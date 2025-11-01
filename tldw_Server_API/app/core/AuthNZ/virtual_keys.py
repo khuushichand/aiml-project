@@ -62,6 +62,17 @@ async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
 
 async def summarize_usage_for_key_day(key_id: int, day_iso: Optional[str] = None) -> Dict[str, Any]:
     # Use a proper date for Postgres; SQLite path will use ISO string
+    """
+    Summarizes total tokens and USD cost for a given API key on a specific UTC day.
+    
+    Parameters:
+        day_iso (Optional[str|datetime.date]): ISO date string (YYYY-MM-DD) or a date object specifying the UTC day to summarize. If omitted, the current UTC date is used.
+    
+    Returns:
+        dict: A dictionary with keys:
+            - "tokens" (int): Total tokens consumed on the specified day.
+            - "usd" (float): Total USD cost incurred on the specified day.
+    """
     day_val = day_iso if day_iso is not None else _utc_today()
     pool = await get_db_pool()
     if pool.pool:
@@ -109,6 +120,12 @@ async def summarize_usage_for_key_day(key_id: int, day_iso: Optional[str] = None
 
 async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
     # Use a rolling 30-day window to avoid calendar-boundary flakiness
+    """
+    Summarizes token and USD usage for a key over a rolling 30-day UTC window.
+    
+    Returns:
+        dict: A mapping with keys `"tokens"` and `"usd"`. `"tokens"` is the total tokens consumed (int) and `"usd"` is the total cost in USD (float); both are 0 when no usage records are found.
+    """
     from datetime import timedelta
     now = datetime.now(timezone.utc)
     start_dt = (now - timedelta(days=30)).replace(microsecond=0)
@@ -137,6 +154,15 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
         # or ISO 'YYYY-MM-DDTHH:MM:SS' form. Normalize with REPLACE for
         # robust string comparisons across both representations.
         def _sqlite_fmt(iso: str) -> str:
+            """
+            Format an ISO datetime string or datetime object into a SQLite-compatible naive UTC timestamp.
+            
+            Parameters:
+                iso (str | datetime): An ISO-formatted datetime string or a datetime instance. If a string is provided it is parsed with datetime.fromisoformat.
+            
+            Returns:
+                str: Timestamp in "YYYY-MM-DD HH:MM:SS" format representing the equivalent instant in UTC with no timezone information.
+            """
             dt = iso if isinstance(iso, datetime) else datetime.fromisoformat(iso)
             # Ensure UTC and naive for lexical comparison
             if dt.tzinfo is not None:
@@ -166,7 +192,15 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
 
 async def is_key_over_budget(key_id: int) -> Dict[str, Any]:
     """
-    Returns dict with keys: over (bool), reasons (list[str]), day and month summaries.
+    Determine whether the given API key has exceeded any configured consumption limits for its current day and rolling 30-day window.
+    
+    Returns:
+        A dictionary with:
+        - `over` — `True` if any configured limit is exceeded, `False` otherwise.
+        - `reasons` — list of strings describing which limits were exceeded and the observed/current values (e.g., "day_tokens_exceeded:1234/1000").
+        - `day` — daily usage summary with keys `tokens` (int) and `usd` (float).
+        - `month` — 30-day usage summary with keys `tokens` (int) and `usd` (float).
+        - `limits` — the stored limit configuration for the key (as returned by the database), or an empty dict when no limits exist.
     """
     limits = await get_key_limits(key_id)
     if not limits or not limits.get("is_virtual"):

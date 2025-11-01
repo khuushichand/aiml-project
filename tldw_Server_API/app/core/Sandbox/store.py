@@ -261,6 +261,11 @@ class SQLiteStore(SandboxStore):
         return con
 
     def _init_db(self) -> None:
+        """
+        Initialize the SQLite database schema for sandbox storage and apply a migration to add the `resource_usage` column if it is missing.
+        
+        Creates the tables used by the store: `sandbox_runs` (run metadata, including `resource_usage`), `sandbox_idempotency` (idempotency records keyed by endpoint, user_key, and key), and `sandbox_usage` (per-user artifact byte usage). After creating tables, attempts to add the `resource_usage` column to `sandbox_runs` for backfill compatibility; any error during the ALTER (e.g., column already exists) is ignored.
+        """
         with self._conn() as con:
             con.executescript(
                 """
@@ -303,6 +308,17 @@ class SQLiteStore(SandboxStore):
                 pass
 
     def _fp(self, body: Dict[str, Any]) -> str:
+        """
+        Compute a stable SHA-256 fingerprint for a JSON-like body.
+        
+        The function canonicalizes `body` to a deterministic JSON string (keys sorted, compact separators) and falls back to `str(body)` if serialization fails, then returns the SHA-256 hex digest of that string.
+        
+        Parameters:
+            body (Dict[str, Any]): The JSON-like object to fingerprint; should be JSON-serializable when possible.
+        
+        Returns:
+            str: Hexadecimal SHA-256 digest of the canonicalized representation.
+        """
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
         except Exception:
@@ -365,6 +381,18 @@ class SQLiteStore(SandboxStore):
                 logger.debug(f"idempotency store failed: {e}")
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
+        """
+        Persist a RunStatus for the given user, replacing any existing record with the same run id.
+        
+        Stores the run fields (id, user_id, spec_version, runtime, base_image, phase, exit_code,
+        started_at, finished_at, message, image_digest, policy_hash) into the backend. Timestamps
+        are stored as ISO 8601 strings; if `resource_usage` is a dict it is serialized to JSON and stored,
+        otherwise `resource_usage` is stored as null.
+        
+        Parameters:
+            user_id: Identifier of the user who owns the run; converted to a canonical string for storage.
+            st (RunStatus): RunStatus object to persist.
+        """
         with self._lock, self._conn() as con:
             con.execute(
                 "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -386,6 +414,14 @@ class SQLiteStore(SandboxStore):
             )
 
     def get_run(self, run_id: str) -> Optional[RunStatus]:
+        """
+        Retrieve a RunStatus by its run identifier.
+        
+        Parses stored fields (including ISO timestamps, enum fields, and JSON-encoded `resource_usage`) and returns a populated RunStatus object.
+        
+        Returns:
+            `RunStatus` for the given `run_id`, or `None` if no record exists or if stored data cannot be parsed.
+        """
         with self._lock, self._conn() as con:
             cur = con.execute("SELECT * FROM sandbox_runs WHERE id=?", (run_id,))
             row = cur.fetchone()

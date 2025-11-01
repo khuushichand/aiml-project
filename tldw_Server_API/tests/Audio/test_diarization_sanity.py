@@ -10,6 +10,18 @@ def test_agglomerative_metric_fallback(monkeypatch):
     class FakeAgglomerative:
         def __init__(self, *, n_clusters, linkage="average", metric=None, affinity=None):  # type: ignore[no-redef]
             # Simulate newer API that errors if unexpected kwarg is supplied
+            """
+            Initialize a fake agglomerative clustering instance used in tests.
+            
+            Parameters:
+                n_clusters (int): Number of clusters to produce.
+                linkage (str): Linkage criterion to use (default "average").
+                metric: Unsupported parameter retained to simulate newer sklearn API; must be None.
+                affinity: Affinity/distance measure to use.
+            
+            Raises:
+                TypeError: If `metric` is not None — this fake implementation rejects the `metric` keyword to force fallback behavior in callers.
+            """
             if metric is not None:
                 # force fallback path
                 raise TypeError("metric not supported in this fake; use affinity")
@@ -20,10 +32,30 @@ def test_agglomerative_metric_fallback(monkeypatch):
 
         def fit_predict(self, embeddings):
             # Simple round-robin cluster assignment
+            """
+            Assigns cluster labels to the provided embeddings in a round-robin fashion.
+            
+            Parameters:
+                embeddings (Sequence): Iterable of embedding vectors whose length determines the number of samples to label.
+            
+            Returns:
+                numpy.ndarray: 1-D integer array of length equal to the number of embeddings containing cluster labels in the range [0, n_clusters-1]. The effective number of clusters is int(self.n_clusters) coerced to at least 1.
+            """
             n = len(embeddings)
             return np.array([i % max(1, int(self.n_clusters)) for i in range(n)], dtype=int)
 
     def fake_normalize(x, axis=1, norm="l2"):
+        """
+        No-op placeholder normalization used for testing; returns the input unchanged.
+        
+        Parameters:
+            x: Array-like input to "normalize". Accepted for compatibility; not modified.
+            axis (int): Ignored; present to match the normalization API.
+            norm (str): Ignored; present to match the normalization API.
+        
+        Returns:
+            The same object passed as `x`, unmodified.
+        """
         return x
 
     fake_bundle = {
@@ -63,14 +95,33 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
     class _FakeHub:
         def set_dir(self, path):
             # accept any path
+            """
+            Set the internal directory path used by this instance.
+            
+            Parameters:
+                path (str | os.PathLike): File-system path to assign as the instance's directory.
+            """
             self._dir = path
 
         def load(self, *args, **kwargs):
             # Simulate network/cache failure
+            """
+            Simulate a hub loading failure by raising a RuntimeError.
+            
+            All arguments are ignored; this method always raises a RuntimeError with the message "simulated hub load failure".
+            
+            Raises:
+                RuntimeError: Indicates the simulated hub load failure.
+            """
             raise RuntimeError("simulated hub load failure")
 
     class _FakeTorch:
         def __init__(self):
+            """
+            Initialize the fake hub container.
+            
+            Creates and assigns a `_FakeHub` instance to the `hub` attribute for use in tests that simulate torch.hub behavior.
+            """
             self.hub = _FakeHub()
 
     monkeypatch.setattr(dlib, "_lazy_import_torch", lambda: _FakeTorch())
@@ -127,6 +178,19 @@ def test_overlap_detection_label_mapping(monkeypatch):
         # unique_labels sorted -> [2, 4]; rows correspond to segments 0,1
         # row0 (primary label 2): sims -> [0.65 (label 2), 0.90 (label 4)]
         # row1 (primary label 4): sims -> [0.10 (label 2), 0.95 (label 4)]
+        """
+        Fake cosine similarity that returns a predefined 2×2 similarity matrix for two segments.
+        
+        Parameters:
+            A (numpy.ndarray): Embeddings for two segments, shape (2, d). Only shape is considered.
+            B (numpy.ndarray): Embeddings for two segments, shape (2, d). Only shape is considered.
+        
+        Returns:
+            numpy.ndarray: A 2×2 float32 similarity matrix where rows correspond to primary labels [2, 4]
+            and columns correspond to labels [2, 4]. Matrix values are:
+            [[0.65, 0.90],
+             [0.10, 0.95]]
+        """
         return np.array([[0.65, 0.90], [0.10, 0.95]], dtype=np.float32)
 
     fake_bundle = {
@@ -168,6 +232,20 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
+        """
+        Simulates imports but forces a simulated ImportError for the "soundfile" module.
+        
+        Parameters:
+            name (str): Name of the module to import.
+            *args: Positional arguments forwarded to the real import function.
+            **kwargs: Keyword arguments forwarded to the real import function.
+        
+        Returns:
+            The object returned by the real import call for the specified module.
+        
+        Raises:
+            ImportError: If `name` is "soundfile", raises a simulated ImportError.
+        """
         if name == "soundfile":
             raise ImportError("simulated absence of soundfile")
         return real_import(name, *args, **kwargs)
@@ -177,10 +255,28 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
     # Stub diarization service to avoid heavy deps and still allow finalize() path
     class _StubDiarizationService:
         def __init__(self, *args, **kwargs):
+            """
+            Initialize the instance and mark it as available.
+            
+            Sets the instance attribute `is_available` to True.
+            """
             self.is_available = True
 
         def diarize(self, audio_path, transcription_segments=None, num_speakers=None):
             # pass through segments with a dummy speaker
+            """
+            Assign all provided transcription segments to a single dummy speaker and return the segments and speaker list.
+            
+            Parameters:
+                audio_path (str): Path to the audio file (not used by this implementation).
+                transcription_segments (list[dict], optional): Sequence of segment dictionaries to pass through. Each returned segment will include `speaker_id` and `speaker_label`.
+                num_speakers (int, optional): Ignored by this implementation.
+            
+            Returns:
+                dict: A mapping with keys:
+                    - "segments": list of segment dicts (each original segment augmented with `speaker_id`: 0 and `speaker_label`: "SPEAKER_0").
+                    - "speakers": list containing a single speaker dict `{"speaker_id": 0, "speaker_label": "SPEAKER_0"}`.
+            """
             segments = []
             for seg in transcription_segments or []:
                 segments.append({**seg, "speaker_id": 0, "speaker_label": "SPEAKER_0"})

@@ -591,6 +591,15 @@ READINESS_STATE = {"ready": True}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Manage application startup and shutdown for the given FastAPI app, performing validations, initializing services, scheduling deferred non‑critical startup tasks, and running background workers.
+    
+    Parameters:
+        app (FastAPI): The FastAPI application instance whose lifespan is managed.
+    
+    Returns:
+        None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
+    """
     _startup_trace("lifespan: entered")
     # Determine if heavy (non-critical) startup should be deferred to background
     # Always defer non-critical initializations to background to keep startup fast
@@ -866,6 +875,20 @@ async def lifespan(app: FastAPI):
                     from tldw_Server_API.app.core.config import settings as _emb_settings
 
                     def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
+                        """
+                        Check a user's ChromaDB collections for embedding-dimension mismatches.
+                        
+                        Scans all collections available to the user's ChromaDB client and compares any recorded
+                        `embedding_dimension` metadata with the actual length of the first stored embedding. Records
+                        collections where both values are present and differ.
+                        
+                        Parameters:
+                            user_id (str): Identifier of the user whose collections will be inspected.
+                        
+                        Returns:
+                            list[tuple[str, int, int, str]]: A list of tuples for each collection with a mismatch:
+                                (collection_name, expected_dimension, actual_dimension, user_id).
+                        """
                         mms: list[tuple[str, int, int, str]] = []
                         mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
                         client = getattr(mgr, 'client', None)
@@ -944,6 +967,16 @@ async def lifespan(app: FastAPI):
     if _defer_heavy:
         import asyncio as _asyncio
         async def _run_deferred_startup():
+            """
+            Begin and run non-critical background initializations required after primary startup.
+            
+            Performs best-effort startup for optional components — including the MCP Unified server, provider manager (and its health checks), chat request queue (when queued execution is enabled), global rate limiter, TTS service, chunking templates, and an opt-in embeddings dimension sanity check — logging success or debug-level failures for each. Failures in individual components are swallowed and logged so the background routine does not fail overall, except when the embeddings dimension check is enabled in strict mode, in which case a RuntimeError ("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED") may be raised.
+            
+            Side effects:
+            - Initializes and starts background services and health checks.
+            - May start request-queue workers when configured.
+            - Config/feature flags and environment variables control which subsystems are started.
+            """
             logger.info("Deferred startup: beginning non-critical initializations in background")
             # MCP Unified server
             try:
@@ -1036,6 +1069,16 @@ async def lifespan(app: FastAPI):
                     from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
                     from tldw_Server_API.app.core.config import settings as _emb_settings
                     def _check_user(user_id: str) -> list[tuple[str,int,int,str]]:
+                        """
+                        Identify Chroma collections for a user where the declared embedding dimension does not match the actual stored embedding length.
+                        
+                        Parameters:
+                            user_id (str): Identifier of the user whose Chroma collections will be inspected.
+                        
+                        Returns:
+                            list[tuple[str, int, int, str]]: A list of tuples for each mismatched collection:
+                                (collection_name, expected_embedding_dimension, actual_embedding_length, user_id).
+                        """
                         out = []
                         mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
                         client = getattr(mgr, 'client', None)

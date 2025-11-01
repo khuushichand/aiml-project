@@ -26,9 +26,14 @@ def patch_sandbox_heartbeat_sleep(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True, scope="session")
 def set_ws_poll_timeout_for_tests():
-    """Ensure the WS server loop notices disconnects quickly in tests.
-
-    Reduce the q.get() poll timeout from the default (30s) to 1s via env.
+    """
+    Configure environment variables to make sandbox WebSocket behavior test-friendly.
+    
+    Sets sensible defaults only if not already present:
+    - Sets SANDBOX_WS_POLL_TIMEOUT_SEC to "1" so the WebSocket loop notices disconnects quickly.
+    - Enables SANDBOX_ENABLE_EXECUTION and SANDBOX_BACKGROUND_EXECUTION to allow execution and background mode during tests.
+    - Enables SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS to avoid CI hangs by using synthetic frames.
+    - Ensures "sandbox" is present in ROUTES_ENABLE so the sandbox router is active for tests.
     """
     os = __import__("os")
     os.environ.setdefault("SANDBOX_WS_POLL_TIMEOUT_SEC", "1")
