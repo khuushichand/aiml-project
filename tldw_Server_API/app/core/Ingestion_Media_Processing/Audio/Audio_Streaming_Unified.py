@@ -41,6 +41,7 @@ from .Audio_Transcription_Nemo import (
     load_parakeet_model,
     transcribe_with_parakeet
 )
+from .model_utils import normalize_model_and_variant
 
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
@@ -1108,18 +1109,15 @@ async def handle_unified_websocket(
                 # Update configuration
                 old_variant = config.model_variant
                 raw_model = config_data.get("model", "parakeet")
-                # Allow combined form like "parakeet-mlx" to set variant
-                if isinstance(raw_model, str) and '-' in raw_model:
-                    base_model, suffix = raw_model.split('-', 1)
-                    if base_model.lower() == 'parakeet' and not config_data.get("variant") and not config_data.get("model_variant"):
-                        config.model = 'parakeet'
-                        config.model_variant = suffix.lower()
-                    else:
-                        config.model = base_model
-                        config.model_variant = config_data.get("variant", config_data.get("model_variant", config.model_variant))
-                else:
-                    config.model = raw_model
-                    config.model_variant = config_data.get("variant", config_data.get("model_variant", config.model_variant))
+                variant_override = config_data.get("variant") or config_data.get("model_variant")
+                new_model, new_variant = normalize_model_and_variant(
+                    raw_model,
+                    current_model=config.model,
+                    current_variant=config.model_variant,
+                    variant_override=variant_override,
+                )
+                config.model = new_model
+                config.model_variant = new_variant
                 config.language = config_data.get("language", "en")
                 config.sample_rate = config_data.get("sample_rate", 16000)
                 config.auto_detect_language = config_data.get("auto_detect_language", False)

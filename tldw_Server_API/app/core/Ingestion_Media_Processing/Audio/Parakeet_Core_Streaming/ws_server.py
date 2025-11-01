@@ -36,6 +36,7 @@ from loguru import logger
 
 from .config import StreamingConfig
 from .transcriber import ParakeetCoreTranscriber, DecodeFn
+from ..model_utils import normalize_model_and_variant
 
 # Optional enhancements: live insights and diarization
 try:  # pragma: no cover - optional, heavy dependency surface
@@ -105,10 +106,18 @@ async def websocket_parakeet_core(
                         config.language = str(cfg.get("language") or "") or None
                     except Exception:
                         config.language = None
-                if "model" in cfg:
-                    config.model = str(cfg.get("model") or config.model)
-                if "model_variant" in cfg:
-                    config.model_variant = str(cfg.get("model_variant") or config.model_variant)
+                # Normalize model + variant, supporting forms like "parakeet-onnx"
+                variant_override = cfg.get("variant") or cfg.get("model_variant")
+                if ("model" in cfg) or (variant_override is not None):
+                    raw_model = str(cfg.get("model") or config.model)
+                    new_model, new_variant = normalize_model_and_variant(
+                        raw_model,
+                        current_model=config.model,
+                        current_variant=config.model_variant,
+                        variant_override=variant_override,
+                    )
+                    config.model = new_model
+                    config.model_variant = new_variant
 
                 if (config.model != old_model) or (config.model_variant != old_variant):
                     # reset state and rebuild transcriber for new model selection

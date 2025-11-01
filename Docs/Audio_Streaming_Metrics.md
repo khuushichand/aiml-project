@@ -27,6 +27,7 @@ Endpoints
 Prometheus Scrape Example
 -------------------------
 
+```yaml
 # prometheus.yml
 scrape_configs:
   - job_name: 'tldw_server'
@@ -34,6 +35,7 @@ scrape_configs:
     metrics_path: '/metrics'
     static_configs:
       - targets: ['localhost:8000']
+```
 
 PromQL Examples
 ---------------

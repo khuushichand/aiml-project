@@ -970,7 +970,7 @@ Feature Discovery Payload (example)
 ```
 GET /api/v1/sandbox/runtimes
 {
-  "store_mode": "TBD",
+  "store_mode": "memory",
   "runtimes": [
     {
       "name": "docker",

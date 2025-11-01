@@ -374,6 +374,33 @@ Notes:
 - `embedding_model` also accepts repo identifiers (e.g., `speechbrain/spkrec-ecapa-voxceleb`) when `embedding_local_only=false` (default). In that case the server caches into `pretrained_models/<sanitized_name>/`.
 - Combine with `diarization.enable_torch_hub_fetch=false` and `diarization.allow_vad_fallback=true` to operate in fully offline/locked‑down environments.
 
+Example error payloads when files are missing and `embedding_local_only=true`:
+
+- WebSocket (unified streaming) warning frame on initialization/finalize:
+
+```
+{ 
+  "type": "warning",
+  "state": "diarization_unavailable",
+  "message": "Diarization disabled: initialization failed",
+  "details": "Embedding model files not found locally. Set embedding_local_only=false to allow download or provide a local path in embedding_model."
+}
+```
+
+- Generic structured error shape for non‑WS callers (illustrative):
+
+```
+{
+  "error": true,
+  "error_type": "diarization_model_unavailable",
+  "message": "Embedding model files not found locally",
+  "details": {
+    "embedding_model": "/opt/models/speechbrain/spkrec-ecapa-voxceleb",
+    "embedding_local_only": true
+  }
+}
+```
+
 ### Basic Live Transcription (Local Python)
 
 ```python
