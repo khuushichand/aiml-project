@@ -17,6 +17,7 @@ Last updated: 2025-10-28
 - [8) Architecture Overview](#8-architecture-overview)
 - [9) API Design (MVP)](#9-api-design-mvp)
   - [Runtimes Defaults](#runtimes-defaults-quick-reference)
+  - [Runtime Limits Normalization](#runtime-limits-normalization)
   - [Spec Versioning](#spec-versioning)
   - [WebSocket Protocol Details](#websocket-protocol-details)
   - [State Machine (Runs)](#state-machine-runs)
@@ -303,7 +304,7 @@ Error Matrix (examples)
 
 Examples
 ```
-{ "error": { "code": "invalid_spec_version", "message": "Unsupported spec_version '0.9'", "details": { "supported": ["1.0", "1.1"], "provided": "0.9" } } }
+{ "error": { "code": "invalid_spec_version", "message": "Unsupported spec_version '0.9'", "details": { "supported": ["1.0"], "provided": "0.9" } } }
 
 { "error": { "code": "idempotency_conflict", "message": "Idempotency-Key replay with different body", "details": { "prior_id": "a1b2c3...", "key": "5c2d1a9a-...", "prior_created_at": "2025-10-28T12:00:00Z" } } }
 
@@ -360,7 +361,7 @@ See Timeouts & Defaults under Content Types & Limits for consolidated rules.
 - Semantics:
   - Minor (1.x): backward-compatible; server may accept a range (e.g., `1.0`-`1.2`).
   - Major (2.0): potentially breaking; server rejects unsupported majors with `invalid_spec_version`.
-- Discovery: GET `/runtimes` includes `supported_spec_versions` (e.g., `["1.0", "1.1"]`).
+- Discovery: GET `/runtimes` includes `supported_spec_versions` (e.g., `["1.0"]` in v0.2; future versions may add `"1.1"`).
 - Validation errors include `details.supported` with accepted versions.
  - Config: Controlled via `SANDBOX_SUPPORTED_SPEC_VERSIONS` (comma- or JSON-list). The server validates `spec_version` against this list and rejects mismatches with `invalid_spec_version` including `details.supported` and `details.provided`.
 
@@ -378,7 +379,7 @@ See Timeouts & Defaults under Content Types & Limits for consolidated rules.
     - `egress_allowlist_supported` (bool)
     - `store_mode` (string: `memory|sqlite|postgres|redis`)
 
-Runtime Limits Normalization
+### Runtime Limits Normalization
 
 - `resources.cpu` maps to:
   - Docker: `--cpus=<float>` (CPUQuota/CPUPeriod). Example: `cpu=1.5` ≈ 1.5 cores.
@@ -1011,6 +1012,8 @@ See also: [Security Defaults](#security-defaults-quick-reference)
 - `SANDBOX_WS_POLL_TIMEOUT_SEC` (default 30) — server WS loop poll timeout for pending frames
 - `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS` (default false) — test-only; when true, WS streams emit synthetic start/end frames and keep the socket open after `end` for CI stability. Not for production use.
  - `SANDBOX_WS_SIGNED_URL_TTL_SEC` (default 60) — TTL for signed `log_stream_url` tokens when enabled
+ - `SANDBOX_WS_SIGNED_URLS` (default false) — enable pre-signed `log_stream_url` issuance for WS log streams
+ - `SANDBOX_WS_SIGNING_SECRET` (secret) — HMAC signing secret for WS URLs; not exposed via config endpoints and excluded from `policy_hash`
 
 ### Security Defaults (quick reference)
 
@@ -1041,7 +1044,7 @@ See also: [Security Defaults](#security-defaults-quick-reference)
   - Execution toggles: `SANDBOX_ENABLE_EXECUTION`, `SANDBOX_BACKGROUND_EXECUTION`,
   - Security profiles: `SANDBOX_DOCKER_SECCOMP` (profile name or canonicalized contents hash), `SANDBOX_DOCKER_APPARMOR_PROFILE` (profile name),
   - Spec support: `SANDBOX_SUPPORTED_SPEC_VERSIONS`.
-  - Exclusions: Test-only toggles (e.g., `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS`) are intentionally excluded from `policy_hash`.
+ - Exclusions: Secrets (e.g., `SANDBOX_WS_SIGNING_SECRET`) and test-only toggles (e.g., `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS`) are intentionally excluded from `policy_hash`.
 - Algorithm:
   - Construct a JSON object with the above keys and their effective values, normalize types (numbers as numbers, booleans as booleans), and sort keys lexicographically.
   - Serialize to UTF-8 JSON without whitespace differences (canonical form) and compute SHA-256.
@@ -1052,6 +1055,7 @@ Feature Discovery Payload (example)
 ```
 GET /api/v1/sandbox/runtimes
 {
+  "store_mode": "memory",
   "runtimes": [
     {
       "name": "docker",
@@ -1091,9 +1095,8 @@ GET /api/v1/sandbox/runtimes
   ]
 }
 ```
-Note: v0.3 will add `store_mode` at the top level and capability flags like
-`interactive_supported` and `egress_allowlist_supported` per runtime when those
-features are enabled.
+Note: v0.3 may add capability flags like `interactive_supported` and
+`egress_allowlist_supported` per runtime when those features are enabled.
 
 Egress Allowlist (v0.3)
 - Opt-in policy; deny_all remains default. Applied per run/session. Server-wide policy may narrow but not widen per-run allowlists.
@@ -1301,7 +1304,7 @@ Runner Interface (reference)
 
 Custom envelope
 ```
-{ "error": { "code": "invalid_spec_version", "message": "Unsupported spec_version '0.9'", "details": { "supported": ["1.0", "1.1"], "provided": "0.9" } } }
+{ "error": { "code": "invalid_spec_version", "message": "Unsupported spec_version '0.9'", "details": { "supported": ["1.0"], "provided": "0.9" } } }
 
 { "error": { "code": "idempotency_conflict", "message": "Idempotency-Key replay with different body", "details": { "prior_id": "a1b2c3...", "key": "5c2d1a9a-...", "prior_created_at": "2025-10-28T12:00:00Z" } } }
 
@@ -1310,7 +1313,7 @@ Custom envelope
 
 RFC 7807 (application/problem+json) mapping (optional)
 ```
-{ "type": "https://docs.tldw.ai/errors/invalid_spec_version", "title": "Invalid spec_version", "detail": "Unsupported spec_version '0.9'", "status": 400, "extensions": { "code": "invalid_spec_version", "supported": ["1.0", "1.1"], "provided": "0.9" } }
+{ "type": "https://docs.tldw.ai/errors/invalid_spec_version", "title": "Invalid spec_version", "detail": "Unsupported spec_version '0.9'", "status": 400, "extensions": { "code": "invalid_spec_version", "supported": ["1.0"], "provided": "0.9" } }
 
 { "type": "https://docs.tldw.ai/errors/idempotency_conflict", "title": "Idempotency conflict", "detail": "Idempotency-Key replay with different body", "status": 409, "extensions": { "code": "idempotency_conflict", "prior_id": "a1b2c3...", "key": "5c2d1a9a-...", "prior_created_at": "2025-10-28T12:00:00Z" } }
 

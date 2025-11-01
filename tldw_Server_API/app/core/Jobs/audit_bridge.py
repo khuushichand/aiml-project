@@ -45,6 +45,7 @@ def _audit_enabled() -> bool:
 _EVENT_QUEUE: "Queue[Tuple[str, Dict[str, Any] | None, Dict[str, Any] | None]]" = Queue()
 _WORKER_THREAD: Optional[threading.Thread] = None
 _WORKER_LOCK = threading.Lock()
+_WORKER_READY = threading.Event()
 _SHUTDOWN_SENTINEL = ("__shutdown__", None, None)
 
 _AUDIT_EVENT_MAP: Dict[str, Tuple[AuditEventType, AuditEventCategory, AuditSeverity, str]] = {}
@@ -95,8 +96,14 @@ def _ensure_worker_started() -> bool:
         if _WORKER_THREAD and _WORKER_THREAD.is_alive():
             return True
         try:
+            # Reset readiness signal before starting
+            _WORKER_READY.clear()
             _WORKER_THREAD = threading.Thread(target=_audit_worker_loop, name="jobs-audit-worker", daemon=True)
             _WORKER_THREAD.start()
+            # Block briefly until the worker initializes the audit service and schema.
+            # This avoids a race where the DB file exists but tables are not yet created,
+            # causing tests that probe the file immediately to fail.
+            _WORKER_READY.wait(timeout=2.0)
             return True
         except Exception as exc:
             logger.warning(f"Failed to start Jobs audit worker: {exc}")
@@ -124,6 +131,10 @@ def _audit_worker_loop() -> None:
     except Exception as exc:  # pragma: no cover - init failure
         logger.warning(f"Jobs audit worker failed to initialize service: {exc}")
         return
+    try:
+        _WORKER_READY.set()
+    except Exception:
+        pass
     try:
         while True:
             try:

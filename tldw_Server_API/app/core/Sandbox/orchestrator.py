@@ -68,11 +68,13 @@ class SandboxOrchestrator:
             self._idem_ttl_sec = 600
         # Queue policy
         try:
-            self._queue_max = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+            import os as _os
+            self._queue_max = int(_os.getenv("SANDBOX_QUEUE_MAX_LENGTH") or getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
         except Exception:
             self._queue_max = 100
         try:
-            self._queue_ttl = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
+            import os as _os
+            self._queue_ttl = int(_os.getenv("SANDBOX_QUEUE_TTL_SEC") or getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
         except Exception:
             self._queue_ttl = 120
         self._session_roots: Dict[str, str] = {}
@@ -150,7 +152,8 @@ class SandboxOrchestrator:
         # Enforce queue capacity: prune TTL then check max length
         self._prune_queue_ttl()
         with self._lock:
-            if self._queue_max > 0 and len(self._queue) >= self._queue_max:
+            # If max length is <= 0, treat as no capacity (force backpressure)
+            if self._queue_max <= 0 or len(self._queue) >= self._queue_max:
                 raise QueueFull(retry_after=max(1, int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))))
 
         # Create new run in queued state

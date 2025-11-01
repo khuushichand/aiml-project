@@ -111,6 +111,7 @@ class SandboxRunStatus(BaseModel):
     message: Optional[str] = None
     resource_usage: Optional[Dict[str, int]] = Field(default=None, description="Resource usage summary when available")
     estimated_start_time: Optional[datetime] = None
+    log_stream_url: Optional[str] = Field(default=None, description="Optional WS URL (signed or unsigned) to stream logs for this run")
 
 
 class ArtifactInfo(BaseModel):

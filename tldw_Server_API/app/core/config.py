@@ -673,6 +673,16 @@ def load_settings():
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
+    # Optional: signed WS URLs for log_stream_url issuance
+    SANDBOX_WS_SIGNED_URL_TTL_SEC = _sbx_int("SANDBOX_WS_SIGNED_URL_TTL_SEC", "ws_signed_url_ttl_sec", 60)
+    SANDBOX_WS_SIGNED_URLS = (
+        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    )(
+        os.getenv("SANDBOX_WS_SIGNED_URLS")
+        or _sbx_get("ws_signed_urls", "false")
+        or "false"
+    )
+    SANDBOX_WS_SIGNING_SECRET = os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
     # Test-only helper: when true, the WS endpoint will publish synthetic
     # start/end frames to ensure subscribers see frames immediately. Disabled
     # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
@@ -800,6 +810,9 @@ def load_settings():
         "SANDBOX_MAX_MEM_MB": SANDBOX_MAX_MEM_MB,
         "SANDBOX_WORKSPACE_CAP_MB": SANDBOX_WORKSPACE_CAP_MB,
         "SANDBOX_SUPPORTED_SPEC_VERSIONS": SANDBOX_SUPPORTED_SPEC_VERSIONS,
+        "SANDBOX_WS_POLL_TIMEOUT_SEC": SANDBOX_WS_POLL_TIMEOUT_SEC,
+        "SANDBOX_WS_SIGNED_URL_TTL_SEC": SANDBOX_WS_SIGNED_URL_TTL_SEC,
+        "SANDBOX_WS_SIGNED_URLS": SANDBOX_WS_SIGNED_URLS,
         # WebSocket stream settings for sandbox UI/logs
         "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS": SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS,
         "SANDBOX_IDEMPOTENCY_TTL_SEC": SANDBOX_IDEMPOTENCY_TTL_SEC,

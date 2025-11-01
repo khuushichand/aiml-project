@@ -391,7 +391,12 @@ elif not _MINIMAL_TEST_APP:
     # Metrics Endpoint
     from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
     # Sandbox Endpoint (scaffold)
-    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        _HAS_SANDBOX = True
+    except Exception as _sandbox_err:  # noqa: BLE001
+        logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sandbox_err}")
+        _HAS_SANDBOX = False
     # Chunking Endpoints
     from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
     from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
@@ -526,7 +531,12 @@ else:
     # Web Scraping Management Endpoints
     from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
     # Sandbox Endpoint (scaffold)
-    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        _HAS_SANDBOX = True
+    except Exception as _sb_err:  # noqa: BLE001
+        logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sb_err}")
+        _HAS_SANDBOX = False
 
 # Metrics and Telemetry - import directly and fail fast on errors
 from tldw_Server_API.app.core.Metrics import (
@@ -777,7 +787,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: MCP Unified server skipped/failed: {e}")
             else:
-                logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
+                logger.exception(f"App Startup: Failed to initialize MCP Unified server: {e}")
                 logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
 
     async def _init_provider_manager(*, deferred: bool) -> None:
@@ -796,7 +806,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: provider manager skipped/failed: {e}")
             else:
-                logger.error(f"App Startup: Failed to initialize provider manager: {e}")
+                logger.exception(f"App Startup: Failed to initialize provider manager: {e}")
 
     async def _init_request_queue(*, deferred: bool) -> None:
         nonlocal request_queue
@@ -835,7 +845,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: request queue skipped/failed: {e}")
             else:
-                logger.error(f"App Startup: Failed to initialize request queue: {e}")
+                logger.exception(f"App Startup: Failed to initialize request queue: {e}")
 
     async def _init_rate_limiter(*, deferred: bool) -> None:
         try:
@@ -857,7 +867,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: rate limiter skipped/failed: {e}")
             else:
-                logger.error(f"App Startup: Failed to initialize rate limiter: {e}")
+                logger.exception(f"App Startup: Failed to initialize rate limiter: {e}")
 
     async def _init_tts_service(*, deferred: bool) -> None:
         try:
@@ -871,7 +881,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: TTS skipped/failed: {e}")
             else:
-                logger.error(f"App Startup: Failed to initialize TTS service: {e}")
+                logger.exception(f"App Startup: Failed to initialize TTS service: {e}")
                 logger.warning("TTS functionality will be unavailable")
 
     async def _init_chunking_templates(*, deferred: bool) -> None:
@@ -889,7 +899,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: chunking templates skipped/failed: {e}")
             else:
-                logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
+                logger.exception(f"App Startup: Failed to initialize chunking templates: {e}")
 
     async def _init_embeddings_dim_check(*, deferred: bool) -> None:
         try:
@@ -931,7 +941,7 @@ async def lifespan(app: FastAPI):
                                 if embs and len(embs) > 0:
                                     first = embs[0]
                                     if first and hasattr(first, '__len__'):
-                                        actual = int(len(first))
+                                        actual = len(first)
                             except Exception:
                                 pass
                         if expected is not None and actual is not None and expected != actual:
@@ -974,7 +984,7 @@ async def lifespan(app: FastAPI):
             if deferred:
                 logger.debug(f"Deferred startup: embeddings dimension check skipped/failed: {e}")
             else:
-                logger.error(f"Embeddings dimension sanity check failed: {e}")
+                logger.exception(f"Embeddings dimension sanity check failed: {e}")
                 # Do not raise except in strict mode (handled above)
 
     async def _run_heavy_initializations(*, deferred: bool) -> None:
@@ -2738,13 +2748,13 @@ if _MINIMAL_TEST_APP:
         app.include_router(authnz_debug_router, prefix=f"{API_V1_PREFIX}", tags=["authnz-debug"])
     except Exception as _e:
         logger.debug(f"Skipping authnz_debug router in tests: {_e}")
-    # Sandbox (scaffold) - include only if import succeeded
+    # Sandbox (scaffold) - include in minimal test app to support sandbox tests
     try:
-        if '_HAS_SANDBOX' in globals() and _HAS_SANDBOX:
-            app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
-    except Exception:
-        # Never let optional sandbox break startup
-        pass
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
+    except Exception as _sandbox_err:
+        # Never let optional sandbox break startup in tests
+        logger.debug(f"Skipping sandbox router in minimal test app: {_sandbox_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:
@@ -2913,7 +2923,8 @@ else:
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
     # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
-    _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
+    if _HAS_SANDBOX:
+        _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
     _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=False)
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)

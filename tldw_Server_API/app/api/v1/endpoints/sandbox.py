@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Header, File, UploadFile, WebSocket, WebSocketDisconnect, Request, Query
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 import asyncio
 import os
 from loguru import logger
@@ -33,6 +33,9 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 from tldw_Server_API.app.core.AuthNZ.permissions import RoleChecker
 import mimetypes
+import hmac
+import hashlib
+import time
 
 
 router = APIRouter(prefix="/sandbox", tags=["sandbox"])
@@ -375,7 +378,7 @@ async def start_run(
         from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         if isinstance(e, IdempotencyConflict):
-            raise HTTPException(status_code=409, detail={
+            return JSONResponse(status_code=409, content={
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
@@ -391,15 +394,15 @@ async def start_run(
                 increment_counter("sandbox_queue_full_total", labels={"component": "sandbox", "runtime": rt_label, "reason": "queue_full"})
             except Exception:
                 pass
-            raise HTTPException(status_code=429, detail={
+            return JSONResponse(status_code=429, content={
                 "error": {
                     "code": "queue_full",
                     "message": "Sandbox run queue is full",
                     "details": {"retry_after": retry_after}
                 }
-            }, headers={"Retry-After": str(int(retry_after))}) from e
+            }, headers={"Retry-After": str(int(retry_after))})
         if isinstance(e, _Svc.InvalidSpecVersion):
-            raise HTTPException(status_code=400, detail={
+            return JSONResponse(status_code=400, content={
                 "error": {
                     "code": "invalid_spec_version",
                     "message": str(e),
@@ -536,6 +539,23 @@ async def start_run(
     except Exception:
         pass
 
+    # Build optional log_stream_url (signed or unsigned)
+    log_stream_url: Optional[str] = None
+    try:
+        base_path = f"/api/v1/sandbox/runs/{status.id}/stream"
+        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)) and getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None):
+            ttl = int(getattr(app_settings, "SANDBOX_WS_SIGNED_URL_TTL_SEC", 60))
+            exp = int(time.time()) + max(1, ttl)
+            msg = f"{status.id}:{exp}".encode("utf-8")
+            secret = str(getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", "")).encode("utf-8")
+            token = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+            log_stream_url = f"{base_path}?token={token}&exp={exp}"
+        else:
+            log_stream_url = base_path
+    except Exception:
+        # Fail open: omit URL on error
+        log_stream_url = None
+
     return SandboxRunStatus(
         id=status.id,
         spec_version=payload.spec_version,
@@ -550,6 +570,7 @@ async def start_run(
         message=status.message,
         resource_usage=status.resource_usage,
         estimated_start_time=status.estimated_start_time,
+        log_stream_url=log_stream_url,
     )
 
 
@@ -600,9 +621,25 @@ async def download_artifact(
     path: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
     range_header: Optional[str] = Header(None, alias="Range"),
+    request: Request = None,
 ):
     # Basic path normalization checks (orchestrator also normalizes on FS)
-    if path.startswith("/") or ".." in path.split("/"):
+    # Reject absolute or traversal attempts early (defense in depth)
+    raw = str(path)
+    if (
+        raw.startswith("/")
+        or raw.startswith("..")
+        or "/.." in raw
+        or "\\.." in raw
+        or ".." in raw
+    ):
+        raise HTTPException(status_code=400, detail="invalid_path")
+    # Also inspect raw URL path to catch traversal/double-slash that may be normalized
+    try:
+        url_path = str(request.url.path) if request else ""
+    except Exception:
+        url_path = ""
+    if "/artifacts/../" in url_path or "/artifacts//" in url_path:
         raise HTTPException(status_code=400, detail="invalid_path")
     data = _service._orch.get_artifact(run_id, path)  # type: ignore[attr-defined]
     if data is None:

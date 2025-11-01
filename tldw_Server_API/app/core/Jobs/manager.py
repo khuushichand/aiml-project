@@ -33,6 +33,7 @@ from .metrics import (
 )
 from .tracing import job_span
 from .event_stream import emit_job_event
+from .audit_bridge import submit_job_audit_event
 from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob, decrypt_json_blob
 from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob_with_key, decrypt_json_blob_with_key
 
@@ -891,6 +892,19 @@ class JobManager:
                             except Exception:
                                 # Best-effort; do not fail job create on outbox errors
                                 pass
+                            # Audit bridge (best-effort)
+                            try:
+                                submit_job_audit_event(
+                                    "job.created",
+                                    job=d,
+                                    attrs={
+                                        "idempotent": (not was_insert),
+                                        "owner_user_id": d.get("owner_user_id"),
+                                        "retry_count": int(d.get("retry_count") or 0),
+                                    },
+                                )
+                            except Exception:
+                                pass
                             return d
                         # Non-idempotent insert
                         cur.execute(
@@ -962,6 +976,18 @@ class JobManager:
                                     int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
                                     "job.created", attrs_json, d.get("owner_user_id"), d.get("request_id"), d.get("trace_id"),
                                 ),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            submit_job_audit_event(
+                                "job.created",
+                                job=d,
+                                attrs={
+                                    "idempotent": False,
+                                    "owner_user_id": d.get("owner_user_id"),
+                                    "retry_count": int(d.get("retry_count") or 0),
+                                },
                             )
                         except Exception:
                             pass
@@ -1106,6 +1132,18 @@ class JobManager:
                                 int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
                                 "job.created", attrs_json, d.get("owner_user_id"), request_id, trace_id,
                             ),
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        submit_job_audit_event(
+                            "job.created",
+                            job={**d, "request_id": request_id, "trace_id": trace_id},
+                            attrs={
+                                "idempotent": False,
+                                "owner_user_id": d.get("owner_user_id"),
+                                "retry_count": int(d.get("retry_count") or 0),
+                            },
                         )
                     except Exception:
                         pass
@@ -1983,6 +2021,11 @@ class JobManager:
                                 )
                             except Exception:
                                 pass
+                            try:
+                                ev = {"id": int(job_id), "domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")}
+                                submit_job_audit_event("job.completed", job=ev, attrs=None)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
                     res_ok = ok
@@ -2265,12 +2308,16 @@ class JobManager:
                             # immediate retry (backoff_seconds=0) so that newer jobs can be
                             # acquired before recently failed ones.
                             if test_mode:
+                                _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {"1", "true", "yes", "y", "on"}
+                                # Permit immediate retry in tests when caller requests backoff=0
+                                # unless outbox mode is enabled (which needs a larger gap).
+                                if not _outbox and exp_backoff <= 1:
+                                    delay = 0
                                 try:
-                                    if int(backoff_seconds) <= 0 and delay < 10:
+                                    if _outbox and int(backoff_seconds) <= 0 and delay < 10:
                                         delay = 10
                                 except Exception:
-                                    # Fallback to a small cushion
-                                    if delay < 3:
+                                    if _outbox and delay < 3:
                                         delay = 3
                             # Poison message quarantine check: increment failure_streak_* and quarantine if threshold reached
                             thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
@@ -2490,11 +2537,14 @@ class JobManager:
                             jitter = random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
                         if test_mode:
+                            _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {"1", "true", "yes", "y", "on"}
+                            if not _outbox and exp_backoff <= 1:
+                                delay = 0
                             try:
-                                if int(backoff_seconds) <= 0 and delay < 10:
+                                if _outbox and int(backoff_seconds) <= 0 and delay < 10:
                                     delay = 10
                             except Exception:
-                                if delay < 3:
+                                if _outbox and delay < 3:
                                     delay = 3
                         thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
                         # SQLite retry path with failure streak bookkeeping
