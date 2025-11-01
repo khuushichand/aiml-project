@@ -2626,7 +2626,13 @@ let chatAutoContinueInProgress = false; // guard for auto-continue
 // Minimal Markdown Renderer (safe)
 // ------------------------------------------------------------
 function mdEscape(s) {
-    return Utils && typeof Utils.escapeHtml === 'function' ? Utils.escapeHtml(String(s || '')) : String(s || '')
+    const str = String(s || '');
+    // If project-provided HTML escaper exists, use it and short-circuit
+    if (Utils && typeof Utils.escapeHtml === 'function') {
+        return Utils.escapeHtml(str);
+    }
+    // Fallback: minimal escaping
+    return str
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -4926,7 +4932,8 @@ function _watchlistsBuildSettingsPayloadFromForm() {
     if (type === 'rss') {
         const rssCfg = {};
         const limit = watchlistsParseNumber(document.getElementById('watchlistsSource_rssLimit')?.value);
-        if (limit !== undefined) rssCfg.limit = limit;
+        // For RSS, persist limit at the top-level settings to match create-time shape
+        if (limit !== undefined) settings.limit = limit;
 
         const hist = {};
         const strat = document.getElementById('watchlistsSource_histStrategy')?.value?.trim();
@@ -5046,7 +5053,7 @@ async function watchlistsLoadSourceIntoForm() {
         if (document.getElementById('watchlistsSource_histPerPage')) document.getElementById('watchlistsSource_histPerPage').value = (hist.per_page ?? '');
         if (document.getElementById('watchlistsSource_histOn304')) document.getElementById('watchlistsSource_histOn304').checked = !!hist.on_304;
         if (document.getElementById('watchlistsSource_histStopOnSeen')) document.getElementById('watchlistsSource_histStopOnSeen').checked = !!hist.stop_on_seen;
-        if (document.getElementById('watchlistsSource_rssLimit')) document.getElementById('watchlistsSource_rssLimit').value = (rss.limit ?? '');
+        if (document.getElementById('watchlistsSource_rssLimit')) document.getElementById('watchlistsSource_rssLimit').value = (settings.limit ?? rss.limit ?? '');
         if (document.getElementById('watchlistsSource_rssUseFeed')) document.getElementById('watchlistsSource_rssUseFeed').checked = !!rss.use_feed_content_if_available;
         if (document.getElementById('watchlistsSource_feedMinChars')) document.getElementById('watchlistsSource_feedMinChars').value = (rss.feed_text_min_chars ?? 400);
         // Expand advanced when settings present

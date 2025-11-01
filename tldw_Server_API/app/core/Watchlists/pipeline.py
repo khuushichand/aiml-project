@@ -308,7 +308,11 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     seen_keys: List[str] = []
                     if hist_stop_on_seen:
                         try:
-                            seen_keys = db.list_seen_item_keys(int(src.id))
+                            limit_base = rss_limit if rss_limit > 0 else 50
+                            if isinstance(hist_per_page, int) and hist_per_page > 0:
+                                limit_base = max(limit_base, hist_per_page)
+                            limit = limit_base * max(hist_max_pages, 1)
+                            seen_keys = db.list_seen_item_keys(int(src.id), limit=limit)
                         except Exception:
                             seen_keys = []
                     if test_mode:

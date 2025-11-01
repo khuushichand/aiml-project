@@ -777,8 +777,13 @@ async def fetch_rss_feed(
                 if not href:
                     continue
                 rel = (ln.get("rel") or "").strip().lower()
+                # Resolve relative IRIs against the feed URL to produce an absolute URL
+                try:
+                    resolved = urljoin(url, href)
+                except Exception:
+                    resolved = href  # fall back to original if resolution fails
                 if rel in {"prev-archive", "next-archive", "current", "self"}:
-                    atom_links.append({"rel": rel, "href": href})
+                    atom_links.append({"rel": rel, "href": resolved})
         except Exception:
             atom_links = []
 
@@ -866,6 +871,8 @@ async def fetch_rss_feed_history(
             "etag": etag_out,
             "last_modified": last_mod_out,
             "pages_fetched": pages_fetched,
+            "strategy_used": (strategy or "auto").lower(),
+            "stop_on_seen_triggered": False,
         }
 
     # Helper: follow Atom RFC5005 prev-archive links

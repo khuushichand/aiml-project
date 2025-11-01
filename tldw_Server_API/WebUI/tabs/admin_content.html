@@ -3773,43 +3773,6 @@ async function _ensurePermissionCategories() {
     <h3>Result:</h3>
     <pre id="adminOrgsTeams_result">---</pre>
     <!-- bindings via js/admin-advanced.js -->
-                const orgId = parseInt(document.getElementById('m_org').value || '0', 10); const userId = parseInt(document.getElementById('m_user').value || '0', 10);
-                const role = (document.getElementById('m_role').value || '').trim();
-                if (!orgId || !userId || !role) { Toast.error('Org ID, User ID, and new role required'); return; }
-                const res = await apiClient.patch(`/api/v1/admin/orgs/${orgId}/members/${userId}`, { role });
-                document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-                Toast.success('Updated org member role');
-            } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Update role failed'); }
-        }
-        async function adminRemoveOrgMember() {
-            try {
-                const orgId = parseInt(document.getElementById('m_org').value || '0', 10); const userId = parseInt(document.getElementById('m_user').value || '0', 10);
-                if (!orgId || !userId) { Toast.error('Org ID and User ID required'); return; }
-                if (!confirm('Remove user ' + userId + ' from org ' + orgId + '?')) return;
-                const res = await apiClient.delete(`/api/v1/admin/orgs/${orgId}/members/${userId}`);
-                document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-                Toast.success('Removed org member');
-            } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Remove failed'); }
-        }
-        async function adminGetOrgWatchlistsSettings() {
-            try {
-                const orgId = parseInt(document.getElementById('m_org').value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
-                const res = await apiClient.get(`/api/v1/admin/orgs/${orgId}/watchlists/settings`);
-                document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-                Toast.success('Loaded org watchlists settings');
-            } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Get settings failed'); }
-        }
-        async function adminSetOrgWatchlistsSettings() {
-            try {
-                const orgId = parseInt(document.getElementById('m_org').value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
-                const val = document.getElementById('org_wl_require').value;
-                const body = { require_include_default: val === '' ? null : (val === 'true') };
-                const res = await apiClient.patch(`/api/v1/admin/orgs/${orgId}/watchlists/settings`, body);
-                document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-                Toast.success('Updated org watchlists settings');
-            } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Update settings failed'); }
-        }
-    </script>
 </div>
 
 <!-- ============ Admin: Tool Permissions ============ -->

@@ -1172,9 +1172,9 @@ class EnhancedWebScraper:
                         elif depth > max_depth:
                             logger.debug(f"Skip URL (depth>{max_depth}): {cur}")
                         continue
-                # Keep original URL string for scraping/results; use 'cur' only for visited checks
-                batch.append((neg_s, depth, _tie, url, parent))
-                visited.add(cur)
+                    # Keep original URL string for scraping/results; use 'cur' only for visited checks
+                    batch.append((neg_s, depth, _tie, url, parent))
+                    visited.add(cur)
 
                 if not batch:
                     continue

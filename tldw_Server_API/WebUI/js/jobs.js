@@ -21,7 +21,7 @@ async function adminFetchJobsStats() {
     if (!data.length) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 6;
+      td.colSpan = 7;
       td.className = 'text-muted';
       td.textContent = 'No data';
       tr.appendChild(td);
@@ -63,7 +63,7 @@ async function adminFetchJobsStats() {
   } catch (e) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.className = 'text-error';
     td.textContent = (e && e.message) ? String(e.message) : 'Failed to load';
     tr.appendChild(td);
@@ -404,6 +404,28 @@ async function adminJobsInit() {
     byId('btnAdminJobsCryptoExec')?.addEventListener('click', adminJobsCryptoRotateExecute);
     byId('adminJobsEvents_start')?.addEventListener('click', adminStartJobsEvents);
     byId('adminJobsEvents_stop')?.addEventListener('click', adminStopJobsEvents);
+    // Optional: user-configurable max events buffer
+    const maxEl = byId('adminJobsEvents_max');
+    if (maxEl) {
+      // Initialize from storage if empty
+      try {
+        if (!maxEl.value) {
+          let saved = null;
+          if (typeof Utils !== 'undefined') saved = Utils.getFromStorage('admin-jobs-events-max');
+          else if (typeof localStorage !== 'undefined') saved = localStorage.getItem('admin-jobs-events-max');
+          if (saved) maxEl.value = String(parseInt(saved, 10) || 100);
+        }
+      } catch (_) {}
+      maxEl.addEventListener('change', () => {
+        const v = parseInt(maxEl.value, 10);
+        const val = (Number.isFinite(v) && v > 0) ? v : 100;
+        maxEl.value = String(val);
+        try {
+          if (typeof Utils !== 'undefined') Utils.saveToStorage('admin-jobs-events-max', val);
+          else if (typeof localStorage !== 'undefined') localStorage.setItem('admin-jobs-events-max', String(val));
+        } catch (_) {}
+      });
+    }
   } catch (_) {}
   try { await adminFetchJobsStats(); } catch (e) { /* ignore */ }
 }
@@ -609,6 +631,37 @@ async function adminStartJobsEvents() {
     tbody.innerHTML = '';
     tbody.appendChild(tr);
   }
+  // Keep a bounded buffer of recent events to avoid unbounded growth
+  // Allow user-configured cap via input #adminJobsEvents_max or local storage key 'admin-jobs-events-max'
+  const EVENTS_MAX = (() => {
+    try {
+      const input = document.getElementById('adminJobsEvents_max');
+      const readStored = () => {
+        try {
+          if (typeof Utils !== 'undefined') {
+            return Utils.getFromStorage('admin-jobs-events-max');
+          }
+          return (typeof localStorage !== 'undefined') ? localStorage.getItem('admin-jobs-events-max') : null;
+        } catch (_) { return null; }
+      };
+      let v = NaN;
+      if (input && input.value) {
+        v = parseInt(input.value, 10);
+      } else {
+        const saved = readStored();
+        if (saved != null) v = parseInt(saved, 10);
+      }
+      if (!Number.isFinite(v) || v <= 0) v = 100; // default
+      if (input) input.value = String(v);
+      try {
+        if (typeof Utils !== 'undefined') Utils.saveToStorage('admin-jobs-events-max', v);
+        else if (typeof localStorage !== 'undefined') localStorage.setItem('admin-jobs-events-max', String(v));
+      } catch (_) {}
+      return v;
+    } catch (_) {
+      return 100;
+    }
+  })();
   const events = [];
   const handle = apiClient.streamSSE('/api/v1/jobs/events/stream', {
     method: 'GET',
@@ -625,6 +678,10 @@ async function adminStartJobsEvents() {
           adminJobsFailureTimelines[jid] = arr.slice(-20);
         }
         events.push(obj);
+        // Trim to the last EVENTS_MAX items to cap memory
+        if (events.length > EVENTS_MAX) {
+          events.splice(0, events.length - EVENTS_MAX);
+        }
       } catch (_) {}
       if (tbody) {
         tbody.innerHTML = '';
