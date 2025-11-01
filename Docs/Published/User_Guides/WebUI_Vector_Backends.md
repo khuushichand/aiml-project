@@ -20,11 +20,7 @@ This page shows how to identify which backend is active and where to change tuni
 
 Screenshots
 
-![Backend badge (pgvector)](../assets/vector_backends_badge_pgvector.png)
-
-![Backend badge (chroma)](../assets/vector_backends_badge_chroma.png)
-
-Note: If images don’t render in your build, ensure the screenshot files are placed under `Docs/Published/assets/` with the names shown above.
+Note: Screenshot files are not bundled to keep the repo lean. See the "Capturing Screenshots" section below for filenames and add them under `Docs/Published/assets/` if you want images to render in your local build.
 
 ## ef_search (pgvector only)
 
@@ -36,7 +32,7 @@ Note: If images don’t render in your build, ensure the screenshot files are pl
 
 Screenshot
 
-![ef_search control](../assets/vector_backends_ef_search.png)
+Note: The ef_search control screenshot is optional and not included by default. To add it locally, save the image under `Docs/Published/assets/vector_backends_ef_search.png` as described below.
 
 Tips
 

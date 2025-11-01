@@ -48,6 +48,10 @@ Implementation status
   - Migration notes: new page added (Docs/Operations/Watchlists_Migration_Notes.md) clarifying that no dedicated CLI is required; use OPML + filters. Linked from API/PRD.
   - DB hardening: schema migration guards added to avoid duplicate‑column ALTER noise.
 
+Cross-links
+- Admin Items view: `/admin/watchlists-items` allows browsing items for a run with pagination and status filters; linked from Runs table.
+- CSV endpoints: see Docs/Published/API-related/Watchlists_API.md for `GET /api/v1/watchlists/runs/export.csv` (supports `include_tallies`) and `GET /api/v1/watchlists/runs/{run_id}/tallies.csv`.
+
 - In Progress
   - Docs polish (light): continue expanding OPML examples and include‑only semantics quick table where helpful.
   - Optional preview endpoint tests: additional RSS+site preview scenarios and edge cases (regex errors, empty filters).

@@ -38,7 +38,16 @@ export default function AdminWatchlistsRunsPage() {
   const hasMoreByJob = useMemo(() => (pageByJob * sizeByJob) < (total || 0), [pageByJob, sizeByJob, total]);
 
   const runsRequireAdmin = (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === '1' || (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === 'true';
-  const userIsAdmin = !!((user as any)?.is_admin || (user as any)?.role === 'admin' || (user as any)?.roles?.includes?.('admin'));
+  const roleVal = (user as any)?.role?.toString?.().toLowerCase?.();
+  const rolesArr = ((user as any)?.roles || []).map((r: any) => r?.toString?.().toLowerCase?.());
+  const userIsAdmin = !!(
+    (user as any)?.is_admin ||
+    (user as any)?.isAdmin ||
+    roleVal === 'admin' ||
+    rolesArr?.includes?.('admin') ||
+    (user as any)?.permissions?.includes?.('admin') ||
+    (user as any)?.scopes?.includes?.('admin')
+  );
 
   const fetchRunsByJob = async (opts?: { page?: number; size?: number }) => {
     const text = jobIdInput.trim();

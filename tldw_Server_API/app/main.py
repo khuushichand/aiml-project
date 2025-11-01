@@ -592,6 +592,15 @@ READINESS_STATE = {"ready": True}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _startup_trace("lifespan: entered")
+    # Determine if heavy (non-critical) startup should be deferred to background
+    # Always defer non-critical initializations to background to keep startup fast
+    _defer_heavy = True
+
+    # Container for background startup tasks (used during shutdown)
+    try:
+        app.state.bg_tasks = {}
+    except Exception:
+        pass
     chat_config: dict[str, object] = {}
     # Startup: Validate MCP configuration in production (fail fast)
     try:
@@ -716,10 +725,13 @@ async def lifespan(app: FastAPI):
     # Initialize MCP Unified Server (secure, production-ready)
     logger.info("App Startup: Initializing MCP Unified server...")
     try:
-        from tldw_Server_API.app.core.MCP_unified import get_mcp_server
-        mcp_server = get_mcp_server()
-        await mcp_server.initialize()
-        logger.info("App Startup: MCP Unified server initialized successfully")
+        if _defer_heavy:
+            logger.info("Deferring MCP Unified server initialization to background (DEFER_HEAVY_STARTUP)")
+        else:
+            from tldw_Server_API.app.core.MCP_unified import get_mcp_server
+            mcp_server = get_mcp_server()
+            await mcp_server.initialize()
+            logger.info("App Startup: MCP Unified server initialized successfully")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
         logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
@@ -728,189 +740,364 @@ async def lifespan(app: FastAPI):
     # Initialize Chat Module Components
     logger.info("App Startup: Initializing Chat module components...")
 
-    # Initialize Provider Manager
-    try:
-        from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
-        # Seed from authoritative provider configuration to avoid drift
-        from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
+    # Initialize Provider Manager (defer in heavy/test mode)
+    if not _defer_heavy:
+        try:
+            from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
+            # Seed from authoritative provider configuration to avoid drift
+            from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
 
-        # Get list of configured providers (authoritative mapping)
-        providers = list(PROVIDER_API_CALL_HANDLERS.keys())
-        provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
-        await provider_manager.start_health_checks()
-        logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize provider manager: {e}")
+            # Get list of configured providers (authoritative mapping)
+            providers = list(PROVIDER_API_CALL_HANDLERS.keys())
+            provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
+            await provider_manager.start_health_checks()
+            logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize provider manager: {e}")
+    else:
+        logger.info("Deferring provider manager initialization to background (DEFER_HEAVY_STARTUP)")
 
-    # Initialize Request Queue
+    # Initialize Request Queue (defer in heavy/test mode)
     try:
-        from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
         from tldw_Server_API.app.core.config import load_comprehensive_config
-
-        config = load_comprehensive_config()
         chat_config = {}
+        config = load_comprehensive_config()
         if config and config.has_section('Chat-Module'):
             chat_config = dict(config.items('Chat-Module'))
 
-        queued_execution_enabled = False
-        try:
-            env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
-            if env_queued is not None:
-                queued_execution_enabled = env_queued.strip().lower() in {"1", "true", "yes", "on"}
-            else:
-                queued_execution_enabled = (
-                    str(chat_config.get('queued_execution', 'False')).strip().lower() in {"1", "true", "yes", "on"}
-                )
-        except Exception:
+        if not _defer_heavy:
+            from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
             queued_execution_enabled = False
+            try:
+                env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
+                if env_queued is not None:
+                    queued_execution_enabled = env_queued.strip().lower() in {"1", "true", "yes", "on"}
+                else:
+                    queued_execution_enabled = (
+                        str(chat_config.get('queued_execution', 'False')).strip().lower() in {"1", "true", "yes", "on"}
+                    )
+            except Exception:
+                queued_execution_enabled = False
 
-        if queued_execution_enabled:
-            request_queue = initialize_request_queue(
-                max_queue_size=int(chat_config.get('max_queue_size', 100)),
-                max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
-                global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
-                per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
-            )
-            await request_queue.start(num_workers=4)
-            logger.info("App Startup: Request queue initialized with 4 workers")
+            if queued_execution_enabled:
+                request_queue = initialize_request_queue(
+                    max_queue_size=int(chat_config.get('max_queue_size', 100)),
+                    max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
+                    global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
+                    per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
+                )
+                await request_queue.start(num_workers=4)
+                logger.info("App Startup: Request queue initialized with 4 workers")
+            else:
+                logger.info("App Startup: Request queue disabled (QUEUED_EXECUTION is off)")
         else:
-            logger.info("App Startup: Request queue disabled (QUEUED_EXECUTION is off)")
+            logger.info("Deferring request queue initialization to background (DEFER_HEAVY_STARTUP)")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize request queue: {e}")
 
-    # Initialize Rate Limiter
+    # Initialize Rate Limiter (defer in heavy/test mode)
     try:
-        from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
-
-        rate_config = RateLimitConfig(
-            global_rpm=int(chat_config.get('rate_limit_per_minute', 60)),
-            per_user_rpm=int(chat_config.get('rate_limit_per_user_per_minute', 20)),
-            per_conversation_rpm=int(chat_config.get('rate_limit_per_conversation_per_minute', 10)),
-            per_user_tokens_per_minute=int(chat_config.get('rate_limit_tokens_per_minute', 10000))
-        )
-        rate_limiter = initialize_rate_limiter(rate_config)
-        logger.info("App Startup: Rate limiter initialized")
+        if not _defer_heavy:
+            from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
+            rate_config = RateLimitConfig(
+                global_rpm=int(chat_config.get('rate_limit_per_minute', 60)),
+                per_user_rpm=int(chat_config.get('rate_limit_per_user_per_minute', 20)),
+                per_conversation_rpm=int(chat_config.get('rate_limit_per_conversation_per_minute', 10)),
+                per_user_tokens_per_minute=int(chat_config.get('rate_limit_tokens_per_minute', 10000))
+            )
+            rate_limiter = initialize_rate_limiter(rate_config)
+            logger.info("App Startup: Rate limiter initialized")
+        else:
+            logger.info("Deferring rate limiter initialization to background (DEFER_HEAVY_STARTUP)")
     except Exception as e:
         logger.error(f"App Startup: Failed to initialize rate limiter: {e}")
 
-    # Initialize TTS Service
-    logger.info("App Startup: Initializing TTS service...")
-    try:
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-        from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
+    # Initialize TTS Service (defer in heavy/test mode)
+    if not _defer_heavy:
+        logger.info("App Startup: Initializing TTS service...")
+        try:
+            from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+            from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
 
-        # Load comprehensive config and extract TTS config dict
-        cfg_obj = load_comprehensive_config_with_tts()
-        tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
+            # Load comprehensive config and extract TTS config dict
+            cfg_obj = load_comprehensive_config_with_tts()
+            tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
 
-        # Initialize the TTS service with configuration (falls back to internal loader if None)
-        await get_tts_service_v2(config=tts_cfg_dict)
-        logger.info("App Startup: TTS service initialized successfully")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize TTS service: {e}")
-        logger.warning("TTS functionality will be unavailable")
-        # Continue startup even if TTS fails (for backward compatibility)
+            # Initialize the TTS service with configuration (falls back to internal loader if None)
+            await get_tts_service_v2(config=tts_cfg_dict)
+            logger.info("App Startup: TTS service initialized successfully")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize TTS service: {e}")
+            logger.warning("TTS functionality will be unavailable")
+            # Continue startup even if TTS fails (for backward compatibility)
+    else:
+        logger.info("Deferring TTS service initialization to background (DEFER_HEAVY_STARTUP)")
 
-    # Initialize Chunking Templates
-    logger.info("App Startup: Initializing chunking templates...")
-    try:
-        from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
+    # Initialize Chunking Templates (defer in heavy/test mode)
+    if not _defer_heavy:
+        logger.info("App Startup: Initializing chunking templates...")
+        try:
+            from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
 
-        if ensure_templates_initialized():
-            logger.info("App Startup: Chunking templates initialized successfully")
-        else:
-            logger.warning("App Startup: Chunking templates initialization incomplete")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
-        # Continue startup even if template initialization fails
+            if ensure_templates_initialized():
+                logger.info("App Startup: Chunking templates initialized successfully")
+            else:
+                logger.warning("App Startup: Chunking templates initialization incomplete")
+        except Exception as e:
+            logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
+            # Continue startup even if template initialization fails
+    else:
+        logger.info("Deferring chunking templates initialization to background (DEFER_HEAVY_STARTUP)")
 
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
 
-    # Embeddings: optional startup-time dimension sanity check (opt-in)
-    try:
-        if os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}:
-            strict_mode = (os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"})
-            logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
-            try:
-                import os as _os_mod
-                from pathlib import Path as _Path
-                from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
-                from tldw_Server_API.app.core.config import settings as _emb_settings
+    # Embeddings: optional startup-time dimension sanity check (defer in heavy/test mode)
+    if not _defer_heavy:
+        try:
+            if os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}:
+                strict_mode = (os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"})
+                logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
+                try:
+                    import os as _os_mod
+                    from pathlib import Path as _Path
+                    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+                    from tldw_Server_API.app.core.config import settings as _emb_settings
 
-                def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
-                    mms: list[tuple[str, int, int, str]] = []
-                    mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
-                    client = getattr(mgr, 'client', None)
-                    list_fn = getattr(client, 'list_collections', None)
-                    collections = list_fn() if callable(list_fn) else []
-                    for col in collections:
+                    def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
+                        mms: list[tuple[str, int, int, str]] = []
+                        mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
+                        client = getattr(mgr, 'client', None)
+                        list_fn = getattr(client, 'list_collections', None)
+                        collections = list_fn() if callable(list_fn) else []
+                        for col in collections:
+                            try:
+                                name = getattr(col, 'name', None) or (col.get('name') if isinstance(col, dict) else None)
+                                if not name:
+                                    continue
+                                get_fn = getattr(client, 'get_collection', None)
+                                c = get_fn(name=name) if callable(get_fn) else col
+                                meta = getattr(c, 'metadata', None) or {}
+                                expected = None
+                                if isinstance(meta, dict) and meta.get('embedding_dimension'):
+                                    try:
+                                        expected = int(meta.get('embedding_dimension'))
+                                    except Exception:
+                                        expected = None
+                                actual = None
+                                if hasattr(c, 'get') and callable(getattr(c, 'get')):
+                                    try:
+                                        res = c.get(limit=1, include=['embeddings'])
+                                        embs = res.get('embeddings') if isinstance(res, dict) else None
+                                        if embs and len(embs) > 0:
+                                            first = embs[0]
+                                            if first and hasattr(first, '__len__'):
+                                                actual = int(len(first))
+                                    except Exception:
+                                        pass
+                                if expected is not None and actual is not None and expected != actual:
+                                    mms.append((name, expected, actual, user_id))
+                            except Exception as _dc_err:
+                                logger.debug(f"Dimension check skipped for collection (user={user_id}): {_dc_err}")
                         try:
-                            name = getattr(col, 'name', None) or (col.get('name') if isinstance(col, dict) else None)
-                            if not name:
-                                continue
-                            get_fn = getattr(client, 'get_collection', None)
-                            c = get_fn(name=name) if callable(get_fn) else col
-                            meta = getattr(c, 'metadata', None) or {}
-                            expected = None
-                            if isinstance(meta, dict) and meta.get('embedding_dimension'):
-                                try:
-                                    expected = int(meta.get('embedding_dimension'))
-                                except Exception:
-                                    expected = None
-                            actual = None
-                            if hasattr(c, 'get') and callable(getattr(c, 'get')):
-                                try:
-                                    res = c.get(limit=1, include=['embeddings'])
-                                    embs = res.get('embeddings') if isinstance(res, dict) else None
-                                    if embs and len(embs) > 0:
-                                        first = embs[0]
-                                        if first and hasattr(first, '__len__'):
-                                            actual = int(len(first))
-                                except Exception:
-                                    pass
-                            if expected is not None and actual is not None and expected != actual:
-                                mms.append((name, expected, actual, user_id))
-                        except Exception as _dc_err:
-                            logger.debug(f"Dimension check skipped for collection (user={user_id}): {_dc_err}")
-                    try:
-                        mgr.close()
-                    except Exception:
-                        pass
-                    return mms
+                            mgr.close()
+                        except Exception:
+                            pass
+                        return mms
 
-                auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
-                mismatches: list[tuple[str, int, int, str]] = []
-                if auth_mode == "multi_user":
-                    base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
-                    if base and _Path(base).exists():
-                        for entry in _Path(base).iterdir():
-                            if entry.is_dir():
-                                user_id = entry.name
-                                try:
-                                    mismatches.extend(_check_user(user_id))
-                                except Exception as _ue:
-                                    logger.debug(f"Dimension check error for user {user_id}: {_ue}")
+                    auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
+                    mismatches: list[tuple[str, int, int, str]] = []
+                    if auth_mode == "multi_user":
+                        base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
+                        if base and _Path(base).exists():
+                            for entry in _Path(base).iterdir():
+                                if entry.is_dir():
+                                    user_id = entry.name
+                                    try:
+                                        mismatches.extend(_check_user(user_id))
+                                    except Exception as _ue:
+                                        logger.debug(f"Dimension check error for user {user_id}: {_ue}")
+                        else:
+                            logger.warning("Embeddings dimension check: USER_DB_BASE_DIR missing or does not exist in multi_user mode")
                     else:
-                        logger.warning("Embeddings dimension check: USER_DB_BASE_DIR missing or does not exist in multi_user mode")
-                else:
-                    user_id = str(_emb_settings.get("SINGLE_USER_FIXED_ID", "1"))
-                    mismatches.extend(_check_user(user_id))
+                        user_id = str(_emb_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                        mismatches.extend(_check_user(user_id))
 
-                if mismatches:
-                    for (n,e,a,u) in mismatches:
-                        logger.error(f"Embeddings dimension mismatch at startup (user={u}) in collection '{n}': expected={e}, actual={a}")
+                    if mismatches:
+                        for (n,e,a,u) in mismatches:
+                            logger.error(f"Embeddings dimension mismatch at startup (user={u}) in collection '{n}': expected={e}, actual={a}")
+                        if strict_mode:
+                            raise RuntimeError("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED")
+                    else:
+                        logger.info("Embeddings dimension sanity check: OK (no mismatches)")
+                except Exception as _dc:
+                    logger.error(f"Embeddings dimension sanity check failed: {_dc}")
                     if strict_mode:
-                        raise RuntimeError("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED")
+                        raise
+        except Exception as _dim_outer:
+            logger.debug(f"Embeddings startup dimension check path failed early: {_dim_outer}")
+    else:
+        logger.info("Deferring embeddings dimension check to background (DEFER_HEAVY_STARTUP)")
+
+    # If heavy startup is deferred, schedule non-critical initializations now in background
+    if _defer_heavy:
+        import asyncio as _asyncio
+        async def _run_deferred_startup():
+            logger.info("Deferred startup: beginning non-critical initializations in background")
+            # MCP Unified server
+            try:
+                from tldw_Server_API.app.core.MCP_unified import get_mcp_server
+                _mcp = get_mcp_server()
+                await _mcp.initialize()
+                logger.info("Deferred startup: MCP Unified server ready")
+            except Exception as _mcp_err:
+                logger.debug(f"Deferred startup: MCP Unified server skipped/failed: {_mcp_err}")
+            # Provider manager
+            try:
+                from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
+                from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
+                _providers = list(PROVIDER_API_CALL_HANDLERS.keys())
+                _pm = initialize_provider_manager(_providers, primary_provider=_providers[0] if _providers else None)
+                await _pm.start_health_checks()
+                logger.info(f"Deferred startup: Provider manager ready ({len(_providers)} providers)")
+            except Exception as _pm_err:
+                logger.debug(f"Deferred startup: provider manager skipped/failed: {_pm_err}")
+
+            # Request queue + rate limiter
+            try:
+                from tldw_Server_API.app.core.config import load_comprehensive_config
+                _cfg = load_comprehensive_config()
+                _chat_cfg = {}
+                if _cfg and _cfg.has_section('Chat-Module'):
+                    _chat_cfg = dict(_cfg.items('Chat-Module'))
+                # Request queue
+                try:
+                    from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
+                    _queued = False
+                    env_q = os.getenv("CHAT_QUEUED_EXECUTION")
+                    if env_q is not None:
+                        _queued = env_q.strip().lower() in {"1","true","yes","on"}
+                    else:
+                        _queued = str(_chat_cfg.get('queued_execution','False')).strip().lower() in {"1","true","yes","on"}
+                    if _queued:
+                        _rq = initialize_request_queue(
+                            max_queue_size=int(_chat_cfg.get('max_queue_size', 100)),
+                            max_concurrent=int(_chat_cfg.get('max_concurrent_requests', 10)),
+                            global_rate_limit=int(_chat_cfg.get('rate_limit_per_minute', 60)),
+                            per_client_rate_limit=int(_chat_cfg.get('rate_limit_per_conversation_per_minute', 20))
+                        )
+                        await _rq.start(num_workers=4)
+                        logger.info("Deferred startup: Request queue online")
+                except Exception as _rq_err:
+                    logger.debug(f"Deferred startup: request queue skipped/failed: {_rq_err}")
+                # Rate limiter
+                try:
+                    from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
+                    _rl_cfg = RateLimitConfig(
+                        global_rpm=int(_chat_cfg.get('rate_limit_per_minute', 60)),
+                        per_user_rpm=int(_chat_cfg.get('rate_limit_per_user_per_minute', 20)),
+                        per_conversation_rpm=int(_chat_cfg.get('rate_limit_per_conversation_per_minute', 10)),
+                        per_user_tokens_per_minute=int(_chat_cfg.get('rate_limit_tokens_per_minute', 10000))
+                    )
+                    initialize_rate_limiter(_rl_cfg)
+                    logger.info("Deferred startup: Rate limiter online")
+                except Exception as _rl_err:
+                    logger.debug(f"Deferred startup: rate limiter skipped/failed: {_rl_err}")
+            except Exception as _q_err:
+                logger.debug(f"Deferred startup: queue/limiter skipped/failed: {_q_err}")
+
+            # TTS service
+            try:
+                from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+                from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
+                _cfg_obj = load_comprehensive_config_with_tts()
+                _tts_cfg = _cfg_obj.get_tts_config() if hasattr(_cfg_obj, 'get_tts_config') else None
+                await get_tts_service_v2(config=_tts_cfg)
+                logger.info("Deferred startup: TTS service ready")
+            except Exception as _tts_err:
+                logger.debug(f"Deferred startup: TTS skipped/failed: {_tts_err}")
+
+            # Chunking templates
+            try:
+                from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
+                if ensure_templates_initialized():
+                    logger.info("Deferred startup: Chunking templates ready")
                 else:
-                    logger.info("Embeddings dimension sanity check: OK (no mismatches)")
-            except Exception as _dc:
-                logger.error(f"Embeddings dimension sanity check failed: {_dc}")
-                if strict_mode:
-                    raise
-    except Exception as _dim_outer:
-        logger.debug(f"Embeddings startup dimension check path failed early: {_dim_outer}")
+                    logger.debug("Deferred startup: Chunking templates incomplete")
+            except Exception as _ct_err:
+                logger.debug(f"Deferred startup: chunking templates skipped/failed: {_ct_err}")
+
+            # Embeddings dimension check (opt-in)
+            try:
+                if os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true","1","yes","y","on"}:
+                    strict_mode = (os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true","1","yes","y","on"})
+                    from pathlib import Path as _Path
+                    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+                    from tldw_Server_API.app.core.config import settings as _emb_settings
+                    def _check_user(user_id: str) -> list[tuple[str,int,int,str]]:
+                        out = []
+                        mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
+                        client = getattr(mgr, 'client', None)
+                        list_fn = getattr(client, 'list_collections', None)
+                        cols = list_fn() if callable(list_fn) else []
+                        for col in cols:
+                            try:
+                                name = getattr(col, 'name', None) or (col.get('name') if isinstance(col, dict) else None)
+                                if not name:
+                                    continue
+                                get_fn = getattr(client, 'get_collection', None)
+                                c = get_fn(name=name) if callable(get_fn) else col
+                                meta = getattr(c, 'metadata', None) or {}
+                                expected = None
+                                if isinstance(meta, dict) and meta.get('embedding_dimension'):
+                                    try: expected = int(meta.get('embedding_dimension'))
+                                    except Exception: pass
+                                actual = None
+                                if hasattr(c, 'get') and callable(getattr(c, 'get')):
+                                    try:
+                                        res = c.get(limit=1, include=['embeddings'])
+                                        embs = res.get('embeddings') if isinstance(res, dict) else None
+                                        if embs and len(embs) > 0:
+                                            first = embs[0]
+                                            if first and hasattr(first, '__len__'):
+                                                actual = int(len(first))
+                                    except Exception:
+                                        pass
+                                if expected is not None and actual is not None and expected != actual:
+                                    out.append((name, expected, actual, user_id))
+                            except Exception:
+                                pass
+                        try:
+                            mgr.close()
+                        except Exception:
+                            pass
+                        return out
+                    mismatches: list[tuple[str,int,int,str]] = []
+                    if str(_emb_settings.get("AUTH_MODE", "single_user")) == "multi_user":
+                        base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
+                        if base and _Path(base).exists():
+                            for entry in _Path(base).iterdir():
+                                if entry.is_dir():
+                                    mismatches.extend(_check_user(entry.name))
+                    else:
+                        mismatches.extend(_check_user(str(_emb_settings.get("SINGLE_USER_FIXED_ID", "1"))))
+                    if mismatches:
+                        for (n,e,a,u) in mismatches:
+                            logger.error(f"Embeddings dimension mismatch (deferred) user={u} collection={n} expected={e} actual={a}")
+                        if strict_mode:
+                            raise RuntimeError("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED")
+                    else:
+                        logger.info("Deferred startup: Embeddings dimension check OK")
+            except Exception:
+                pass
+
+            logger.info("Deferred startup: completed non-critical initializations")
+
+        try:
+            app.state.bg_tasks['deferred_startup'] = _asyncio.create_task(_run_deferred_startup())
+        except Exception as _ds_e:
+            logger.debug(f"Failed to schedule deferred startup task: {_ds_e}")
 
     # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), audio Jobs (MVP), claims rebuild
     cleanup_task = None
@@ -1490,6 +1677,17 @@ async def lifespan(app: FastAPI):
         pass
 
     # Cancel/stop background worker(s)
+    try:
+        bg = getattr(app.state, 'bg_tasks', None)
+        if isinstance(bg, dict):
+            task = bg.get('deferred_startup')
+            if task:
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+    except Exception:
+        pass
     try:
         if 'cleanup_task' in locals() and cleanup_task:
             cleanup_task.cancel()

@@ -112,6 +112,16 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
             _start_dt, _end_dt, key_id,
         )
     else:
+        # SQLite stores CURRENT_TIMESTAMP as 'YYYY-MM-DD HH:MM:SS' (UTC). Normalize bounds accordingly
+        from datetime import datetime, timezone
+        def _sqlite_fmt(iso: str) -> str:
+            dt = datetime.fromisoformat(iso)
+            # Ensure UTC and naive for lexical comparison
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        start_str = _sqlite_fmt(start)
+        end_str = _sqlite_fmt(end)
         totals = await pool.fetchone(
             """
             SELECT COALESCE(SUM(total_tokens),0) AS tokens,
@@ -119,7 +129,7 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
             FROM llm_usage_log
             WHERE ts >= ? AND ts < ? AND key_id = ?
             """,
-            start, end, key_id,
+            start_str, end_str, key_id,
         )
     return {"tokens": int(totals["tokens"] if totals and isinstance(totals, dict) else 0), "usd": float(totals["usd"] if totals and isinstance(totals, dict) else 0.0)}
 

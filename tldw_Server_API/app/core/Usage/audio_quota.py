@@ -66,6 +66,39 @@ _lock = asyncio.Lock()
 _redis_client = None
 
 
+def _get_stream_ttl_seconds() -> int:
+    """TTL for Redis stream counters to mitigate leaks on abrupt disconnects.
+
+    Resolved in order of precedence:
+    1) Env var AUDIO_STREAM_TTL_SECONDS
+    2) Config [Audio-Quota] stream_ttl_seconds
+    3) Default 120 seconds
+    Values are clamped to [30, 3600].
+    """
+    # 1) Environment variable override
+    val_env = os.getenv("AUDIO_STREAM_TTL_SECONDS")
+    if val_env:
+        try:
+            v = int(val_env)
+            return max(30, min(3600, v))
+        except Exception:
+            pass
+    # 2) Config default
+    try:
+        from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
+        cfg = load_comprehensive_config()
+        if cfg and cfg.has_section('Audio-Quota'):
+            try:
+                v = int(cfg.get('Audio-Quota', 'stream_ttl_seconds', fallback='120'))
+            except Exception:
+                v = 120
+            return max(30, min(3600, v))
+    except Exception:
+        pass
+    # 3) Hard default
+    return 120
+
+
 def _use_redis() -> bool:
     if not redis_async:
         return False
@@ -102,11 +135,23 @@ def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
         if not get_metrics_registry or not MetricDefinition or not MetricType:
             return
         reg = get_metrics_registry()
-        try:
-            reg.register_metric(MetricDefinition(name=name, type=MetricType.GAUGE, description=name, labels=list(labels.keys())))
-        except Exception:
-            pass
-        reg.set_gauge(name, float(value), labels)
+        # Canonical metric name: underscores
+        canonical = name
+        # Backward-compat alias with dots
+        alias = name.replace('_', '.') if '_' in name else name
+        for metric_name in (canonical, alias):
+            try:
+                reg.register_metric(
+                    MetricDefinition(
+                        name=metric_name,
+                        type=MetricType.GAUGE,
+                        description=metric_name,
+                        labels=list(labels.keys()),
+                    )
+                )
+            except Exception:
+                pass
+            reg.set_gauge(metric_name, float(value), labels)
     except Exception:
         pass
 
@@ -116,11 +161,21 @@ def _metrics_increment(name: str, labels: Dict[str, str]) -> None:
         if not get_metrics_registry or not MetricDefinition or not MetricType:
             return
         reg = get_metrics_registry()
-        try:
-            reg.register_metric(MetricDefinition(name=name, type=MetricType.COUNTER, description=name, labels=list(labels.keys())))
-        except Exception:
-            pass
-        reg.increment(name, 1, labels)
+        canonical = name
+        alias = name.replace('_', '.') if '_' in name else name
+        for metric_name in (canonical, alias):
+            try:
+                reg.register_metric(
+                    MetricDefinition(
+                        name=metric_name,
+                        type=MetricType.COUNTER,
+                        description=metric_name,
+                        labels=list(labels.keys()),
+                    )
+                )
+            except Exception:
+                pass
+            reg.increment(metric_name, 1, labels)
     except Exception:
         pass
 
@@ -289,20 +344,20 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
             new_val = await r.incr(key)
             if new_val > max_jobs:
                 await r.decr(key)
-                _metrics_increment("audio.quota_violations_total", {"type": "concurrent_jobs"})
+                _metrics_increment("audio_quota_violations_total", {"type": "concurrent_jobs"})
                 return False, f"Concurrent job limit reached ({max_jobs})"
-            _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
+            _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
             return True, "OK"
         except Exception as e:
             logger.debug(f"Redis error in can_start_job: {e}")
     async with _lock:
         active = _active_jobs.get(user_id, 0)
         if max_jobs and active >= max_jobs:
-            _metrics_increment("audio.quota_violations_total", {"type": "concurrent_jobs"})
+            _metrics_increment("audio_quota_violations_total", {"type": "concurrent_jobs"})
             return False, f"Concurrent job limit reached ({max_jobs})"
         new_val = active + 1
         _active_jobs[user_id] = new_val
-        _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
+        _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
         return True, "OK"
 
 
@@ -315,7 +370,7 @@ async def finish_job(user_id: int) -> None:
             if new_val < 0:
                 await r.set(key, 0)
                 new_val = 0
-            _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
+            _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
             return
         except Exception as e:
             logger.debug(f"Redis error in finish_job: {e}")
@@ -323,7 +378,7 @@ async def finish_job(user_id: int) -> None:
         cur = _active_jobs.get(user_id, 0)
         new_val = max(0, cur - 1)
         _active_jobs[user_id] = new_val
-        _metrics_set_gauge("audio.jobs.active", float(new_val), {"user_id": str(int(user_id))})
+        _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
 
 
 async def can_start_stream(user_id: int) -> Tuple[bool, str]:
@@ -334,22 +389,27 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
         key = f"audio:active_streams:{int(user_id)}"
         try:
             new_val = await r.incr(key)
+            # Set/refresh TTL to mitigate leaks
+            try:
+                await r.expire(key, _get_stream_ttl_seconds())
+            except Exception:
+                pass
             if new_val > max_streams:
                 await r.decr(key)
-                _metrics_increment("audio.quota_violations_total", {"type": "concurrent_streams"})
+                _metrics_increment("audio_quota_violations_total", {"type": "concurrent_streams"})
                 return False, f"Concurrent streams limit reached ({max_streams})"
-            _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
+            _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
             return True, "OK"
         except Exception as e:
             logger.debug(f"Redis error in can_start_stream: {e}")
     async with _lock:
         active = _active_streams.get(user_id, 0)
         if max_streams and active >= max_streams:
-            _metrics_increment("audio.quota_violations_total", {"type": "concurrent_streams"})
+            _metrics_increment("audio_quota_violations_total", {"type": "concurrent_streams"})
             return False, f"Concurrent streams limit reached ({max_streams})"
         new_val = active + 1
         _active_streams[user_id] = new_val
-        _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
+        _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
         return True, "OK"
 
 
@@ -362,7 +422,7 @@ async def finish_stream(user_id: int) -> None:
             if new_val < 0:
                 await r.set(key, 0)
                 new_val = 0
-            _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
+            _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
             return
         except Exception as e:
             logger.debug(f"Redis error in finish_stream: {e}")
@@ -370,7 +430,7 @@ async def finish_stream(user_id: int) -> None:
         cur = _active_streams.get(user_id, 0)
         new_val = max(0, cur - 1)
         _active_streams[user_id] = new_val
-        _metrics_set_gauge("audio.streaming.active", float(new_val), {"user_id": str(int(user_id))})
+        _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
 
 
 async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> Tuple[bool, Optional[float]]:
@@ -385,7 +445,7 @@ async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> T
     used = await get_daily_minutes_used(user_id)
     remaining = float(limit) - float(used)
     if minutes_requested > remaining:
-        _metrics_increment("audio.quota_violations_total", {"type": "daily_minutes"})
+        _metrics_increment("audio_quota_violations_total", {"type": "daily_minutes"})
         return False, max(0.0, remaining)
     return True, remaining - minutes_requested
 
@@ -394,3 +454,89 @@ def bytes_to_seconds(byte_count: int, sample_rate: int) -> float:
     # Float32 mono: 4 bytes per sample
     samples = max(0, int(byte_count // 4))
     return float(samples) / float(sample_rate or 16000)
+
+
+async def heartbeat_stream(user_id: int) -> None:
+    """Refresh TTL for active stream counter in Redis to prevent leaks.
+
+    No-op for in-process counters.
+    """
+    r = await _get_redis()
+    if not r:
+        return
+    try:
+        key = f"audio:active_streams:{int(user_id)}"
+        # Only refresh if key exists
+        exists = await r.exists(key)
+        if exists:
+            await r.expire(key, _get_stream_ttl_seconds())
+    except Exception as e:
+        logger.debug(f"Redis heartbeat_stream failed: {e}")
+
+
+async def active_streams_count(user_id: int) -> int:
+    """Return current active stream count for a user.
+
+    Reads Redis counter if available; falls back to in-process map.
+    """
+    r = await _get_redis()
+    if r:
+        try:
+            key = f"audio:active_streams:{int(user_id)}"
+            val = await r.get(key)
+            if val is None:
+                return 0
+            try:
+                return int(val)
+            except Exception:
+                return 0
+        except Exception as e:
+            logger.debug(f"Redis active_streams_count failed: {e}")
+    return int(_active_streams.get(int(user_id), 0))
+
+
+def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Dict[str, Optional[float]]]:
+    """Apply overrides from config.txt [Audio-Quota] and env JSON.
+
+    Supported config keys: <tier>_daily_minutes, <tier>_concurrent_streams,
+    <tier>_concurrent_jobs, <tier>_max_file_size_mb for tiers: free, standard, premium.
+    Env var AUDIO_TIER_LIMITS_JSON can fully override the mapping.
+    """
+    merged = {k: v.copy() for k, v in base.items()}
+    # Env JSON has priority
+    import json as _json
+    try:
+        j = os.getenv("AUDIO_TIER_LIMITS_JSON")
+        if j:
+            data = _json.loads(j)
+            if isinstance(data, dict):
+                for tier, vals in data.items():
+                    if tier in merged and isinstance(vals, dict):
+                        merged[tier].update(vals)
+    except Exception as e:
+        logger.debug(f"AUDIO_TIER_LIMITS_JSON parse failed: {e}")
+    # Config file overrides
+    try:
+        from tldw_Server_API.app.core.config import load_comprehensive_config
+        cfg = load_comprehensive_config()
+        if cfg and cfg.has_section('Audio-Quota'):
+            for tier in ("free", "standard", "premium"):
+                for key in ("daily_minutes", "concurrent_streams", "concurrent_jobs", "max_file_size_mb"):
+                    opt = f"{tier}_{key}"
+                    if cfg.has_option('Audio-Quota', opt):
+                        val = cfg.get('Audio-Quota', opt)
+                        # Coerce None for 'unlimited'
+                        if str(val).strip().lower() in {"none", "unlimited", "-1"} and key == "daily_minutes":
+                            merged[tier][key] = None
+                        else:
+                            try:
+                                merged[tier][key] = float(val) if key == "daily_minutes" else int(val)
+                            except Exception:
+                                pass
+    except Exception as e:
+        logger.debug(f"Audio-Quota config overrides failed: {e}")
+    return merged
+
+
+# Apply overrides on import
+TIER_LIMITS = _apply_tier_overrides_from_config(TIER_LIMITS)

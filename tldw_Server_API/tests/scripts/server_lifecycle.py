@@ -35,14 +35,15 @@ from typing import Optional
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_PORT = "8000"
 
-# Candidate health endpoints to probe in order. The check succeeds when any returns HTTP 200.
+# Candidate health endpoints to probe (most lightweight first).
+# The check succeeds when any returns HTTP 200, or 206 for aggregate health.
 HEALTH_PATHS = [
-    "/api/v1/health",
-    "/health",
-    "/api/v1/healthz",
-    "/healthz",
-    "/api/v1/health/ready",
-    "/ready",
+    "/healthz",                 # ultra-light liveness (no deps)
+    "/api/v1/healthz",         # API-scoped liveness
+    "/health",                 # control-plane health (simple 200)
+    "/api/v1/health",          # aggregate health (200 ok, 206 degraded)
+    "/ready",                  # control-plane readiness
+    "/api/v1/health/ready",    # API readiness
 ]
 
 # Default timeout; may be overridden via env (see _get_timeout_seconds).
@@ -133,8 +134,9 @@ def health_check() -> None:
             url = f"{base_url}{path}"
             try:
                 with urllib.request.urlopen(url, timeout=5) as response:
-                    if response.status == 200:
-                        print(f"[server-lifecycle] Health check OK for '{label}' via {path}")
+                    # Accept 200 OK universally; accept 206 for aggregate health endpoints
+                    if response.status == 200 or (response.status == 206 and path.endswith("/health")):
+                        print(f"[server-lifecycle] Health check OK for '{label}' via {path} (status {response.status})")
                         return
             except Exception:
                 # Try next candidate

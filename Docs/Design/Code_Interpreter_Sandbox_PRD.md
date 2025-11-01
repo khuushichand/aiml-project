@@ -175,7 +175,7 @@ Endpoints
 
 - POST `/runs`
   - Start a run (one-shot or for existing session). Body: `spec_version`, session_id? base_image? command[], env, `startup_timeout_sec` (image pull/VM boot), `timeout_sec` (execution), resource overrides, network_policy, files? (optional inline small files), capture_patterns. Request shape enforces `oneOf`: either `{ session_id, command }` or `{ base_image, command }`; when `session_id` is omitted, `base_image` is required. Supports `Idempotency-Key` header to dedupe client retries.
-  - Returns: `run_id`, `session_id?`.
+  - Returns: `run_id`, `session_id?`, `log_stream_url?` (pre‑signed or unsigned WS URL).
   - v0.3 / spec 1.1 (Draft): optional fields for limited interactivity and WS resume:
     - `interactive` (bool; default false)
     - `stdin_max_bytes`, `stdin_max_frame_bytes`, `stdin_bps`, `stdin_idle_timeout_sec` (limits; names TBD)
@@ -379,6 +379,23 @@ Timeout Outcomes (quick reference)
   - Heartbeats: server sends `{ "type": "heartbeat", "ts": "ISO", "seq": n }` every ~10s; clients should disconnect after ~30s of silence unless keepalive traffic observed.
   - Future (vNext): optional client→server frames when interactive runs are enabled: `{ "type": "stdin", "encoding": "utf8"|"base64", "data": "<payload>" }`.
 
+Signed WS URLs (spec)
+ - Server MAY return a pre-signed `log_stream_url` in responses (e.g., POST `/runs`, Admin details) containing a short‑lived `token` and an `exp` timestamp. Example:
+   - `ws://host/api/v1/sandbox/runs/{run_id}/stream?token=eyJhbGci...&exp=2025-10-28T12:01:00Z`
+ - Token semantics: scoped to `run_id`; expires at `exp`; bearer headers not required when `token` is present. TTL defaults are policy‑controlled (TBD).
+- Clients SHOULD prefer `log_stream_url` when present; otherwise construct the WS URL and use standard auth headers.
+ - Servers MAY also return an unsigned `log_stream_url` (no token) when using header-based auth; in that case, clients MUST send the normal auth headers when connecting.
+
+ Resume from sequence (spec)
+ - Goal: resume logs after reconnects using `seq`.
+ - Client can request resume via either:
+   - POST `/runs` optional field `resume_from_seq` (spec 1.1) to hint initial stream start; or
+   - Query param on WS: `GET .../stream?from_seq=<n>` to start from a specific sequence (inclusive).
+ - Server behavior:
+   - If buffered frames contain `from_seq`, stream from that sequence; otherwise stream from earliest retained and include a best‑effort gap note in the first `event` frame (TBD exact field).
+   - When neither provided, stream from the current tail.
+ - Buffering limits are policy‑controlled; clients SHOULD handle gaps and reorder using `seq`.
+
 Deprecated envelopes: any WS shapes that omit `seq` or use `data_b64`, `channel`, or `chunk` fields are no longer supported.
   Example: Start a one-shot Python run
 ```json
@@ -512,7 +529,7 @@ Key UX
 Protocol Hooks
 - `tldw.sandbox.run`
   - Args: file list or tar stream reference, working directory, runtime/image, command, env, startup_timeout_sec, timeout_sec, capture patterns.
-  - Resp: run_id, initial status; client opens WS to stream logs.
+  - Resp: run_id, initial status, optional `log_stream_url`; client opens WS to stream logs. Note: URL may be unsigned when header-based auth is used—include auth headers.
 - `tldw.sandbox.configure`
   - Configure defaults (runtime/image, policy hints) per workspace.
 - `tldw.sandbox.openArtifacts`
@@ -591,7 +608,8 @@ Response
 ```
 {
   "run_id": "a1b2c3d4-...",
-  "phase": "starting"
+  "phase": "starting",
+  "log_stream_url": "ws://host/api/v1/sandbox/runs/a1b2c3d4-.../stream?token=eyJhbGciOi...&exp=2025-10-28T12:01:00Z"
 }
 ```
 
@@ -606,6 +624,12 @@ GET ws://host/api/v1/sandbox/runs/a1b2c3d4-.../stream
   { "type": "heartbeat", "ts": "2025-10-28T12:00:00Z", "seq": 3 }
   { "type": "truncated", "reason": "log_cap", "seq": 4 }
   ```
+
+  4b) Stream logs (signed URL + resume)
+  ```
+  GET ws://host/api/v1/sandbox/runs/a1b2c3d4-.../stream?token=eyJhbGciOi...&exp=2025-10-28T12:01:00Z&from_seq=42
+  ```
+  Note: In header-based auth mode, servers may return an unsigned `log_stream_url` (no token). Include the normal auth headers when connecting.
 
   4a) Get run status
   ```
@@ -943,6 +967,7 @@ Feature Discovery Payload (example)
 ```
 GET /api/v1/sandbox/runtimes
 {
+  "store_mode": "TBD",
   "runtimes": [
     {
       "name": "docker",
@@ -960,6 +985,8 @@ GET /api/v1/sandbox/runtimes
       "workspace_cap_mb": 256,
       "artifact_ttl_hours": 24,
       "supported_spec_versions": ["1.0", "1.1"],
+      "interactive_supported": true,
+      "egress_allowlist_supported": true,
       "notes": null
     },
     {
@@ -975,6 +1002,8 @@ GET /api/v1/sandbox/runtimes
       "workspace_cap_mb": 256,
       "artifact_ttl_hours": 24,
       "supported_spec_versions": ["1.0"],
+      "interactive_supported": false,
+      "egress_allowlist_supported": false,
       "notes": "Direct Firecracker; enable on supported Linux hosts"
     }
   ]
@@ -1262,7 +1291,7 @@ HTTP requests
 - Content negotiation: `Content-Type: application/json` (uploads: `multipart/form-data` or `application/x-tar`); `Accept: application/json` or `application/problem+json`.
 
 WebSocket logs
-- URL: `ws(s)://<host>/api/v1/sandbox/runs/{run_id}/stream[?token=<signed>]`.
+- URL: `ws(s)://<host>/api/v1/sandbox/runs/{run_id}/stream[?token=<signed>][&from_seq=<n>]`.
 - Auth: same headers as REST or short‑lived `token` query. No subprotocol.
 - Frames: UTF‑8 JSON envelopes; `stdout`/`stderr` set `encoding` to `utf8` or `base64` per payload.
 - Ordering: all frames (including `heartbeat` and `truncated`) include `seq`; use it for ordering and dedup across reconnects.

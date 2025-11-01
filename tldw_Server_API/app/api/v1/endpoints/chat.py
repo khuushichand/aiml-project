@@ -146,6 +146,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
 )
 import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
@@ -613,6 +614,7 @@ async def _save_message_turn_to_db(
     dependencies=[
         Depends(rbac_rate_limit("chat.create")),
         Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.completions", count_as="call")),
+        Depends(enforce_llm_budget),  # Hard budget stop before handler runs
     ]
 )
 async def create_chat_completion(
@@ -636,6 +638,66 @@ async def create_chat_completion(
 
     # Initialize metrics collector
     metrics = get_chat_metrics()
+
+    # Fallback budget enforcement (in case middleware is bypassed by import order in tests)
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_auth_settings
+        _as = _get_auth_settings()
+        if getattr(_as, 'VIRTUAL_KEYS_ENABLED', True) and getattr(_as, 'LLM_BUDGET_ENFORCE', True):
+            key_id = getattr(request.state, 'api_key_id', None)
+            if not key_id:
+                # Attempt header-based resolution (X-API-KEY or Bearer)
+                api_key_hdr = None
+                try:
+                    api_key_hdr = X_API_KEY or None
+                    if not api_key_hdr and Authorization and Authorization.lower().startswith('bearer '):
+                        api_key_hdr = Authorization.split(' ', 1)[1].strip()
+                except Exception:
+                    api_key_hdr = None
+                if api_key_hdr:
+                    try:
+                        from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates as _derive_keys
+                        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
+                        import hmac as _hmac, hashlib as _hashlib
+                        digests: list[str] = []
+                        for k in _derive_keys(_as):
+                            d = _hmac.new(k, api_key_hdr.encode('utf-8'), _hashlib.sha256).hexdigest()
+                            if d not in digests:
+                                digests.append(d)
+                        if digests:
+                            pool = await _get_pool()
+                            placeholders = ",".join("?" for _ in digests)
+                            q = (
+                                f"SELECT id, user_id FROM api_keys "
+                                f"WHERE key_hash IN ({placeholders}) AND status = ? "
+                                f"ORDER BY created_at DESC LIMIT 1"
+                            )
+                            row = await pool.fetchone(q, (*digests, "active"))
+                            if row:
+                                key_id = row.get('id') if isinstance(row, dict) else row[0]
+                                try:
+                                    request.state.api_key_id = key_id
+                                    request.state.user_id = row.get('user_id') if isinstance(row, dict) else row[1]
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+            if key_id:
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits as _get_limits, is_key_over_budget as _is_over
+                    limits = await _get_limits(int(key_id))
+                    if limits and limits.get('is_virtual'):
+                        res = await _is_over(int(key_id))
+                        if res.get('over'):
+                            return JSONResponse({
+                                "error": "budget_exceeded",
+                                "message": "Virtual key budget exceeded",
+                                "details": res,
+                            }, status_code=402)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     # Parse provider and model for metrics (no mutation)
     provider, model = parse_provider_model_for_metrics(request_data, DEFAULT_LLM_PROVIDER)

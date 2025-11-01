@@ -46,6 +46,16 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     bytes_to_seconds,
 )
+# Quota helpers for status/limits and TTL heartbeat
+try:
+    from tldw_Server_API.app.core.Usage.audio_quota import (
+        heartbeat_stream as heartbeat_stream,
+        active_streams_count as active_streams_count,
+        get_daily_minutes_used as get_daily_minutes_used,
+        get_user_tier as get_user_tier,
+    )
+except Exception:
+    pass
 # Expose job quota helpers at module scope for tests to monkeypatch
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -1408,7 +1418,18 @@ async def websocket_transcribe(
                 await add_daily_minutes(user_id_for_usage, minutes_chunk)
 
             try:
-                await handle_unified_websocket(websocket, config, on_audio_seconds=_on_audio_quota)
+                async def _on_heartbeat() -> None:
+                    try:
+                        await heartbeat_stream(user_id_for_usage)
+                    except Exception:
+                        pass
+
+                await handle_unified_websocket(
+                    websocket,
+                    config,
+                    on_audio_seconds=_on_audio_quota,
+                    on_heartbeat=_on_heartbeat,
+                )
             except _QuotaExceeded as qe:
                 # Send structured error and close with application-defined code
                 try:
@@ -1495,14 +1516,24 @@ async def streaming_status():
             available_models.append("parakeet-mlx")
         except ImportError:
             pass
-        
-        # Check for standard variant
+
+        # Check for standard variant (NeMo)
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
                 load_parakeet_model
             )
             available_models.append("parakeet-standard")
         except ImportError:
+            pass
+
+        # Check for ONNX variant
+        try:
+            import onnxruntime  # noqa: F401
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
+                load_parakeet_onnx_model
+            )
+            available_models.append("parakeet-onnx")
+        except Exception:
             pass
         
         return JSONResponse({
@@ -1531,6 +1562,53 @@ async def streaming_status():
             }
         )
 
+
+@router.get("/stream/limits", summary="Get user's streaming quota and usage")
+async def streaming_limits(
+    current_user: User = Depends(get_request_user),
+):
+    """
+    Reports per-user daily minutes remaining and current active stream count.
+    """
+    try:
+        limits = await get_limits_for_user(current_user.id)
+    except Exception:
+        # Fallback to default free limits
+        limits = {"daily_minutes": 30.0, "concurrent_streams": 1, "concurrent_jobs": 1, "max_file_size_mb": 25}
+    try:
+        used_minutes = await get_daily_minutes_used(current_user.id)
+    except Exception:
+        used_minutes = 0.0
+    limit_minutes = limits.get("daily_minutes")
+    if limit_minutes is None:
+        remaining_minutes = None
+    else:
+        try:
+            remaining_minutes = max(0.0, float(limit_minutes) - float(used_minutes))
+        except Exception:
+            remaining_minutes = None
+    try:
+        active_streams = await active_streams_count(current_user.id)
+    except Exception:
+        active_streams = 0
+    try:
+        tier = await get_user_tier(current_user.id)
+    except Exception:
+        tier = "free"
+    try:
+        max_streams = int(limits.get("concurrent_streams") or 0)
+    except Exception:
+        max_streams = 0
+    can_start = (max_streams == 0) or (active_streams < max_streams)
+    return JSONResponse({
+        "user_id": current_user.id,
+        "tier": tier,
+        "limits": limits,
+        "used_today_minutes": used_minutes,
+        "remaining_minutes": remaining_minutes,
+        "active_streams": active_streams,
+        "can_start_stream": can_start,
+    })
 
 @router.post("/stream/test", summary="Test streaming transcription setup")
 async def test_streaming():

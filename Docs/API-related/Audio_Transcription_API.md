@@ -200,6 +200,21 @@ nemo_cache_dir = ./models/nemo
 
 Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change default transcriber, Nemo device, model variant, and cache dir.
 
+Additional streaming quota/env controls:
+- `AUDIO_TIER_LIMITS_JSON`: JSON mapping to override per-tier limits, e.g. `{ "free": { "daily_minutes": 60, "concurrent_streams": 2 } }`
+- `AUDIO_STREAM_TTL_SECONDS`: TTL for Redis stream counters (default 120) to mitigate counter leaks on abrupt disconnects
+
+Config file overrides (Config_Files/config.txt):
+```ini
+[Audio-Quota]
+free_daily_minutes = 60
+free_concurrent_streams = 2
+free_concurrent_jobs = 1
+free_max_file_size_mb = 25
+standard_daily_minutes = 480
+premium_daily_minutes = unlimited  # or 'none'
+```
+
 ## Live Transcription
 
 ### WebSocket API (Real-time)
@@ -227,6 +242,7 @@ Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`
 
 Helper endpoints
 - `GET /api/v1/audio/stream/status` → returns availability and supported models/variants and features
+- `GET /api/v1/audio/stream/limits` → per-user limits, minutes remaining, active streams
 - `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
 
 Examples (wscat)
@@ -277,6 +293,22 @@ The insight payload mirrors granola-style UX:
   "source": {"segment_range": [3,4], "start": 45.0, "end": 62.0}
 }
 ```
+
+### Auth & Close Codes
+
+- Auth modes
+  - Single-user: pass `?token=<API_KEY>` query, or `X-API-KEY` header, or `Authorization: Bearer <API_KEY>`, or first message `{ "type":"auth", "token":"..." }`.
+  - Multi-user: prefer `Authorization: Bearer <JWT>`; first-message JWT also accepted. Virtual API keys via `X-API-KEY` are supported with endpoint/path allowlists and DB-backed quotas.
+- Quotas
+  - Concurrent streams and daily minutes enforced per user; Redis is used when available for cross-process counters; otherwise in-process.
+  - On quota violations, the server emits `{ "type":"error", "error_type":"quota_exceeded", "quota":"daily_minutes|concurrent_streams" }` and closes with code `4003`.
+- Common close codes
+  - `4401` Unauthorized (auth missing/invalid)
+  - `4403` Forbidden (endpoint/path not allowed or key/JWT quota exceeded)
+  - `4003` Application quota violation (daily minutes / concurrent streams)
+  - `1008` Policy violation (e.g., IP not on allowlist)
+  - `1011` Internal error (e.g., no models available after fallback)
+
 
 #### Speaker Diarization & Audio Persistence
 

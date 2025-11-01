@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 from typing import Callable
+import hmac
+import hashlib
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+import os
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
 
 
@@ -20,16 +25,24 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app):
         super().__init__(app)
-        self._settings = get_settings()
+        # Do not cache settings; fetch fresh each request to honor test resets
+        self._settings = None
 
     def _should_check(self, path: str) -> bool:
         try:
-            if not getattr(self._settings, 'VIRTUAL_KEYS_ENABLED', True):
+            settings = get_settings()
+            if not getattr(settings, 'VIRTUAL_KEYS_ENABLED', True):
                 return False
-            if not getattr(self._settings, 'LLM_BUDGET_ENFORCE', True):
+            if not getattr(settings, 'LLM_BUDGET_ENFORCE', True):
                 return False
-            endpoints = getattr(self._settings, 'LLM_BUDGET_ENDPOINTS', []) or []
-            return any(path.startswith(p) for p in endpoints)
+            endpoints = getattr(settings, 'LLM_BUDGET_ENDPOINTS', None)
+            if not isinstance(endpoints, (list, tuple, set)) or len(endpoints) == 0:
+                # Fallback to sane defaults if overrides are missing/malformed
+                endpoints = [
+                    "/api/v1/chat/completions",
+                    "/api/v1/embeddings",
+                ]
+            return any(isinstance(p, str) and path.startswith(p) for p in endpoints)
         except Exception:
             return False
 
@@ -47,11 +60,53 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         if not self._should_check(path):
             return await call_next(request)
 
+        # Optional debug toggle for flaky test diagnosis (quiet by default)
+        _mw_debug = os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+
+        # Resolve key_id deterministically from header first (DB hash lookup),
+        # then fall back to manager validation if needed. This avoids cases
+        # where a stale singleton or init-order peculiarity misses the key.
         key_id = getattr(request.state, 'api_key_id', None)
         if not key_id:
-            # Try to validate API key header early (before route deps set request.state)
-            api_key = request.headers.get('X-API-KEY')
+            # Read API key from either X-API-KEY or Authorization: Bearer
+            api_key = request.headers.get('X-API-KEY') or request.headers.get('x-api-key')
+            if not api_key:
+                auth = request.headers.get('authorization') or request.headers.get('Authorization')
+                if isinstance(auth, str) and auth.lower().startswith('bearer '):
+                    api_key = auth.split(' ', 1)[1].strip()
+
+            # 1) Direct DB lookup by HMAC(hash)
             if api_key:
+                try:
+                    digests: list[str] = []
+                    for key in derive_hmac_key_candidates(get_settings()):
+                        digest = hmac.new(key, api_key.encode('utf-8'), hashlib.sha256).hexdigest()
+                        if digest not in digests:
+                            digests.append(digest)
+                    if digests:
+                        pool = await get_db_pool()
+                        placeholders = ",".join("?" for _ in digests)
+                        query = (
+                            f"SELECT id, user_id FROM api_keys "
+                            f"WHERE key_hash IN ({placeholders}) AND status = ? "
+                            f"ORDER BY created_at DESC LIMIT 1"
+                        )
+                        row = await pool.fetchone(query, (*digests, "active"))
+                        if row:
+                            key_id = row.get('id') if isinstance(row, dict) else row[0]
+                            try:
+                                request.state.api_key_id = key_id
+                                request.state.user_id = row.get('user_id') if isinstance(row, dict) else row[1]
+                            except Exception:
+                                pass
+                            if _mw_debug:
+                                logger.debug(f"LLM budget: resolved key_id via hash lookup: {key_id}")
+                except Exception as _e_hash:
+                    if _mw_debug:
+                        logger.debug(f"LLM budget: hash-lookup failed: {_e_hash}")
+
+            # 2) Fallback to manager validation if still unresolved
+            if not key_id and api_key:
                 try:
                     from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                     mgr = await get_api_key_manager()
@@ -59,15 +114,18 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     if info:
                         key_id = info.get('id')
                         try:
-                            # Attach for downstream if route deps rely on it too
                             request.state.api_key_id = key_id
                             request.state.user_id = info.get('user_id')
                         except Exception:
                             pass
-                except Exception as _e:
-                    logger.debug(f"LLM budget: early API key validation failed: {_e}")
+                        if _mw_debug:
+                            logger.debug(f"LLM budget: resolved key_id via manager.validate: {key_id}")
+                except Exception as _e_mgr:
+                    if _mw_debug:
+                        logger.debug(f"LLM budget: manager.validate failed: {_e_mgr}")
+
+            # If still no key_id, treat as JWT/no-key and skip enforcement
             if not key_id:
-                # JWT or no API key set yet: skip enforcement
                 return await call_next(request)
 
         try:

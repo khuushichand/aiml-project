@@ -22,6 +22,10 @@ For the full, frequently updated raw reference (auto-generated), see `Env_Vars.m
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).
 - `MAGIC_FILE_PATH`: Path to `magic.mgc` for `python-magic` if needed.
 
+Startup Fast/Deferred Mode (CI/test‑friendly)
+- `DEFER_HEAVY_STARTUP`: When `true`, defers non‑critical initialization to a background task after the app starts serving requests. This reduces time‑to‑health for smoke checks. Deferred work includes MCP Unified init, Chat Provider Manager, Chat Request Queue + Rate Limiter, TTS service, chunking templates, and the optional embeddings dimension check. Implied when `TEST_MODE=true` or `DISABLE_HEAVY_STARTUP=1`.
+- `DISABLE_HEAVY_STARTUP`: Back‑compat flag used in CI; treated the same as `DEFER_HEAVY_STARTUP` by the server.
+
 Logging & OpenAPI URLs
 - `LOG_JSON` / `ENABLE_JSON_LOGS`: Enable structured JSON logs (`true|false`).
 - `LOG_STREAM`: Log sink (`stderr|stdout`).
@@ -81,3 +85,8 @@ Monitoring & Telemetry
 - `WORKFLOWS_INTERNAL_BASE_URL`: Base URL for validation requests; defaults to `http://127.0.0.1:8000`.
 - `WORKFLOWS_MINT_VIRTUAL_KEYS`: `true|false` — when enabled, the scheduler mints a short‑lived scoped JWT (`scope=workflows`) per scheduled run and injects it as `secrets.jwt`.
 - `WORKFLOWS_VIRTUAL_KEY_TTL_MIN`: TTL (minutes) for per‑run tokens; default `15`.
+
+## Health Probes (CI smoke)
+- The smoke lifecycle script probes health endpoints in this order: `/healthz`, `/api/v1/healthz`, `/health`, `/api/v1/health`, `/ready`, `/api/v1/health/ready`.
+- Success criteria: HTTP `200` on any endpoint, or HTTP `206` on `/api/v1/health` (aggregate “degraded” still indicates the server is up).
+- Timeout can be adjusted with `SMOKE_STARTUP_TIMEOUT_SECONDS` (default `120`).

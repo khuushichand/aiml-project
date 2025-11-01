@@ -59,6 +59,58 @@ except Exception:  # pragma: no cover - optional dependency probing
         """Fallback diarization error when service is unavailable."""
         pass
 
+# Optional: Parakeet Core adapter
+try:  # pragma: no cover - optional integration path
+    from .Parakeet_Core_Streaming.transcriber import ParakeetCoreTranscriber as _CoreTranscriber
+    from .Parakeet_Core_Streaming.config import StreamingConfig as _CoreConfig
+
+    class _ParakeetCoreAdapter:
+        """Adapter exposing the same interface expected by handle_unified_websocket.
+
+        Delegates to the self-contained Parakeet core streaming transcriber so this
+        unified path can benefit from the improved buffering/metadata and variant handling.
+        """
+
+        def __init__(self, config: 'UnifiedStreamingConfig') -> None:
+            self._uconf = config
+            self._core = None  # type: ignore
+
+        def initialize(self) -> None:
+            # Map Unified config to core config
+            c = _CoreConfig(
+                model=self._uconf.model,
+                model_variant=self._uconf.model_variant,
+                sample_rate=self._uconf.sample_rate,
+                chunk_duration=self._uconf.chunk_duration,
+                overlap_duration=self._uconf.overlap_duration,
+                max_buffer_duration=self._uconf.max_buffer_duration,
+                enable_partial=self._uconf.enable_partial,
+                partial_interval=self._uconf.partial_interval,
+                language=self._uconf.language,
+            )
+            self._core = _CoreTranscriber(config=c)
+            # Ensure chosen variant is available; if not, raise to trigger fallback logic
+            if getattr(self._core, 'decode_fn', None) is None:
+                raise RuntimeError(f"parakeet_variant_unavailable: {self._uconf.model_variant}")
+
+        async def process_audio_chunk(self, audio_data: bytes):  # -> Optional[Dict[str, Any]]
+            return await self._core.process_audio_chunk(audio_data)  # type: ignore
+
+        def get_full_transcript(self) -> str:
+            return self._core.get_full_transcript()  # type: ignore
+
+        def reset(self) -> None:
+            self._core.reset()  # type: ignore
+
+        def cleanup(self) -> None:
+            try:
+                self._core.reset()  # type: ignore
+            except Exception:
+                pass
+
+except Exception:  # pragma: no cover - keep unified path working when core module absent
+    _ParakeetCoreAdapter = None  # type: ignore
+
 
 @dataclass
 class UnifiedStreamingConfig(StreamingConfig):
@@ -901,14 +953,18 @@ class UnifiedStreamingTranscriber:
     def initialize(self):
         """Initialize the appropriate transcriber."""
         model_lower = self.config.model.lower()
-        
+
         if model_lower == 'canary':
             self.transcriber = CanaryStreamingTranscriber(self.config)
         elif model_lower == 'whisper':
             self.transcriber = WhisperStreamingTranscriber(self.config)
-        else:  # Default to Parakeet
-            self.transcriber = ParakeetStreamingTranscriber(self.config)
-        
+        else:  # Parakeet
+            # Prefer the core adapter when available; fall back to legacy transcriber
+            if _ParakeetCoreAdapter is not None:
+                self.transcriber = _ParakeetCoreAdapter(self.config)  # type: ignore
+            else:
+                self.transcriber = ParakeetStreamingTranscriber(self.config)
+
         self.transcriber.initialize()
         logger.info(f"Initialized {self.config.model} transcriber")
     
@@ -950,6 +1006,7 @@ async def handle_unified_websocket(
     websocket,
     config: Optional[UnifiedStreamingConfig] = None,
     on_audio_seconds: Optional[Callable[[float, int], Awaitable[None]]] = None,
+    on_heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
 ):
     """
     Handle WebSocket connection for unified real-time transcription.
@@ -1101,6 +1158,21 @@ async def handle_unified_websocket(
         except Exception as e:
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
             logger.error(error_msg, exc_info=True)
+            # Emit structured warning about model/variant unavailability before fallback attempts
+            try:
+                await websocket.send_json({
+                    "type": "warning",
+                    "state": "model_unavailable",
+                    "error_type": "model_unavailable",
+                    "message": "Requested model/variant unavailable; attempting fallback if enabled",
+                    "details": {
+                        "model": config.model,
+                        "variant": getattr(config, 'model_variant', None),
+                        "error": str(e),
+                    },
+                })
+            except Exception:
+                pass
             
             # Check if fallback to Whisper is enabled in config
             from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -1142,8 +1214,11 @@ async def handle_unified_websocket(
                     # Send error with more details
                     await websocket.send_json({
                         "type": "error",
+                        "error_type": "model_unavailable",
                         "message": "No transcription models available. Please install required dependencies.",
                         "details": {
+                            "model": config.model,
+                            "variant": getattr(config, 'model_variant', None),
                             "original_error": str(e),
                             "fallback_error": str(fallback_error),
                             "suggestion": "Install nemo_toolkit[asr] for Parakeet/Canary or ensure faster-whisper is installed"
@@ -1254,8 +1329,18 @@ async def handle_unified_websocket(
                     # Optional callback to account for usage seconds before processing
                     if on_audio_seconds is not None:
                         # Compute seconds from byte length and configured sample rate
-                        seconds = float(len(audio_bytes)) / float(4 * max(1, config.sample_rate))
-                        await on_audio_seconds(seconds, config.sample_rate)
+                        try:
+                            from tldw_Server_API.app.core.Usage.audio_quota import bytes_to_seconds as _bytes_to_seconds
+                            seconds = _bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
+                        except Exception:
+                            seconds = float(len(audio_bytes)) / float(4 * max(1, int(config.sample_rate or 16000)))
+                        await on_audio_seconds(seconds, int(config.sample_rate or 16000))
+                    # Optional heartbeat to refresh stream TTL when using Redis counters
+                    if on_heartbeat is not None:
+                        try:
+                            await on_heartbeat()
+                        except Exception:
+                            pass
                     
                     # Process audio chunk
                     result = await transcriber.process_audio_chunk(audio_bytes)
