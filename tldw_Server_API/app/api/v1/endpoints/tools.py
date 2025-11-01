@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Coroutine
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
@@ -21,22 +21,30 @@ router = APIRouter()
 async def list_tools_endpoint(current_user: User = Depends(get_request_user)) -> ToolListResponse:
     try:
         executor = ToolExecutor()
+
         out = await executor.list_tools(
             user_id=str(current_user.id),
             client_id=str(current_user.username or current_user.id),
         )
 
-        def _to_tool_info(t: Dict[str, Any]) -> ToolInfo:
+        async def _to_tool_info(t: Dict[str, Any]) -> ToolInfo | None:
             try:
                 return ToolInfo(**t)
             except Exception:
-                # Best-effort mapping from dynamic tool dicts
-                return ToolInfo(
-                    name=str(t.get("name", "")),
-                    description=t.get("description"),
-                    module=t.get("module"),
-                    canExecute=bool(t.get("canExecute")),
-                )
+                out = await executor.list_tools(user_id=str(current_user.id), client_id=str(current_user.username or current_user.id))
+                tools = []
+                for t in out.get("tools", []) or []:
+                    try:
+                        tools.append(ToolInfo(**t))
+                    except Exception as e:
+                        logger.warning(f"Failed to parse tool info, falling back to best-effort mapping. Tool: {t.get('name')}, Error: {e}")
+                        # Best-effort mapping from dynamic tool dicts
+                        return ToolInfo(
+                            name=str(t.get("name", "")),
+                            description=t.get("description"),
+                            module=t.get("module"),
+                            canExecute=bool(t.get("canExecute")),
+                        )
 
         raw_tools = (out.get("tools") or []) if isinstance(out, dict) else []
         tools = [_to_tool_info(t) for t in raw_tools]

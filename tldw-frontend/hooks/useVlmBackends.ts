@@ -34,7 +34,7 @@ export function useVlmBackends(): UseVlmBackendsResult {
         setEndpoint(discovered);
 
         // Normalize endpoint to be relative to api base (remove /api/v1 prefix if present)
-        const rel = discovered.replace(/^\/?api\/?v1\//, '/').replace(/^\//, '/');
+        const rel = '/' + discovered.replace(/^\/?api\/?v1\//, '/').replace(/^\/+/, '');
         const finalPath = rel.startsWith('/rag/') ? rel : `/rag/${rel.replace(/^rag\//, '')}`;
 
         const data: any = await apiClient.get(finalPath);
