@@ -194,7 +194,8 @@ async function monListAlerts() {
 async function monMarkAlertRead(id) {
   try {
     if (!id) return;
-    await window.apiClient.post(`/api/v1/monitoring/alerts/${id}/read`, {});
+    const safeId = encodeURIComponent(id);
+    await window.apiClient.post(`/api/v1/monitoring/alerts/${safeId}/read`, {});
     Toast.success('Marked read');
     await monListAlerts();
   } catch (e) { Toast.error('Mark read failed'); }
