@@ -15,6 +15,18 @@ pytest_plugins = (
 )
 
 import os
+# Ensure problematic optional routers don't import during test collection
+# and enable test-friendly behaviors before importing the app.
+try:
+    # Disable heavy 'research' router to avoid importing Web_Scraping during collection
+    existing_disable = os.getenv("ROUTES_DISABLE", "")
+    if "research" not in existing_disable:
+        os.environ["ROUTES_DISABLE"] = (existing_disable + ",research").strip(",")
+    # Enable deterministic test behaviors across subsystems
+    os.environ.setdefault("TEST_MODE", "1")
+    os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+except Exception:
+    pass
 import pytest
 from fastapi.testclient import TestClient
 

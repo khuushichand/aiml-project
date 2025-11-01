@@ -128,34 +128,24 @@ def _trace_log_patcher(record):
         pass
 
 def _safe_log_format(record: dict) -> str:
-    try:
-        ts = record.get("time")
-        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
-    except Exception:
-        ts_str = ""
-    level = record.get("level").name if record.get("level") else "INFO"
-    extra = record.get("extra") or {}
-    trace_id = extra.get("trace_id", "")
-    span_id = extra.get("span_id", "")
-    request_id = extra.get("request_id", "")
-    session_id = extra.get("session_id", "")
-    def _san(v: object) -> str:
-        try:
-            s = str(v)
-            return s.replace("<", "").replace(">", "")
-        except Exception:
-            return ""
-    name = _san(record.get("name", ""))
-    function = _san(record.get("function", ""))
-    line = record.get("line", "")
-    message = _san(record.get("message", ""))
-    # Colorized with Loguru markup tags (processed when colorize=True)
+    """
+    Build a safe format template for Loguru which defers insertion of
+    dynamic values (especially the message) to Loguru's own formatting.
+
+    Returning a template with placeholders avoids embedding the raw message
+    into the format string. This prevents Loguru's colorizer from parsing
+    curly braces coming from messages (e.g., JSON dicts) which previously
+    caused recursive parsing and "Max string recursion exceeded" errors.
+    """
+    # Note: Markup tags (<level>, <dim>, etc.) are parsed before placeholders
+    # are formatted, so the inserted {message} content will not be re‑parsed
+    # for markup. This removes the need to strip '<' or '>' from messages.
     return (
-        f"<dim>{ts_str}</dim> | "
-        f"<level>{level:<8}</level> | "
-        f"<cyan>trace={trace_id}</cyan> <cyan>span={span_id}</cyan> "
-        f"<yellow>req={request_id}</yellow> <yellow>ses={session_id}</yellow> | "
-        f"<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
+        "<dim>{time:YYYY-MM-DD HH:mm:ss.SSS}</dim> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>trace={extra[trace_id]}</cyan> <cyan>span={extra[span_id]}</cyan> "
+        "<yellow>req={extra[request_id]}</yellow> <yellow>ses={extra[session_id]}</yellow> | "
+        "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
     )
 
 # Reset Loguru and configure a single, thread-safe sink

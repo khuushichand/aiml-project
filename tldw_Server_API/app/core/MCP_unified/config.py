@@ -317,24 +317,12 @@ class MCPConfig(BaseSettings):
         except Exception:
             pass
 
-        def _safe_fmt(record: dict) -> str:
-            try:
-                ts = record.get("time")
-                ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
-            except Exception:
-                ts_str = ""
-            level = record.get("level").name if record.get("level") else "INFO"
-            def _san(v: object) -> str:
-                try:
-                    s = str(v)
-                    return s.replace("<", "").replace(">", "")
-                except Exception:
-                    return ""
-            name = _san(record.get("name", ""))
-            function = _san(record.get("function", ""))
-            line = record.get("line", "")
-            msg = _san(record.get("message", ""))
-            return f"{ts_str} | {level:<8} | {name}:{function}:{line} - {msg}"
+        # Placeholder-based format template (no color, safe for braces in messages)
+        _fmt_template = (
+            "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+            "{level: <8} | "
+            "{name}:{function}:{line} - {message}"
+        )
 
         try:
             logger.remove()  # Reset to avoid duplicate/default handlers
@@ -344,7 +332,7 @@ class MCPConfig(BaseSettings):
         # Console logging (safe format, no color)
         logger.add(
             sink=os.sys.stderr,
-            format=_safe_fmt,
+            format=_fmt_template,
             level=self.log_level,
             colorize=False,
         )
@@ -353,7 +341,7 @@ class MCPConfig(BaseSettings):
         if self.log_file:
             logger.add(
                 sink=self.log_file,
-                format=_safe_fmt,
+                format=_fmt_template,
                 level=self.log_level,
                 rotation=self.log_rotation,
                 retention=self.log_retention,
@@ -364,7 +352,7 @@ class MCPConfig(BaseSettings):
         if self.audit_enabled:
             logger.add(
                 sink=self.audit_log_file,
-                format="{time:YYYY-MM-DD HH:mm:ss} | AUDIT | {message}",
+                format="{time:YYYY-MM-DD HH:mm:ss.SSS} | AUDIT | {message}",
                 level="INFO",
                 filter=lambda record: "audit" in record["extra"],
                 rotation="1 day",

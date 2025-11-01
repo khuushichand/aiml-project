@@ -21,14 +21,25 @@ router = APIRouter()
 async def list_tools_endpoint(current_user: User = Depends(get_request_user)) -> ToolListResponse:
     try:
         executor = ToolExecutor()
-        out = await executor.list_tools(user_id=str(current_user.id), client_id=str(current_user.username or current_user.id))
-        tools = []
-        for t in out.get("tools", []) or []:
+        out = await executor.list_tools(
+            user_id=str(current_user.id),
+            client_id=str(current_user.username or current_user.id),
+        )
+
+        def _to_tool_info(t: Dict[str, Any]) -> ToolInfo:
             try:
-                tools.append(ToolInfo(**t))
+                return ToolInfo(**t)
             except Exception:
                 # Best-effort mapping from dynamic tool dicts
-                tools.append(ToolInfo(name=str(t.get("name")), description=t.get("description"), module=t.get("module"), canExecute=bool(t.get("canExecute"))))
+                return ToolInfo(
+                    name=str(t.get("name", "")),
+                    description=t.get("description"),
+                    module=t.get("module"),
+                    canExecute=bool(t.get("canExecute")),
+                )
+
+        raw_tools = (out.get("tools") or []) if isinstance(out, dict) else []
+        tools = [_to_tool_info(t) for t in raw_tools]
         return ToolListResponse(tools=tools)
     except Exception as e:
         logger.error(f"tools.list failed: {e}")
