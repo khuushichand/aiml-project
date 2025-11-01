@@ -91,7 +91,7 @@ Form fields (in addition to common `/media/add` fields)
 - `accept_mbox`: bool (default false). When true, allows uploading a `.mbox` mailbox; each message is expanded and processed.
     - `accept_pst`: bool (default false). When true, allows uploading a `.pst`/`.ost` container. With `pypff`/`libpff` installed, messages are expanded and processed; otherwise, the API returns an informative error.
 - `ingest_attachments`: bool (default false). When true, attached `.eml` files are parsed recursively and added as separate child media items.
-- `max_depth`: int (default 2) — recursion depth for child `.eml` parsing.
+- `max_depth`: int (default 2) - recursion depth for child `.eml` parsing.
 
 Chunking defaults for emails
 - If not overridden by the client, `/media/add` aligns chunk size to 1000 and overlap to 150 for emails.
@@ -112,7 +112,7 @@ MBOX behavior
 - Each child result includes a grouping keyword `email_mbox:<mbox_file_stem>`.
 - The synthetic parent (the MBOX) is not persisted; the response contains `children` (results) and `child_db_results` (DB insert summaries for children).
 
-PST/OST behavior (feature‑flag)
+PST/OST behavior (feature-flag)
 - When `accept_pst=true` with a `.pst`/`.ost` upload, the request is accepted under a feature flag.
 - With `pypff` (libpff) installed, messages are expanded and processed like MBOX, with guardrails and grouping `email_pst:<pst_file_stem>`.
 - Without `pypff`, the API returns a single informative error result; grouping keyword is still included for filtering.

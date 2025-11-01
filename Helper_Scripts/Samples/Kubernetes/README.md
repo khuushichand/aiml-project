@@ -1,21 +1,21 @@
 # Kubernetes Samples
 
 These manifests provide a simple, non-HA deployment of tldw_server with Postgres and Redis.
-They are meant as starting points — review and adapt for your cluster (Ingress class, TLS secrets, images, resources).
+They are meant as starting points - review and adapt for your cluster (Ingress class, TLS secrets, images, resources).
 
 ## Files
-- `namespace.yaml` — Namespace `tldw`
-- `postgres-statefulset.yaml` — Headless Service + StatefulSet for PostgreSQL
-- `redis-deployment.yaml` — Service + Deployment for Redis
-- `app-configmap.yaml` — Non-sensitive app configuration (mode, CORS, logging)
-- `app-secret.yaml` — Sensitive values (JWT/DB URL/password)
-- `tldw-app-deployment.yaml` — App Deployment + Service (8000)
-- `ingress.yaml` — NGINX Ingress with long timeouts + TLS
+- `namespace.yaml` - Namespace `tldw`
+- `postgres-statefulset.yaml` - Headless Service + StatefulSet for PostgreSQL
+- `redis-deployment.yaml` - Service + Deployment for Redis
+- `app-configmap.yaml` - Non-sensitive app configuration (mode, CORS, logging)
+- `app-secret.yaml` - Sensitive values (JWT/DB URL/password)
+- `tldw-app-deployment.yaml` - App Deployment + Service (8000)
+- `ingress.yaml` - NGINX Ingress with long timeouts + TLS
 
 ## Prerequisites
 - NGINX Ingress Controller (or adjust for your ingress class)
 - A TLS secret for your domain (or use cert-manager and change annotations)
-- An image for the app (`tldw-server:prod` is a placeholder — replace with your registry)
+- An image for the app (`tldw-server:prod` is a placeholder - replace with your registry)
 
 ## Quick Start (apply order)
 ```bash

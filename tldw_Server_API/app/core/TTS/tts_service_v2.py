@@ -92,7 +92,7 @@ class TTSServiceV2:
                     if not asyncio.iscoroutine(maybe_factory):
                         self._factory = maybe_factory  # type: ignore[assignment]
         except Exception:
-            # Safe to ignore — tests may override `_factory` directly
+            # Safe to ignore - tests may override `_factory` directly
             pass
         self.circuit_manager = circuit_manager
         # Limit concurrent generations; honor config if available

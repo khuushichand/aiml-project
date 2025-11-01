@@ -107,6 +107,7 @@ try:  # pragma: no cover - optional integration path
                 max_buffer_duration=self._uconf.max_buffer_duration,
                 enable_partial=self._uconf.enable_partial,
                 partial_interval=self._uconf.partial_interval,
+                min_partial_duration=self._uconf.min_partial_duration,
                 language=self._uconf.language,
             )
             self._core = _CoreTranscriber(config=c)
@@ -188,6 +189,7 @@ class UnifiedStreamingConfig(StreamingConfig):
     auto_detect_language: bool = False  # Auto-detect language
     enable_vad: bool = False  # Voice Activity Detection
     vad_threshold: float = 0.5
+    min_partial_duration: float = 0.5
     # Whisper-specific options
     whisper_model_size: str = 'distil-large-v3'  # Whisper model size
     beam_size: int = 5  # Beam search size
@@ -1242,6 +1244,12 @@ async def handle_unified_websocket(
                 config.enable_partial = config_data.get("enable_partial", True)
                 config.enable_vad = config_data.get("enable_vad", False)
                 config.vad_threshold = config_data.get("vad_threshold", 0.5)
+                # Optional partial emission tuning
+                try:
+                    if "min_partial_duration" in config_data:
+                        config.min_partial_duration = max(0.0, float(config_data.get("min_partial_duration")))
+                except (TypeError, ValueError):
+                    logger.warning("Invalid min_partial_duration in config; keeping previous value")
                 
                 # Whisper-specific configuration
                 if config.model.lower() == "whisper":

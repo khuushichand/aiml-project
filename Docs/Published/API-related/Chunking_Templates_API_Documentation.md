@@ -497,7 +497,7 @@ The system comes with several pre-configured templates:
 
 - Classifier location: `classifier` may be top-level or under `chunking.config`. Both are supported for matching and validation.
 - Hierarchical options: `hierarchical` and `hierarchical_template` must be provided under `chunking.config` (top-level keys are ignored by the validator).
-- Operation schema: Pre/Post operations accept either `{operation, config}` or `{type, params}` — the processor supports both.
+- Operation schema: Pre/Post operations accept either `{operation, config}` or `{type, params}` - the processor supports both.
 - Apply overrides: You can override `method`, `max_size`, `overlap`, and other config via `override_options` on apply; these merge over template defaults.
 - Response shape: Use `include_metadata=true` to receive `{text, metadata}` objects instead of a plain list of strings.
 

@@ -1,4 +1,4 @@
-# Embeddings A/B Testing v2 – Product Requirements Document
+# Embeddings A/B Testing v2 - Product Requirements Document
 
 ## Overview
 - **Objective**: Deliver fully managed embeddings A/B testing with reusable collections, queued execution, governance controls, and comprehensive observability to compare embedding configurations at scale.
@@ -59,19 +59,19 @@
 - Test coverage must address hashing determinism, collection reuse, cleanup behavior, API contracts, and export payload integrity.
 
 ## Milestones & Timeline
-1. **M1 – Persistence & Documentation (1 week)**  
+1. **M1 - Persistence & Documentation (1 week)**  
    Finalize adapter/migrations, re-establish implementation plan doc, and add CRUD tests.
 
-2. **M2 – Collection Pipeline (1.5 weeks)**  
+2. **M2 - Collection Pipeline (1.5 weeks)**  
    Implement reuse logic, background job execution, status transitions, and failure handling tests.
 
-3. **M3 – Query Runner & Metrics (1 week)**  
+3. **M3 - Query Runner & Metrics (1 week)**  
    Solidify retrieval flows, persist metrics, and add pagination/aggregation tests.
 
-4. **M4 – Governance & Cleanup (1 week)**  
+4. **M4 - Governance & Cleanup (1 week)**  
    Enforce quotas, implement cleanup scheduler, record audit logs, and validate enforcement paths.
 
-5. **M5 – Observability & Exports (1 week)**  
+5. **M5 - Observability & Exports (1 week)**  
    Ship Prometheus metrics, structured logging, export endpoints with tests, and documentation updates including property/integration tests.
 
 ## Dependencies

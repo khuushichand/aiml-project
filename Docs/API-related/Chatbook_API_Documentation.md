@@ -622,13 +622,13 @@ When upgrading from the single-user version to multi-user with authentication:
 Environment variables controlling Chatbooks job backends and downloads:
 
 - `CHATBOOKS_JOBS_BACKEND`: `core` | `prompt_studio`
-  - `core`: Uses the new core Jobs module (DB-backed queue with leasing) — default.
+  - `core`: Uses the new core Jobs module (DB-backed queue with leasing) - default.
   - `prompt_studio`: Uses Prompt Studio’s JobManager via an adapter for status/cancellation.
 - `TLDW_JOBS_BACKEND`: Module-wide default backend for jobs. Domain overrides (like `CHATBOOKS_JOBS_BACKEND`) take precedence.
 - Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` (use `CHATBOOKS_JOBS_BACKEND=prompt_studio` instead).
 
 Signed downloads:
-- `CHATBOOKS_SIGNED_URLS=true|false` — enable HMAC-signed download URLs.
-- `CHATBOOKS_SIGNING_SECRET` — shared secret for signing.
-- `CHATBOOKS_ENFORCE_EXPIRY=true|false` — enforce job `expires_at`.
-- `CHATBOOKS_URL_TTL_SECONDS` — default expiry TTL for generated links.
+- `CHATBOOKS_SIGNED_URLS=true|false` - enable HMAC-signed download URLs.
+- `CHATBOOKS_SIGNING_SECRET` - shared secret for signing.
+- `CHATBOOKS_ENFORCE_EXPIRY=true|false` - enforce job `expires_at`.
+- `CHATBOOKS_URL_TTL_SECONDS` - default expiry TTL for generated links.

@@ -16,9 +16,9 @@ from .fixtures import api_client, data_tracker, create_test_file, cleanup_test_f
 @pytest.mark.critical
 def test_bulk_media_ingest(api_client, data_tracker):
     texts = [
-        "Doc A — concurrency test.",
-        "Doc B — concurrency test.",
-        "Doc C — concurrency test.",
+        "Doc A - concurrency test.",
+        "Doc B - concurrency test.",
+        "Doc C - concurrency test.",
     ]
     ids = []
     paths = []

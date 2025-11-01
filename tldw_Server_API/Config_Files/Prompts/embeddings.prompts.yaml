@@ -15,12 +15,12 @@ situate_context_prompt_alt: |
   the header.
 
 document_outline: |
-  Create a concise outline of the document with 5–10 bullets. Each bullet should have a
+  Create a concise outline of the document with 5-10 bullets. Each bullet should have a
   short section title followed by a one-sentence summary of that section’s content.
 
 # Alternate key for loader compatibility
 document_outline_prompt: |
-  Create a concise outline of the document with 5–10 bullets. Each bullet should have a
+  Create a concise outline of the document with 5-10 bullets. Each bullet should have a
   short section title followed by a one-sentence summary of that section’s content.
 
 # Qwen3 Embeddings (Transformers) configuration

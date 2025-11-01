@@ -364,7 +364,7 @@ class EmbeddingWorker(BaseWorker):
                     except Exception:
                         pass
 
-                    # Then check in‑process LRU cache
+                    # Then check in-process LRU cache
                     if embedding is None and self.cache and self.embedding_config.enable_caching:
                         cached_embedding = self.cache.get(chunk.content, model_name)
                         if cached_embedding:

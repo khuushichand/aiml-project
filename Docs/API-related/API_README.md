@@ -24,7 +24,7 @@ See also:
 #### Chat
 
 - Chat API (OpenAI-compatible): `POST /api/v1/chat/completions`
-  - Streaming (SSE), persistence toggle, multi‑provider support
+  - Streaming (SSE), persistence toggle, multi-provider support
   - See: [Chat API Documentation](Chat_API_Documentation.md)
 
 - Character Chat API: sessions and messages under `/api/v1/chats` and `/api/v1/messages`
@@ -39,16 +39,16 @@ Unified RAG endpoints provide hybrid search (FTS5 + vectors + reranking), option
 
 ##### Core Endpoints
 
-- `POST /api/v1/rag/search` — Unified search (all features via parameters)
-- `POST /api/v1/rag/search/stream` — NDJSON streaming of answer chunks (set `enable_generation=true`)
-- `GET /api/v1/rag/simple` — Convenience query param search with sensible defaults
-- `GET /api/v1/rag/advanced` — Convenience endpoint with common features enabled (citations/answer)
-- `POST /api/v1/rag/batch` — Batch multiple queries concurrently
+- `POST /api/v1/rag/search` - Unified search (all features via parameters)
+- `POST /api/v1/rag/search/stream` - NDJSON streaming of answer chunks (set `enable_generation=true`)
+- `GET /api/v1/rag/simple` - Convenience query param search with sensible defaults
+- `GET /api/v1/rag/advanced` - Convenience endpoint with common features enabled (citations/answer)
+- `POST /api/v1/rag/batch` - Batch multiple queries concurrently
 
 Notes:
 - “Agent” endpoints are not exposed in the current server. Use `/rag/search` with `enable_generation=true` or `/rag/search/stream`.
 - Health and ops endpoints are available under `/api/v1/rag/health*` and `/api/v1/rag/cache*`.
 
 For comprehensive documentation, see:
-- [RAG API Consumer Guide](RAG-API-Guide.md) — Complete API reference with examples
-- [RAG Developer Guide](../Development/RAG-Developer-Guide.md) — Architecture and implementation details
+- [RAG API Consumer Guide](RAG-API-Guide.md) - Complete API reference with examples
+- [RAG Developer Guide](../Development/RAG-Developer-Guide.md) - Architecture and implementation details

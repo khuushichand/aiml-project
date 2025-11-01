@@ -62,9 +62,9 @@ The import pipeline (in `modules/character_io.py`) supports:
 The `ccv3_parser.py` module brings minimal support for the emerging Character Card v3 spec (`validate_v3_card`, `parse_v3_card`). V3 parsing is attempted before falling back to v2/v1 heuristics.
 
 Common helpers:
-- `import_and_save_character_from_file(...)` – orchestrates file type detection, parsing, validation, DB insert/update.
-- `load_character_and_image(...)` – loads a single card with placeholder substitution and decoded `PIL.Image`.
-- `get_character_list_for_ui(...)`, `extract_character_id_from_ui_choice(...)` – UI helper utilities.
+- `import_and_save_character_from_file(...)` - orchestrates file type detection, parsing, validation, DB insert/update.
+- `load_character_and_image(...)` - loads a single card with placeholder substitution and decoded `PIL.Image`.
+- `get_character_list_for_ui(...)`, `extract_character_id_from_ui_choice(...)` - UI helper utilities.
 
 ### API Usage
 `app/api/v1/endpoints/characters_endpoint.py` delegates to these helpers for the `/characters` REST API. Rate limits are enforced before imports or bulk operations (see below).
@@ -73,10 +73,10 @@ Common helpers:
 
 ## Conversation & Message Management
 Key functions live in `modules/character_chat.py`:
-- `start_new_chat_session(...)`, `list_character_conversations(...)`, `delete_conversation_by_id(...)` – conversation CRUD.
-- `post_message_to_conversation(...)`, `edit_message_content(...)`, `set_message_ranking(...)`, `find_messages_in_conversation(...)` – message lifecycle helpers.
-- `process_db_messages_to_ui_history(...)` – convert raw message rows into `(user, bot)` tuples for UI consumption, handling placeholder replacements and consecutive message merges.
-- `load_chat_and_character(...)` – fetches character metadata, conversation payload, and message list in a single call.
+- `start_new_chat_session(...)`, `list_character_conversations(...)`, `delete_conversation_by_id(...)` - conversation CRUD.
+- `post_message_to_conversation(...)`, `edit_message_content(...)`, `set_message_ranking(...)`, `find_messages_in_conversation(...)` - message lifecycle helpers.
+- `process_db_messages_to_ui_history(...)` - convert raw message rows into `(user, bot)` tuples for UI consumption, handling placeholder replacements and consecutive message merges.
+- `load_chat_and_character(...)` - fetches character metadata, conversation payload, and message list in a single call.
 
 Placeholder replacement is centralized via `modules/character_utils.replace_placeholders`, ensuring tokens like `{{char}}` or `<USER>` resolve consistently.
 
@@ -111,7 +111,7 @@ The chat API (`app/api/v1/endpoints/chat.py`, section around dictionary endpoint
 `character_rate_limiter.py` ensures character operations and chat completions cannot overwhelm the system:
 - Redis-backed ZSET implementation when a Redis client is supplied; falls back to per-process memory otherwise.
 - Limits:
-  - `max_operations/window_seconds` – generic operations (create/update/import).
+  - `max_operations/window_seconds` - generic operations (create/update/import).
   - `max_characters`, `max_chats_per_user`, `max_messages_per_chat`.
   - `max_chat_completions_per_minute`, `max_message_sends_per_minute`.
   - `max_import_size_mb` guard for oversized uploads.
@@ -124,10 +124,10 @@ Unit tests validating this behaviour live in `tldw_Server_API/tests/unit/test_ch
 
 ## API Integration Touch Points
 The Character Chat module is consumed across several FastAPI routers:
-- `characters_endpoint.py` – card CRUD, import/export, world book management.
-- `character_chat_sessions.py` – conversation creation & metadata updates.
-- `character_messages.py` – message history, edits, ranking, search.
-- `chat.py` – dictionary CRUD, world book context injection during completions, placeholder utilities.
+- `characters_endpoint.py` - card CRUD, import/export, world book management.
+- `character_chat_sessions.py` - conversation creation & metadata updates.
+- `character_messages.py` - message history, edits, ranking, search.
+- `chat.py` - dictionary CRUD, world book context injection during completions, placeholder utilities.
 
 Each endpoint resolves the per-user `CharactersRAGDB` via `get_chacha_db_for_user` and ensures the correct AuthNZ dependencies (`get_request_user`) before calling into this module.
 
@@ -135,11 +135,11 @@ Each endpoint resolves the per-user `CharactersRAGDB` via `get_chacha_db_for_use
 
 ## Testing Strategy
 Relevant suites:
-- `tldw_Server_API/tests/Characters/test_character_chat_lib.py` – large unit suite covering helper behaviour.
-- `tldw_Server_API/tests/Characters/test_ccv3_parser.py` – verifies v3 parsing.
-- `tldw_Server_API/tests/Character_Chat_NEW/*` – property tests and newer unit coverage for dictionary + world book interactions.
-- `tldw_Server_API/tests/integration/test_chatbook_integration.py` – exercises cross-module interactions (Chatbooks + Character Chat).
-- `tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py` – API layer coverage for dictionary endpoints.
+- `tldw_Server_API/tests/Characters/test_character_chat_lib.py` - large unit suite covering helper behaviour.
+- `tldw_Server_API/tests/Characters/test_ccv3_parser.py` - verifies v3 parsing.
+- `tldw_Server_API/tests/Character_Chat_NEW/*` - property tests and newer unit coverage for dictionary + world book interactions.
+- `tldw_Server_API/tests/integration/test_chatbook_integration.py` - exercises cross-module interactions (Chatbooks + Character Chat).
+- `tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py` - API layer coverage for dictionary endpoints.
 
 Run targeted tests after touching core logic:
 ```bash

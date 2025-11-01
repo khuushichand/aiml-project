@@ -47,7 +47,7 @@ The Evaluations module follows a layered architecture pattern with clear separat
    - Progress tracking and aggregation
 
 4. **Evaluators** (various `*_evaluator.py` files)
-   - Implementations: G‑Eval, RAG, response quality, OCR, etc.
+   - Implementations: G-Eval, RAG, response quality, OCR, etc.
    - Metric calculations and LLM integration
 
 5. **Database Manager** (`Evaluations_DB.py`)
@@ -60,7 +60,7 @@ The Evaluations module follows a layered architecture pattern with clear separat
 app/core/Evaluations/
 ├── unified_evaluation_service.py   # Unified evaluation orchestration
 ├── eval_runner.py                  # Evaluation run executor
-├── ms_g_eval.py                    # G‑Eval implementation
+├── ms_g_eval.py                    # G-Eval implementation
 ├── rag_evaluator.py                # RAG evaluator
 ├── response_quality_evaluator.py   # Response quality evaluator
 └── evaluation_manager.py           # Legacy manager (kept for compatibility)
@@ -144,13 +144,13 @@ The unified service also manages auxiliary tables used by evaluation features:
   - `embedding_abtests`: test metadata/config/stats
   - `embedding_abtest_arms`: per-arm provider/model settings and stats
   - `embedding_abtest_queries`: queries and optional ground-truth ids
-  - `embedding_abtest_results`: per‑arm per‑query results/metrics/latency
+  - `embedding_abtest_results`: per-arm per-query results/metrics/latency
 
 ## Internal API Usage
 
 ### Using Evaluations Programmatically
 
-Option A — Unified service (recommended):
+Option A - Unified service (recommended):
 
 ```python
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
@@ -187,7 +187,7 @@ run = await svc.create_run(
 run_status = await svc.get_run(run["id"])
 ```
 
-Option B — Direct DB + runner (supported):
+Option B - Direct DB + runner (supported):
 
 ```python
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase

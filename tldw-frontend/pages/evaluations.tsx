@@ -339,7 +339,7 @@ function ResultsExplorer() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="font-medium text-gray-800">{it.name || it.type || 'Evaluation'}</div>
-                    <div className="text-xs text-gray-500">{it.status || '—'} • {it.created_at ? new Date(it.created_at).toLocaleString() : ''}</div>
+                    <div className="text-xs text-gray-500">{it.status || '-'} • {it.created_at ? new Date(it.created_at).toLocaleString() : ''}</div>
                   </div>
                   <div className="text-xs text-gray-400">{it.id || it.eval_id || ''}</div>
                 </div>

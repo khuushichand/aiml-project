@@ -294,7 +294,7 @@ Notes:
 - Maximum 2048 items in the input array.
 - The input list cannot be empty.
 
-Token‑array inputs are supported on the standard create endpoint. If `input` is a token array (`List[int]`) or a batch of token arrays (`List[List[int]]`), the server decodes tokens to text using the model’s tokenizer when available, or a sensible default (`cl100k_base`) as a fallback. Token usage is counted from the supplied token arrays. The batch endpoint accepts strings only.
+Token-array inputs are supported on the standard create endpoint. If `input` is a token array (`List[int]`) or a batch of token arrays (`List[List[int]]`), the server decodes tokens to text using the model’s tokenizer when available, or a sensible default (`cl100k_base`) as a fallback. Token usage is counted from the supplied token arrays. The batch endpoint accepts strings only.
 
 ### Output Formats
 
@@ -308,7 +308,7 @@ Token‑array inputs are supported on the standard create endpoint. If `input` i
 }
 ```
 
-Note: For non‑OpenAI providers, the response `model` value is prefixed with the provider (e.g., `"huggingface:sentence-transformers/all-MiniLM-L6-v2"`).
+Note: For non-OpenAI providers, the response `model` value is prefixed with the provider (e.g., `"huggingface:sentence-transformers/all-MiniLM-L6-v2"`).
 
 #### Base64 Encoded Format
 ```json
@@ -428,7 +428,7 @@ def select_provider(requirements):
 }
 ```
 
-Note: Some errors use an OpenAI‑style envelope, but most validation errors are returned as `{ "detail": "..." }`. When inputs exceed the per‑model token limit, the API returns a dedicated top‑level error object:
+Note: Some errors use an OpenAI-style envelope, but most validation errors are returned as `{ "detail": "..." }`. When inputs exceed the per-model token limit, the API returns a dedicated top-level error object:
 
 ```json
 {

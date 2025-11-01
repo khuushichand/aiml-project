@@ -1023,10 +1023,10 @@ async def get_optimization_strategies() -> StandardResponse:
             "display_name": "MCTS (Canary)",
             "description": "Monte Carlo Tree Search over prompt sequences; disabled by default; enable via PROMPT_STUDIO_ENABLE_MCTS or dev canary.",
             "parameters": {
-                "mcts_simulations": "Number of simulations (e.g., 5–50)",
-                "mcts_max_depth": "Search depth (1–10)",
-                "mcts_exploration_c": "UCT exploration constant (0.1–2.0)",
-                "prompt_candidates_per_node": "Candidates per node (1–5)",
+                "mcts_simulations": "Number of simulations (e.g., 5-50)",
+                "mcts_max_depth": "Search depth (1-10)",
+                "mcts_exploration_c": "UCT exploration constant (0.1-2.0)",
+                "prompt_candidates_per_node": "Candidates per node (1-5)",
                 "token_budget": "Hard token cap",
                 "ws_throttle_every": "Throttling interval for WS iteration events"
             }

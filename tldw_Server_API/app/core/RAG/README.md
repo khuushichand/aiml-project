@@ -16,7 +16,7 @@ The RAG (Retrieval-Augmented Generation) module provides intelligent search and 
 - **Smart Caching**: Semantic cache with adaptive thresholds and LRU eviction
 - **Document Reranking**: Multiple strategies (FlashRank, cross-encoder, hybrid)
   - New: Two-tier reranking (cross-encoder shortlist → LLM rerank) with sentinel calibration and generation gating
-- **Citations**: Academic citations (APA/MLA/Chicago/Harvard/IEEE); chunk‑level details in progress
+- **Citations**: Academic citations (APA/MLA/Chicago/Harvard/IEEE); chunk-level details in progress
 - **Analytics Integration**: Privacy-preserving server analytics with SHA256 hashing
 - **Batch Processing**: Concurrent processing of multiple queries
 - **Security Features**: PII detection and content filtering
@@ -55,7 +55,7 @@ generated_answer = result.generated_answer
 
 ## Claims & Factuality
 
-Enable per‑claim extraction and verification, and get a factuality summary:
+Enable per-claim extraction and verification, and get a factuality summary:
 
 ```python
 result = await unified_rag_pipeline(
@@ -75,25 +75,25 @@ print(result.factuality)   # supported/refuted/nei, precision, coverage, claim_f
 ### APS (Abstractive Proposition Segmentation)
 
 What it is:
-- APS decomposes text into minimal, self‑contained factual propositions that can be individually verified.
-- We use an APS‑style prompt profile ("gemma_aps") with the proposition chunker to extract atomic claims with high precision.
+- APS decomposes text into minimal, self-contained factual propositions that can be individually verified.
+- We use an APS-style prompt profile ("gemma_aps") with the proposition chunker to extract atomic claims with high precision.
 
 How it’s implemented here:
 - `claim_extractor="aps"` routes claim extraction through `PropositionChunkingStrategy` using the LLM engine with `proposition_prompt_profile="gemma_aps"`.
 - The extractor windows long text (≈1200 chars), extracts atomic propositions, normalizes/merges short items, and returns one claim per proposition.
-- Verification then runs per‑claim using a hybrid approach: local NLI if available (`RAG_NLI_MODEL`), otherwise an LLM judge.
+- Verification then runs per-claim using a hybrid approach: local NLI if available (`RAG_NLI_MODEL`), otherwise an LLM judge.
 
 Using APS elsewhere:
-- Chunking API: use `method="propositions"`, `proposition_engine="llm"`, `proposition_prompt_profile="gemma_aps"` for APS‑style proposition chunking.
+- Chunking API: use `method="propositions"`, `proposition_engine="llm"`, `proposition_prompt_profile="gemma_aps"` for APS-style proposition chunking.
 
 Recommended models (optional):
 - `google/gemma-2b-aps-it`
 - `google/gemma-7b-aps-it` (or community GGUF variants for CPU/quantized)
 
 Model configuration notes:
-- The APS extractor uses your default OpenAI‑compatible chat endpoint. To back it with a specific APS‑IT model:
-  - Point your OpenAI‑compatible gateway (e.g., vLLM/TabbyAPI/OpenRouter/custom‑openai) at the APS model and set it as the default model, or
-  - For ingestion‑time claim extraction (non‑APS path), set `CLAIMS_LLM_PROVIDER` and `CLAIMS_LLM_MODEL` in `Config_Files/config.txt`.
+- The APS extractor uses your default OpenAI-compatible chat endpoint. To back it with a specific APS-IT model:
+  - Point your OpenAI-compatible gateway (e.g., vLLM/TabbyAPI/OpenRouter/custom-openai) at the APS model and set it as the default model, or
+  - For ingestion-time claim extraction (non-APS path), set `CLAIMS_LLM_PROVIDER` and `CLAIMS_LLM_MODEL` in `Config_Files/config.txt`.
 - Local NLI for verification: set `RAG_NLI_MODEL` (e.g., `roberta-large-mnli`) to reduce LLM calls.
 ```
 
@@ -133,7 +133,7 @@ mgr.process_and_store_content(
 After answer generation, you can enable a post-generation verifier that checks the draft answer against the retrieved evidence and optionally performs a bounded repair pass.
 
 - Triggers when unsupported_ratio = (refuted + NEI) / total_claims exceeds a threshold.
-- Runs a second‑chance retrieval + regeneration within time/attempt budgets.
+- Runs a second-chance retrieval + regeneration within time/attempt budgets.
 - Exposes metrics for retries, unsupported counts, and duration.
 
 Usage in unified pipeline:
@@ -181,7 +181,7 @@ The unified pipeline includes lightweight generation guardrails you can enable p
   - Request fields: `require_hard_citations` (default false)
   - Metadata: `metadata.hard_citations = { sentences: [ { text, citations[ {doc_id,start,end} ] } ], coverage, total, supported }`
   - Metric: `rag_missing_hard_citations_total`
-  - Gauge: `rag_hard_citation_coverage{strategy}` (0.0–1.0)
+  - Gauge: `rag_hard_citation_coverage{strategy}` (0.0-1.0)
 
 - Numeric fidelity (post-generation): extracts numeric tokens in the answer and verifies presence in sources. On mismatch, you can retry targeted retrieval or ask/decline.
   - Request fields: `enable_numeric_fidelity` (default false), `numeric_fidelity_behavior` in `[continue|ask|decline|retry]`
@@ -204,14 +204,14 @@ print(res.metadata.get("hard_citations"))
 print(res.metadata.get("numeric_fidelity"))
 ```
 
-## Adaptive Post‑Verification & Rerun
+## Adaptive Post-Verification & Rerun
 
-When `enable_post_verification=true`, the pipeline verifies the generated answer against retrieved evidence (per‑claim) and may attempt a small repair pass. If confidence remains low, you can optionally trigger a single, bounded rerun of the full pipeline to try to find a better‑supported answer.
+When `enable_post_verification=true`, the pipeline verifies the generated answer against retrieved evidence (per-claim) and may attempt a small repair pass. If confidence remains low, you can optionally trigger a single, bounded rerun of the full pipeline to try to find a better-supported answer.
 
 Request fields (selected):
-- `enable_post_verification` (bool): enable the post‑gen verifier.
+- `enable_post_verification` (bool): enable the post-gen verifier.
 - `adaptive_unsupported_threshold` (float): if `(refuted+NEI)/total_claims` exceeds this, treat as low confidence.
-- `adaptive_advanced_rewrites` (bool?): enable/disable HyDE + multi‑strategy rewrites in the verifier’s adaptive pass.
+- `adaptive_advanced_rewrites` (bool?): enable/disable HyDE + multi-strategy rewrites in the verifier’s adaptive pass.
 - `adaptive_rerun_on_low_confidence` (bool): when true and verifier signals low confidence, perform one full pipeline rerun.
 - `adaptive_rerun_include_generation` (bool): include generation in the rerun (true) or stop after retrieval/rerank.
 - `adaptive_rerun_bypass_cache` (bool): force `enable_cache=false` on rerun to avoid stale cache hits.
@@ -221,7 +221,7 @@ Request fields (selected):
 Adoption criteria:
 - The rerun is adopted only if the unsupported ratio improves AND there is no regression on guardrails:
   - Numeric fidelity: missing count must not increase.
-  - Hard‑citation coverage: coverage must not decrease.
+  - Hard-citation coverage: coverage must not decrease.
 
 Response metadata:
 - `metadata.post_verification`: `{ unsupported_ratio, total_claims, unsupported_count, fixed, reason }`
@@ -286,11 +286,11 @@ When generation is gated (hard-citations or NLI), a compact envelope is added to
 
 ### Reading Gauges (Prometheus / OTEL)
 
-- Hard-citation coverage (0.0–1.0):
+- Hard-citation coverage (0.0-1.0):
   - Metric: `rag_hard_citation_coverage{strategy="standard|agentic"}`
   - Prom scrape example: `curl http://localhost:8000/metrics | grep rag_hard_citation_coverage`
 
-- NLI unsupported ratio (0.0–1.0):
+- NLI unsupported ratio (0.0-1.0):
   - Metric: `rag_nli_unsupported_ratio{strategy="standard|agentic"}`
   - Prom scrape example: `curl http://localhost:8000/metrics | grep rag_nli_unsupported_ratio`
 
@@ -302,7 +302,7 @@ Both gauges are also exported to OTEL when enabled; search for these instrument 
 
 ## Security & Safety
 
-Per‑tenant row‑level security (Postgres)
+Per-tenant row-level security (Postgres)
 - The DB adapters for ChaChaNotes and Prompt Studio set a session variable for the current tenant/user on PostgreSQL connections:
   - `SET SESSION app.current_user_id = '<client_id>'` (server also sets legacy `app.user_id` for compatibility)
 - Apply RLS policies referencing `current_setting('app.current_user_id', true)` to enforce tenant isolation at the DB layer.
@@ -317,14 +317,14 @@ Content policy filters (PII/PHI) before generation
 - Metrics: `rag_policy_filtered_chunks_total{mode}`
 
 Document sanitation
-- HTML sanitizer with allow‑listed tags/attrs to strip unsafe markup from retrieved chunks.
-- OCR confidence gating: drop low‑confidence OCR chunks using `metadata.ocr_confidence`.
+- HTML sanitizer with allow-listed tags/attrs to strip unsafe markup from retrieved chunks.
+- OCR confidence gating: drop low-confidence OCR chunks using `metadata.ocr_confidence`.
 - Request fields:
   - `enable_html_sanitizer`, `html_allowed_tags`, `html_allowed_attrs`
   - `ocr_confidence_threshold` (float)
 - Metrics: `rag_sanitized_docs_total`, `rag_ocr_dropped_docs_total`
 
-## Generation & Grounding (opt‑in)
+## Generation & Grounding (opt-in)
 
 The unified pipeline exposes additional generation controls for safer answers:
 
@@ -332,11 +332,11 @@ The unified pipeline exposes additional generation controls for safer answers:
   - Fields: `enable_abstention`, `abstention_behavior` in `[continue|ask|decline]`
   - Works best with `reranking_strategy="two_tier"`.
 
-- Quote‑level citations: quoted phrases in the answer are mapped to source offsets (with fuzzy fallback) and attached under `metadata.quote_citations`.
+- Quote-level citations: quoted phrases in the answer are mapped to source offsets (with fuzzy fallback) and attached under `metadata.quote_citations`.
 
-- Numeric/table‑aware retrieval: when the query contains numbers/units, you can modestly boost table‑like or number‑dense chunks before reranking. Field: `enable_numeric_table_boost`.
+- Numeric/table-aware retrieval: when the query contains numbers/units, you can modestly boost table-like or number-dense chunks before reranking. Field: `enable_numeric_table_boost`.
 
-- Multi‑turn synthesis (draft → critique → refine): optionally generates a draft, critiques it using retrieved snippets, then refines under a strict time/token budget.
+- Multi-turn synthesis (draft → critique → refine): optionally generates a draft, critiques it using retrieved snippets, then refines under a strict time/token budget.
   - Fields: `enable_multi_turn_synthesis`, `synthesis_time_budget_sec`, `synthesis_draft_tokens`, `synthesis_refine_tokens`
 
 Example (abstention + synthesis):
@@ -349,7 +349,7 @@ res = await unified_rag_pipeline(
     # Abstention path when evidence thin
     enable_abstention=True,
     abstention_behavior="ask",
-    # Multi‑turn synthesis with budgets
+    # Multi-turn synthesis with budgets
     enable_multi_turn_synthesis=True,
     synthesis_time_budget_sec=5.0,
     synthesis_draft_tokens=256,
@@ -404,13 +404,13 @@ Events:
 - `{ "type": "final_claims", ... }`
 
 Notes:
-- Control verification fan-out during streaming overlays with `claims_concurrency` (default 8, range 1–32).
+- Control verification fan-out during streaming overlays with `claims_concurrency` (default 8, range 1-32).
 
 ## RAG Evaluation (claim_faithfulness)
 
 The unified evaluations API can compute claim-level faithfulness by verifying extracted claims against your provided contexts.
 
-- Metric name: `claim_faithfulness` (0–1). Internally uses APS-style extraction + hybrid verification (NLI if available, else LLM judge).
+- Metric name: `claim_faithfulness` (0-1). Internally uses APS-style extraction + hybrid verification (NLI if available, else LLM judge).
 
 Example request:
 
@@ -436,15 +436,15 @@ The verifier prefers a local MNLI model and falls back to an LLM judge if unavai
 
 ## Reranking Strategy
 
-### Two‑Tier Reranking (Recommended)
+### Two-Tier Reranking (Recommended)
 
-This strategy offers a cost‑aware, robust ranking flow for evidence selection:
+This strategy offers a cost-aware, robust ranking flow for evidence selection:
 
-- Stage 1 (fast): Cross‑encoder reranker (e.g., `BAAI/bge-reranker-v2-m3`) ranks all candidates and selects a shortlist (default 50).
-- Stage 2 (accurate): LLM‑based reranker evaluates the shortlist (default top 10) under existing time/doc budgets.
-- Sentinel calibration: A small synthetic “irrelevant” passage is injected to calibrate low‑evidence scenarios.
+- Stage 1 (fast): Cross-encoder reranker (e.g., `BAAI/bge-reranker-v2-m3`) ranks all candidates and selects a shortlist (default 50).
+- Stage 2 (accurate): LLM-based reranker evaluates the shortlist (default top 10) under existing time/doc budgets.
+- Sentinel calibration: A small synthetic “irrelevant” passage is injected to calibrate low-evidence scenarios.
 - Score calibration: Mixed features (original retrieval score, CE score, LLM score) are mapped through a logistic function to a probability of relevance. Final score = calibrated probability.
-- Generation gating: If the top calibrated probability is below a threshold, or too close to the sentinel score, answer generation is gated to avoid over‑confident responses.
+- Generation gating: If the top calibrated probability is below a threshold, or too close to the sentinel score, answer generation is gated to avoid over-confident responses.
 
 Enable via unified pipeline:
 
@@ -466,8 +466,8 @@ print(result.metadata.get("reranking_calibration"))
 
 Environment defaults (tunable):
 
-- `RAG_TRANSFORMERS_RERANKER_MODEL` cross‑encoder model id (default `BAAI/bge-reranker-v2-m3`)
-- `RAG_LLM_RERANK_TIMEOUT_SEC` per‑doc LLM scoring timeout (default 10)
+- `RAG_TRANSFORMERS_RERANKER_MODEL` cross-encoder model id (default `BAAI/bge-reranker-v2-m3`)
+- `RAG_LLM_RERANK_TIMEOUT_SEC` per-doc LLM scoring timeout (default 10)
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC` total budget cap (default 20)
 - `RAG_LLM_RERANK_MAX_DOCS` max docs scored by LLM (default 20)
 - Calibration weights for the logistic map:
@@ -477,7 +477,7 @@ Environment defaults (tunable):
   - `RAG_RERANK_CALIB_W_LLM` (default `3.0`)
 - Gating thresholds:
   - `RAG_MIN_RELEVANCE_PROB` minimum top probability to allow generation (default `0.35`)
-  - `RAG_SENTINEL_MARGIN` minimum (top_prob − sentinel_prob) margin (default `0.10`)
+  - `RAG_SENTINEL_MARGIN` minimum (top_prob - sentinel_prob) margin (default `0.10`)
 
 Metrics:
 - `rag_reranker_llm_*` counters: timeouts, exceptions, budget, docs scored
@@ -498,15 +498,15 @@ How it is wired:
 - For incremental updates, each chunk receives a deterministic `chunk_uid` based on the file name, offsets, and content hash.
 - Location: `tldw_Server_API/app/core/Chunking/__init__.py` under `chunk_for_embedding()`.
 
-### Ingest‑time Deduplication
-- Near‑duplicate chunks are removed during ingestion using a light shingle‑Jaccard filter to keep a canonical chunk and map duplicates to it.
+### Ingest-time Deduplication
+- Near-duplicate chunks are removed during ingestion using a light shingle-Jaccard filter to keep a canonical chunk and map duplicates to it.
 - Duplicates receive `metadata.duplicate_of = <canonical_uid>`; only canonical chunks are embedded to reduce storage and skew.
 - Controls:
   - `INGEST_ENABLE_DEDUP` (default `true`)
   - `INGEST_DEDUP_THRESHOLD` (default `0.9`)
 
 ### Synonym/Alias Enrichment (Per Corpus)
-- Place corpus‑specific alias files under `Config_Files/Synonyms/<corpus>.json` mapping `term -> [aliases]`.
+- Place corpus-specific alias files under `Config_Files/Synonyms/<corpus>.json` mapping `term -> [aliases]`.
 - Query rewrites use these aliases when `index_namespace` is provided in the RAG request, enriching both synonym and domain expansions.
 - Implementation: `synonyms_registry.get_corpus_synonyms()` and `multi_strategy_expansion(query, strategies, corpus=index_namespace)`.
 
@@ -647,7 +647,7 @@ See also:
 
 ## Anthropic Contextual RAG (example config)
 
-To enable Contextual RAG using Anthropic for generating per‑chunk context headers and optional document outlines, set these in `tldw_Server_API/Config_Files/config.txt`:
+To enable Contextual RAG using Anthropic for generating per-chunk context headers and optional document outlines, set these in `tldw_Server_API/Config_Files/config.txt`:
 
 ```ini
 # Use Anthropic as the default provider so contextualization routes correctly
@@ -826,11 +826,11 @@ results = await unified_batch_pipeline(
 
 VLM (Vision-Language) late chunking augments retrieved results with compact, VLM-derived hints from PDFs at retrieval time. This is separate from OCR and can be turned on per request.
 
-- `enable_vlm_late_chunking: bool` — enable/disable
-- `vlm_backend: str | null` — `docling` for PDF-structural detection, or `hf_table_transformer` for per-page table detection
-- `vlm_detect_tables_only: bool` — if true, only keep `table` detections; otherwise include images/figures as `vlm`
-- `vlm_max_pages: int | null` — analyze up to this many pages per PDF
-- `vlm_late_chunk_top_k_docs: int` — apply to top-k retrieved media_db documents (default: 3)
+- `enable_vlm_late_chunking: bool` - enable/disable
+- `vlm_backend: str | null` - `docling` for PDF-structural detection, or `hf_table_transformer` for per-page table detection
+- `vlm_detect_tables_only: bool` - if true, only keep `table` detections; otherwise include images/figures as `vlm`
+- `vlm_max_pages: int | null` - analyze up to this many pages per PDF
+- `vlm_late_chunk_top_k_docs: int` - apply to top-k retrieved media_db documents (default: 3)
 
 The created hints are appended as additional documents with `metadata.chunk_type` set to `table` (for tables) or `vlm` (for other labels). Combine with `chunk_type_filter` to include/exclude these:
 
@@ -846,7 +846,7 @@ The created hints are appended as additional documents with `metadata.chunk_type
 Backends are shared with the ingestion VLM registry. To check availability:
 - Programmatic: `tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry.list_backends()`
 - API: `GET /api/v1/rag/vlm/backends`
-- High‑level (static defaults): `GET /api/v1/rag/capabilities` (lists names/env keys, not runtime availability)
+- High-level (static defaults): `GET /api/v1/rag/capabilities` (lists names/env keys, not runtime availability)
 
 ### Citations
 - `enable_citations: bool` - Generate citations
@@ -895,7 +895,7 @@ print(result.citations[0])  # "Smith, J. (2024). Introduction to Machine Learnin
 
 Both formats are exposed in the unified response:
 - `academic_citations`: list of formatted strings (APA/MLA/Chicago/Harvard/IEEE)
-- `chunk_citations`: per‑chunk evidence objects for verification
+- `chunk_citations`: per-chunk evidence objects for verification
 - `citations`: combined convenience list containing both types
 
 ### Combined Usage
@@ -932,10 +932,10 @@ The RAG module exposes a comprehensive unified API:
 
 ## Scoring and Thresholds
 
-- All retrieval scores are normalized to a 0–1 range with higher=better.
-  - SQLite FTS uses bm25; raw bm25 (lower=better) is inverted and min–max normalized per result set.
-  - PostgreSQL FTS uses ts_rank; raw ranks are min–max normalized per result set.
-  - Vector similarity scores are min–max normalized before fusion where applicable.
+- All retrieval scores are normalized to a 0-1 range with higher=better.
+  - SQLite FTS uses bm25; raw bm25 (lower=better) is inverted and min-max normalized per result set.
+  - PostgreSQL FTS uses ts_rank; raw ranks are min-max normalized per result set.
+  - Vector similarity scores are min-max normalized before fusion where applicable.
 - The `min_score` parameter in `RetrievalConfig` applies to these normalized scores consistently across backends.
 - Ordering semantics:
   - SQLite FTS default ordering uses `bm25(table) ASC`.
@@ -1148,20 +1148,20 @@ results = await unified_batch_pipeline(
 - Progress tracking
 - Partial result recovery
 
-### Near‑Duplicate Clustering & Reuse (New)
+### Near-Duplicate Clustering & Reuse (New)
 
-Batch processing now performs a lightweight normalization + embedding‑based clustering step to deduplicate and reuse retrieval/reranking across near‑duplicate queries.
+Batch processing now performs a lightweight normalization + embedding-based clustering step to deduplicate and reuse retrieval/reranking across near-duplicate queries.
 
 - Identical queries (ignoring case/punctuation) are processed exactly once; results are reused for duplicates.
-- Near‑duplicates are clustered via cosine similarity of their query embeddings (best‑effort; falls back to exact dedupe if embeddings are unavailable).
+- Near-duplicates are clustered via cosine similarity of their query embeddings (best-effort; falls back to exact dedupe if embeddings are unavailable).
 - The cluster head is executed; member queries reuse its results, reducing redundant work and latency in batched workloads.
 
 Controls and observability:
 - Env: `RAG_BATCH_NEAR_DUP_THRESHOLD` (default `0.9`) controls cosine similarity threshold for clustering.
-- Metric: `rag_batch_query_reuse_total` increments when results are reused across duplicates/near‑duplicates.
+- Metric: `rag_batch_query_reuse_total` increments when results are reused across duplicates/near-duplicates.
 
 Notes:
-- This is an in‑memory, per‑request optimization in the unified batch pipeline and does not persist any shared state.
+- This is an in-memory, per-request optimization in the unified batch pipeline and does not persist any shared state.
 - If your embedding backend is not available, the code transparently falls back to exact dedupe so batches remain reliable.
 
 ## Analytics & Feedback System
@@ -1203,7 +1203,7 @@ The unified pipeline includes several performance enhancements:
 Connection pooling is handled internally by the service; no explicit flag is required.
 
 ### Embedding Cache
-Embeddings are cached internally by the embeddings subsystem/vector store; there is no per‑request toggle in the unified RAG API. You can keep using `search_mode="vector"` normally — caching behavior is automatic where available.
+Embeddings are cached internally by the embeddings subsystem/vector store; there is no per-request toggle in the unified RAG API. You can keep using `search_mode="vector"` normally - caching behavior is automatic where available.
 
 ### Module-Level Imports
 Pre-loaded modules reduce cold start time by 500ms:

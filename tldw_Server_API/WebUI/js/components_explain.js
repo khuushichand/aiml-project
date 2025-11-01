@@ -9,9 +9,9 @@
   }
 
   function renderMetrics(metrics) {
-    const termCov = typeof metrics.term_coverage === 'number' ? Math.round(metrics.term_coverage * 100) + '%' : '—';
-    const uniqDocs = metrics.unique_docs ?? '—';
-    const redundancy = (typeof metrics.redundancy === 'number') ? Math.round(metrics.redundancy * 100) + '%' : '—';
+    const termCov = typeof metrics.term_coverage === 'number' ? Math.round(metrics.term_coverage * 100) + '%' : '-';
+    const uniqDocs = metrics.unique_docs ?? '-';
+    const redundancy = (typeof metrics.redundancy === 'number') ? Math.round(metrics.redundancy * 100) + '%' : '-';
     const el = $(
       `<div class="explain-metrics">
         <div class="metric-item"><strong>Coverage</strong><div>${termCov}</div></div>
@@ -32,7 +32,7 @@
     (prov || []).slice(0, 50).forEach((p) => {
       const li = document.createElement('li');
       const title = (p.title || p.document_id || 'doc');
-      const sec = p.section_title ? ` — ${p.section_title}` : '';
+      const sec = p.section_title ? ` - ${p.section_title}` : '';
       li.textContent = `${title}${sec} [${p.start}-${p.end}]`;
       list.appendChild(li);
     });
@@ -55,7 +55,7 @@
 
       // Header
       const hdr = document.createElement('div');
-      hdr.innerHTML = '<strong>Explain</strong> — Agentic Plan & Spans';
+      hdr.innerHTML = '<strong>Explain</strong> - Agentic Plan & Spans';
       hdr.style.marginBottom = '8px';
       root.appendChild(hdr);
 

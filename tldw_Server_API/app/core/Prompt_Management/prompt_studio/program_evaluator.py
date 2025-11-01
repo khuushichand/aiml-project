@@ -3,7 +3,7 @@ program_evaluator.py
 Sandboxed Program Evaluator (Phase 2)
 
 Executes extracted Python code in a restricted subprocess with resource limits
-and evaluates objective/constraints to produce a reward in [−1..10].
+and evaluates objective/constraints to produce a reward in [-1..10].
 
 Notes:
 - Network and filesystem access are blocked via static checks and isolated mode.
@@ -83,7 +83,7 @@ class ProgramEvaluator:
     def evaluate_text_output(self, text: str) -> float:
         """Fallback heuristic reward if sandbox execution is disabled.
 
-        Returns a reward in [−1..10].
+        Returns a reward in [-1..10].
         """
         if not text:
             return -1.0
@@ -198,7 +198,9 @@ class ProgramEvaluator:
             "# Execute user code",
             "__code_globals = {}",
             "__code_locals = None",
-            f"__user_code = json.loads(r'''{code_json}''')",
+            # Embed the pre-JSON-encoded string as a safe Python literal
+            # Using !r ensures backslashes (e.g., \n) remain escaped for json.loads
+            f"__user_code = json.loads({code_json!r})",
             "try:",
             "    # First try to execute as-is",
             "    exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)",
@@ -266,7 +268,7 @@ class ProgramEvaluator:
             return True, out, err, gjson
 
     def _score_from_outputs(self, stdout: str, globals_dump: Dict[str, Any], spec: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
-        """Map execution results to reward in [−1..10]."""
+        """Map execution results to reward in [-1..10]."""
         metrics: Dict[str, Any] = {"mode": "sandbox", "constraints_ok": None}
 
         # If spec provides metric_var and objective, use it

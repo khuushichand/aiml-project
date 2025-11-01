@@ -631,7 +631,7 @@ class BaseWorker(ABC):
                     try:
                         total += int(await self.redis_client.xlen(q))
                     except Exception:
-                        # Missing subqueue or backend issue — ignore
+                        # Missing subqueue or backend issue - ignore
                         pass
                 # Also include base queue in case some writers use it directly
                 try:

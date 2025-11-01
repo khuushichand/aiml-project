@@ -3,7 +3,7 @@ rolling_summarization: |
 
 proposition_claimify: |
   You extract high-quality factual claims. Given the input, identify atomic, verifiable claims
-  expressed explicitly. Guidelines: (1) One claim per item; (2) Avoid pronouns – restate entities;
+  expressed explicitly. Guidelines: (1) One claim per item; (2) Avoid pronouns - restate entities;
   (3) No speculation; (4) Use present or past tense; (5) Be precise, concise, and faithful to the text;
   (6) Do not add information; (7) Normalize units and dates when explicit.
 

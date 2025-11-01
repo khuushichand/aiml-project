@@ -1,8 +1,8 @@
 ---
-title: WebUI — Vector Backends
+title: WebUI - Vector Backends
 ---
 
-# WebUI — Vector Backends
+# WebUI - Vector Backends
 
 The Vector Stores tab in the WebUI works with multiple backends:
 
@@ -24,7 +24,7 @@ Note: Screenshot files are not bundled to keep the repo lean. See the "Capturing
 
 ## ef_search (pgvector only)
 
-- The Admin section exposes an ef_search control. This applies only to pgvector; on Chroma it’s accepted but effectively a no‑op.
+- The Admin section exposes an ef_search control. This applies only to pgvector; on Chroma it’s accepted but effectively a no-op.
 - To adjust ef_search:
   1) Enter a value (e.g., 128)
   2) Click “Set ef_search”
@@ -72,7 +72,7 @@ Prerequisites
 - Admin privileges (single-user mode or admin token)
 - Vector backends configured as needed in `config.txt`
 
-1) Backend Badge — pgvector
+1) Backend Badge - pgvector
 
 - Ensure `[RAG] vector_store_type = pgvector` in `config.txt`; restart the server.
 - In WebUI → Vector Stores → Create Vector Store, create a small store (e.g., 8 dimensions).
@@ -80,14 +80,14 @@ Prerequisites
 - Crop the badge area that shows: `index: hnsw • backend: pgvector (ops: ...)`.
 - Save as `Docs/Published/assets/vector_backends_badge_pgvector.png`.
 
-2) Backend Badge — Chroma
+2) Backend Badge - Chroma
 
 - Set `vector_store_type = chromadb` in `config.txt`; restart.
 - Create a store as above; click “Index Info”.
 - Crop the badge showing: `index: managed • backend: chroma`.
 - Save as `Docs/Published/assets/vector_backends_badge_chroma.png`.
 
-3) ef_search Control — pgvector only
+3) ef_search Control - pgvector only
 
 - With pgvector active, in Admin set `ef_search` (e.g., 128) and click “Set ef_search”.
 - Click “Index Info” again to confirm the session value.
@@ -98,5 +98,5 @@ Recommendations
 
 - Redact or avoid sensitive values (DSNs, user IDs). Use demo store names/IDs.
 - Use a consistent theme (light or dark) across screenshots for uniformity.
-- Keep images narrow (≈ 800–1200px width) and crop tightly around the relevant UI.
+- Keep images narrow (≈ 800-1200px width) and crop tightly around the relevant UI.
 - Rebuild docs locally with `mkdocs serve` to verify images render.

@@ -12,7 +12,7 @@ This guide describes a repeatable methodology to measure scraping performance an
 
 ## Corpus
 
-- Static pages (50–100): Medium, Substack, and typical blogs/news articles
+- Static pages (50-100): Medium, Substack, and typical blogs/news articles
 - JS-heavy pages (20): Sites known to require rendering (client-side apps, heavy paywalls)
 - Provide a `urls.txt` file listing one URL per line, grouped by category for reporting
 

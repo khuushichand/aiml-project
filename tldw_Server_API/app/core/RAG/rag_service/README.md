@@ -1,8 +1,8 @@
-# RAG Service – Unified Pipeline (Internal Overview)
+# RAG Service - Unified Pipeline (Internal Overview)
 
-This directory contains the internal building blocks of the RAG (Retrieval‑Augmented Generation) module.
+This directory contains the internal building blocks of the RAG (Retrieval-Augmented Generation) module.
 
-As of v4, the project uses a single, unified pipeline where all features are controlled via explicit parameters (no external config, no presets). The previous functional‑pipeline presets have been archived. For how to use RAG from applications or via API, see:
+As of v4, the project uses a single, unified pipeline where all features are controlled via explicit parameters (no external config, no presets). The previous functional-pipeline presets have been archived. For how to use RAG from applications or via API, see:
 
 - tldw_Server_API/app/core/RAG/README.md (primary dev/user guide)
 - tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md (endpoint/parameter reference)
@@ -14,7 +14,7 @@ This package provides the internal modules used by the unified pipeline. The uni
 ## Highlights
 
 - Unified pipeline entrypoint with explicit parameters
-- Multi‑database retrieval (media, notes, characters/chats)
+- Multi-database retrieval (media, notes, characters/chats)
 - Hybrid search (FTS + vector) and optional reranking
 - Optional features: query expansion, caching, security filtering, table processing
 - Citations, answer generation, metrics/observability (optional)
@@ -479,13 +479,13 @@ Same as tldw_server (GPLv3)
 
 ## Feedback & Learning (New)
 
-- Implicit feedback loop: the WebUI emits click/expand/copy signals for the result list. The backend records these via `POST /api/v1/rag/feedback/implicit` and updates per‑user priors and pairwise preferences (learning‑to‑rank). Data are stored per‑user under `Databases/user_databases/<user_id>/` and never cross tenants.
+- Implicit feedback loop: the WebUI emits click/expand/copy signals for the result list. The backend records these via `POST /api/v1/rag/feedback/implicit` and updates per-user priors and pairwise preferences (learning-to-rank). Data are stored per-user under `Databases/user_databases/<user_id>/` and never cross tenants.
 - Personalization: the unified pipeline can apply a light boost using historical priors when `collect_feedback=true` and `apply_feedback_boost=true` are present in the request. Override the user id with `feedback_user_id`.
 - Query→rewrite caching: effective rewrites are cached per intent cluster and corpus to reduce cost and improve stability. The cache persists to `Databases/Rewrite_Cache/rewrite_cache.jsonl` and decays over time.
 
 ## Observability & SLOs (New)
 
-- Per‑phase timers: histograms for retrieval, rerank‑fast, rerank‑llm, and generation (`rag_phase_duration_seconds` with labels `phase` and `difficulty`). Overall reranking duration is recorded as `rag_reranking_duration_seconds{strategy=...}`.
+- Per-phase timers: histograms for retrieval, rerank-fast, rerank-llm, and generation (`rag_phase_duration_seconds` with labels `phase` and `difficulty`). Overall reranking duration is recorded as `rag_reranking_duration_seconds{strategy=...}`.
 - Faithfulness SLO: counters `rag_total_claims_checked_total` and `rag_unsupported_claims_total` power a faithfulness ratio panel/alert.
-- Alerts: see `Docs/Deployment/Monitoring/Alerts/rag-slo-alerts.yml` for latency and faithfulness SLO rules and a simple burn‑rate alarm tied to `/api/v1/rag*` endpoints.
-- Payload exemplars: when post‑verification fails, a small redacted snapshot (query, short contexts, answer) is sampled to `Databases/observability/rag_payload_exemplars.jsonl` for debugging (sampling rate `RAG_PAYLOAD_EXEMPLAR_SAMPLING`).
+- Alerts: see `Docs/Deployment/Monitoring/Alerts/rag-slo-alerts.yml` for latency and faithfulness SLO rules and a simple burn-rate alarm tied to `/api/v1/rag*` endpoints.
+- Payload exemplars: when post-verification fails, a small redacted snapshot (query, short contexts, answer) is sampled to `Databases/observability/rag_payload_exemplars.jsonl` for debugging (sampling rate `RAG_PAYLOAD_EXEMPLAR_SAMPLING`).

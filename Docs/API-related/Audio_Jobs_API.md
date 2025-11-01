@@ -6,7 +6,7 @@ Base path: `/api/v1/audio`
 
 ## Endpoints
 
-- POST `/jobs/submit` — Submit an audio job
+- POST `/jobs/submit` - Submit an audio job
   - Body (JSON):
     - `url` (string, optional): Remote audio/video URL to download.
     - `local_path` (string, optional): Server-local absolute file path.
@@ -17,19 +17,19 @@ Base path: `/api/v1/audio`
   - Response: `{ id, uuid, domain, queue, job_type, status }`
   - Auth: Single-user X-API-KEY or multi-user JWT.
 
-- GET `/jobs/{job_id}` — Get job status (owner or admin)
+- GET `/jobs/{job_id}` - Get job status (owner or admin)
   - Path: `job_id` (int)
   - Response: Job row fields (`id, job_type, status, priority, retry_count, ...`).
 
-- GET `/jobs/admin/list` — List jobs (admin)
-  - Query: `status` (optional), `owner_user_id` (optional), `limit` (1–200)
+- GET `/jobs/admin/list` - List jobs (admin)
+  - Query: `status` (optional), `owner_user_id` (optional), `limit` (1-200)
   - Response: `{ jobs: [...] }`
 
-- GET `/jobs/admin/summary` — Counts by status (admin)
+- GET `/jobs/admin/summary` - Counts by status (admin)
   - Query: `owner_user_id` (optional)
   - Response: `{ counts_by_status, total, owner_user_id }`
 
-- GET `/jobs/admin/owner/{owner_user_id}/processing` — Active processing (admin)
+- GET `/jobs/admin/owner/{owner_user_id}/processing` - Active processing (admin)
   - Path: `owner_user_id` (string/int)
   - Response: `{ owner_user_id, processing, limit }`
 
@@ -55,4 +55,4 @@ Base path: `/api/v1/audio`
 
 ## Notes
 
-- This API complements synchronous `/audio/transcriptions` and real‑time WS; it does not replace them.
+- This API complements synchronous `/audio/transcriptions` and real-time WS; it does not replace them.

@@ -3,7 +3,7 @@
       - macOS: brew install act
       - Linux: curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash
 
-  One‑time config
+  One-time config
 
   - Use the full Ubuntu image (has apt, Python, etc.) and works on Apple Silicon:
       - act -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:full-22.04
@@ -20,7 +20,7 @@
 
   Notes for act
 
-  - Services: Postgres service starts automatically; act exposes dynamic ports and we export them at runtime — no changes needed.
+  - Services: Postgres service starts automatically; act exposes dynamic ports and we export them at runtime - no changes needed.
   - Network: Our composite actions fetch remote actions; ensure Docker has outbound network.
   - Artifacts: Use --artifact-server-path ./.act_artifacts to keep coverage/test XMLs locally.
   - Secrets: Not required for CI; if you want Codecov upload in local run (optional), pass -s CODECOV_TOKEN=....

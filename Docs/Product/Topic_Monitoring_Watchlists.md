@@ -1,22 +1,22 @@
 # Topic Monitoring & Watchlists (Design)
 
-Goal: Provide a configurable, privacy‑respecting content monitoring feature that detects when specified topics are mentioned in user activity (chat input/output, ingestion, notes, RAG queries) and emits non‑blocking alerts for admins/owners to review.
+Goal: Provide a configurable, privacy-respecting content monitoring feature that detects when specified topics are mentioned in user activity (chat input/output, ingestion, notes, RAG queries) and emits non-blocking alerts for admins/owners to review.
 
 ## Scope (Phase 1)
-- Rule‑based “watchlists” (literals/regex) with optional categories and severities.
-- Scopes: global (all users), per‑user; basic support for per‑team and per‑org when caller provides membership.
+- Rule-based “watchlists” (literals/regex) with optional categories and severities.
+- Scopes: global (all users), per-user; basic support for per-team and per-org when caller provides membership.
 - Integration points: chat input and output; notes (create/update/bulk); RAG search (unified/simple/advanced). Hooks emit alerts but NEVER block content.
-- Alert storage and retrieval API with mark‑as‑read.
+- Alert storage and retrieval API with mark-as-read.
 - Admin endpoints to manage watchlists and list alerts.
 
-## Non‑Goals (Phase 1)
+## Non-Goals (Phase 1)
 - Email/SMS/Slack/webhook delivery (planned in Phase 2).
-- Real‑time WS push to WebUI (planned in Phase 2).
-- ML classifiers or external moderation APIs (local‑first only for now).
+- Real-time WS push to WebUI (planned in Phase 2).
+- ML classifiers or external moderation APIs (local-first only for now).
 
 ## Requirements
-- Opt‑in and auditable: explicit configuration enabling; record the alert but do not alter the content flow.
-- Safe by default: local regex engine, bounded scan length, DoS‑safe pattern validation (re‑use checks from ModerationService).
+- Opt-in and auditable: explicit configuration enabling; record the alert but do not alter the content flow.
+- Safe by default: local regex engine, bounded scan length, DoS-safe pattern validation (re-use checks from ModerationService).
 - Transparent: Admins can inspect effective configuration and rules.
 
 ## Data Model
@@ -24,8 +24,8 @@ Goal: Provide a configurable, privacy‑respecting content monitoring feature th
   - `pattern` (literal or `/regex/`)
   - `category` (e.g., `self_harm`, `adult`, `violence`, `custom`)
   - `severity` (`info|warning|critical`)
-  - `note` (free‑text)
-  - Optional per‑rule `tags` set
+  - `note` (free-text)
+  - Optional per-rule `tags` set
 
 - Watchlist
   - `id`, `name`, `description`
@@ -58,16 +58,16 @@ Goal: Provide a configurable, privacy‑respecting content monitoring feature th
 
 ## Integration (chat only for Phase 1)
 At moderation/processing sites in endpoints, MonitoringService is called for:
-- chat input (pre‑LLM) with `source=chat.input`
-- chat output (stream and non‑stream) with `source=chat.output`
+- chat input (pre-LLM) with `source=chat.input`
+- chat output (stream and non-stream) with `source=chat.output`
 - notes creation/update/bulk with `source=notes.*`
 - RAG queries with `source=rag.*`
 
 Monitoring emits alerts without changing moderation behavior or endpoint results.
 
 ## Security & Privacy
-- Admin‑only APIs. Extend to org/team leads later.
-- Opt‑in via config or explicit creation of watchlists.
+- Admin-only APIs. Extend to org/team leads later.
+- Opt-in via config or explicit creation of watchlists.
 - Store minimal snippets (e.g., first 200 chars around the match).
 - All local; no external calls.
 

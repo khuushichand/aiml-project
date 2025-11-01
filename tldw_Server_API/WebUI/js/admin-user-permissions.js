@@ -250,7 +250,7 @@ async function bulkApplyOverrides(action, which = 'all') {
 function renderEffectiveOut() {
   const el = document.getElementById('userPermEffectiveOut');
   if (!el) return;
-  if (!UP_STATE.selectedUser) { el.textContent = '—'; return; }
+  if (!UP_STATE.selectedUser) { el.textContent = '-'; return; }
   el.textContent = JSON.stringify({ user_id: UP_STATE.selectedUser.id, permissions: Array.from(UP_STATE.effective).sort() }, null, 2);
 }
 

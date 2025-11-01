@@ -31,7 +31,7 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
 | **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
-| **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, optional GGUF streaming |
+| **NeuTTS** | Local (Hybrid) | EN | ✅ (3-15s) | Instant voice cloning, optional GGUF streaming |
 
 \* Current adapter configuration targets English (`tts-1` / `tts-1-hd`). Additional languages depend on OpenAI model availability.
 

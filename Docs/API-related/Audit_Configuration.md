@@ -4,7 +4,7 @@ Audit Configuration and Tuning
 Overview
 --------
 The Unified Audit Service supports runtime tuning via settings to control
-PII detection, risk scoring, and high‑risk operation sensitivity. This
+PII detection, risk scoring, and high-risk operation sensitivity. This
 document summarizes the knobs and provides practical examples.
 
 Settings Reference
@@ -18,7 +18,7 @@ Settings Reference
     - .env (JSON): `AUDIT_PII_PATTERNS={"custom":"HELLO\\d{3}"}`
 
 - AUDIT_PII_SCAN_FIELDS
-  - Type: list[str] or comma‑separated str
+  - Type: list[str] or comma-separated str
   - Purpose: Extra string fields to scan/redact outside of metadata.
     Accepts event field names (e.g., `error_message`) or `context_` prefixed
     context fields (e.g., `context_endpoint`, `context_user_agent`).
@@ -35,8 +35,8 @@ Settings Reference
     - .env (JSON): `AUDIT_ACTION_RISK_BONUS={"bulk_delete":15}`
 
 - AUDIT_HIGH_RISK_OPERATIONS
-  - Type: list[str] or comma‑separated str
-  - Purpose: Words/verbs that, when present in `event.action` (case‑insensitive
+  - Type: list[str] or comma-separated str
+  - Purpose: Words/verbs that, when present in `event.action` (case-insensitive
     substring), add +30 to the risk score.
   - Default set includes: delete, drop, truncate, export, download,
     change_password, reset_password, grant, revoke, modify_permissions,
@@ -68,8 +68,8 @@ Notes
 -----
 - Settings are read via the project’s `settings` mapping (LazySettings). They can be set in `.env` or programmatically in tests.
 - For PII, redaction places `[{TYPE}_REDACTED]` placeholders in strings while preserving metadata structure (dict/list) where possible.
-- Risk scoring is additive and capped at 100. Time‑of‑day and weekend bonuses are separate.
-- High‑risk operations match `event.action` by case‑insensitive substring (e.g., `"PurGe_old"` matches `"purge"`).
+- Risk scoring is additive and capped at 100. Time-of-day and weekend bonuses are separate.
+- High-risk operations match `event.action` by case-insensitive substring (e.g., `"PurGe_old"` matches `"purge"`).
 
 Quick Examples
 --------------

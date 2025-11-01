@@ -4,9 +4,9 @@ Condensed troubleshooting tips for Workflows. See the full guide at `../Operatio
 
 ## Enable Logs
 
-- `WORKFLOWS_DEBUG=1` – broad debug logs
-- `WORKFLOWS_ARTIFACTS_DEBUG=1` – artifact endpoints
-- `WORKFLOWS_DLQ_DEBUG=1` – DLQ endpoints/worker
+- `WORKFLOWS_DEBUG=1` - broad debug logs
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` - artifact endpoints
+- `WORKFLOWS_DLQ_DEBUG=1` - DLQ endpoints/worker
 
 ## Artifacts
 

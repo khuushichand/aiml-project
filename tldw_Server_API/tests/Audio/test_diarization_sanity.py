@@ -20,7 +20,7 @@ def test_agglomerative_metric_fallback(monkeypatch):
                 affinity: Affinity/distance measure to use.
             
             Raises:
-                TypeError: If `metric` is not None — this fake implementation rejects the `metric` keyword to force fallback behavior in callers.
+                TypeError: If `metric` is not None - this fake implementation rejects the `metric` keyword to force fallback behavior in callers.
             """
             if metric is not None:
                 # force fallback path

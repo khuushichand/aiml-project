@@ -29,8 +29,8 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
     
     Returns:
         dict: A mapping with keys:
-            - "api_key_id": int or None — the resolved API key ID as an integer when found, otherwise None.
-            - "user_id": Any or None — the associated user identifier when available, otherwise None.
+            - "api_key_id": int or None - the resolved API key ID as an integer when found, otherwise None.
+            - "user_id": Any or None - the associated user identifier when available, otherwise None.
     """
     key_id = getattr(request.state, "api_key_id", None)
     user_id = getattr(request.state, "user_id", None)

@@ -99,7 +99,7 @@ Notes
 Client Examples
 ---------------
 
-Python (websockets) — base64 JSON frames
+Python (websockets) - base64 JSON frames
 
 import asyncio, json, base64, numpy as np
 import websockets
@@ -134,7 +134,7 @@ async def main():
 
 asyncio.run(main())
 
-Node.js (ws) — base64 JSON frames
+Node.js (ws) - base64 JSON frames
 
 const WebSocket = require('ws');
 const sr = 16000;
@@ -151,7 +151,7 @@ ws.on('open', () => {
 });
 ws.on('message', (data) => console.log(JSON.parse(data)));
 
-Python — raw float32 usage (library-level)
+Python - raw float32 usage (library-level)
 - If you embed the core transcriber in your own service, pass `numpy.float32` arrays directly. The Parakeet core transcriber accepts raw float32 and handles chunking, overlap, and metadata.
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber import ParakeetCoreTranscriber
@@ -189,7 +189,7 @@ Quotas and Redis (optional)
 - Redis enables TTL-based leak safety for abrupt disconnects; configuration precedence:
   - Env `AUDIO_STREAM_TTL_SECONDS`
   - Config `[Audio-Quota].stream_ttl_seconds`
-  - Default 120s (clamped to 30–3600)
+  - Default 120s (clamped to 30-3600)
 - Without Redis, concurrency counters are in-process only.
 
 Health

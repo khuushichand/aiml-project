@@ -3,7 +3,7 @@ Audio Streaming Metrics & Monitoring
 
 Overview
 --------
-The audio streaming subsystem exports lightweight metrics via the built‑in registry and the `/metrics` HTTP endpoint suitable for Prometheus scraping. These metrics capture live usage and quota violations:
+The audio streaming subsystem exports lightweight metrics via the built-in registry and the `/metrics` HTTP endpoint suitable for Prometheus scraping. These metrics capture live usage and quota violations:
 
 - Gauges (canonical)
   - `audio_streaming_active` labels: `user_id`
@@ -68,5 +68,5 @@ OpenTelemetry (Optional)
 
 Operational Tips
 ----------------
-- Redis is optional but recommended for accurate concurrent stream counting across processes and TTL‑based cleanup on abrupt disconnects. See `[Audio-Quota].stream_ttl_seconds` in config and `AUDIO_STREAM_TTL_SECONDS` env.
+- Redis is optional but recommended for accurate concurrent stream counting across processes and TTL-based cleanup on abrupt disconnects. See `[Audio-Quota].stream_ttl_seconds` in config and `AUDIO_STREAM_TTL_SECONDS` env.
 - Health endpoint `/api/v1/audio/stream/status` is a quick feature probe to confirm variant availability before load testing.

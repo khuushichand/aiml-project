@@ -77,15 +77,15 @@ class UnifiedRAGRequest(BaseModel):
                 pass
             return values
 
-    # Optional corpus/namespace for per‑corpus indexing and synonyms
+    # Optional corpus/namespace for per-corpus indexing and synonyms
     corpus: Optional[str] = Field(
         default=None,
-        description="Alias for index_namespace used to select corpus‑specific synonyms",
+        description="Alias for index_namespace used to select corpus-specific synonyms",
         example="my_corpus"
     )
     index_namespace: Optional[str] = Field(
         default=None,
-        description="Corpus/namespace identifier (enables per‑corpus synonyms & indexing)",
+        description="Corpus/namespace identifier (enables per-corpus synonyms & indexing)",
         example="my_corpus"
     )
 
@@ -661,14 +661,14 @@ class UnifiedRAGRequest(BaseModel):
         default=None,
         ge=0.0,
         le=1.0,
-        description="Override minimum calibrated probability to allow generation (Two‑Tier)",
+        description="Override minimum calibrated probability to allow generation (Two-Tier)",
         example=0.5,
     )
     rerank_sentinel_margin: Optional[float] = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="Override required margin between top probability and sentinel (Two‑Tier)",
+        description="Override required margin between top probability and sentinel (Two-Tier)",
         example=0.15,
     )
     
@@ -705,7 +705,7 @@ class UnifiedRAGRequest(BaseModel):
     )
     strict_extractive: bool = Field(
         default=False,
-        description="Strict extractive mode: assemble the answer only from retrieved spans (no free‑form generation). Intended for sentence‑level grounding with hard citations.",
+        description="Strict extractive mode: assemble the answer only from retrieved spans (no free-form generation). Intended for sentence-level grounding with hard citations.",
         example=False,
     )
     

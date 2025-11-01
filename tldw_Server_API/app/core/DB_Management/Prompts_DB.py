@@ -583,10 +583,10 @@ class PromptsDatabase:
         return str(uuid.uuid4())
 
     def _normalize_keyword(self, keyword: str) -> str:
-        """Normalize keyword while preserving case for round‑trip display/export.
+        """Normalize keyword while preserving case for round-trip display/export.
 
         - Trim and collapse internal whitespace
-        - Do NOT lowercase; table uses COLLATE NOCASE for case‑insensitive uniqueness
+        - Do NOT lowercase; table uses COLLATE NOCASE for case-insensitive uniqueness
         """
         s = keyword.strip()
         s = re.sub(r'\s+', ' ', s).strip()

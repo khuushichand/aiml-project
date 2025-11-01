@@ -678,8 +678,8 @@ const TTS = {
                     if (fi) fi.disabled = true;
                 }
                 // Informational toast and long-clip hint
-                try { TTS.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
-                try { if (blob && blob.size > 5 * 1024 * 1024) TTS.showStatus('Long recording detected (>5MB). Aim for 3–15 seconds for best performance.', 'warning'); } catch(_) {}
+                try { TTS.showStatus('Mic recording overrides file input (3-15s recommended)', 'info'); } catch(_) {}
+                try { if (blob && blob.size > 5 * 1024 * 1024) TTS.showStatus('Long recording detected (>5MB). Aim for 3-15 seconds for best performance.', 'warning'); } catch(_) {}
             };
             // Soft cap with countdown (per-provider)
             try {
@@ -807,9 +807,9 @@ const TTS = {
                 const fileInput = document.getElementById('neutts-ref-audio');
                 if (fileInput) fileInput.disabled = true;
                 // Brief informational toast
-                try { this.showStatus('Mic recording overrides file input (3–15s recommended)', 'info'); } catch(_) {}
+                try { this.showStatus('Mic recording overrides file input (3-15s recommended)', 'info'); } catch(_) {}
                 // Hint on overly long recordings (size heuristic)
-                try { if (blob && blob.size > 5 * 1024 * 1024) this.showStatus('Long recording detected (>5MB). Processing may be slow; aim for 3–15 seconds.', 'warning'); } catch(_) {}
+                try { if (blob && blob.size > 5 * 1024 * 1024) this.showStatus('Long recording detected (>5MB). Processing may be slow; aim for 3-15 seconds.', 'warning'); } catch(_) {}
             };
             // Soft cap with countdown (NeuTTS)
             try {

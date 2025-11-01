@@ -221,7 +221,7 @@ async def create_chatbook(
                     job_id=result
                 )
             else:
-                # Sync mode — create a completed export job with a UUID as job_id
+                # Sync mode - create a completed export job with a UUID as job_id
                 import uuid
                 from datetime import datetime, timedelta
 

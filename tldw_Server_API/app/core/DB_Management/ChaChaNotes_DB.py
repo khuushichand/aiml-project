@@ -410,7 +410,7 @@ class CharactersRAGDB:
 
     _FULL_SCHEMA_SQL_V4 = """
 /*───────────────────────────────────────────────────────────────
-  RAG Character-Chat Schema  –  Version 4   (2025-05-14)
+  RAG Character-Chat Schema  -  Version 4   (2025-05-14)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -661,7 +661,7 @@ AFTER INSERT ON keywords BEGIN
   WHERE new.deleted = 0;
 END;
 
-/* ───── AFTER UPDATE → conditional delete + add —────────────── */
+/* ───── AFTER UPDATE → conditional delete + add -────────────── */
 CREATE TRIGGER keywords_au
 AFTER UPDATE ON keywords BEGIN
   /* delete the old doc only if it was indexed */
@@ -824,7 +824,7 @@ CREATE TABLE IF NOT EXISTS sync_log(
 CREATE INDEX IF NOT EXISTS idx_sync_log_ts     ON sync_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity,entity_id);
 
-/*—— drop any pre-existing sync triggers ———————————*/
+/*-- drop any pre-existing sync triggers -----------*/
 DROP TRIGGER IF EXISTS messages_sync_create;
 DROP TRIGGER IF EXISTS messages_sync_update;
 DROP TRIGGER IF EXISTS messages_sync_delete;
@@ -855,7 +855,7 @@ DROP TRIGGER IF EXISTS keyword_collections_sync_update;
 DROP TRIGGER IF EXISTS keyword_collections_sync_delete;
 DROP TRIGGER IF EXISTS keyword_collections_sync_undelete;
 
-/*—— sync triggers: messages ———————————————*/
+/*-- sync triggers: messages ---------------*/
 CREATE TRIGGER messages_sync_create
 AFTER INSERT ON messages BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -914,7 +914,7 @@ BEGIN
                      'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: conversations ———————————*/
+/*-- sync triggers: conversations -----------*/
 CREATE TRIGGER conversations_sync_create
 AFTER INSERT ON conversations BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -966,7 +966,7 @@ BEGIN
                      'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: character_cards —————————*/
+/*-- sync triggers: character_cards ---------*/
 CREATE TRIGGER character_cards_sync_create
 AFTER INSERT ON character_cards BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1034,7 +1034,7 @@ BEGIN
                      'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: notes ———————————————*/
+/*-- sync triggers: notes ---------------*/
 CREATE TRIGGER notes_sync_create
 AFTER INSERT ON notes BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1077,7 +1077,7 @@ BEGIN
                      'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: keywords ————*/
+/*-- sync triggers: keywords ----*/
 CREATE TRIGGER keywords_sync_create
 AFTER INSERT ON keywords BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1120,7 +1120,7 @@ BEGIN
 END;
 
 
-/*—— sync triggers: keyword_collections ————*/
+/*-- sync triggers: keyword_collections ----*/
 CREATE TRIGGER keyword_collections_sync_create
 AFTER INSERT ON keyword_collections BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1175,7 +1175,7 @@ UPDATE db_schema_version
     # --- Migration: V4 -> V5 (Flashcards/Decks/Reviews) ---
     _MIGRATION_SQL_V4_TO_V5 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 5 – Flashcards/Decks/SRS (2025-09-21)
+  Migration to Version 5 - Flashcards/Decks/SRS (2025-09-21)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -1193,7 +1193,7 @@ CREATE TABLE IF NOT EXISTS decks(
 CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks(deleted);
 CREATE INDEX IF NOT EXISTS idx_decks_last_modified ON decks(last_modified);
 
-/* Flashcards table – with integer id for FTS external-content */
+/* Flashcards table - with integer id for FTS external-content */
 CREATE TABLE IF NOT EXISTS flashcards(
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   uuid             TEXT UNIQUE NOT NULL,
@@ -1415,7 +1415,7 @@ UPDATE db_schema_version
     # --- Migration: V5 -> V6 (Flashcard model_type + extra) ---
     _MIGRATION_SQL_V5_TO_V6 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 6 – Flashcard model_type + extra (2025-09-21)
+  Migration to Version 6 - Flashcard model_type + extra (2025-09-21)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -1431,7 +1431,7 @@ UPDATE db_schema_version
     # --- Migration: V6 -> V7 (Flashcard reverse flag) ---
     _MIGRATION_SQL_V6_TO_V7 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 7 – Flashcard reverse flag (2025-09-21)
+  Migration to Version 7 - Flashcard reverse flag (2025-09-21)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -1446,7 +1446,7 @@ UPDATE db_schema_version
     # --- Migration: V7 -> V8 (Message images table) ---
     _MIGRATION_SQL_V7_TO_V8 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 8 – Message images table (2025-10-14)
+  Migration to Version 8 - Message images table (2025-10-14)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 

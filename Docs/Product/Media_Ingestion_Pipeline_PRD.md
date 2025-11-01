@@ -83,12 +83,12 @@ Contributors must support new media types, improve processing fidelity, and conn
 - **Backends:** SQLite is default and fully supported; Postgres backend exists but some ingestion routines rely on SQLite-specific syntax (e.g., `INSERT OR IGNORE`). Stage 2 roadmap covers removing those assumptions.
 
 ## 9. API Surface (developer focus)
-- `/api/v1/media/add` — process uploads/URLs and persist results (default path).  
-- `/api/v1/media/process-{audios|videos|documents|pdfs|ebooks|web-content|mediawiki}` — process without persistence (used by UI previews and external tooling).  
-- `/api/v1/media/process-code` — code-aware chunking pipeline.  
-- `/api/v1/media/ingest-web-content` — crawler/scraper entry that reuses watchlist fetchers.  
-- `/api/v1/media/mediawiki/...` — long-running MediaWiki ingestion with streaming responses.  
-- `/api/v1/media/{id}` — CRUD endpoints (fetch, update metadata, delete/restore).  
+- `/api/v1/media/add` - process uploads/URLs and persist results (default path).  
+- `/api/v1/media/process-{audios|videos|documents|pdfs|ebooks|web-content|mediawiki}` - process without persistence (used by UI previews and external tooling).  
+- `/api/v1/media/process-code` - code-aware chunking pipeline.  
+- `/api/v1/media/ingest-web-content` - crawler/scraper entry that reuses watchlist fetchers.  
+- `/api/v1/media/mediawiki/...` - long-running MediaWiki ingestion with streaming responses.  
+- `/api/v1/media/{id}` - CRUD endpoints (fetch, update metadata, delete/restore).  
 - `/api/v1/watchlists/*` and `/api/v1/items` reuse ingestion outputs to list items and outputs.  
 - Future: `/api/v1/media/jobs/*` for asynchronous queued ingestion (Stage 2).
 
@@ -111,13 +111,13 @@ Contributors must support new media types, improve processing fidelity, and conn
 - **AuthNZ:** Media actions gated by `MEDIA_CREATE`, `MEDIA_READ`, `MEDIA_DELETE` permissions and API key/JWT contexts.
 
 ## 12. Roadmap
-### Stage 0 – Foundations (Complete)
+### Stage 0 - Foundations (Complete)
 - Core processors for major media formats.
 - Upload validation with extension, size, optional Yara.
 - Media DB persistence + claims extraction + chunking.
 - Watchlists/collections integration and embeddings enqueue hook.
 
-### Stage 1 – Observability & Job Control (In progress)
+### Stage 1 - Observability & Job Control (In progress)
 - Instrument per-media metrics (validation failures, processing duration, chunk counts).  
 - Normalize async task orchestration: background queues for long-running jobs (Large PDFs, yt-dlp).  
 - Introduce ingestion job registry with retry/backoff metadata stored in Media DB (or new table).  
@@ -125,14 +125,14 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Ensure Content Collections pipeline receives consistent provenance metadata (run_id, source_id).  
 - Tighten sanitization (HTML/XML cleaning) and document safe defaults.
 
-### Stage 2 – Backend Parity & Scaling
+### Stage 2 - Backend Parity & Scaling
 - Remove SQLite-specific SQL; add migrations for Postgres parity.  
 - Support distributed workers for heavy processing (audio transcription, OCR) with queue-based execution.  
 - Implement resource budgeting per user (size limits, concurrency) with metrics + limits surfaced to admin UI.  
 - Add structured structure-index writes (section hierarchy) per Ingest-Plan-1.  
 - Expand FTS/embedding parity (image captioning, table extraction).
 
-### Stage 3 – Advanced Automation
+### Stage 3 - Advanced Automation
 - Agentic ingestion workflows (auto-derive follow-up fetches, domain-specific pipelines).  
 - Built-in summarization + highlight extraction stored alongside media versions.  
 - Inline quality scoring and remediation suggestions for failed ingestion.  

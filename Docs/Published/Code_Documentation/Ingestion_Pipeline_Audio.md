@@ -2,7 +2,7 @@
 
 ## Overview
 
-Transcribes audio inputs (URLs or local files), optionally chunks text, and runs analysis/summarization. Batch-oriented, DB‑agnostic; returns structured results for each input.
+Transcribes audio inputs (URLs or local files), optionally chunks text, and runs analysis/summarization. Batch-oriented, DB-agnostic; returns structured results for each input.
 
 ## Primary Function
 

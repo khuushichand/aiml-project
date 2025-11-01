@@ -210,9 +210,9 @@ Public API endpoints for API key CRUD (list/create/rotate/revoke) are not yet ex
 
 #### API key enforcement guidelines
 
-- **IP allowlists** – API keys can be restricted to a specific set of client IP addresses by setting `allowed_ips` when the key is created (admin CLI/DB helpers). When an allowlist is present the request **must** include a resolvable client IP; requests without an IP are rejected instead of silently skipping the check. Make sure your reverse proxy forwards the original client IP (for example via `X-Forwarded-For`) and that the ASGI server is configured to trust it.
-- **Missing IP metadata** – If your deployment strips client IP information, either disable the allowlist for that key or fix the proxy configuration. The server now treats a missing IP as a hard failure for allowlisted keys.
-- **Audit logging** – Enable `API_KEY_AUDIT_LOG_USAGE` in AuthNZ settings to capture lightweight “used” events each time a key validates. This is helpful when you begin enforcing allowlists or other restrictions.
+- **IP allowlists** - API keys can be restricted to a specific set of client IP addresses by setting `allowed_ips` when the key is created (admin CLI/DB helpers). When an allowlist is present the request **must** include a resolvable client IP; requests without an IP are rejected instead of silently skipping the check. Make sure your reverse proxy forwards the original client IP (for example via `X-Forwarded-For`) and that the ASGI server is configured to trust it.
+- **Missing IP metadata** - If your deployment strips client IP information, either disable the allowlist for that key or fix the proxy configuration. The server now treats a missing IP as a hard failure for allowlisted keys.
+- **Audit logging** - Enable `API_KEY_AUDIT_LOG_USAGE` in AuthNZ settings to capture lightweight “used” events each time a key validates. This is helpful when you begin enforcing allowlists or other restrictions.
 
 ### Session Management
 

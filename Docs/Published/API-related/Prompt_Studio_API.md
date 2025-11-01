@@ -1,6 +1,6 @@
 # Prompt Studio API
 
-The Prompt Studio module provides a structured workflow to design, version, test, evaluate, and optimize prompts within projects. It exposes cohesive APIs for projects, prompts (with versioning), test cases, evaluations, optimizations, and real‑time updates.
+The Prompt Studio module provides a structured workflow to design, version, test, evaluate, and optimize prompts within projects. It exposes cohesive APIs for projects, prompts (with versioning), test cases, evaluations, optimizations, and real-time updates.
 
 ## Overview
 
@@ -9,9 +9,9 @@ The Prompt Studio module provides a structured workflow to design, version, test
 - Test cases define inputs, expected outputs, tags, and a golden flag; they form the corpus for evaluation.
 - Evaluations run a prompt (or prompt version) against a set of test cases and save metrics.
 - Optimizations run strategies to iteratively improve prompts (e.g., iterative refinement, hyperparameter tuning).
-- Real‑time updates are available via WebSocket with SSE fallback.
+- Real-time updates are available via WebSocket with SSE fallback.
 
-Authentication follows the server's standard modes (single‑user API key or multi‑user JWT). Endpoints are project‑scoped: reads require access, writes require write access. Rate limits apply to generation/optimization endpoints.
+Authentication follows the server's standard modes (single-user API key or multi-user JWT). Endpoints are project-scoped: reads require access, writes require write access. Rate limits apply to generation/optimization endpoints.
 
  Tag in OpenAPI: `prompt-studio`.
 
@@ -123,7 +123,7 @@ curl -X GET "http://localhost:8000/api/v1/prompt-studio/optimizations/history/70
 - Strategies: `GET /api/v1/prompt-studio/optimizations/strategies`
 - Compare: `POST /api/v1/prompt-studio/optimizations/compare`
 
-### Real‑time API
+### Real-time API
 - WebSocket base: `WS /api/v1/prompt-studio/ws`
 - WebSocket per project: `WS /api/v1/prompt-studio/ws/{project_id}`
 - SSE fallback: `GET /api/v1/prompt-studio/ws` (text/event-stream)
@@ -275,7 +275,7 @@ curl -X POST "http://localhost:8000/api/v1/prompt-studio/optimizations/create" \
       }'
 ```
 
-### Subscribe to Real‑time Updates (WebSocket)
+### Subscribe to Real-time Updates (WebSocket)
 ```js
 const ws = new WebSocket("ws://localhost:8000/api/v1/prompt-studio/ws");
 ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", entity_type: "project", entity_id: 1 }));
@@ -292,5 +292,5 @@ ws.onmessage = (evt) => console.log("event", evt.data);
 
 - Prompt updates create new versions; reverting also creates a new version
 - Evaluations can run synchronously or as background tasks
-- Real‑time updates support both WebSocket and SSE fallback
-- Real‑time updates support both WebSocket and SSE fallback
+- Real-time updates support both WebSocket and SSE fallback
+- Real-time updates support both WebSocket and SSE fallback

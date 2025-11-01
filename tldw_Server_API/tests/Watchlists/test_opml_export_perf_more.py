@@ -65,3 +65,25 @@ def test_opml_export_perf_sanity_beyond_300(client_with_user: TestClient):
     urls = _extract_opml_urls(r.text)
     # Ensure at least N RSS feeds are present
     assert len([u for u in urls if u.startswith("https://example.com/perfmore")]) >= n
+
+
+@pytest.mark.performance
+def test_opml_export_perf_sanity_beyond_800(client_with_user: TestClient):
+    c = client_with_user
+    # Create >800 RSS sources to stress export path
+    n = 800
+    for i in range(n):
+        r = c.post(
+            "/api/v1/watchlists/sources",
+            json={
+                "name": f"PerfMoreB{i}",
+                "url": f"https://example.com/perfmoreB{i}.xml",
+                "source_type": "rss",
+            },
+        )
+        assert r.status_code == 200, r.text
+
+    r = c.get("/api/v1/watchlists/sources/export", params={"type": "rss"})
+    assert r.status_code == 200, r.text
+    urls = _extract_opml_urls(r.text)
+    assert len([u for u in urls if u.startswith("https://example.com/perfmoreB")]) >= n

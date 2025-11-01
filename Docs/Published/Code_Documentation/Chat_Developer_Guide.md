@@ -1,57 +1,57 @@
-# Chat Module – Developer Guide
+# Chat Module - Developer Guide
 
 This guide explains the Chat module’s architecture, key components, and how to extend or maintain it. It targets developers and maintainers working on provider integrations, request handling, streaming, and system reliability.
 
 ## Goals & Scope
 
-- OpenAI‑compatible Chat API (`/api/v1/chat/completions`) with streaming (SSE) and non‑streaming responses
+- OpenAI-compatible Chat API (`/api/v1/chat/completions`) with streaming (SSE) and non-streaming responses
 - Multiple LLM providers (commercial and local) through a unified dispatch layer
 - Consistent validation (Pydantic schemas) and rich error mapping
-- Optional rate limiting, queuing/back‑pressure, and metrics/tracing
+- Optional rate limiting, queuing/back-pressure, and metrics/tracing
 - Character sessions, dictionaries, world books integration through adjacent subsystems
 
 ## Authentication
 
-- Supports `Authorization: Bearer <token>`, legacy `Token: <token>`, and single‑user `X-API-KEY` headers.
+- Supports `Authorization: Bearer <token>`, legacy `Token: <token>`, and single-user `X-API-KEY` headers.
 - Actual enforcement depends on deployment settings (`AUTH_MODE`, config flags). See `main.py` auth wiring and `core/Auth` utilities.
 
 ## Persistence
 
 - Requests are ephemeral by default; set `save_to_db: true` to persist conversations/messages.
 - Config toggles for default persistence are read from `[Chat-Module]` and environment (e.g., `CHAT_SAVE_DEFAULT`).
-- Non‑stream responses include `tldw_conversation_id` in the JSON payload for client state.
+- Non-stream responses include `tldw_conversation_id` in the JSON payload for client state.
 
 ## Directory Map
 
  - `tldw_Server_API/app/core/Chat/`
-  - `Chat_Functions.py` – Minimal compatibility shim exporting only `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`. Import history/dictionary/character helpers from their dedicated modules.
-  - `chat_orchestrator.py` – Primary dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
-  - `chat_helpers.py` – Request shaping helpers, conversion from API schemas, dictionary/character hooks
-  - `provider_manager.py` & `provider_config.py` – Provider health/fallback management and authoritative handler/parameter mappings
-  - `rate_limiter.py` – Module‑level rate limiting primitives & startup initialization
-  - `request_queue.py` – Optional in‑memory queue for back‑pressure and concurrency control
-  - `streaming_utils.py` – Streaming helpers (yielding tokens/chunks to clients)
-  - `chat_metrics.py` – Metrics emitters (counters, histograms)
-  - `chat_exceptions.py` – Typed exceptions + mapping utilities
-  - `Chat_Deps.py` – Shared dependency types and error helpers
-  - `document_generator.py` – Structured output helpers for document‑like responses
-  - `prompt_template_manager.py` (+ `prompt_templates/`) – Prompt templating utilities
+  - `Chat_Functions.py` - Minimal compatibility shim exporting only `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`. Import history/dictionary/character helpers from their dedicated modules.
+  - `chat_orchestrator.py` - Primary dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
+  - `chat_helpers.py` - Request shaping helpers, conversion from API schemas, dictionary/character hooks
+  - `provider_manager.py` & `provider_config.py` - Provider health/fallback management and authoritative handler/parameter mappings
+  - `rate_limiter.py` - Module-level rate limiting primitives & startup initialization
+  - `request_queue.py` - Optional in-memory queue for back-pressure and concurrency control
+  - `streaming_utils.py` - Streaming helpers (yielding tokens/chunks to clients)
+  - `chat_metrics.py` - Metrics emitters (counters, histograms)
+  - `chat_exceptions.py` - Typed exceptions + mapping utilities
+  - `Chat_Deps.py` - Shared dependency types and error helpers
+  - `document_generator.py` - Structured output helpers for document-like responses
+  - `prompt_template_manager.py` (+ `prompt_templates/`) - Prompt templating utilities
 
 Related:
 - API schemas: `tldw_Server_API/app/api/v1/schemas/chat_request_schemas.py`
 - LLM provider calls: `tldw_Server_API/app/core/LLM_Calls/` (both cloud and local backends)
 - Character sessions & world books: `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py`, notes DB
-- Chat dictionaries: `Config_Files` + `core/config.py` (Chat‑Dictionaries section)
+- Chat dictionaries: `Config_Files` + `core/config.py` (Chat-Dictionaries section)
 - Provider listing/health: `tldw_Server_API/app/api/v1/endpoints/llm_providers.py`
 
-## Request Flow (High‑Level)
+## Request Flow (High-Level)
 
-1. FastAPI endpoint parses request into `ChatCompletionRequest` (Pydantic) – OpenAI‑compatible schema.
+1. FastAPI endpoint parses request into `ChatCompletionRequest` (Pydantic) - OpenAI-compatible schema.
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
 3. The endpoint uses lightweight helpers in `chat_service.py` and delegates to `chat_orchestrator.chat_api_call(...)`. Mappings are sourced from `provider_config.py`. A minimal compatibility shim (`Chat_Functions.chat_api_call`) remains for legacy callers/tests; new code should import `chat_orchestrator` directly.
-4. `LLM_Calls/*` executes the provider‑specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
+4. `LLM_Calls/*` executes the provider-specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.
 
@@ -78,7 +78,7 @@ Provider selection notes:
 
 ## Validation & Schemas
 
-- `chat_request_schemas.py` defines OpenAI‑compatible request models, messages, tools, and response‑format constraints.
+- `chat_request_schemas.py` defines OpenAI-compatible request models, messages, tools, and response-format constraints.
 - `chat_validators.py` provides additional validators (IDs, temperatures, max tokens, stop sequences, and `MAX_REQUEST_SIZE`).
 - The endpoint validates:
   - Message roles and content constraints (assistant/tool message rules)
@@ -98,7 +98,7 @@ Provider selection notes:
 ## Streaming
 
 - Providers that support streaming return an iterator/generator.
-- `streaming_utils.py` normalizes provider chunks and emits OpenAI‑style Server‑Sent Events (`text/event-stream`).
+- `streaming_utils.py` normalizes provider chunks and emits OpenAI-style Server-Sent Events (`text/event-stream`).
 - The endpoint wraps streams with heartbeats, idle timeouts, and finalization signals.
 - Errors in streams are emitted as SSE error frames and logged with context.
 - Event framing:
@@ -109,23 +109,23 @@ Provider selection notes:
 ## Rate Limiting & Queuing
 
 - `rate_limiter.py` exposes a `RateLimitConfig` and `initialize_rate_limiter()` called on app startup (see `main.py`), and is enforced in the chat endpoint.
-- `request_queue.py` exists for back‑pressure and concurrency control; it is initialized in `main.py` but not yet wired into the chat endpoint (integration planned).
-- Apply limits to high‑cost routes (completions, tools) and consider per‑user/per‑IP strategies.
+- `request_queue.py` exists for back-pressure and concurrency control; it is initialized in `main.py` but not yet wired into the chat endpoint (integration planned).
+- Apply limits to high-cost routes (completions, tools) and consider per-user/per-IP strategies.
 - In `TEST_MODE=true`, the rate limiter’s key function bypasses client IP to avoid false positives in tests.
 
 ## Metrics & Tracing
 
 - `chat_metrics.py` provides counters and histograms (e.g., `chat_api_call_attempt/success`, durations).
 - Uses the unified telemetry/metrics facades in `app/core/Metrics` for Prometheus and tracing compatibility.
-- Label cardinality should remain bounded (`provider`, `model`, `status`). Avoid dynamic or free‑form labels.
+- Label cardinality should remain bounded (`provider`, `model`, `status`). Avoid dynamic or free-form labels.
 
 ## Configuration
 
 - Configuration sources:
   - `Config_Files/config.txt` (`[Chat-Module]`, `[Chat-Dictionaries]`, and provider sections)
   - Environment variables (override file settings)
-- `provider_config.py` defines handler/parameter mappings; `provider_manager.py` manages health/circuit‑breaker/fallback.
-- Common toggles: default provider/model, streaming timeouts, max tokens, safety filters, rate‑limit config, request queue sizes.
+- `provider_config.py` defines handler/parameter mappings; `provider_manager.py` manages health/circuit-breaker/fallback.
+- Common toggles: default provider/model, streaming timeouts, max tokens, safety filters, rate-limit config, request queue sizes.
 
 ## Images & Multimodal Input
 
@@ -154,12 +154,12 @@ Provider selection notes:
 
 - Treat `provider_config.py` as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. The legacy duplicate in `Chat_Functions.py` has been removed to prevent drift.
 - Log safe: escape curly braces and large payloads before logging (see existing patterns in exception handling).
-- Preserve OpenAI response compatibility in streaming and non‑streaming outputs to avoid client regressions.
+- Preserve OpenAI response compatibility in streaming and non-streaming outputs to avoid client regressions.
 - Be careful when altering schema constraints; downstream clients (UI and tools) rely on them.
 
 Additional endpoint behavior to note:
-- Non‑stream responses include `tldw_conversation_id` in the JSON body for ease of client‑side state tracking.
- - Streaming responses use SSE with an initial `stream_start` event, OpenAI‑style `data:` deltas, periodic heartbeats, and a `stream_end` event on completion.
+- Non-stream responses include `tldw_conversation_id` in the JSON body for ease of client-side state tracking.
+ - Streaming responses use SSE with an initial `stream_start` event, OpenAI-style `data:` deltas, periodic heartbeats, and a `stream_end` event on completion.
 
 ---
 

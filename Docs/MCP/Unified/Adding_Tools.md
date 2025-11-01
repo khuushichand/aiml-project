@@ -1,14 +1,14 @@
 # Adding New MCP Tools (Modules)
 
-This guide explains how to add a new tool to the MCP Unified stack so it can be executed via the server‑side tool executor (and from the Tools API). Tools are provided by MCP “modules”.
+This guide explains how to add a new tool to the MCP Unified stack so it can be executed via the server-side tool executor (and from the Tools API). Tools are provided by MCP “modules”.
 
 ## Overview
 
 - Implement a module class that extends `BaseModule` and lives under the allowed namespace:
   - `tldw_Server_API.app.core.MCP_unified.modules.implementations`
-- Provide tool definitions via `get_tools()` with JSON‑schema’d inputs.
+- Provide tool definitions via `get_tools()` with JSON-schema’d inputs.
 - Implement `execute_tool(tool_name, arguments)` to run your logic.
-- (For write tools) override `validate_tool_arguments` and mark your tool as write‑capable via metadata or name heuristics.
+- (For write tools) override `validate_tool_arguments` and mark your tool as write-capable via metadata or name heuristics.
 - Register the module in `mcp_modules.yaml` and restart the server.
 
 ## Module Skeleton
@@ -25,7 +25,7 @@ class MyModule(BaseModule):
         pass
 
     async def check_health(self) -> Dict[str, bool]:
-        # Return fine‑grained checks
+        # Return fine-grained checks
         return {"initialized": True}
 
     async def get_tools(self) -> List[Dict[str, Any]]:
@@ -46,7 +46,7 @@ class MyModule(BaseModule):
                     "properties": {"id": {"type": "integer"}, "name": {"type": "string"}},
                     "required": ["id", "name"],
                 },
-                metadata={"category": "management"},  # treated as write‑capable
+                metadata={"category": "management"},  # treated as write-capable
             ),
         ]
 
@@ -63,13 +63,13 @@ class MyModule(BaseModule):
         # Optional extra validation beyond JSON schema (enforced for write tools)
         if tool_name == "my.create_item":
             if int(arguments.get("id", -1)) < 0:
-                raise ValueError("id must be non‑negative")
+                raise ValueError("id must be non-negative")
 ```
 
 Notes
 - `metadata.category` influences write detection (`ingestion`/`management` are considered write).
 - The base class provides `sanitize_input()` and `is_write_tool_def()` helpers.
-- Concurrency/circuit breaker and per‑call timeouts are handled by the base class.
+- Concurrency/circuit breaker and per-call timeouts are handled by the base class.
 
 ## Registering the Module
 
@@ -84,7 +84,7 @@ modules:
     version: "1.0.0"
     department: "lab"
     max_concurrent: 8
-    # Module‑specific settings are available as self.config.settings
+    # Module-specific settings are available as self.config.settings
     settings:
       greeting: "hello"
 ```
@@ -93,17 +93,17 @@ Restart the server. On startup, the MCP server loads modules from this YAML. The
 
 ## Permissions (RBAC)
 
-- The MCP protocol enforces per‑tool permission `tools.execute:{tool_name}` (or wildcard) and module read permission.
+- The MCP protocol enforces per-tool permission `tools.execute:{tool_name}` (or wildcard) and module read permission.
 - Grant via Admin RBAC endpoints/console. For quick testing, assign `tools.execute:*` to your role.
-- The Tools API (`POST /api/v1/tools/execute`) also requires the endpoint‑level `tools.execute:*` permission.
+- The Tools API (`POST /api/v1/tools/execute`) also requires the endpoint-level `tools.execute:*` permission.
 
 ## Testing Your Tool
 
-- List tools: `GET /api/v1/tools` — check your tool appears and `canExecute` is true.
-- Dry‑run validate: `POST /api/v1/tools/execute` with `{"tool_name":"my.echo","arguments":{"message":"hi"},"dry_run":true}`.
+- List tools: `GET /api/v1/tools` - check your tool appears and `canExecute` is true.
+- Dry-run validate: `POST /api/v1/tools/execute` with `{"tool_name":"my.echo","arguments":{"message":"hi"},"dry_run":true}`.
 - Execute: `POST /api/v1/tools/execute` with arguments; observe the result.
 
-## Write‑Tool Safety
+## Write-Tool Safety
 
 - To enable write tools in production, ensure your MCP policy allows them (see `Docs/MCP/Unified/System_Admin_Guide.md`).
 - The protocol enforces:
@@ -114,7 +114,7 @@ Restart the server. On startup, the MCP server loads modules from this YAML. The
 
 ## Surfacing Results in Chat (optional)
 
-If you later enable Chat auto‑execution:
+If you later enable Chat auto-execution:
 - Chat can call your tool through the server executor and record a `role=tool` message.
 - The legacy WebUI now renders tool calls and tool results under assistant messages for transparency.
 

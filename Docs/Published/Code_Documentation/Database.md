@@ -1,13 +1,13 @@
 # Database Overview
 
-This document describes the persistence layer used by tldw_server: relational databases (SQLite by default, PostgreSQL where applicable), per‑user storage layout, vector storage (ChromaDB), and where each module keeps its data. It links to focused docs for detailed schemas and API usage.
+This document describes the persistence layer used by tldw_server: relational databases (SQLite by default, PostgreSQL where applicable), per-user storage layout, vector storage (ChromaDB), and where each module keeps its data. It links to focused docs for detailed schemas and API usage.
 
 ## At a Glance
 - Default relational store: SQLite (production supports PostgreSQL for AuthNZ and is wired for content DB backends).
 - Vector store: ChromaDB per user, on disk.
-- Per‑user data root: `USER_DB_BASE_DIR` (defaults to `Databases/user_databases`).
-- Soft deletes, versioning, and sync logging are first‑class across content DBs.
-- FTS5 is used for full‑text search in multiple databases (Media, Prompts, Prompt Studio).
+- Per-user data root: `USER_DB_BASE_DIR` (defaults to `Databases/user_databases`).
+- Soft deletes, versioning, and sync logging are first-class across content DBs.
+- FTS5 is used for full-text search in multiple databases (Media, Prompts, Prompt Studio).
 
 Related docs:
 - Media DB v2: Docs/Code_Documentation/Databases/Media_DB_v2.md
@@ -17,13 +17,13 @@ Related docs:
 
 Environment and config determine paths. Defaults are created on startup if missing.
 
-- `USER_DB_BASE_DIR` (base for per‑user data)
+- `USER_DB_BASE_DIR` (base for per-user data)
   - Default: `Databases/user_databases`
   - Source: tldw_Server_API/app/core/config.py:403
 
 - AuthNZ main database (`DATABASE_URL`)
-  - Default (single‑user): `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
-  - Multi‑user recommended: PostgreSQL `postgresql://...`
+  - Default (single-user): `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - Multi-user recommended: PostgreSQL `postgresql://...`
   - Code: tldw_Server_API/app/core/AuthNZ/database.py:1, tldw_Server_API/app/core/config.py:408
 
 - Media database (content)
@@ -43,11 +43,11 @@ Environment and config determine paths. Defaults are created on startup if missi
   - Library: tldw_Server_API/app/core/DB_Management/Prompts_DB.py:180
   - Prompt Studio extension: tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py:1
 
-- Evaluations (OpenAI‑compatible + internal/unified)
+- Evaluations (OpenAI-compatible + internal/unified)
   - Default DB: `Databases/evaluations.db`
   - Used by background workers (ephemeral cleanup) and APIs
   - Code: tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:1, tldw_Server_API/app/main.py:343
-  - Per‑user audit/evaluations paths available via db_path_utils for some DI flows
+  - Per-user audit/evaluations paths available via db_path_utils for some DI flows
 
 - Vector store (ChromaDB + meta SQLite per user)
   - Chroma storage: `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/`
@@ -65,7 +65,7 @@ Notes:
 ## Key Databases and Capabilities
 
 ### AuthNZ (Users)
-- Backend: SQLite (single‑user) or PostgreSQL (multi‑user recommended).
+- Backend: SQLite (single-user) or PostgreSQL (multi-user recommended).
 - Pooling/transactions: tldw_Server_API/app/core/AuthNZ/database.py:1
 - Schema files: `tldw_Server_API/Databases/SQLite/Schema/sqlite_users.sql`, `tldw_Server_API/Databases/Postgres/Schema/postgresql_users.sql`
 - Settings: `DATABASE_URL`, `AUTH_MODE`, `SINGLE_USER_FIXED_ID`
@@ -81,7 +81,7 @@ Notes:
 
 ### ChaChaNotes DB
 - Purpose: Notes, characters, chats, tags, flashcards, decks, reviews, sessions.
-- Per‑user file: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
+- Per-user file: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
 - Current schema version: 7
 - DI: `get_chacha_db_for_user`
 - Doc: Docs/Code_Documentation/Databases/ChaChaNotes_DB.md
@@ -89,19 +89,19 @@ Notes:
 
 ### Prompts / Prompt Studio DB
 - Purpose: Prompt library, keyword FTS, projects, signatures, test cases, evaluations, optimizations.
-- Per‑user file: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
+- Per-user file: `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`
 - FTS5 enabled for prompts/keywords; Prompt Studio migrations under `.../migrations`.
 - DI: `get_prompts_db_for_user`
 - Code: tldw_Server_API/app/core/DB_Management/Prompts_DB.py:180, PromptStudioDatabase.py:1
 
 ### Evaluations DB (Unified)
-- Purpose: OpenAI‑compatible evaluations, evaluation runs, datasets; internal/unified evaluations; webhook registrations; embedding A/B tests; ephemeral collections registry.
+- Purpose: OpenAI-compatible evaluations, evaluation runs, datasets; internal/unified evaluations; webhook registrations; embedding A/B tests; ephemeral collections registry.
 - Default file: `Databases/evaluations.db`
 - Unified migration: `migrations_v5_unified_evaluations.py`
 - Code: tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:1
 
 ### Vector Store and Jobs (Per user)
-- ChromaDB storage: `<USER_DB_BASE_DIR>/<user_id>/chroma_storage` with per‑user `ChromaDBManager`.
+- ChromaDB storage: `<USER_DB_BASE_DIR>/<user_id>/chroma_storage` with per-user `ChromaDBManager`.
 - Meta and batch/job tracking: `vector_store_meta.db`, `vector_store_batches.db`, `media_embedding_jobs.db`.
 - Code: tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py:130, vector_store_meta_db.py:1, vector_store_batches_db.py:1, media_embedding_jobs_db.py:1
 
@@ -117,9 +117,9 @@ Notes:
 - Unified audit service: `tldw_Server_API/app/api/v1/API_Deps/Audit_DB_Deps.py`:1 (`get_audit_service_for_user`)
 
 ## Configuration Reference
-- `USER_DB_BASE_DIR`: Base dir for per‑user SQLite and ChromaDB storage.
-- `DATABASE_URL`: AuthNZ DB (SQLite or PostgreSQL). Defaults to per‑user `tldw.db` in single‑user mode.
-- `SINGLE_USER_FIXED_ID`: User ID used to compute single‑user default paths.
+- `USER_DB_BASE_DIR`: Base dir for per-user SQLite and ChromaDB storage.
+- `DATABASE_URL`: AuthNZ DB (SQLite or PostgreSQL). Defaults to per-user `tldw.db` in single-user mode.
+- `SINGLE_USER_FIXED_ID`: User ID used to compute single-user default paths.
 - `MCP_DATABASE_URL`: MCP unified DB (SQLite+aiosqlite or PostgreSQL).
 - Content DB settings: `tldw_Server_API/Config_Files/config.txt` (Media DB path, backend selection).
 
@@ -127,7 +127,7 @@ Notes:
 - Media DB v2 exposes `backup_database(path)`; automated/incremental helpers are placeholders.
 - Prompt Studio applies migrations from `tldw_Server_API/app/core/DB_Management/migrations/`.
 - Evaluations DB applies unified migration v5 automatically at init.
-- General backup helpers exist in DB_Management, but prefer per‑library backup functions where available.
+- General backup helpers exist in DB_Management, but prefer per-library backup functions where available.
 
 ## Testing Pointers
 - Media DB v2: tldw_Server_API/tests/Media_Ingestion_Modification/test_media_processing.py:35

@@ -365,7 +365,7 @@
                     </div>
                     <div class="form-group">
                         <label for="monWl_name">Name:</label>
-                        <input id="monWl_name" type="text" placeholder="Kid-Safe Defaults — Custom" />
+                        <input id="monWl_name" type="text" placeholder="Kid-Safe Defaults - Custom" />
                     </div>
                     <div class="form-group">
                         <label for="monWl_desc">Description:</label>
@@ -522,7 +522,7 @@
                 <div class="column">
                     <div class="form-group">
                         <label>Last Update:</label>
-                        <span id="monAlerts_last_update">—</span>
+                        <span id="monAlerts_last_update">-</span>
                     </div>
                 </div>
             </div>
@@ -709,7 +709,7 @@
                     if (!id) { Toast.error(`Enter a ${scopeType} id`); return; }
                     const listed = await apiClient.get('/api/v1/monitoring/watchlists');
                     const wls = (listed && listed.watchlists) || [];
-                    // Select global defaults (Kid-Safe Defaults — ...)
+                    // Select global defaults (Kid-Safe Defaults - ...)
                     const defaults = wls.filter(w => (w.name || '').startsWith('Kid-Safe Defaults'));
                     if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
                     let created = 0;
@@ -1009,7 +1009,7 @@
                 <div class="column">
                     <div class="form-group">
                         <label>Last Update:</label>
-                        <span id="monNotif_last_update">—</span>
+                        <span id="monNotif_last_update">-</span>
                         <span id="monNotif_updated" style="margin-left:8px;color:#28a745;"></span>
                     </div>
                 </div>
@@ -1441,7 +1441,7 @@
         <p style="font-size: 0.9em; color: #666; margin-top: -6px;">
             Tip: Managed operations require sending the current ETag in an <code>If-Match</code> header.
             Click <strong>Load</strong> to refresh and keep the ETag up to date. If someone else updates the list first,
-            your append/delete will return <code>412 Precondition Failed</code>—just reload and try again.
+            your append/delete will return <code>412 Precondition Failed</code>-just reload and try again.
         </p>
 
         <div class="columns">
@@ -3008,7 +3008,7 @@
 
         <div class="columns" style="align-items:center; margin: 4px 0 12px 0;">
             <div class="column">
-                <span id="rbacRolesInfo">Roles: –</span>
+                <span id="rbacRolesInfo">Roles: -</span>
                 <span id="rbacRolesNote" style="opacity:0.75; margin-left:8px;"></span>
             </div>
             <div class="column">
@@ -3170,7 +3170,7 @@
             const { limit, offset } = _getRolesLimitOffset();
             const start = total ? Math.min(total, offset + 1) : (offset + 1);
             const end = total ? Math.min(total, offset + rolesReturned) : (offset + rolesReturned);
-            const text = total ? `Roles: ${start}–${end} of ${total}` : `Roles: ${start}–${end}`;
+            const text = total ? `Roles: ${start}-${end} of ${total}` : `Roles: ${start}-${end}`;
             info.textContent = text;
             // Update pager disabled states
             const prevBtn = document.getElementById('rbacPrevBtn');
@@ -3657,7 +3657,7 @@ async function _ensurePermissionCategories() {
 <div id="tabAdminUserPermissions" class="tab-content">
     <div class="endpoint-section" id="adminUserPerms">
         <h2>User Permissions Editor</h2>
-        <p>Search for a user, manage their roles, and set per‑permission overrides. Admin access required.</p>
+        <p>Search for a user, manage their roles, and set per-permission overrides. Admin access required.</p>
 
         <div class="columns" style="margin-bottom: 8px;">
             <div class="column">

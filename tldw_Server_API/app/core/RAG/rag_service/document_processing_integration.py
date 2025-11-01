@@ -201,7 +201,7 @@ class DocumentProcessor:
         # Common replacements
         replacements = {
             'â€™': "'",
-            'â€"': "—",
+            'â€"': "-",
             'â€œ': '"',
             'â€�': '"',
             'â€˜': "'",

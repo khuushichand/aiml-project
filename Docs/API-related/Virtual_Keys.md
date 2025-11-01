@@ -134,12 +134,12 @@ curl -X POST http://127.0.0.1:8000/api/v1/embeddings \
 
 ## Admin: Orgs and Teams (selected)
 
-- POST `/api/v1/admin/orgs` — create organization
-- GET `/api/v1/admin/orgs` — list
-- POST `/api/v1/admin/orgs/{org_id}/teams` — create team
-- GET `/api/v1/admin/orgs/{org_id}/teams` — list
-- POST `/api/v1/admin/teams/{team_id}/members` — add member
-- GET `/api/v1/admin/teams/{team_id}/members` — list
+- POST `/api/v1/admin/orgs` - create organization
+- GET `/api/v1/admin/orgs` - list
+- POST `/api/v1/admin/orgs/{org_id}/teams` - create team
+- GET `/api/v1/admin/orgs/{org_id}/teams` - list
+- POST `/api/v1/admin/teams/{team_id}/members` - add member
+- GET `/api/v1/admin/teams/{team_id}/members` - list
 
 These endpoints assist grouping users and associating Virtual Keys with org/team scopes.
 Example (cURL):
@@ -150,14 +150,14 @@ curl -X GET http://127.0.0.1:8000/api/v1/admin/users/123/virtual-keys \
 
 ## Scoped JWTs for Workflows (Virtual Keys)
 
-In addition to API keys, the server supports short‑lived, scoped JWTs ("virtual keys") intended for internal automation such as Workflows schedules.
+In addition to API keys, the server supports short-lived, scoped JWTs ("virtual keys") intended for internal automation such as Workflows schedules.
 
-- Mint token (admin; multi‑user):
+- Mint token (admin; multi-user):
   - POST `/api/v1/workflows/auth/virtual-key`
   - Body: `{ "ttl_minutes": 60, "scope": "workflows", "schedule_id": "<optional>" }`
   - Returns: `{ token, expires_at, scope, schedule_id }`
 
-- Mint token (self‑service; multi‑user):
+- Mint token (self-service; multi-user):
   - POST `/api/v1/auth/virtual-key`
   - Body (examples):
     - Basic: `{ "ttl_minutes": 30, "scope": "workflows" }`
@@ -177,23 +177,23 @@ In addition to API keys, the server supports short‑lived, scoped JWTs ("virtua
   - Returns: `{ token, expires_at, scope, schedule_id }`
 
 Scope enforcement
-- Endpoints can opt‑in to scope checks. For example:
+- Endpoints can opt-in to scope checks. For example:
   - `scope=workflows` required when a scoped token is presented for evaluation run creation.
   - For scheduler endpoints such as `POST /api/v1/scheduler/workflows/{schedule_id}/run-now`, when a token contains a `schedule_id` claim, it must match the path `schedule_id`.
 - Admin tokens (role=admin) bypass scope checks.
-- API key and single‑user flows are unaffected.
+- API key and single-user flows are unaffected.
 
 Endpoint allowlists and quotas
 - Tokens may include optional claims enforced where enabled:
   - `allowed_endpoints`: list of logical endpoint IDs; requests outside the list are rejected (403).
   - `allowed_methods`: allowed HTTP methods.
   - `allowed_paths`: list of allowed URL path prefixes.
-  - `max_calls`: process‑local, best‑effort cap on number of invocations with the token.
+  - `max_calls`: process-local, best-effort cap on number of invocations with the token.
   - `max_runs`: same as `max_calls` but counted for endpoints that mark the action as a run.
-- Note: For hard multi‑instance budgets and LLM token budgets, prefer Admin Virtual API keys with DB‑backed enforcement. Scoped JWT quotas are lightweight and process‑local.
+- Note: For hard multi-instance budgets and LLM token budgets, prefer Admin Virtual API keys with DB-backed enforcement. Scoped JWT quotas are lightweight and process-local.
 
 Scheduler integration
-- To automatically mint a per‑run token for schedules and inject it into workflow steps, set:
+- To automatically mint a per-run token for schedules and inject it into workflow steps, set:
   - `WORKFLOWS_MINT_VIRTUAL_KEYS=true`
   - `WORKFLOWS_VIRTUAL_KEY_TTL_MIN=15`
   The scheduler adds a `secrets.jwt` bearer to the run context; adapters (e.g., webhook) use it when headers do not already specify auth.
@@ -211,7 +211,7 @@ python -m Helper_Scripts.AuthNZ.mint_virtual_key \
 ```
 
 Workflows webhook adapter auth fallbacks
-- When an HTTP step omits explicit Authorization or X‑API‑KEY headers, the adapter will:
+- When an HTTP step omits explicit Authorization or X-API-KEY headers, the adapter will:
   1) Use `secrets.jwt` as `Authorization: Bearer ...`, or
   2) Use `secrets.api_key` as `X-API-KEY: ...`, or
   3) Fall back to `WORKFLOWS_DEFAULT_BEARER_TOKEN` or `WORKFLOWS_DEFAULT_API_KEY` if provided.

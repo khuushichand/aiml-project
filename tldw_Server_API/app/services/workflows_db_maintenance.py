@@ -46,7 +46,7 @@ async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             if db.backend and db.backend_type == BackendType.POSTGRESQL:
-                # Optional manual VACUUM ANALYZE — autovacuum normally covers this
+                # Optional manual VACUUM ANALYZE - autovacuum normally covers this
                 if _env_bool("WORKFLOWS_POSTGRES_VACUUM", False):
                     try:
                         with db.backend.transaction() as conn:  # type: ignore[union-attr]

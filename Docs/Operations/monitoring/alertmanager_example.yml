@@ -20,7 +20,7 @@ receivers:
         channel: '#alerts'
         username: 'alertmanager'
         send_resolved: true
-        title: '{{ .CommonLabels.alertname }} — {{ .Status | toUpper }}'
+        title: '{{ .CommonLabels.alertname }} - {{ .Status | toUpper }}'
         text: |
           *Instance:* {{ .CommonLabels.instance }}
           *Details:* {{ range .Alerts }}\n- {{ .Annotations.summary }} ({{ .Labels.severity }})\n  {{ .Annotations.description }}\n{{ end }}
@@ -30,7 +30,7 @@ receivers:
       - routing_key: 'YOUR_PAGERDUTY_INTEGRATION_KEY'
         severity: '{{ if eq .CommonLabels.severity "critical" }}critical{{ else }}error{{ end }}'
         send_resolved: true
-        description: '{{ .CommonLabels.alertname }} — {{ .Status }}'
+        description: '{{ .CommonLabels.alertname }} - {{ .Status }}'
         details:
           tenant: '{{ .CommonLabels.tenant }}'
           instance: '{{ .CommonLabels.instance }}'

@@ -1,4 +1,4 @@
-# Environment Variables – tldw_server (v0.1)
+# Environment Variables - tldw_server (v0.1)
 
 This reference lists environment variables recognized by the server. Environment variables take precedence over values from `Config_Files/.env`, which in turn take precedence over `Config_Files/config.txt` (where supported).
 
@@ -12,7 +12,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
-- `ALLOWED_ORIGINS`: CORS allowlist. Comma‑separated or JSON array.
+- `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
 - `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
 - `ENABLE_SECURITY_HEADERS`: Enable security headers middleware (defaults to true in production).
@@ -38,13 +38,13 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
  - `RAG_REWRITE_CACHE_PATH`: Optional path for query→rewrite cache JSONL (default `Databases/Rewrite_Cache/rewrite_cache.jsonl`).
 
 ### RAG Guardrails (Production Defaults)
-- `RAG_GUARDRAILS_STRICT`: When `true`, enable strict guardrails in the unified pipeline (enables numeric fidelity and hard citations by default). Useful for non‑prod environments where you still want strict behavior.
+- `RAG_GUARDRAILS_STRICT`: When `true`, enable strict guardrails in the unified pipeline (enables numeric fidelity and hard citations by default). Useful for non-prod environments where you still want strict behavior.
 - `RAG_ENABLE_NUMERIC_FIDELITY`: Force-enable numeric fidelity verification of answers (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
-- `RAG_REQUIRE_HARD_CITATIONS`: Force-enable per‑sentence hard citations mapping (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
+- `RAG_REQUIRE_HARD_CITATIONS`: Force-enable per-sentence hard citations mapping (overrides request default). Optional; typically implied by `RAG_GUARDRAILS_STRICT`.
 - `RAG_NUMERIC_FIDELITY_BEHAVIOR`: Default behavior when numeric values are not verified in sources: `continue` | `ask` | `decline` | `retry`. Default `ask` when strict mode is active.
  - `RAG_PAYLOAD_EXEMPLAR_SAMPLING`: Sampling rate (0..1) to record redacted payload exemplars when adaptive check fails (default `0.05`).
  - `RAG_PAYLOAD_EXEMPLAR_PATH`: Optional path for payload exemplars JSONL sink (default `Databases/observability/rag_payload_exemplars.jsonl`).
- - `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half‑life for decay of per‑user priors (default `7`).
+ - `RAG_PERSONALIZATION_HALF_LIFE_DAYS`: Half-life for decay of per-user priors (default `7`).
 - `RAG_PERSONALIZATION_WEIGHT`: Additive weight applied to prior during boosting (default `0.1`).
 
 ### RAG Quality Evaluations (Nightly)
@@ -58,13 +58,13 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 Notes:
 - In production (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the unified pipeline will default to enabling numeric fidelity and strict citations unless explicitly configured otherwise by the request.
 
-### Two‑Tier Reranking Calibration & Gating
+### Two-Tier Reranking Calibration & Gating
 - `RAG_RERANK_CALIB_BIAS`: Logistic calibration bias. Default `-1.5`.
 - `RAG_RERANK_CALIB_W_ORIG`: Weight for original retrieval score. Default `0.8`.
 - `RAG_RERANK_CALIB_W_CE`: Weight for cross-encoder score. Default `2.5`.
 - `RAG_RERANK_CALIB_W_LLM`: Weight for LLM reranker score. Default `3.0`.
 - `RAG_MIN_RELEVANCE_PROB`: Minimum calibrated probability to allow generation. Default `0.35`.
-- `RAG_SENTINEL_MARGIN`: Required margin of (top_prob − sentinel_prob) to consider evidence strong enough. Default `0.10`.
+- `RAG_SENTINEL_MARGIN`: Required margin of (top_prob - sentinel_prob) to consider evidence strong enough. Default `0.10`.
 
 ### RAG Rollout Toggles (Structure, Planner, Cache)
 - `RAG_ENABLE_STRUCTURE_INDEX`: Enable persisted document structure index (sections/paragraphs with char offsets) and retrieval metadata enrichment. Defaults to `true`. Config file key: `[RAG] enable_structure_index`.
@@ -77,9 +77,9 @@ Notes:
 - These env vars take precedence over `.env`, which takes precedence over `config.txt`. The loader now propagates `config.txt` defaults into process env when unset, so modules reading `os.getenv` will honor file settings by default.
 
 ### Ingest & Chunking
-- `INGEST_ENABLE_DEDUP`: Enable near‑duplicate removal at ingestion time (`true|false`, default `true`).
-- `INGEST_DEDUP_THRESHOLD`: Jaccard similarity threshold for shingle‑based dedupe (0–1, default `0.9`).
-- Chunker adaptive controls are primarily request‑level, but ingestion defaults set `adaptive=true` and `adaptive_overlap=true`.
+- `INGEST_ENABLE_DEDUP`: Enable near-duplicate removal at ingestion time (`true|false`, default `true`).
+- `INGEST_DEDUP_THRESHOLD`: Jaccard similarity threshold for shingle-based dedupe (0-1, default `0.9`).
+- Chunker adaptive controls are primarily request-level, but ingestion defaults set `adaptive=true` and `adaptive_overlap=true`.
 
 ### RAG Adaptive Post-Verification
 - `RAG_ADAPTIVE_TIME_BUDGET_SEC`: Optional hard cap (seconds) for post-generation verification and repair. When unset or `0`, no cap is applied. Other knobs are request-level (`enable_post_verification`, `adaptive_max_retries`, `adaptive_unsupported_threshold`, `adaptive_max_claims`).
@@ -162,11 +162,11 @@ Config file support (optional):
 
 ### Tokenizer (Chat Dictionaries & World Books)
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
-  - `whitespace` counts whitespace‑separated tokens.
+  - `whitespace` counts whitespace-separated tokens.
   - `char_approx` estimates by character length (≈ length/divisor).
 - `TOKEN_CHAR_APPROX_DIVISOR`: Integer divisor for `char_approx` (default `4`).
 
-Runtime overrides (non‑persistent) are available via API:
+Runtime overrides (non-persistent) are available via API:
 - `GET /api/v1/config/tokenizer` → read current mode/divisor
 - `PUT /api/v1/config/tokenizer` → update mode/divisor in memory
 
@@ -200,19 +200,19 @@ Runtime overrides (non‑persistent) are available via API:
   File-based overrides are also supported at `tldw_Server_API/Config_Files/model_pricing.json`.
 
 ## Embeddings
-- `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage‑specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.
-- `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma‑separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
+- `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage-specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.
+- `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma-separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
 
 ### Backpressure & Quotas
 - `EMB_BACKPRESSURE_MAX_DEPTH`: Maximum depth across core embeddings queues (`embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`) before ingest/embeddings endpoints return HTTP 429 with `Retry-After`. Default: `25000`.
 - `EMB_BACKPRESSURE_MAX_AGE_SECONDS`: Maximum age (seconds) of the oldest message across core embeddings queues before HTTP 429. Default: `300`.
-- `EMBEDDINGS_TENANT_RPS`: Per‑tenant requests per second limit for embeddings endpoints (multi‑tenant mode only). `0` disables. Default: `0`.
-- `INGEST_TENANT_RPS`: Per‑tenant requests per second limit for ingestion endpoints (multi‑tenant mode). Falls back to `EMBEDDINGS_TENANT_RPS` if unset. `0` disables. Default: `0`.
+- `EMBEDDINGS_TENANT_RPS`: Per-tenant requests per second limit for embeddings endpoints (multi-tenant mode only). `0` disables. Default: `0`.
+- `INGEST_TENANT_RPS`: Per-tenant requests per second limit for ingestion endpoints (multi-tenant mode). Falls back to `EMBEDDINGS_TENANT_RPS` if unset. `0` disables. Default: `0`.
 - `EMBEDDINGS_REDIS_URL`: Redis connection string for embeddings job manager queues (`embeddings:*`). Falls back to `REDIS_URL` and defaults to `redis://localhost:6379`.
 
 ### Priority Queues
-- `EMBEDDINGS_PRIORITY_ENABLED`: Enable per‑stage priority sub‑queues with weighted fair consumption (`true|false`). Default: `false`.
-- `EMBEDDINGS_PRIORITY_WEIGHTS`: Comma‑separated weights for `high`, `normal`, `low` priority buckets used by workers when `EMBEDDINGS_PRIORITY_ENABLED=true`. Example: `high:5,normal:3,low:1` (default).
+- `EMBEDDINGS_PRIORITY_ENABLED`: Enable per-stage priority sub-queues with weighted fair consumption (`true|false`). Default: `false`.
+- `EMBEDDINGS_PRIORITY_WEIGHTS`: Comma-separated weights for `high`, `normal`, `low` priority buckets used by workers when `EMBEDDINGS_PRIORITY_ENABLED=true`. Example: `high:5,normal:3,low:1` (default).
 
 ### Vector Store: pgvector
 - `RAG.vector_store_type`: Set to `pgvector` to activate the pgvector adapter (default `chromadb`).
@@ -235,28 +235,28 @@ Quick start (local dev):
 
 ## LLM Provider Keys
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `QWEN_API_KEY`
-- Additional provider‑specific variables as required by their APIs.
+- Additional provider-specific variables as required by their APIs.
 
 ## MCP Unified
 - `MCP_JWT_SECRET`: Secret used by the MCP server for issuing/verifying tokens.
 - `MCP_API_KEY_SALT`: Salt used for API key hashing/derivation.
 - `MCP_LOG_LEVEL`: MCP module log level (`DEBUG|INFO|WARNING|ERROR`).
 
-## OCR – POINTS Reader (optional)
+## OCR - POINTS Reader (optional)
 - `POINTS_MODE`: `sglang` or `transformers` (default: auto).
 - `POINTS_SGLANG_URL`: SGLang chat/completions endpoint (e.g., `http://127.0.0.1:8081/v1/chat/completions`).
 - `POINTS_SGLANG_MODEL`: Model name in SGLang server (e.g., `WePoints`).
 
 ## Scheduler
-- `SCHEDULER_DATABASE_URL`: Database URL for the core task scheduler. Defaults to `sqlite:///PROJECT_ROOT/Databases/scheduler.db` (test mode uses a per‑process temp file). Set this to place the scheduler DB alongside other DBs.
+- `SCHEDULER_DATABASE_URL`: Database URL for the core task scheduler. Defaults to `sqlite:///PROJECT_ROOT/Databases/scheduler.db` (test mode uses a per-process temp file). Set this to place the scheduler DB alongside other DBs.
 - `SCHEDULER_BASE_PATH`: Base path for the scheduler’s payload storage. Defaults to `PROJECT_ROOT/Databases/scheduler`.
-- `WORKFLOWS_SCHEDULER_DATABASE_URL`: Optional override for the Workflows Scheduler (cron) persistence; if using SQLite and not set, it defaults to the per‑user path under `USER_DB_BASE_DIR/<user_id>/workflows/workflows_scheduler.db`.
+- `WORKFLOWS_SCHEDULER_DATABASE_URL`: Optional override for the Workflows Scheduler (cron) persistence; if using SQLite and not set, it defaults to the per-user path under `USER_DB_BASE_DIR/<user_id>/workflows/workflows_scheduler.db`.
 - `WORKFLOWS_SCHEDULER_RESCAN_SEC`: Interval (seconds) for the Workflows Scheduler to rescan all users for new/removed schedules. Default: `600`.
 - `POINTS_MODEL_PATH`: HF model path when running locally (e.g., `tencent/POINTS-Reader`).
 - `POINTS_PROMPT`: Optional prompt override.
 
 ## Notes
-- Many subsystems also support file‑based configuration under `Config_Files/` and module‑specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
+- Many subsystems also support file-based configuration under `Config_Files/` and module-specific YAML files (e.g., TTS provider config). Environment variables always take precedence when present.
 
 ## Telemetry & Observability
 

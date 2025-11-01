@@ -70,7 +70,7 @@ OPML (usable when OPML endpoints ship):
 
 All examples assume single-user mode using `X-API-KEY`. Adjust `Authorization: Bearer` for JWT.
 
-### 5A. Import sources (Bulk JSON) — Available Now
+### 5A. Import sources (Bulk JSON) - Available Now
 
 Endpoint: `POST /api/v1/watchlists/sources/bulk` (see `tldw_Server_API/app/api/v1/endpoints/watchlists.py:647`)
 
@@ -127,7 +127,7 @@ curl -sS -X PATCH \
   http://127.0.0.1:8000/api/v1/watchlists/sources/123
 ```
 
-### 5B. Import sources (OPML) — When Shipped
+### 5B. Import sources (OPML) - When Shipped
 
 Endpoints: `POST /api/v1/watchlists/sources/import`, `GET /api/v1/watchlists/sources/export` (per Bridge PRD)
 
@@ -225,12 +225,24 @@ Templates: list/create under `/api/v1/watchlists/templates` (`watchlists.py:1403
   - Browse runs (Global or By Job), confirm counters (found/ingested and filters include/exclude/flag) and pagination.
   - Optionally enable “Include tallies” and set a filtered sample size to view per-run tallies and a small sample of filtered items.
   - For large result sets, prefer the “Server CSV” export links over client-side CSV.
+  - Server CSV links include pagination parity header `X-Has-More` and honor the "Include tallies" toggle via `include_tallies=true`.
 
 - Items view: from the Runs table, click “View items” or open `/admin/watchlists-items?run_id=<id>`.
   - Verify items list for the run, status filter (ingested/filtered/flagged), and pagination work as expected.
 
 Tip: These views are intended for admin triage only and reflect the same data returned by the API endpoints under `/api/v1/watchlists/*`.
 - Delivery (email/Chatbook) succeeds in integration/staging.
+
+### CI Focused Suites (rate-limiter on)
+
+- Ensure global SlowAPI middleware is active (unset `TEST_MODE`/`TESTING`).
+- Run focused Watchlists tests that assert headers and pagination metadata:
+  - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_rate_limit_headers_real.py`
+  - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_runs_csv_export.py tldw_Server_API/tests/Watchlists/test_runs_csv_has_more_header.py`
+  - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_youtube_normalization_more.py`
+  - Perf (optional): `python -m pytest -q -m "perf or performance" tldw_Server_API/tests/Watchlists/test_opml_export_perf_more.py`
+
+Known unrelated: `tests/sandbox/test_ws_heartbeat_seq.py` can hang in some local harnesses on teardown; track separately.
 
 ## 7) Rollback Plan
 
@@ -243,19 +255,19 @@ Tip: These views are intended for admin triage only and reflect the same data re
 
 To streamline ops, add the following helper scripts (CLI entry points under `Helper_Scripts/watchlists/`):
 
-1) `opml_import.py` — Import OPML into Watchlists sources
+1) `opml_import.py` - Import OPML into Watchlists sources
    - Args: `--file`, `--active`, `--tags`, `--group-id`, `--api-key`, `--base-url`
    - Behavior: POST multipart to `/watchlists/sources/import`; print summary.
 
-2) `bulk_sources_load.py` — Bulk import from CSV/JSON
+2) `bulk_sources_load.py` - Bulk import from CSV/JSON
    - Args: `--input {csv|json}`, `--api-key`, `--base-url`; `--dry-run`
    - Behavior: Convert to bulk JSON; POST to `/watchlists/sources/bulk`.
 
-3) `subs_rules_to_job_filters.py` — Translate SUBS Import Rules → job filters (when filters API ships)
+3) `subs_rules_to_job_filters.py` - Translate SUBS Import Rules → job filters (when filters API ships)
    - Args: `--rules-file`, `--job-id`, `--api-key`, `--base-url`; `--dry-run`
    - Behavior: POST to `/watchlists/jobs/{id}/filters`.
 
-4) `seed_job_and_run.py` — Create a job from tag list and trigger one run
+4) `seed_job_and_run.py` - Create a job from tag list and trigger one run
    - Args: `--name`, `--tags`, `--cron`, `--tz`, `--api-key`, `--base-url`
    - Behavior: POST job → POST run → print run id.
 

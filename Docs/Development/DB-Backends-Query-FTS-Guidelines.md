@@ -1,6 +1,6 @@
 # Database Backends: Query Placeholders and FTS Guidelines
 
-This project supports both SQLite and PostgreSQL for content storage through a shared backend abstraction. This note summarizes best practices for SQL placeholders and Full‑Text Search (FTS) across backends.
+This project supports both SQLite and PostgreSQL for content storage through a shared backend abstraction. This note summarizes best practices for SQL placeholders and Full-Text Search (FTS) across backends.
 
 ## Placeholders and Parameterization
 
@@ -9,7 +9,7 @@ This project supports both SQLite and PostgreSQL for content storage through a s
 - For named parameters with dictionaries, use the native placeholder style for your backend:
   - PostgreSQL: `%(name)s`
   - SQLite: `:name` or `?` with tuple/sequence
-- Prefer the shared helpers when you need to pre‑compute statements:
+- Prefer the shared helpers when you need to pre-compute statements:
   - `prepare_backend_statement(backend_type, sql, params)`
   - `prepare_backend_many_statement(backend_type, sql, params_list)`
 - The PostgreSQL adapter internally invokes the shared preparation path for both `execute(...)` and `execute_many(...)`. Direct calls to `DatabaseBackend.execute` are safe.
@@ -23,7 +23,7 @@ This project supports both SQLite and PostgreSQL for content storage through a s
   - Do not use `INSERT OR REPLACE` on Postgres.
   - Update the `tsvector` via `UPDATE ... SET ...` expressions and rely on normal tables + indexes.
   - Rank with: `ORDER BY ts_rank(tsvector_col, to_tsquery(...)) DESC`.
-- Cross‑backend query translation
+- Cross-backend query translation
   - Use `FTSQueryTranslator` to translate between FTS5 and `to_tsquery` syntax where needed.
   - Be aware that FTS5 scores are typically negative (bm25), while Postgres scores are positive (ts_rank).
 
@@ -35,6 +35,6 @@ This project supports both SQLite and PostgreSQL for content storage through a s
 
 ## Backups
 
-- SQLite: use the built‑in backup APIs (see `DB_Backups.create_backup`) and sidecar WAL/SHM copying.
+- SQLite: use the built-in backup APIs (see `DB_Backups.create_backup`) and sidecar WAL/SHM copying.
 - PostgreSQL: use `pg_dump` via the helper in `DB_Backups.create_postgres_backup(...)`. Requires `pg_dump` to be installed and on PATH. The helper sources connection details from the configured backend.
 

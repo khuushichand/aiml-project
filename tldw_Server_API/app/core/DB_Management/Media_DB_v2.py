@@ -4180,7 +4180,7 @@ class MediaDatabase:
         """Add or update a media record, handle keyword links, optional chunks and full-text sync."""
 
         # ---------------------------------------------------------------------
-        # 1. Fast‑fail validation & normalisation
+        # 1. Fast-fail validation & normalisation
         # ---------------------------------------------------------------------
         if content is None:
             raise InputError("Content cannot be None.")
@@ -6508,7 +6508,7 @@ def get_full_media_details_rich(
             pass
     word_count = len(content_text.split()) if content_text else 0
 
-    # Versions list (lightweight by default – no content)
+    # Versions list (lightweight by default - no content)
     versions_list: List[Dict[str, Any]] = []
     if include_versions:
         try:

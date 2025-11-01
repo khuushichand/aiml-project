@@ -33,7 +33,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Automated remediation (e.g., auto-switching providers) beyond alerts.
 - Full cost accounting pipeline; cost estimates are coarse projections.
 - SLA contractual reporting (focus is internal operations).
-- Real-time streaming dashboards (update cadence can be 1–5 minutes).
+- Real-time streaming dashboards (update cadence can be 1-5 minutes).
 
 ## 5. Personas & Use Cases
 - **Platform Operator / SRE**: Monitors system-wide health, responds to alerts.

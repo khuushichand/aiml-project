@@ -349,7 +349,7 @@ export default function MediaPage() {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Author</div>
-                  <div className="text-sm">{selectedItem?.source?.author || '—'}</div>
+                  <div className="text-sm">{selectedItem?.source?.author || '-'}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Words</div>

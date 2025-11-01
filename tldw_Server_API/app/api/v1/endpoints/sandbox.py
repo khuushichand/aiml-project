@@ -397,7 +397,7 @@ async def start_run(
                     "message": "Sandbox run queue is full",
                     "details": {"retry_after": retry_after}
                 }
-            }, headers={"Retry-After": str(int(retry_after))})
+            }, headers={"Retry-After": str(int(retry_after))}) from e
         if isinstance(e, _Svc.InvalidSpecVersion):
             raise HTTPException(status_code=400, detail={
                 "error": {
@@ -689,6 +689,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
     q = hub.subscribe(run_id)
+    # Keep strong references to any background tasks spawned in this handler
+    synth_task: asyncio.Task | None = None
     try:
         logger.debug(f"WS stream[{run_id}]: after drain_buffer qsize={getattr(q, 'qsize', lambda: -1)()} ")
     except Exception:
@@ -726,7 +728,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                         q.put_nowait({"type": "event", "event": "end", "data": {"source": "ws_synthetic"}, "seq": seq2})
                     except Exception:
                         return
-                asyncio.create_task(_enqueue_end_later())
+                # Store task to avoid premature GC and enable cleanup
+                synth_task = asyncio.create_task(_enqueue_end_later())
     except Exception:
         pass
     # After subscribing, wait briefly for late-published buffered frames (e.g., 'end')
@@ -825,6 +828,12 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             if hb_task:
                 hb_task.cancel()
+        except Exception:
+            pass
+        # Ensure any synthetic end task is also cancelled if still pending
+        try:
+            if synth_task and not synth_task.done():
+                synth_task.cancel()
         except Exception:
             pass
         try:

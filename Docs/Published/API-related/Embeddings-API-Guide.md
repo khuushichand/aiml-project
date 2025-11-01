@@ -240,14 +240,14 @@ Note: When the embeddings implementation is unavailable (e.g., optional dependen
 
 ### Admin & Management (admin-only in multi-user; single-user acts as admin)
 
-- `GET /api/v1/embeddings/providers-config` — List configured providers/models
-- `GET /api/v1/embeddings/models` — List available models
-- `GET /api/v1/embeddings/models/{model_id}` — Model metadata
-- `POST /api/v1/embeddings/models/warmup` — Preload a model
-- `POST /api/v1/embeddings/models/download` — Prepare/download a model
-- `GET /api/v1/embeddings/circuit-breakers` — Check provider breaker states
-- `POST /api/v1/embeddings/circuit-breakers/{provider}/reset` — Reset a breaker
-- `GET /api/v1/embeddings/metrics` — Embeddings metrics summary
+- `GET /api/v1/embeddings/providers-config` - List configured providers/models
+- `GET /api/v1/embeddings/models` - List available models
+- `GET /api/v1/embeddings/models/{model_id}` - Model metadata
+- `POST /api/v1/embeddings/models/warmup` - Preload a model
+- `POST /api/v1/embeddings/models/download` - Prepare/download a model
+- `GET /api/v1/embeddings/circuit-breakers` - Check provider breaker states
+- `POST /api/v1/embeddings/circuit-breakers/{provider}/reset` - Reset a breaker
+- `GET /api/v1/embeddings/metrics` - Embeddings metrics summary
 
 ### Media Embeddings API (Chunk and store document vectors)
 
@@ -307,7 +307,7 @@ Notes:
 - Maximum 2048 items in the input array.
 - The input list cannot be empty.
 
-Token‑array inputs are supported on the standard create endpoint. If `input` is a token array (`List[int]`) or a batch of token arrays (`List[List[int]]`), the server decodes tokens to text using the model’s tokenizer when available, or a sensible default (`cl100k_base`) as a fallback. Token usage is counted from the supplied token arrays. The batch endpoint accepts strings only.
+Token-array inputs are supported on the standard create endpoint. If `input` is a token array (`List[int]`) or a batch of token arrays (`List[List[int]]`), the server decodes tokens to text using the model’s tokenizer when available, or a sensible default (`cl100k_base`) as a fallback. Token usage is counted from the supplied token arrays. The batch endpoint accepts strings only.
 
 ### Output Formats
 
@@ -321,7 +321,7 @@ Token‑array inputs are supported on the standard create endpoint. If `input` i
 }
 ```
 
-Note: For non‑OpenAI providers, the response `model` value is prefixed with the provider (e.g., `"huggingface:sentence-transformers/all-MiniLM-L6-v2"`).
+Note: For non-OpenAI providers, the response `model` value is prefixed with the provider (e.g., `"huggingface:sentence-transformers/all-MiniLM-L6-v2"`).
 
 #### Base64 Encoded Format
 ```json
@@ -440,7 +440,7 @@ The embeddings endpoint participates in the global rate limiter configured via A
 
 Notes
 - In single-user mode, the API key is treated as admin; adjust your reverse proxy limits as needed.
-- Per‑provider/model throttling can be layered on top of global limits at the proxy or client.
+- Per-provider/model throttling can be layered on top of global limits at the proxy or client.
 
 Client handling example (JS):
 ```js
@@ -463,7 +463,7 @@ async function withBackoff(fn, retries = 3) {
 }
 ```
 
-Note: Some errors use an OpenAI‑style envelope, but most validation errors are returned as `{ "detail": "..." }`. When inputs exceed the per‑model token limit, the API returns a dedicated top‑level error object:
+Note: Some errors use an OpenAI-style envelope, but most validation errors are returned as `{ "detail": "..." }`. When inputs exceed the per-model token limit, the API returns a dedicated top-level error object:
 
 ```json
 {

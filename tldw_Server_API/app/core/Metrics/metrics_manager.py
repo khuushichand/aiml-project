@@ -494,7 +494,7 @@ class MetricsRegistry:
             MetricDefinition(
                 name="rag_hard_citation_coverage",
                 type=MetricType.GAUGE,
-                description="Per-answer hard-citation coverage ratio (0.0–1.0)",
+                description="Per-answer hard-citation coverage ratio (0.0-1.0)",
                 labels=["strategy"],
             )
         )
@@ -643,7 +643,7 @@ class MetricsRegistry:
             )
         )
 
-        # Quality evaluation (nightly eval set) — dashboard inputs
+        # Quality evaluation (nightly eval set) - dashboard inputs
         self.register_metric(
             MetricDefinition(
                 name="rag_eval_faithfulness_score",

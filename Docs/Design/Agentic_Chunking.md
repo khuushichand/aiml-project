@@ -1,4 +1,4 @@
-# Agentic Chunking – Design Note (v0)
+# Agentic Chunking - Design Note (v0)
 
 Goal: add a query-time, agentic evidence assembly path that avoids fixed pre-chunks. The agent first performs coarse retrieval (hybrid FTS5 + vector) to select top-K candidate documents, then assembles an ephemeral, query-specific chunk composed of quoted spans with provenance.
 
@@ -87,7 +87,7 @@ Notes:
   - `agentic_vlm_detect_tables_only` (bool, default true)
   - `agentic_vlm_max_pages` (optional int)
   - `agentic_vlm_late_chunk_top_k_docs` (int, default 2)
-  - Effect: for top‑k PDFs with local file paths, run table/figure detection and add VLM hints as extra spans.
+  - Effect: for top-k PDFs with local file paths, run table/figure detection and add VLM hints as extra spans.
 
 - Adaptive budgets & metrics:
   - `agentic_adaptive_budgets` (bool, default true)
@@ -95,7 +95,7 @@ Notes:
   - `agentic_min_corroborating_docs` (int, default 2)
   - `agentic_max_redundancy` (float, default 0.9)
   - `agentic_enable_metrics` (bool, default true)
-  - Effect: dynamically stops the tool loop when term coverage and cross‑doc corroboration are sufficient; emits metrics for tool calls, durations, span lengths, and bytes read.
+  - Effect: dynamically stops the tool loop when term coverage and cross-doc corroboration are sufficient; emits metrics for tool calls, durations, span lengths, and bytes read.
 
 - Verification on agentic generation:
   - `require_hard_citations` (bool, default false)
@@ -104,7 +104,7 @@ Notes:
   - `enable_claims` (bool, default false), `claim_verifier` ("nli"|"llm"|"hybrid"), `claims_top_k`, `claims_conf_threshold`, `claims_max`, `nli_model`, `claims_concurrency`
   - Effect: verifies each sentence/claim and numeric values against assembled spans; attaches `hard_citations` and `numeric_fidelity` metadata.
 
-## Multi‑Hop Example
+## Multi-Hop Example
 
 POST /api/v1/rag/search
 {

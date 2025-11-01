@@ -47,6 +47,11 @@ export default function AdminWatchlistsRunsPage() {
   const hasMoreByJob = useMemo(() => (pageByJob * sizeByJob) < (total || 0), [pageByJob, sizeByJob, total]);
 
   const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
+  const serverCsvThreshold = (() => {
+    const raw = (process.env.NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD ?? '2000').toString();
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 2000;
+  })();
   const userIsAdmin = useIsAdmin();
 
   const fetchRunsByJob = async (opts?: { page?: number; size?: number }) => {
@@ -396,7 +401,7 @@ export default function AdminWatchlistsRunsPage() {
               )}
               {/* Prefer server-side CSV export for large datasets */}
               {mode === 'global' ? (
-                (total > 2000) && (
+                (total > serverCsvThreshold) && (
                   <a
                     className="text-sm text-indigo-700 hover:underline"
                     href={`/api/v1/watchlists/runs/export.csv?scope=global&q=${encodeURIComponent(q)}&page=${page}&size=${size}&include_tallies=${includeTallies ? 'true' : 'false'}`}
@@ -408,7 +413,7 @@ export default function AdminWatchlistsRunsPage() {
                 (() => {
                   const idNum = Number(jobIdInput.trim());
                   if (!Number.isFinite(idNum) || idNum <= 0) return null;
-                  return (total > 2000) ? (
+                  return (total > serverCsvThreshold) ? (
                     <a
                       className="text-sm text-indigo-700 hover:underline"
                       href={`/api/v1/watchlists/runs/export.csv?scope=job&job_id=${idNum}&page=${pageByJob}&size=${sizeByJob}&include_tallies=${includeTallies ? 'true' : 'false'}`}

@@ -1,6 +1,6 @@
 # PostgreSQL Backups
 
-This guide shows how to back up and restore the content databases when running on PostgreSQL. It includes both CLI usage (`pg_dump`/`pg_restore`) and the built‑in helpers available in tldw_server.
+This guide shows how to back up and restore the content databases when running on PostgreSQL. It includes both CLI usage (`pg_dump`/`pg_restore`) and the built-in helpers available in tldw_server.
 
 ## TL;DR
 
@@ -76,7 +76,7 @@ Notes:
 - The backup helper writes with `--no-owner --no-privileges` for portability.
 - Backup destination: set `TLDW_DB_BACKUP_PATH` to override the default
   `./tldw_DB_Backups/` base directory used by server helpers (SQLite and
-  PostgreSQL). Per‑DB subdirectories are created under this base.
+  PostgreSQL). Per-DB subdirectories are created under this base.
 
 ## Roles and Privileges
 

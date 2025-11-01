@@ -2,7 +2,7 @@
   "watchlists": [
     {
       "id": "a6b91ab4-e886-4137-893b-1ad7d5a61455",
-      "name": "Kid-Safe Defaults — Adult",
+      "name": "Kid-Safe Defaults - Adult",
       "description": "Detect common adult-content terms",
       "enabled": true,
       "scope_type": "global",
@@ -61,7 +61,7 @@
     },
     {
       "id": "d818f7ae-8aa0-459c-b57a-36f26b5e3f77",
-      "name": "Kid-Safe Defaults — Self Harm",
+      "name": "Kid-Safe Defaults - Self Harm",
       "description": "Detect self-harm or suicidal ideation terms",
       "enabled": true,
       "scope_type": "global",
@@ -106,7 +106,7 @@
     },
     {
       "id": "11aff5a0-cb4b-4bd3-a99d-59c9189da227",
-      "name": "Kid-Safe Defaults — Drugs",
+      "name": "Kid-Safe Defaults - Drugs",
       "description": "Detect illicit drug references and acquisition",
       "enabled": true,
       "scope_type": "global",
@@ -137,7 +137,7 @@
     },
     {
       "id": "22e7e6ab-ed38-42bf-8291-056f02ab52d8",
-      "name": "Kid-Safe Defaults — Violence",
+      "name": "Kid-Safe Defaults - Violence",
       "description": "Detect violent intent references",
       "enabled": true,
       "scope_type": "global",

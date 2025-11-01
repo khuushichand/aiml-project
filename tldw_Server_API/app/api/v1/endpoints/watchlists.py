@@ -306,7 +306,7 @@ def _items_to_markdown_lines(items: List[ScrapedItem]) -> List[str]:
         else:
             line = f"{idx}. {entry_title}"
         if itm.summary:
-            line += f" — {itm.summary}"
+            line += f" - {itm.summary}"
         lines.append(line)
     return lines
 
@@ -322,7 +322,7 @@ def _items_to_html_entries(items: List[ScrapedItem]) -> List[str]:
         else:
             entry = f"<li>{title_text}"
         if summary_text:
-            entry += f" — {summary_text}"
+            entry += f" - {summary_text}"
         entry += "</li>"
         entries.append(entry)
     return entries
@@ -1744,9 +1744,9 @@ async def export_runs_csv(
     if scope == "job":
         if not job_id:
             raise HTTPException(status_code=400, detail="job_id_required")
-        rows, _ = db.list_runs_for_job(job_id, limit=limit, offset=offset)
+        rows, total = db.list_runs_for_job(job_id, limit=limit, offset=offset)
     else:
-        rows, _ = db.list_runs(q=q, limit=limit, offset=offset)
+        rows, total = db.list_runs(q=q, limit=limit, offset=offset)
     headers = [
         "id",
         "job_id",
@@ -1787,7 +1787,19 @@ async def export_runs_csv(
                 vals.append("{}")
         out_lines.append(",".join(vals))
     filename = f"watchlists_runs_{scope}_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
-    return PlainTextResponse("\n".join(out_lines), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    # Include lightweight pagination metadata parity via header
+    try:
+        has_more = (offset + len(rows)) < int(total or 0)
+    except Exception:
+        has_more = False
+    return PlainTextResponse(
+        "\n".join(out_lines),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "X-Has-More": "true" if has_more else "false",
+        },
+    )
 
 @router.get("/runs/{run_id}", response_model=Run, summary="Get a run")
 async def get_run(

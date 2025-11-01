@@ -590,9 +590,9 @@ Example response:
 ```
 
 ### OCR Evaluation
-`POST /api/v1/evaluations/ocr` — Evaluate OCR text quality on provided content
+`POST /api/v1/evaluations/ocr` - Evaluate OCR text quality on provided content
 
-`POST /api/v1/evaluations/ocr-pdf` — Evaluate OCR text quality on uploaded PDF
+`POST /api/v1/evaluations/ocr-pdf` - Evaluate OCR text quality on uploaded PDF
 
 ## Webhook Management
 
@@ -690,11 +690,11 @@ Responses from evaluation endpoints also include standard `X-RateLimit-*` header
 
 For create endpoints, supply `Idempotency-Key` to make requests safe to retry. When a prior successful request with the same key exists (scoped per user and entity type), the API returns the original resource instead of creating a duplicate.
 
-- `POST /api/v1/evaluations` — create evaluation definition
-- `POST /api/v1/evaluations/datasets` — create dataset
-- `POST /api/v1/evaluations/{eval_id}/runs` — create run
-- `POST /api/v1/evaluations/embeddings/abtest` — create embeddings A/B test (scaffold)
-- `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` — start A/B test (admin‑gated)
+- `POST /api/v1/evaluations` - create evaluation definition
+- `POST /api/v1/evaluations/datasets` - create dataset
+- `POST /api/v1/evaluations/{eval_id}/runs` - create run
+- `POST /api/v1/evaluations/embeddings/abtest` - create embeddings A/B test (scaffold)
+- `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` - start A/B test (admin-gated)
 
 Example:
 ```

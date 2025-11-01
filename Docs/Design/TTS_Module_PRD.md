@@ -1,11 +1,11 @@
-# Text-to-Speech (TTS) Module – Developer PRD
+# Text-to-Speech (TTS) Module - Developer PRD
 
 ## 1. Background
 - The TTS stack powers `/api/v1/audio/speech` as an OpenAI-compatible endpoint with streaming and non-streaming modes (`tldw_Server_API/app/api/v1/endpoints/audio.py`).
 - `TTSServiceV2` orchestrates provider selection, validation, generation, fallback, and metrics while adapters encapsulate individual providers (`tldw_Server_API/app/core/TTS/tts_service_v2.py`).
 - A unified configuration layer merges YAML, `config.txt`, and environment overrides to enable/disable providers and tune performance (`tldw_Server_API/app/core/TTS/tts_config.py`, `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`).
 - Voice management supports upload, storage, and preview of custom voices for cloning-capable engines (`tldw_Server_API/app/core/TTS/voice_manager.py`).
-- Refactor phases 1–2 completed (exceptions, validation, resource manager, circuit breaker); phases 3–5 (testing, observability, hardening) remain open (`Docs/Development/TTS-Refactor-3.md`).
+- Refactor phases 1-2 completed (exceptions, validation, resource manager, circuit breaker); phases 3-5 (testing, observability, hardening) remain open (`Docs/Development/TTS-Refactor-3.md`).
 
 ## 2. Objectives & Success Criteria
 - Deliver a production-ready, extensible TTS layer with pluggable providers, real-time streaming, and voice cloning.

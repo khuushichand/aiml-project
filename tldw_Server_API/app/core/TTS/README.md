@@ -70,7 +70,7 @@ TTS/
 | IndexTTS2     | Local (Index)| Yes       | Yes (required)| mp3, wav               | Zero/one-shot cloning with emotion prompts; requires reference audio |
 | NeuTTS Air    | Local Hybrid | Conditional†| Yes         | mp3, wav, opus, flac, pcm | On-device synthesis; streaming when loading quantized GGUF |
 | Mock (tests)  | Test double  | Yes       | No            | wav                    | Deterministic adapter for test environments |
-| AllTalk       | Planned      | –         | –             | –                      | Placeholder entry in `TTSProvider` for future work |
+| AllTalk       | Planned      | -         | -             | -                      | Placeholder entry in `TTSProvider` for future work |
 
 \* Actual formats depend on each adapter’s `TTSCapabilities`.
 
@@ -161,12 +161,12 @@ Additional notes:
 
 All endpoints live under `/api/v1/audio`:
 
-- `POST /api/v1/audio/speech` — OpenAI-compatible speech synthesis (streaming or buffered).
-- `GET /api/v1/audio/voices/catalog` — Aggregate voice catalog across providers.
-- `POST /api/v1/audio/voices/upload` — Upload custom voice references.
-- `GET /api/v1/audio/voices` — List a user’s custom voice assets.
-- `GET /api/v1/audio/voices/{voice_id}` / `DELETE /api/v1/audio/voices/{voice_id}` — Manage stored voices.
-- `POST /api/v1/audio/voices/{voice_id}/preview` — Generate preview audio via a stored voice.
+- `POST /api/v1/audio/speech` - OpenAI-compatible speech synthesis (streaming or buffered).
+- `GET /api/v1/audio/voices/catalog` - Aggregate voice catalog across providers.
+- `POST /api/v1/audio/voices/upload` - Upload custom voice references.
+- `GET /api/v1/audio/voices` - List a user’s custom voice assets.
+- `GET /api/v1/audio/voices/{voice_id}` / `DELETE /api/v1/audio/voices/{voice_id}` - Manage stored voices.
+- `POST /api/v1/audio/voices/{voice_id}/preview` - Generate preview audio via a stored voice.
 
 See `tldw_Server_API/app/api/v1/endpoints/audio.py` for additional STT and quota-related endpoints co-located with the TTS routes.
 
@@ -221,7 +221,7 @@ python -m pytest tldw_Server_API/tests/TTS/test_tts_adapters.py -k openai
 
 ## Additional References
 
-- `TTS-DEPLOYMENT.md` — deployment checklist and environment validation.
-- `TTS-VOICE-CLONING.md` — detailed cloning workflows and provider requirements.
-- `Docs/STT-TTS/TTS-SETUP-GUIDE.md` — end-to-end setup for local and cloud engines.
-- `Docs/Design/TTS_Module_PRD.md` — product requirements and roadmap.
+- `TTS-DEPLOYMENT.md` - deployment checklist and environment validation.
+- `TTS-VOICE-CLONING.md` - detailed cloning workflows and provider requirements.
+- `Docs/STT-TTS/TTS-SETUP-GUIDE.md` - end-to-end setup for local and cloud engines.
+- `Docs/Design/TTS_Module_PRD.md` - product requirements and roadmap.

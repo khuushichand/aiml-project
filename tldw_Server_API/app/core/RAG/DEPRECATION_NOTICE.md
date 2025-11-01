@@ -1,6 +1,6 @@
 # RAG Module Deprecation Notice
 
-## Current Architecture (v4.0 – Unified Pipeline)
+## Current Architecture (v4.0 - Unified Pipeline)
 
 The RAG system now uses a single, unified pipeline where all features are controlled by explicit parameters. See `rag_service/unified_pipeline.py` and the `/api/v1/rag/*` endpoints.
 
@@ -47,8 +47,8 @@ These modules are replaced by the functional pipeline and should be archived:
 ### API Endpoints
 
 #### Active
-- `/api/v1/rag/search` – Unified search
-- `/api/v1/rag/batch` – Unified batch processing
+- `/api/v1/rag/search` - Unified search
+- `/api/v1/rag/batch` - Unified batch processing
 - `/api/v1/rag/simple`, `/api/v1/rag/advanced`, `/api/v1/rag/features`, `/api/v1/rag/health/*`
 
 #### Deprecated
@@ -58,7 +58,7 @@ These modules are replaced by the functional pipeline and should be archived:
 
 1. For API users
    - Move to `/api/v1/rag/search` and pass features as request parameters
-   - Use `/api/v1/rag/batch` for multi‑query processing
+   - Use `/api/v1/rag/batch` for multi-query processing
 
 2. For direct module users
    ```python
@@ -96,14 +96,14 @@ Move deprecated files to:
 
 ### Timeline
 
-- 2024‑08‑19: Functional pipeline implemented (v3)
-- 2025‑08‑xx: Unified pipeline introduced (v4)
-- 2025‑Q4: Retire remaining deprecated endpoints
+- 2024-08-19: Functional pipeline implemented (v3)
+- 2025-08-xx: Unified pipeline introduced (v4)
+- 2025-Q4: Retire remaining deprecated endpoints
 
 ### Benefits of Unified Architecture
 
 1. Simplicity: Single function, explicit parameters
-2. Flexibility: Mix‑and‑match features per request
+2. Flexibility: Mix-and-match features per request
 3. Transparency: No hidden configuration layers
 4. Testability: Direct parameterization simplifies testing
 5. Maintainability: Fewer surfaces, clearer contracts

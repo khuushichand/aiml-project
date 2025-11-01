@@ -518,7 +518,7 @@ async def get_db_pool() -> DatabasePool:
         if auth_mode_changed or db_url_changed:
             logger.info(
                 "AuthNZ database configuration changed "
-                "(AUTH_MODE: {} -> {}, DATABASE_URL: {} -> {}) — recreating pool",
+                "(AUTH_MODE: {} -> {}, DATABASE_URL: {} -> {}) - recreating pool",
                 previous_settings.AUTH_MODE,
                 current_settings.AUTH_MODE,
                 previous_settings.DATABASE_URL,

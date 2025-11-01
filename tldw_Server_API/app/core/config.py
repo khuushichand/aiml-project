@@ -737,7 +737,7 @@ def load_settings():
         "REDIS_URL": redis_url,
         "CACHE_TTL": cache_ttl,
         "REDIS_ENABLED": redis_enabled,
-        # Character-Chat (rate limiting) – file-backed defaults; env may override later
+        # Character-Chat (rate limiting) - file-backed defaults; env may override later
         "CHARACTER_RATE_LIMIT_OPS": _character_rate_limit_ops,
         "CHARACTER_RATE_LIMIT_WINDOW": _character_rate_limit_window,
         "MAX_CHARACTERS_PER_USER": _max_characters_per_user,

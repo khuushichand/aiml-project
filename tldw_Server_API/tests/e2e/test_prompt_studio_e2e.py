@@ -1,6 +1,6 @@
 """
 test_prompt_studio_e2e.py
-Description: Prompt Studio E2E — create project, create test case, subscribe WS, echo job update.
+Description: Prompt Studio E2E - create project, create test case, subscribe WS, echo job update.
 """
 
 import os

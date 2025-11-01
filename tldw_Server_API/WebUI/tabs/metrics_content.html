@@ -343,7 +343,7 @@
                     while (ageHist.length > 30) ageHist.shift();
                     window.orchestratorAgeHistory[st] = ageHist;
                     const fl = flags[st] || {};
-                    const flagTxt = [fl.paused ? 'paused' : '', fl.drain ? 'drain' : ''].filter(Boolean).join(' ') || '—';
+                    const flagTxt = [fl.paused ? 'paused' : '', fl.drain ? 'drain' : ''].filter(Boolean).join(' ') || '-';
                     return `<tr>
                         <td>${st}</td>
                         <td>${qdepth}</td>
@@ -842,7 +842,7 @@ async function refreshJobsOverview() {
             const li = document.createElement('li');
             const a = document.createElement('a');
             a.href = '#';
-            a.textContent = `${row.domain}/${row.queue}/${row.job_type} — queued: ${row.queued}, processing: ${row.processing}`;
+            a.textContent = `${row.domain}/${row.queue}/${row.job_type} - queued: ${row.queued}, processing: ${row.processing}`;
             a.addEventListener('click', (ev) => {
                 ev.preventDefault();
                 openAdminJobsWithFilter(row.domain, row.queue, row.job_type);

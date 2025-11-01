@@ -1,4 +1,4 @@
-# MCP Unified – Documentation Ingestion Playbook
+# MCP Unified - Documentation Ingestion Playbook
 
 > Use this guide to pull a codebase’s documentation into the TLDW knowledge stores and expose it to your MCP-aware coding tools.
 
@@ -14,7 +14,7 @@
 
 - Gather the docs you want indexed (project `README`, `docs/`, ADRs, API references, etc.).
 - Normalize formats where possible (Markdown or HTML are fastest to process).
-- Keep file paths meaningful—folder names become useful tags when you ingest.
+- Keep file paths meaningful-folder names become useful tags when you ingest.
 - Large repos: stage a manifest first so you can retry failed uploads easily:
 
 ```bash
@@ -43,12 +43,12 @@ curl -s -X POST "$BASE_URL/api/v1/media/add" \
 
 **Key form parameters**
 
-- `media_type=document` – tells the pipeline to use the document parser.
-- `keywords` – optional tags (`comma,separated`) that improve filtering later.
-- `perform_analysis` – disable for a quick load; enable if you want automatic summaries.
-- `generate_embeddings` – set to `true` if you rely on vector search or RAG pipelines.
-- `files` – repeat this field for each file you want in the same request.
-- `urls` – instead of `files`, you can point at raw GitHub URLs or docs hosting (must resolve to a supported extension or content-type).
+- `media_type=document` - tells the pipeline to use the document parser.
+- `keywords` - optional tags (`comma,separated`) that improve filtering later.
+- `perform_analysis` - disable for a quick load; enable if you want automatic summaries.
+- `generate_embeddings` - set to `true` if you rely on vector search or RAG pipelines.
+- `files` - repeat this field for each file you want in the same request.
+- `urls` - instead of `files`, you can point at raw GitHub URLs or docs hosting (must resolve to a supported extension or content-type).
 
 ### Bulk ingestion helper
 
@@ -131,9 +131,9 @@ POST /api/v1/mcp/tools/execute
 ```
 
 Response highlights:
-- `results[].id` – source-specific identifier (e.g., media ID)
-- `results[].uri` – `media://{id}` for quick follow-up calls
-- `results[].snippet` – preview text you can show in the client
+- `results[].id` - source-specific identifier (e.g., media ID)
+- `results[].uri` - `media://{id}` for quick follow-up calls
+- `results[].snippet` - preview text you can show in the client
 
 ### Retrieve full content
 

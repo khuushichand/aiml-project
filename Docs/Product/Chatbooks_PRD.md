@@ -52,13 +52,13 @@ Chatbooks provide a portable, trustworthy backup format for all user knowledge a
 ## 7. Functional Requirements
 
 1. **Endpoints**
-   - `POST /api/v1/chatbooks/export` — accepts metadata, filters, sync/async flag; returns file (sync) or job reference (async) with download URL + expiry.
-   - `POST /api/v1/chatbooks/import` — accepts upload, conflict strategy, async option; records warnings/errors per item.
-   - `POST /api/v1/chatbooks/preview` — validates archive and returns manifest summary without persisting data.
-   - `GET/DELETE /api/v1/chatbooks/export/jobs[/id]` and `/import/jobs[/id]` — list, inspect, cancel jobs.
-   - `GET /api/v1/chatbooks/download/{job_id}` — serve completed exports with optional signed URL.
-   - `POST /api/v1/chatbooks/cleanup` — remove expired exports from storage.
-   - `GET /api/v1/chatbooks/health` — report storage readiness and service status.
+   - `POST /api/v1/chatbooks/export` - accepts metadata, filters, sync/async flag; returns file (sync) or job reference (async) with download URL + expiry.
+   - `POST /api/v1/chatbooks/import` - accepts upload, conflict strategy, async option; records warnings/errors per item.
+   - `POST /api/v1/chatbooks/preview` - validates archive and returns manifest summary without persisting data.
+   - `GET/DELETE /api/v1/chatbooks/export/jobs[/id]` and `/import/jobs[/id]` - list, inspect, cancel jobs.
+   - `GET /api/v1/chatbooks/download/{job_id}` - serve completed exports with optional signed URL.
+   - `POST /api/v1/chatbooks/cleanup` - remove expired exports from storage.
+   - `GET /api/v1/chatbooks/health` - report storage readiness and service status.
 
 2. **Manifest Schema**
    - Versioned JSON describing metadata, content entries, relationships, file references, locale/timezone, export provenance (user, time, app version).

@@ -17,7 +17,7 @@ workflow jobs.
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
   FTS artefacts, then shut the server down before migrating data.
 
-## Step 1 – Prepare connection details
+## Step 1 - Prepare connection details
 
 Collect the PostgreSQL host, port, database, username, and password. These map directly onto the
 CLI arguments and `DatabaseConfig` fields inside the migration utility.
@@ -30,7 +30,7 @@ export PGUSER=tldw_user
 export PGPASSWORD=super-secret
 ```
 
-## Step 2 – Run the migration utility
+## Step 2 - Run the migration utility
 
 Invoke the migration module with paths to your existing SQLite databases. Provide `--content-sqlite`
 for the main media database and optionally pass `--chacha-sqlite`, `--analytics-sqlite`, and
@@ -62,7 +62,7 @@ The script performs the following actions for each supplied database:
 
 Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip large log tables).
 
-## Step 3 – Validate the migration
+## Step 3 - Validate the migration
 
 - Compare row counts between SQLite and PostgreSQL:
 
@@ -103,7 +103,7 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   two minutes and finished with zero failures.
 
 
-## Step 4 – Switch the application configuration
+## Step 4 - Switch the application configuration
 
 1. Update environment variables or `Config_Files/config.txt`:
 
@@ -128,13 +128,13 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
 
 ## Troubleshooting
 
-- **Foreign-key errors during copy** – ensure the PostgreSQL schema was created by running the API
+- **Foreign-key errors during copy** - ensure the PostgreSQL schema was created by running the API
   once before migrating. The script expects tables and constraints to exist.
-- **Sequence mismatch** – rerun the migration with `--batch-size 1` for the affected database to
+- **Sequence mismatch** - rerun the migration with `--batch-size 1` for the affected database to
   recompute the sequence state, or run the generated `SELECT setval(...)` statements manually.
-- **Large datasets** – increase `--batch-size` (default 500) to improve throughput, or run per
+- **Large datasets** - increase `--batch-size` (default 500) to improve throughput, or run per
   database to isolate issues.
-- **Workflow runtime lag** – confirm the connection pool overrides above are applied and check
+- **Workflow runtime lag** - confirm the connection pool overrides above are applied and check
   `pg_stat_activity` for sessions waiting on locks. Enable the stress suite with reduced batch size
   (set `TLDW_WORKFLOW_STRESS_BATCH=25`) to reproduce issues under controlled load.
 

@@ -228,7 +228,7 @@ https://arxiv.org/abs/2412.17758
 https://huggingface.co/spaces/bigcode/bigcodebench-leaderboard
 https://www.atla-ai.com/post/evaluating-the-evaluator
 https://hamel.dev/blog/posts/llm-judge/
-https://github.com/scrapinghub/article-extraction-benchmark — see `Docs/Evals/WebScraping_Article_Benchmark.md` for integration details
+https://github.com/scrapinghub/article-extraction-benchmark - see `Docs/Evals/WebScraping_Article_Benchmark.md` for integration details
 https://github.com/Zhe-Young/SelfCorrectDecompose
 https://eugeneyan.com/writing/evals/
 
@@ -494,7 +494,7 @@ Links:
 - **Role Play**
     - **Conversation Relevancy**
         - DeepEval
-            * `assesses whether your LLM chatbot is able to generate relevant responses throughout a conversation. It is calculated by looping through each turn individually and adopts a sliding window approach to take the last min(0, current turn number — window size) turns into account to determine whether it is relevant or not. The final conversation relevancy metric score is simply the number of turn responses that is relevant divided by the total number of turns in a conversational test case.` 
+            * `assesses whether your LLM chatbot is able to generate relevant responses throughout a conversation. It is calculated by looping through each turn individually and adopts a sliding window approach to take the last min(0, current turn number - window size) turns into account to determine whether it is relevant or not. The final conversation relevancy metric score is simply the number of turn responses that is relevant divided by the total number of turns in a conversational test case.` 
             * https://docs.confident-ai.com/docs/metrics-conversation-relevancy
     - **Debating**
         - https://huggingface.co/blog/debate
@@ -744,7 +744,7 @@ https://huggingface.co/learn/cookbook/en/rag_evaluation
                     - `nDCG evaluates the ranking quality by considering the position of relevant documents in the result list and assigning higher scores to relevant documents appearing earlier.`
                     - `It is particularly effective for scenarios where documents have varying degrees of relevance.`
                     - `To calculate discounted cumulative gain (DCG), each document in the retrieved list is assigned a relevance score, rel and a discount factor reduces the weight of documents as their rank position increases.`
-                    - `DCG =[Summation i=1 to n ((2 ^ rel(i) — 1)/log(i+1))`
+                    - `DCG =[Summation i=1 to n ((2 ^ rel(i) - 1)/log(i+1))`
                       - Here rel(i) is the graded relevance of document at position i. IDCG is the ideal DCG which is the DCG for perfect ranking. nDCG is calculated as the ratio between actual discounted cumulative gain (DCG) and the ideal discounted cumulative gain (IDCG)
                     - `nDCG = DCG/IDCG`
                       - `nDCG is quite a complex metric to calculate. It requires documents to have a relevance score which may lead to subjectivity and the choice of the discount factor affects the values significantly, but it accounts for varying degrees of relevance in documents and gives more weightage to higher ranked items.`

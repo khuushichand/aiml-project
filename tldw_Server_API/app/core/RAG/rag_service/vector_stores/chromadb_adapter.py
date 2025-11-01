@@ -255,7 +255,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
         except Exception:
             return None
 
-    # Adapter-specific helper: for duplication – vectors plus embeddings
+    # Adapter-specific helper: for duplication - vectors plus embeddings
     async def list_vectors_with_embeddings_paginated(self, collection_name: str, limit: int, offset: int, filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self._initialized:
             await self.initialize()

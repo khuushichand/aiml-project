@@ -1,7 +1,7 @@
 # Privilege Maps PRD
 
 ## Overview
-- **Objective**: Deliver privilege-aware maps (API + WebUI) so admins, managers, and end users can see—in real time—what capabilities they actually have without combing through configs or triggering authorization errors.
+- **Objective**: Deliver privilege-aware maps (API + WebUI) so admins, managers, and end users can see-in real time-what capabilities they actually have without combing through configs or triggering authorization errors.
 - **Primary outcomes**: Cut "permission denied" support tickets by 50% within 30 days of launch; ensure 75% of new users view their map during week one; provide compliance-ready exports and snapshots with 90-day retention.
 - **Version scope**: Initial release covering admin, organization, team, and self-service views exposed through FastAPI endpoints and surfaced in the WebUI.
 
@@ -137,15 +137,15 @@
   - Keys follow `privmap:{view}:{hash(filters)}` format where `view ∈ {self,user,team,org,summary,detail}`; `hash` derived from sorted query params and user/team IDs.
   - Default TTL 15 minutes (configurable via `PRIVILEGE_CACHE_TTL_SECONDS`), refreshed on cache hits („sliding“ TTL optional).
   - Invalidation triggered by role assignment changes, catalog version bumps, deployment events. Multi-instance deployments broadcast invalidations via Redis pub/sub channel `privmap:invalidate`.
-  - Trend computation windows default to 30 days but accept `window_days` override (1–90); trends stored alongside cache entry metadata so recomputation is deterministic.
+  - Trend computation windows default to 30 days but accept `window_days` override (1-90); trends stored alongside cache entry metadata so recomputation is deterministic.
 
 ## Implementation Phases
-1. **Discovery & Design (1 week)** — *Status: complete*
+1. **Discovery & Design (1 week)** - *Status: complete*
    - Audit metadata coverage, finalize API schemas, align caching strategy.
-2. **Backend Foundations (2 weeks)** — *Status: complete* (catalog loader, introspection registry, aggregation engine, retention job, refreshed tests)
-3. **WebUI Integration (2 weeks)** — *Status: complete* (admin/org/team/self views, export flows, onboarding copy)
+2. **Backend Foundations (2 weeks)** - *Status: complete* (catalog loader, introspection registry, aggregation engine, retention job, refreshed tests)
+3. **WebUI Integration (2 weeks)** - *Status: complete* (admin/org/team/self views, export flows, onboarding copy)
    - Build admin/org/team/self components, export flows, onboarding copy.
-4. **Pilot & Rollout (1 week)** — *Status: queued*
+4. **Pilot & Rollout (1 week)** - *Status: queued*
    - Enable internally, gather feedback, tune metrics, publish documentation.
 
 ### Upcoming Deliverables
@@ -492,7 +492,7 @@
 - **Error Handling**: Returns `404` if the snapshot is purged by retention policy, and `410` when the snapshot metadata exists but the underlying matrix was downsampled (detail replaced by weekly summary).
 
 ## Non-Functional Requirements
-- **Security**: Respect existing RBAC—users can only request maps they have rights to see; avoid leaking hidden endpoints.
+- **Security**: Respect existing RBAC-users can only request maps they have rights to see; avoid leaking hidden endpoints.
 - **Performance**: Initial map generation should complete within 2 seconds for <500 endpoints; cached responses should return <300 ms; admin drill-down views must rely on server-side pagination/virtualized tables so clients never render full 10k x 1k matrices.
 - **Scalability**: Support up to 10k users and 1k endpoints per instance with incremental caching, precomputed aggregates, and paginated detail queries that cap payload sizes.
 - **Reliability**: Cache invalidation tied to role/config updates; provide background job to refresh stale entries.

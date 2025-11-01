@@ -42,7 +42,7 @@ function _ap_renderSummary() {
   if (!el) return;
   const items = _ap_filteredItems();
   const { total, allowed, blocked } = _ap_summarize(items);
-  const ts = AUTH_PERM_CACHE.lastLoadedAt ? new Date(AUTH_PERM_CACHE.lastLoadedAt).toLocaleString() : '—';
+  const ts = AUTH_PERM_CACHE.lastLoadedAt ? new Date(AUTH_PERM_CACHE.lastLoadedAt).toLocaleString() : '-';
   el.innerHTML = `Items: <strong>${total}</strong> · Allowed: <strong>${allowed}</strong> · Blocked: <strong>${blocked}</strong> · Loaded: ${_ap_escape(ts)}`;
 }
 

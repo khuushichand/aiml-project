@@ -179,11 +179,11 @@ class PermissionChecker:
                 if current_settings and current_settings.RBAC_SOFT_ENFORCE:
                     if redact_logs:
                         logger.warning(
-                            f"[RBAC soft-enforce] Authenticated user lacks '{self.permission}' — allowing (soft mode)"
+                            f"[RBAC soft-enforce] Authenticated user lacks '{self.permission}' - allowing (soft mode)"
                         )
                     else:
                         logger.warning(
-                            f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' — allowing (soft mode)"
+                            f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' - allowing (soft mode)"
                         )
                     return user
             except Exception:

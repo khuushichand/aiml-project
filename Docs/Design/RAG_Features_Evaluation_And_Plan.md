@@ -1,4 +1,4 @@
-# RAG Feature Additions — Evaluation and Plan (v0.1)
+# RAG Feature Additions - Evaluation and Plan (v0.1)
 
 Author: tldw_server coding agent
 Date: 2025-10-16
@@ -6,31 +6,31 @@ Date: 2025-10-16
 ## Scope
 Evaluate and plan six requested enhancements to the unified RAG module:
 
-1) Sentence‑level grounding (strict extractive mode; per‑sentence citations; NLI verification; ask/decline on unsupported claims)
+1) Sentence-level grounding (strict extractive mode; per-sentence citations; NLI verification; ask/decline on unsupported claims)
 2) Document structure index (heading/paragraph offsets) to power precise open_section and page/section citations
-3) Smarter planner (few‑shot prompts; tool awareness; graceful fallback; exposed trace)
+3) Smarter planner (few-shot prompts; tool awareness; graceful fallback; exposed trace)
 4) Persistent cache for agentic “ephemeral chunk” with user/version scoping and invalidation on updates
 5) Observability (tool/budget metrics and traces; expose plan/spans/coverage in metadata)
-6) Ingestion structure index (persist per‑paragraph/heading offsets in MediaDB; expose in retrieval metadata)
+6) Ingestion structure index (persist per-paragraph/heading offsets in MediaDB; expose in retrieval metadata)
 
 This doc maps current capabilities, gaps, proposed changes, code touchpoints, testing, risks, and an incremental rollout plan.
 
 ---
 
-## 1) Sentence‑Level Grounding
+## 1) Sentence-Level Grounding
 
 ### Current
-- Per‑sentence “hard citations” already exist, mapping generated sentences to doc offsets:
+- Per-sentence “hard citations” already exist, mapping generated sentences to doc offsets:
   - unified pipeline hard citations and handling for ask/decline when incomplete: tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:1994
   - hard/quote citation builders: tldw_Server_API/app/core/RAG/rag_service/guardrails.py:280
-- Claims (extraction + NLI/LLM hybrid verification) and post‑verification/repair:
+- Claims (extraction + NLI/LLM hybrid verification) and post-verification/repair:
   - Claims/NLI in unified pipeline: tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:2040
-  - Post‑generation verifier with threshold + optional repair pass: tldw_Server_API/app/core/RAG/rag_service/post_generation_verifier.py:52
+  - Post-generation verifier with threshold + optional repair pass: tldw_Server_API/app/core/RAG/rag_service/post_generation_verifier.py:52
 - API schema exposes controls:
   - require_hard_citations, enable_claims, low_confidence_behavior: tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:960, 1320
 
 ### Gaps
-- “Strict extractive mode” for generation is not a first‑class switch in the standard pipeline (agentic has extractive assembly but is separate).
+- “Strict extractive mode” for generation is not a first-class switch in the standard pipeline (agentic has extractive assembly but is separate).
 - Default behavior to ask/decline on unsupported claims may need stronger, consistent enforcement across both standard and agentic strategies.
 
 ### Proposal
@@ -41,7 +41,7 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
 ### Touchpoints
 - unified pipeline gating and answer path: tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:1994
 - guardrails hard/quote citations: tldw_Server_API/app/core/RAG/rag_service/guardrails.py:280
-- post‑verification controls: tldw_Server_API/app/core/RAG/rag_service/post_generation_verifier.py:52
+- post-verification controls: tldw_Server_API/app/core/RAG/rag_service/post_generation_verifier.py:52
 - API schema (add strict_extractive if we make it public): tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:720
 
 ### Tests
@@ -65,12 +65,12 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
   - columns: id, media_id, parent_id, kind (section|paragraph|table|header|list), level, title, start_char, end_char, order_index, path (optional), created_at, last_modified, version/client_id (align with v2 schema model), deleted flag.
 - Populate on ingestion (PDF/Plaintext/Books). Keep ancestry titles/section path in a small JSON field or composite columns.
 - Build SQLite indexes on (media_id, kind), and (media_id, start_char) for fast range queries.
-- Provide helper queries to power precise open_section(page/section) and to return section‑aware citation anchors.
+- Provide helper queries to power precise open_section(page/section) and to return section-aware citation anchors.
 
 ### Touchpoints
 - Media DB schema and insert helpers: tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:220
 - Chunker structure and offsets: tldw_Server_API/app/core/Chunking/chunker.py:280
-- Agentic tools open_section upgrade to DB‑backed lookup.
+- Agentic tools open_section upgrade to DB-backed lookup.
 
 ### Tests
 - Ingestion builds structure rows with correct parent/child and offsets.
@@ -78,20 +78,20 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
 
 ---
 
-## 3) Smarter Planner (Few‑Shot + Tool Awareness)
+## 3) Smarter Planner (Few-Shot + Tool Awareness)
 
 ### Current
-- Agentic tool loop supports optional LLM planning and traces; few‑shot not curated:
+- Agentic tool loop supports optional LLM planning and traces; few-shot not curated:
   - tool loop + optional planning: tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py:478
   - tool trace exposed when debug: tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py:1091
 - Tools include search_within/open_section/expand/quote.
 
 ### Gaps
-- Few‑shot exemplars and tool‑aware instructions not standardized; minimal, heuristic planner.
+- Few-shot exemplars and tool-aware instructions not standardized; minimal, heuristic planner.
 - Trace not uniformly exposed in standard pipeline or when not in debug.
 
 ### Proposal
-- Add curated few‑shot prompts demonstrating tool selection (open_section vs search_within), with budget hints.
+- Add curated few-shot prompts demonstrating tool selection (open_section vs search_within), with budget hints.
 - Persist planner params in config/prompt templates; ensure graceful fallback to deterministic heuristics on LLM errors/timeouts.
 - Always expose a compact `metadata.plan` with steps taken and coverage metrics (even if debug_trace is off), bounded in size.
 
@@ -105,18 +105,18 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
 
 ---
 
-## 4) Persistent Cache for Ephemeral Chunk (User/Version‑Scoped)
+## 4) Persistent Cache for Ephemeral Chunk (User/Version-Scoped)
 
 ### Current
-- Ephemeral agentic cache in‑process only: AdvancedAgenticCache (in‑memory, TTL): tldw_Server_API/app/core/RAG/rag_service/advanced_cache.py:96
+- Ephemeral agentic cache in-process only: AdvancedAgenticCache (in-memory, TTL): tldw_Server_API/app/core/RAG/rag_service/advanced_cache.py:96
 - Agentic ephemeral cache keys based on query + doc snapshot, no user/version scoping: tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py:883
-- Intra‑doc vectors cached in process + basic invalidation on media delete: tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:3400
+- Intra-doc vectors cached in process + basic invalidation on media delete: tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:3400
 
 ### Gaps
-- No multi‑process/shared backend; no robust invalidation on document updates; no user scoping; ephemeral cache not aware of document version/content_hash.
+- No multi-process/shared backend; no robust invalidation on document updates; no user scoping; ephemeral cache not aware of document version/content_hash.
 
 ### Proposal
-- Introduce a pluggable cache backend interface (Memory | SQLite | Redis). Default remains Memory; opt‑in to SQLite file in `Databases/user_databases/<user_id>/Agentic_Cache/`.
+- Introduce a pluggable cache backend interface (Memory | SQLite | Redis). Default remains Memory; opt-in to SQLite file in `Databases/user_databases/<user_id>/Agentic_Cache/`.
 - Cache key schema: `user:{user_id}:ver:{content_hash_or_version}:q:{sha(query)}` with TTL. Store small payload: chunk_text checksum, provenance spans.
 - Invalidation: on media updates/soft deletes, call cache.invalidate_prefix for the affected `ver:{...}` or `media_id:` prefix; wire invalidation path in MediaDatabase on writes and in sync_log consumer.
 
@@ -134,7 +134,7 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
 ## 5) Observability (Tools/Budgets/Traces/Metadata)
 
 ### Current
-- Extensive timing and OTEL hooks in unified pipeline; per‑phase histograms: tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:540
+- Extensive timing and OTEL hooks in unified pipeline; per-phase histograms: tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:540
 - Agentic coverage/uniqueness/redundancy scores: tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py:920
 - Tracing module + metrics available: tldw_Server_API/app/core/RAG/rag_service/observability.py:1
 
@@ -181,7 +181,7 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
 - Retrieval: augment metadata from structure index when available.
 
 ### Tests
-- End‑to‑end ingestion for PDFs and plaintext produces consistent offsets and lookups via retriever.
+- End-to-end ingestion for PDFs and plaintext produces consistent offsets and lookups via retriever.
 
 ---
 
@@ -195,10 +195,10 @@ This doc maps current capabilities, gaps, proposed changes, code touchpoints, te
    - Ensure require_hard_citations + low_confidence_behavior works uniformly.
 3) Persistent agentic cache
    - Introduce pluggable cache backend; add user/version scoping and invalidation.
-4) Smarter planner (few‑shot)
+4) Smarter planner (few-shot)
    - Curate prompts and integrate graceful fallback; expose compact plan always.
 5) Strict extractive mode (standard strategy)
-   - Add `strict_extractive` to unify with agentic path; implement sentence‑stitcher with spans.
+   - Add `strict_extractive` to unify with agentic path; implement sentence-stitcher with spans.
 
 Each step ships behind feature flags/environment toggles. Migrations for DB changes are idempotent.
 
@@ -230,5 +230,5 @@ Each step ships behind feature flags/environment toggles. Migrations for DB chan
 ---
 
 ## Summary
-Most of the requested capabilities are partially present today (hard citations per sentence, claims/NLI, OTEL/metrics, hierarchical offsets in chunker, chunk‑level FTS). The plan above focuses on making them first‑class, persistent, and consistent across both standard and agentic strategies with minimal disruption and clear rollout guards.
+Most of the requested capabilities are partially present today (hard citations per sentence, claims/NLI, OTEL/metrics, hierarchical offsets in chunker, chunk-level FTS). The plan above focuses on making them first-class, persistent, and consistent across both standard and agentic strategies with minimal disruption and clear rollout guards.
 

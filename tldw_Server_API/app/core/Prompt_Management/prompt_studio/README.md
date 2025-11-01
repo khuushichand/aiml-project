@@ -356,7 +356,7 @@ config = {
 
 Notes:
 - Progress is streamed via Prompt Studio WebSocket (iteration, current/best scores).
-- Heuristic pruning is controlled by `min_quality` (0–10). Lower = fewer prunes.
+- Heuristic pruning is controlled by `min_quality` (0-10). Lower = fewer prunes.
 - OpenAPI example for MCTS is available under `/api/v1/prompt-studio/optimizations/create`.
 
 ## API Reference
@@ -707,9 +707,9 @@ See also:
 
 | Strategy | Pros | Cons | Cost Expectation |
 | --- | --- | --- | --- |
-| iterative | Simple, predictable | May get stuck in local optima | Low–Medium |
+| iterative | Simple, predictable | May get stuck in local optima | Low-Medium |
 | bootstrap | Improves few-shot grounding | Needs quality traces | Medium |
-| genetic | Explores diverse space | Parameter-sensitive | Medium–High |
+| genetic | Explores diverse space | Parameter-sensitive | Medium-High |
 | mcts (canary) | Strong on hard tasks; sequence-aware | Higher token usage; latency | High |
 
 For MCTS, token usage scales with simulations × depth × candidates. Use `token_budget`, `ws_throttle_every`, and caching to control costs.

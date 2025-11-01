@@ -733,7 +733,7 @@ class SessionManager:
 
                 await self._update_last_activity(session_data['id'], conn)
 
-            # Outside of the DB context – refresh cache with validation status
+            # Outside of the DB context - refresh cache with validation status
             expires_at = session_data.get('expires_at')
             if isinstance(expires_at, str):
                 expires_at_dt = datetime.fromisoformat(expires_at)

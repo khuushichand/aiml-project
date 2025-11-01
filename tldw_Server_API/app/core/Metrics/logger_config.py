@@ -76,7 +76,7 @@ def setup_logger(args):
     and configuration file settings.
 
     This function adds:
-      - A console sink with a simple human‑readable format.
+      - A console sink with a simple human-readable format.
       - A file sink for standard logs.
       - Optionally, a file sink with JSON formatting for metrics.
     """

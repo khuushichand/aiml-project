@@ -265,7 +265,7 @@ performance:
 
 ## Manual GPU Smoke Test (IndexTTS2)
 
-1. **Environment check** – Verify CUDA is visible:
+1. **Environment check** - Verify CUDA is visible:
    ```bash
    python - <<'PY'
    import torch
@@ -273,7 +273,7 @@ performance:
    print(torch.cuda.get_device_name(0))
    PY
    ```
-2. **Adapter dry run** – Use a short voice reference (5–10 s WAV) and confirm end-to-end generation (update the `voice_refs/coach.wav` path to your sample):
+2. **Adapter dry run** - Use a short voice reference (5-10 s WAV) and confirm end-to-end generation (update the `voice_refs/coach.wav` path to your sample):
    ```bash
    python - <<'PY'
    import base64, asyncio
@@ -305,7 +305,7 @@ performance:
    asyncio.run(main())
    PY
    ```
-3. **Streaming verification** – Launch the API and request a streaming response to ensure chunk pacing:
+3. **Streaming verification** - Launch the API and request a streaming response to ensure chunk pacing:
    ```bash
    uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
    ```

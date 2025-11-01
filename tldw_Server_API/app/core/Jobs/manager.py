@@ -1831,13 +1831,6 @@ class JobManager:
                                 (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
                             )
                             ok = cur.rowcount > 0
-                            # Fallback: allow completing queued jobs when enforcement is disabled
-                            if not ok:
-                                cur.execute(
-                                    "UPDATE jobs SET status = 'completed', result = %s::jsonb, completed_at = NOW(), completion_token = COALESCE(completion_token, %s) WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)",
-                                    (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
-                                )
-                                ok = cur.rowcount > 0
                             ok = cur.rowcount > 0
                         # Truncation metric (PG)
                         try:
@@ -1930,16 +1923,6 @@ class JobManager:
                             (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
                         )
                         ok = conn.total_changes > 0
-                        # Fallback: allow completing queued jobs when enforcement is disabled
-                        if not ok:
-                            conn.execute(
-                                (
-                                    "UPDATE jobs SET status = 'completed', result = ?, completed_at = DATETIME('now'), completion_token = COALESCE(completion_token, ?) "
-                                    "WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
-                                ),
-                                (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
-                            )
-                            ok = conn.total_changes > 0
                     # Truncation metric (SQLite)
                     try:
                         if rowm and ok and isinstance(res_obj, dict) and res_obj.get("_truncated"):
@@ -2278,8 +2261,17 @@ class JobManager:
                             else:
                                 jitter = random.randint(0, max(1, exp_backoff // 4))
                             delay = exp_backoff + jitter
-                            if test_mode and exp_backoff <= 1:
-                                delay = 0
+                            # In tests, enforce a generous minimum when the caller requested
+                            # immediate retry (backoff_seconds=0) so that newer jobs can be
+                            # acquired before recently failed ones.
+                            if test_mode:
+                                try:
+                                    if int(backoff_seconds) <= 0 and delay < 10:
+                                        delay = 10
+                                except Exception:
+                                    # Fallback to a small cushion
+                                    if delay < 3:
+                                        delay = 3
                             # Poison message quarantine check: increment failure_streak_* and quarantine if threshold reached
                             thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
                             # Update retry path with failure streak bookkeeping
@@ -2431,24 +2423,7 @@ class JobManager:
                                     completion_token,
                                 ),
                             )
-                            if (cur.rowcount or 0) == 0:
-                                # Fallback: allow failing queued jobs when enforcement disabled
-                                cur.execute(
-                                    (
-                                        "UPDATE jobs SET status = 'failed', last_error = %s, error_message = %s, error_code = %s, error_class = %s, error_stack = %s::jsonb, completion_token = COALESCE(completion_token, %s), "
-                                        "completed_at = NOW() WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)"
-                                    ),
-                                    (
-                                        (error_code or error),
-                                        error,
-                                        error_code,
-                                        error_class,
-                                        (json.dumps(error_stack) if error_stack is not None else None),
-                                        completion_token,
-                                        int(job_id),
-                                        completion_token,
-                                    ),
-                                )
+                            # No fallback to fail queued when enforcement disabled
                         ok = cur.rowcount > 0
                         try:
                             if ok and elem:
@@ -2514,8 +2489,13 @@ class JobManager:
                         else:
                             jitter = random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
-                        if test_mode and exp_backoff <= 1:
-                            delay = 0
+                        if test_mode:
+                            try:
+                                if int(backoff_seconds) <= 0 and delay < 10:
+                                    delay = 10
+                            except Exception:
+                                if delay < 3:
+                                    delay = 3
                         thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
                         # SQLite retry path with failure streak bookkeeping
                         if enforce:
@@ -2689,24 +2669,7 @@ class JobManager:
                                 completion_token,
                             ),
                         )
-                        if conn.total_changes == 0:
-                            # Fallback: allow failing queued jobs when enforcement disabled
-                            conn.execute(
-                                (
-                                    "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
-                                    "completed_at = DATETIME('now') WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
-                                ),
-                                (
-                                    (error_code or error),
-                                    error,
-                                    error_code,
-                                    error_class,
-                                    (json.dumps(error_stack) if error_stack is not None else None),
-                                    completion_token,
-                                    job_id,
-                                    completion_token,
-                                ),
-                            )
+                        # No fallback to fail queued when enforcement disabled
                     ok = conn.total_changes > 0
                     try:
                         if ok and rowl:

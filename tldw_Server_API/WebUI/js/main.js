@@ -48,7 +48,7 @@ class WebUI {
             try {
                 const banner = document.createElement('div');
                 banner.style.cssText = 'padding:10px; background:#fff3cd; border:1px solid #ffeeba; color:#856404; text-align:center;';
-                banner.innerText = 'Opened from file:// — start the server and use http://127.0.0.1:8000/webui/ for full functionality.';
+                banner.innerText = 'Opened from file:// - start the server and use http://127.0.0.1:8000/webui/ for full functionality.';
                 const container = document.querySelector('.app-container');
                 if (container) container.insertBefore(banner, container.firstChild);
             } catch (e) { /* ignore */ }

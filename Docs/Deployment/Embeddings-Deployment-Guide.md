@@ -281,10 +281,10 @@ scrape_configs:
 ```
 
 Key embeddings metrics (subset):
-- `embedding_requests_total` – Request counter
-- `embedding_request_duration_seconds` – Latency histogram
-- `embedding_cache_hits_total` – Cache hit rate
-- `active_embedding_requests` – Current load
+- `embedding_requests_total` - Request counter
+- `embedding_request_duration_seconds` - Latency histogram
+- `embedding_cache_hits_total` - Cache hit rate
+- `active_embedding_requests` - Current load
 - Circuit breaker status is available via admin endpoints
 
 ### Health Checks and Admin Metrics

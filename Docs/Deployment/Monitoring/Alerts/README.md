@@ -1,16 +1,16 @@
 # Grafana Alerting
 
-This folder contains sample Grafana managed alert rules (YAML) and guidance. Mount this directory into Grafana at `/etc/grafana/provisioning/alerting` to auto‑load rules on startup.
+This folder contains sample Grafana managed alert rules (YAML) and guidance. Mount this directory into Grafana at `/etc/grafana/provisioning/alerting` to auto-load rules on startup.
 
 How to enable
 - In Docker Compose, add a volume: `./Docs/Deployment/Monitoring/Alerts:/etc/grafana/provisioning/alerting`
 - Ensure your Prometheus datasource UID is `prometheus` (rules reference it).
 
 Included files
-- `app-alerts.yml` – App/API alerts (HTTP 5xx ratio, high p95 latency)
-- `mcp-alerts.yml` – MCP Unified alerts (p95 latency, rate limit spikes)
-- `rag-alerts.yml` – RAG reranker alerts (LLM timeouts, exceptions, budget exhaustions)
-- `rag-slo-alerts.yml` – RAG SLOs (p95 latency, faithfulness ratio, burn-rate)
+- `app-alerts.yml` - App/API alerts (HTTP 5xx ratio, high p95 latency)
+- `mcp-alerts.yml` - MCP Unified alerts (p95 latency, rate limit spikes)
+- `rag-alerts.yml` - RAG reranker alerts (LLM timeouts, exceptions, budget exhaustions)
+- `rag-slo-alerts.yml` - RAG SLOs (p95 latency, faithfulness ratio, burn-rate)
 
 Notes
 - The YAML uses Grafana’s unified alerting provisioning (apiVersion: 1).
@@ -108,7 +108,7 @@ groups:
     interval: 1m
     rules:
       - uid: mcp_invalid_params_rate
-        title: MCP – Invalid Params (Schema/Validator)
+        title: MCP - Invalid Params (Schema/Validator)
         condition: C
         data:
           - refId: A
@@ -144,7 +144,7 @@ groups:
             type: query
 
       - uid: mcp_validator_missing
-        title: MCP – Missing Validator Override (Write Tools)
+        title: MCP - Missing Validator Override (Write Tools)
         condition: C
         data:
           - refId: A
@@ -185,4 +185,4 @@ Operational guidance
   - Clients sending wrong argument shapes (fix SDKs/clients),
   - Mismatched inputSchema vs. server expectations (update schema), or
   - Legitimate rejections by module validators (tighten docs/tooling).
-- Any non-zero `mcp_tool_validator_missing_total` suggests a write-capable tool was registered without a strict validator—treat as a release-blocking quality issue.
+- Any non-zero `mcp_tool_validator_missing_total` suggests a write-capable tool was registered without a strict validator-treat as a release-blocking quality issue.

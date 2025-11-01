@@ -4,15 +4,15 @@ The MCP Unified stack is the production Model Context Protocol surface that ship
 
 ## Available Guides
 
-- `Developer_Guide.md` – System architecture, extension patterns, testing strategy
-- `System_Admin_Guide.md` – Installation, configuration, monitoring, and security hardening
-- `User_Guide.md` – HTTP and WebSocket workflows, authentication, troubleshooting
-- `Modules.md` – Reference for creating and managing pluggable MCP modules
-- `Documentation_Ingestion_Playbook.md` – Step-by-step workflow for ingesting project docs and exposing them through MCP tools
- - `Client_Snippets.md` – Minimal JS/Python examples for initialize → tools/list → tools/call
-- `Client_Snippets.md` – Minimal JS/Python examples for initialize → tools/list → tools/call
-- `Adding_Tools.md` – Step-by-step guide to add new tools (modules) and register them
-- `../../API-related/Tools_API_Documentation.md` – REST facade for listing/executing tools via MCP
+- `Developer_Guide.md` - System architecture, extension patterns, testing strategy
+- `System_Admin_Guide.md` - Installation, configuration, monitoring, and security hardening
+- `User_Guide.md` - HTTP and WebSocket workflows, authentication, troubleshooting
+- `Modules.md` - Reference for creating and managing pluggable MCP modules
+- `Documentation_Ingestion_Playbook.md` - Step-by-step workflow for ingesting project docs and exposing them through MCP tools
+ - `Client_Snippets.md` - Minimal JS/Python examples for initialize → tools/list → tools/call
+- `Client_Snippets.md` - Minimal JS/Python examples for initialize → tools/list → tools/call
+- `Adding_Tools.md` - Step-by-step guide to add new tools (modules) and register them
+- `../../API-related/Tools_API_Documentation.md` - REST facade for listing/executing tools via MCP
 
 ## When to Use MCP Unified
 

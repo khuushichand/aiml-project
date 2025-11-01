@@ -12,7 +12,7 @@ def _backend_map() -> Dict[str, Type[VLMBackend]]:
 
         mapping[HFTableTransformerBackend.name] = HFTableTransformerBackend
     except Exception:
-        # transformers or PIL may be missing – silently ignore; available() will reflect this
+        # transformers or PIL may be missing - silently ignore; available() will reflect this
         pass
     try:
         from .backends.docling_vlm import DoclingVLMBackend

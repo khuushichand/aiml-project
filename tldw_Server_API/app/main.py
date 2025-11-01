@@ -138,7 +138,7 @@ def _safe_log_format(record: dict) -> str:
     caused recursive parsing and "Max string recursion exceeded" errors.
     """
     # Note: Markup tags (<level>, <dim>, etc.) are parsed before placeholders
-    # are formatted, so the inserted {message} content will not be re‑parsed
+    # are formatted, so the inserted {message} content will not be re-parsed
     # for markup. This removes the need to strip '<' or '>' from messages.
     return (
         "<dim>{time:YYYY-MM-DD HH:mm:ss.SSS}</dim> | "
@@ -528,7 +528,7 @@ else:
     # Sandbox Endpoint (scaffold)
     from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
 
-# Metrics and Telemetry — import directly and fail fast on errors
+# Metrics and Telemetry - import directly and fail fast on errors
 from tldw_Server_API.app.core.Metrics import (
     initialize_telemetry,
     shutdown_telemetry,
@@ -537,7 +537,7 @@ from tldw_Server_API.app.core.Metrics import (
     OTEL_AVAILABLE,
 )
 
-# Core helpers — import directly (fail fast if missing)
+# Core helpers - import directly (fail fast if missing)
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
 from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
@@ -602,7 +602,7 @@ READINESS_STATE = {"ready": True}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Manage application startup and shutdown for the given FastAPI app, performing validations, initializing services, scheduling deferred non‑critical startup tasks, and running background workers.
+    Manage application startup and shutdown for the given FastAPI app, performing validations, initializing services, scheduling deferred non-critical startup tasks, and running background workers.
     
     Parameters:
         app (FastAPI): The FastAPI application instance whose lifespan is managed.
@@ -1555,7 +1555,7 @@ async def lifespan(app: FastAPI):
                 _enabled = [k for k, v in _test_flags.items() if str(v).lower() in {"1", "true", "yes", "on"}]
                 if _enabled:
                     logger.warning(
-                        f"Test-mode toggles enabled in production: {', '.join(_enabled)} — disable these for secure deployments"
+                        f"Test-mode toggles enabled in production: {', '.join(_enabled)} - disable these for secure deployments"
                     )
         except Exception:
             pass
@@ -2031,9 +2031,9 @@ OPENAPI_TAGS = [
     {"name": "config", "description": "Server configuration and capability info."},
     {"name": "sync", "description": "Synchronization operations and helpers."},
     {"name": "tools", "description": "Tooling endpoints (utilities)."},
-    {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) – experimental surface in 0.1.",
+    {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) - experimental surface in 0.1.",
      "externalDocs": {"description": "MCP Unified Developer Guide", "url": _ext_url("/docs-static/MCP/Unified/Developer_Guide.md")}},
-    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes) – experimental in 0.1."},
+    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes) - experimental in 0.1."},
     {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore).",
      "externalDocs": {"description": "Chatbooks API", "url": _ext_url("/docs-static/API-related/Chatbook_Features_API_Documentation.md")}},
     {"name": "llm", "description": "LLM provider configuration and discovery.",
@@ -2057,7 +2057,7 @@ _prod_flag = _env_os.getenv("tldw_production", "false").lower() in {"true", "1",
 
 APP_DESCRIPTION = (
     """
-    Too Long; Didn't Watch Server (tldw_server) — unified research assistant and media analysis platform.
+    Too Long; Didn't Watch Server (tldw_server) - unified research assistant and media analysis platform.
 
     Auth: Click the “Authorize” button.
     - Single-user mode: use header X-API-KEY with the printed key.
@@ -2709,7 +2709,7 @@ async def metrics():
         pass
     return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
 
-# OpenTelemetry metrics endpoint (if using OTLP) — registered conditionally below
+# OpenTelemetry metrics endpoint (if using OTLP) - registered conditionally below
 @track_metrics(labels={"endpoint": "metrics"})
 async def api_metrics():
     """Get current metrics in JSON format."""
@@ -2738,7 +2738,7 @@ if _MINIMAL_TEST_APP:
         app.include_router(authnz_debug_router, prefix=f"{API_V1_PREFIX}", tags=["authnz-debug"])
     except Exception as _e:
         logger.debug(f"Skipping authnz_debug router in tests: {_e}")
-    # Sandbox (scaffold) — include only if import succeeded
+    # Sandbox (scaffold) - include only if import succeeded
     try:
         if '_HAS_SANDBOX' in globals() and _HAS_SANDBOX:
             app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
@@ -2803,7 +2803,7 @@ else:
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
     _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
-    # Tools (MCP-backed server tool execution) — include if initial guarded import succeeded
+    # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if 'tools_router' in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
@@ -2950,7 +2950,7 @@ except Exception as _metrics_rt_err:
 async def health_check():
     return {"status": "healthy"}
 
-# Readiness check (verifies critical dependencies) — registered conditionally below
+# Readiness check (verifies critical dependencies) - registered conditionally below
 async def readiness_check():
     """Readiness probe for orchestrators and load balancers."""
     try:

@@ -1,4 +1,4 @@
-ChromaDB Tests — Running and Skips
+ChromaDB Tests - Running and Skips
 
 This note explains why some ChromaDB tests are skipped/xfail and how to run or avoid them.
 

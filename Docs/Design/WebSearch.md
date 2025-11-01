@@ -324,7 +324,7 @@ Generate a comprehensive, well-structured, and informative answer for a given qu
     • Use markdown formatting (e.g., **bold**, bullet points, ## headings) to organize the information.
     • If the provided results are insufficient to answer the question, explicitly state what information is missing or unclear.
     Structure your answer like this:
-    1. **Short introduction**: Briefly summarize the topic (1–2 sentences).
+    1. **Short introduction**: Briefly summarize the topic (1-2 sentences).
     2. **Bulleted points**: Present key details, each with appropriate citations.
     3. **Conclusion**: Summarize the findings or restate the core answer (with citations if needed).
     Example:

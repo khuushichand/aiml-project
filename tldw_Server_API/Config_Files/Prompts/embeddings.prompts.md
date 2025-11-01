@@ -1,6 +1,6 @@
 # Embeddings Module Prompts
 
-## Situate Context Prompt (per‑chunk)
+## Situate Context Prompt (per-chunk)
 ```
 Please give a short succinct context to situate this chunk within the overall document
 for the purposes of improving search retrieval of the chunk.

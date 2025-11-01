@@ -1,11 +1,11 @@
-## MCP Tool Catalogs — Minimal Design (v0.1)
+## MCP Tool Catalogs - Minimal Design (v0.1)
 
 Goal
 - Introduce first-class, named tool catalogs to group MCP tools for discovery without breaking existing flows.
 - Allow admin/org/team owners to create catalogs and entries; clients can request tools filtered by catalog.
 
 Scope (Minimal Spike)
-- Data model: two SQLite tables (AuthNZ DB) — `tool_catalogs` and `tool_catalog_entries`.
+- Data model: two SQLite tables (AuthNZ DB) - `tool_catalogs` and `tool_catalog_entries`.
 - Admin API: CRUD-lite endpoints to list/create/delete catalogs and manage entries.
 - MCP: Extend `tools/list` to accept a `catalog` (name) or `catalog_id` filter.
 - Backward compatible: if no catalog specified, behavior unchanged.
@@ -41,27 +41,27 @@ API Changes
    - Catalog filters shape discovery only; RBAC still gates visibility/`canExecute` and execution.
 
 2) Admin endpoints (all require admin)
-   - `GET  /api/v1/admin/mcp/tool_catalogs` — list catalogs (optional `org_id`, `team_id` filters)
-   - `POST /api/v1/admin/mcp/tool_catalogs` — create catalog
-   - `DELETE /api/v1/admin/mcp/tool_catalogs/{catalog_id}` — delete catalog (cascades entries)
-   - `GET  /api/v1/admin/mcp/tool_catalogs/{catalog_id}/entries` — list entries
-   - `POST /api/v1/admin/mcp/tool_catalogs/{catalog_id}/entries` — add entry `{ tool_name, module_id? }`
-- `DELETE /api/v1/admin/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}` — remove entry
+   - `GET  /api/v1/admin/mcp/tool_catalogs` - list catalogs (optional `org_id`, `team_id` filters)
+   - `POST /api/v1/admin/mcp/tool_catalogs` - create catalog
+   - `DELETE /api/v1/admin/mcp/tool_catalogs/{catalog_id}` - delete catalog (cascades entries)
+   - `GET  /api/v1/admin/mcp/tool_catalogs/{catalog_id}/entries` - list entries
+   - `POST /api/v1/admin/mcp/tool_catalogs/{catalog_id}/entries` - add entry `{ tool_name, module_id? }`
+- `DELETE /api/v1/admin/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}` - remove entry
 
 3) Org/Team management endpoints (manager roles)
 - Organization-scoped (requires org manager: owner/admin/lead, or global admin):
-  - `GET  /api/v1/orgs/{org_id}/mcp/tool_catalogs` — list org catalogs
-  - `POST /api/v1/orgs/{org_id}/mcp/tool_catalogs` — create org catalog
-  - `POST /api/v1/orgs/{org_id}/mcp/tool_catalogs/{catalog_id}/entries` — add entry
-  - `DELETE /api/v1/orgs/{org_id}/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}` — remove entry
-  - `DELETE /api/v1/orgs/{org_id}/mcp/tool_catalogs/{catalog_id}` — delete catalog (cascades entries)
+  - `GET  /api/v1/orgs/{org_id}/mcp/tool_catalogs` - list org catalogs
+  - `POST /api/v1/orgs/{org_id}/mcp/tool_catalogs` - create org catalog
+  - `POST /api/v1/orgs/{org_id}/mcp/tool_catalogs/{catalog_id}/entries` - add entry
+  - `DELETE /api/v1/orgs/{org_id}/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}` - remove entry
+  - `DELETE /api/v1/orgs/{org_id}/mcp/tool_catalogs/{catalog_id}` - delete catalog (cascades entries)
 
 - Team-scoped (requires team manager: owner/admin/lead, or global admin):
-  - `GET  /api/v1/teams/{team_id}/mcp/tool_catalogs` — list team catalogs
-  - `POST /api/v1/teams/{team_id}/mcp/tool_catalogs` — create team catalog
-  - `POST /api/v1/teams/{team_id}/mcp/tool_catalogs/{catalog_id}/entries` — add entry
-  - `DELETE /api/v1/teams/{team_id}/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}` — remove entry
- - `DELETE /api/v1/teams/{team_id}/mcp/tool_catalogs/{catalog_id}` — delete catalog (cascades entries)
+  - `GET  /api/v1/teams/{team_id}/mcp/tool_catalogs` - list team catalogs
+  - `POST /api/v1/teams/{team_id}/mcp/tool_catalogs` - create team catalog
+  - `POST /api/v1/teams/{team_id}/mcp/tool_catalogs/{catalog_id}/entries` - add entry
+  - `DELETE /api/v1/teams/{team_id}/mcp/tool_catalogs/{catalog_id}/entries/{tool_name}` - remove entry
+ - `DELETE /api/v1/teams/{team_id}/mcp/tool_catalogs/{catalog_id}` - delete catalog (cascades entries)
 
 RBAC & Ownership
 - Admin endpoints remain admin-only.

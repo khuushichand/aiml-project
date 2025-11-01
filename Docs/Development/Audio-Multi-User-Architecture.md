@@ -395,4 +395,4 @@ This architecture provides:
 - **Resource efficiency** through batching and quotas
 - **Scalability** with tier-based resource allocation
 
-The key insight is that multi-user transcription isn't just about scaling horizontally—it's about intelligently managing shared resources while providing differentiated service levels.
+The key insight is that multi-user transcription isn't just about scaling horizontally-it's about intelligently managing shared resources while providing differentiated service levels.

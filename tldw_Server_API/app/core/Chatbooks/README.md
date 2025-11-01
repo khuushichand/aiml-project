@@ -12,7 +12,7 @@
 - `chatbook_service.py`: Main service for export/import/preview and job tracking. Creates per-user storage, writes manifests/archives, manages job rows, optional signed URLs.
 - `chatbook_models.py`: Data classes and enums for manifests, content items, relationships, and job records (export/import + statuses).
 - `chatbook_validators.py`: Centralized validation and sanitization (filenames, ZIP integrity, traversal checks, ID formats, metadata limits).
-- `quota_manager.py`: Per-user quotas (storage, per‑day ops, concurrent jobs, file size). DB-backed when available with fallbacks.
+- `quota_manager.py`: Per-user quotas (storage, per-day ops, concurrent jobs, file size). DB-backed when available with fallbacks.
 - `ps_job_adapter.py`: Optional adapter to route Chatbooks jobs through Prompt Studio’s JobManager when configured.
 - `exceptions.py`: Domain-specific exceptions and helpers.
 - `job_queue_shim.py`: Legacy shim preserved for reference; not used by the current service.
@@ -42,7 +42,7 @@
 - `POST /import` → import chatbook ZIP (sync or async). Supports conflict resolution strategies and selection filters.
 - `POST /preview` → preview manifest without importing.
 - `GET  /export/jobs` and `GET /import/jobs` → list jobs; `GET /export/jobs/{id}`/`GET /import/jobs/{id}` → job status.
-- `DELETE /export/jobs/{id}` and `DELETE /import/jobs/{id}` → cancel in‑flight jobs.
+- `DELETE /export/jobs/{id}` and `DELETE /import/jobs/{id}` → cancel in-flight jobs.
 - `GET  /download/{job_id}` → download completed export; supports optional signed URLs.
 - `POST /cleanup` → delete expired exports.
 - `GET  /health` → lightweight service health for storage checks.
@@ -65,7 +65,7 @@
 
 **Security & Validation**
 - Filename and path sanitization, symlink rejection, traversal prevention.
-- ZIP validation: magic number, integrity, per‑file size caps, suspicious compression ratio checks, unsafe extensions rejection, required `manifest.json`.
+- ZIP validation: magic number, integrity, per-file size caps, suspicious compression ratio checks, unsafe extensions rejection, required `manifest.json`.
 - Optional signed download URLs: HMAC(SHA256) over `{job_id}:{exp}` with `CHATBOOKS_SIGNING_SECRET`.
 - Access control: jobs and files are scoped to the authenticated user. Download validates ownership and path containment.
 
@@ -77,7 +77,7 @@
   - File size caps enforced per tier
 
 **Database**
-- The service initializes job tables in the per‑user ChaChaNotes DB (`export_jobs`, `import_jobs`).
+- The service initializes job tables in the per-user ChaChaNotes DB (`export_jobs`, `import_jobs`).
 - Interacts via `CharactersRAGDB.execute_query(...)`; no raw SQL outside DB abstractions elsewhere in the project.
 
 **Configuration**
@@ -94,7 +94,7 @@
 **Local Development Tips**
 - Start API: `python -m uvicorn tldw_Server_API.app.main:app --reload`
 - Health check: `GET /api/v1/chatbooks/health`
-- Use `TLDW_USER_DATA_PATH` to direct per‑user storage somewhere writable in dev.
+- Use `TLDW_USER_DATA_PATH` to direct per-user storage somewhere writable in dev.
 - Async exports: ensure core Jobs worker is enabled via app startup, or switch to sync for quick iteration.
 
 **Testing**
@@ -123,7 +123,7 @@
 - Raise HTTP 4xx for validation/quota errors; 5xx for unexpected failures (API layer handles mapping).
 - Persist error messages to job rows and surface in job status endpoints.
 
-**Cross‑Module References**
+**Cross-Module References**
 - Endpoints: `tldw_Server_API/app/api/v1/endpoints/chatbooks.py`
 - Schemas: `tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py`
 - Jobs core: `tldw_Server_API/app/core/Jobs/`

@@ -416,7 +416,7 @@ function RequestHistorySection({ history, replay, reload }: { history: RequestHi
                 <div className="flex items-center space-x-2">
                   <span className="font-mono text-xs text-gray-500" title={new Date(h.timestamp).toLocaleString()}>{formatRelativeTime(h.timestamp)}</span>
                   <Badge variant={methodBadgeVariant(h.method) as any}>{h.method}</Badge>
-                  <Badge variant={statusBadgeVariant(h.status, h.ok) as any}>{h.status ?? (h.ok === false ? 'Error' : '—')}</Badge>
+                  <Badge variant={statusBadgeVariant(h.status, h.ok) as any}>{h.status ?? (h.ok === false ? 'Error' : '-')}</Badge>
                   <span className="text-xs text-gray-600">{h.duration_ms != null ? `${h.duration_ms} ms` : ''}</span>
                 </div>
                 <div className="space-x-2">

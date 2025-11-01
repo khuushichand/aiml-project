@@ -1,12 +1,12 @@
 # Metrics Cheatsheet
 
-The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Some categories require OpenTelemetry or module‑specific collectors to be enabled (noted below).
+The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Some categories require OpenTelemetry or module-specific collectors to be enabled (noted below).
 
 - Text format: `GET /metrics` (or `GET /api/v1/metrics/text`)
 - JSON: `GET /api/v1/metrics/json`
 - Health: `GET /api/v1/metrics/health`
 - Chat metrics (JSON): `GET /api/v1/metrics/chat` (includes `token_costs`)
-- Reset metrics: `POST /api/v1/metrics/reset` (admin‑only; clears in‑memory counters)
+- Reset metrics: `POST /api/v1/metrics/reset` (admin-only; clears in-memory counters)
 
 ## HTTP
 - `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
@@ -63,7 +63,7 @@ Example PromQL:
 - `embedding_request_duration_seconds{provider,model}`: Histogram of request latency.
 - `embedding_cache_hits_total{provider,model}`: Counter of cache hits.
 - `embedding_cache_size`: Gauge of current embedding cache size.
-- `active_embedding_requests`: Gauge of in‑flight embedding requests.
+- `active_embedding_requests`: Gauge of in-flight embedding requests.
 
 ## Uploads & Storage
 - `uploads_total{user_id,media_type}`: Counter of uploaded files.
@@ -103,10 +103,10 @@ Note: System gauges appear when a resource monitor/collector is running; they ar
 - `security_headers_responses_total`: Counter of responses with security headers applied.
 
 ## Circuit Breakers
-- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half‑open).
+- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half-open).
 - `circuit_breaker_trips_total{service,reason}`: Counter of trips.
 
-## Chat (OpenAI‑compatible Chat API)
+## Chat (OpenAI-compatible Chat API)
 - Requests: `chat_requests_total{provider,model,status}`; latency: `chat_request_duration_seconds{provider,model}`.
 - Streaming: `chat_streaming_duration_seconds{conversation_id}`, `chat_streaming_chunks_total{conversation_id}`, `chat_streaming_heartbeats_total{conversation_id}`, `chat_streaming_timeouts_total{conversation_id}`.
 - Tokens: `chat_tokens_prompt{provider,model}`, `chat_tokens_completion{provider,model}`, `chat_tokens_total{provider,model}`.
@@ -140,7 +140,7 @@ Notes:
 - Cache: `mcp_cache_hits_total{cache_name}`, `mcp_cache_misses_total{cache_name}`.
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
 Notes:
-- JSON metrics: `GET /api/v1/mcp/metrics` (admin‑only).
+- JSON metrics: `GET /api/v1/mcp/metrics` (admin-only).
 - Prometheus scrape (unauthenticated, for internal networks): `GET /api/v1/mcp/metrics/prometheus`.
   - Security: expose only on trusted networks or behind an authing proxy.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.
@@ -186,7 +186,7 @@ providers:
       path: /var/lib/grafana/dashboards
 ```
 
-Note: If your Prometheus datasource UID is not `prometheus`, update dashboards via UI on import, or set a dashboard‑level default datasource. The alert rules below explicitly use `datasourceUid: prometheus`.
+Note: If your Prometheus datasource UID is not `prometheus`, update dashboards via UI on import, or set a dashboard-level default datasource. The alert rules below explicitly use `datasourceUid: prometheus`.
 
 3) Alerting
 
@@ -194,7 +194,7 @@ Copy alert rules to a mounted path, e.g., `/etc/grafana/provisioning/alerting`:
 - `Docs/Deployment/Monitoring/Alerts/app-alerts.yml`
 - `Docs/Deployment/Monitoring/Alerts/mcp-alerts.yml`
 
-Grafana auto‑discovers `.yml` rules under the alerting directory on startup.
+Grafana auto-discovers `.yml` rules under the alerting directory on startup.
 
 4) Docker Compose (snippet)
 

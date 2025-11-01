@@ -2,11 +2,11 @@
 
 This document explains the purpose and usage of settings in `Config_Files/config.txt`.
 It is the single source of truth for server/runtime configuration. Values are read
-at startup by the backend and, for some modules, re‑read on demand.
+at startup by the backend and, for some modules, re-read on demand.
 
 Conventions
 - All keys belong to an INI section like `[Chunking]`.
-- Booleans: `true|false` (case‑insensitive). Integers/floats are unquoted.
+- Booleans: `true|false` (case-insensitive). Integers/floats are unquoted.
 - Paths are relative to the repo root unless noted.
 - Secrets should be supplied via `.env` where indicated; do not commit secrets.
 
@@ -24,7 +24,7 @@ How to apply changes
 ## [Setup]
 - `enable_first_time_setup` (bool): Allow interactive/setup workflows on first run.
 - `setup_completed` (bool): Marks setup completed to suppress guided flows.
-- `allow_remote_setup_access` (bool): If true, allows setup API from non‑localhost.
+- `allow_remote_setup_access` (bool): If true, allows setup API from non-localhost.
  - `setup_ip_allowlist` (csv): Optional IPs/CIDRs allowed to access `/setup` remotely.
    - Env override: `TLDW_SETUP_ALLOWLIST="203.0.113.0/24"`
  - `setup_ip_denylist` (csv): Optional IPs/CIDRs to explicitly block from `/setup`.
@@ -32,7 +32,7 @@ How to apply changes
 
 ## [Server]
 - `disable_cors` (bool): Disable CORS protections for development.
-- `allow_remote_webui_access` (bool): Allow remote clients (non‑localhost) to load `/webui`.
+- `allow_remote_webui_access` (bool): Allow remote clients (non-localhost) to load `/webui`.
   - Security: Only enable on trusted networks and with proper auth. When enabled, run the server
     listening on a public interface (e.g., `uvicorn ... --host 0.0.0.0`).
   - Env override: set `TLDW_WEBUI_ALLOW_REMOTE=1` (or `WEBUI_ALLOW_REMOTE=1`).
@@ -66,18 +66,18 @@ How to apply changes
 - `kept_video_retention_hours` (int): Retention: age cap for video temp files.
 
 ## [Chat-Dictionaries]
-- `enable_chat_dictionaries` (bool): Enable dictionary‑based post‑gen editing.
+- `enable_chat_dictionaries` (bool): Enable dictionary-based post-gen editing.
 - `post_gen_replacement` (bool): Apply post generation replacement list.
 - `post_gen_replacement_dict` (path): Markdown file with replacements.
 - `chat_dictionary_chat_prompts` (path): Prompt dictionary for chat.
 - `chat_dictionary_RAG_prompts` (path): Prompt dictionary for RAG.
 - `strategy` (str): Application strategy, e.g., `character_lore_first`.
-- `max_tokens` (int): Size cap for dictionary‑injected content.
+- `max_tokens` (int): Size cap for dictionary-injected content.
 - `default_rag_prompt` (str): Name of default system prompt for RAG.
 
 ## [Chat-Module]
 - `enable_provider_fallback` (bool): Allow fallback to alt provider on failure.
-- `max_base64_image_size_mb` (int): Per‑image Base64 size limit.
+- `max_base64_image_size_mb` (int): Per-image Base64 size limit.
 - `max_text_length_per_message` (int): Characters per user message.
 - `max_messages_per_request` (int): Limit messages per API call.
 - `max_images_per_request` (int): Max images per API call.
@@ -89,8 +89,8 @@ How to apply changes
 - `conversation_creation_max_retries` (int)
 - `db_transaction_max_retries` (int)
 - `rate_limit_per_minute` (int): Global rate per client.
-- `rate_limit_per_conversation_per_minute` (int): Per‑conversation rate.
-- `history_messages_limit` (int): History window size for context (1‑500).
+- `rate_limit_per_conversation_per_minute` (int): Per-conversation rate.
+- `history_messages_limit` (int): History window size for context (1-500).
 - `history_messages_order` (str): `asc|desc` ordering of loaded history.
 
 ## [Character-Chat]
@@ -133,23 +133,23 @@ Global defaults:
 - `chunk_max_size` (int): Default chunk size (units vary by method).
 - `chunk_overlap` (int): Default overlap (units vary by method).
 - `adaptive_chunking` (bool): Adaptive window scaling heuristics.
-- `chunking_multi_level` (bool): Paragraph‑aware multi‑level chunking.
+- `chunking_multi_level` (bool): Paragraph-aware multi-level chunking.
 - `language` (str): Default language hint.
 
 Operational controls:
 - `max_streaming_flush_threshold_chars` (int): Upper bound on stream flush size; 0 disables.
 - `json_single_metadata_reference` (bool): Emit one JSON metadata chunk and reference from others.
 - `json_metadata_reference_key` (str): Reference field name in JSON chunks.
-- `cache_copy_on_access` (bool): Deep‑copy cached results (safety) vs direct store (performance).
+- `cache_copy_on_access` (bool): Deep-copy cached results (safety) vs direct store (performance).
 - `verbose_logging` (bool): Raise chunk creation logs to INFO (otherwise DEBUG).
 - `regex_timeout_seconds` (float): Cap regex execution time in `ebook_chapters`.
-- `regex_disable_multiprocessing` (bool): Use thread‑guarded regex only.
+- `regex_disable_multiprocessing` (bool): Use thread-guarded regex only.
 - `regex_simple_only` (bool): Restrict custom chapter regex to safe subset.
 - `enable_contextual_retrieval` (bool): Include contextual elements in retrieval.
 - `context_window_size` (int): Contextual window for retrieval.
 - `include_parent_context` (bool)
 
-Per‑media defaults (override global):
+Per-media defaults (override global):
 For each type in `chunking_types` (`article|audio|book|document|mediawiki_article|mediawiki_dump|obsidian_note|podcast|text|video`) the following are available:
 - `<type>_chunking_method` (str)
 - `<type>_chunk_max_size` (int)
@@ -245,10 +245,10 @@ Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry
 - `buffered_merge_algo` (str): e.g., `lcs`.
 
 ## [external_providers]
-- Reserved for plugging in external providers (YAML/INI sub‑configs).
+- Reserved for plugging in external providers (YAML/INI sub-configs).
 
 ## [TTS-Settings]
-General and provider‑specific:
+General and provider-specific:
 - `local_tts_device` (str): `cpu|cuda|auto`.
 - `default_tts_provider` (str), `default_tts_voice` (str), `default_tts_speed` (float)
 OpenAI TTS:
@@ -260,7 +260,7 @@ AllTalk:
 - `default_alltalk_tts_*`, `alltalk_api_ip`
 Kokoro (local):
 - `kokoro_model_path`, `default_kokoro_tts_*`
-Custom OpenAI‑compatible TTS:
+Custom OpenAI-compatible TTS:
 - `default_custom_openai_*`
 VibeVoice:
 - `vibevoice_*` keys: variant/model/device/quantization/streaming params/paths
@@ -276,7 +276,7 @@ VibeVoice:
 - `search_result_display_type` (str) & `search_result_display_metadata` (bool)
 - `search_result_save_to_db` (bool)
 - `search_result_analysis_tone` (str)
-- Per‑engine keys: API keys/IDs/region/language filters and router URLs.
+- Per-engine keys: API keys/IDs/region/language filters and router URLs.
 
 ## [Web-Scraper]
 - `web_scraper_api_key|web_scraper_api_url` (str)
@@ -346,17 +346,17 @@ VibeVoice:
 
 Notes
 - Some keys are placeholders (`FIXME`); leave empty or set via `.env` when a provider requires credentials.
-- When both provider‑specific and global keys exist, provider‑specific keys take precedence for that provider’s operations.
+- When both provider-specific and global keys exist, provider-specific keys take precedence for that provider’s operations.
 - For advanced tuning of chunking behavior, see `tldw_Server_API/app/core/Chunking/README.md`.
 
 ---
 
 ## API Route Toggles
 
-Purpose: allow end users to run only stable API modules and let developers/operators selectively enable in‑development endpoints. Route inclusion is evaluated at startup before routers are mounted.
+Purpose: allow end users to run only stable API modules and let developers/operators selectively enable in-development endpoints. Route inclusion is evaluated at startup before routers are mounted.
 
 Default behavior
-- Stable‑only mode is ON by default. A curated set of experimental routes is disabled unless explicitly enabled.
+- Stable-only mode is ON by default. A curated set of experimental routes is disabled unless explicitly enabled.
 - You can override behavior per route or globally via `config.txt` or environment variables.
 
 Configure in `config.txt`
@@ -364,7 +364,7 @@ Configure in `config.txt`
 - Keys:
   - `stable_only` (bool, default: true): When true, disables the experimental set unless explicitly enabled.
   - `disable` (csv): Route keys to always disable.
-  - `enable` (csv): Route keys to force‑enable (useful when `stable_only=true`).
+  - `enable` (csv): Route keys to force-enable (useful when `stable_only=true`).
   - `experimental_routes` (csv): Extend the curated experimental set with more route keys.
 
 Environment overrides
@@ -380,14 +380,14 @@ Curated experimental set (gated by `stable_only=true` unless explicitly enabled)
 `sandbox, connectors, workflows, scheduler, flashcards, personalization, persona, jobs, benchmarks`
 
 Examples
-- Run stable‑only with workflows enabled:
+- Run stable-only with workflows enabled:
   - `stable_only = true`
   - `enable = workflows`
-- Disable web‑scraping and connectors regardless of `stable_only`:
+- Disable web-scraping and connectors regardless of `stable_only`:
   - `disable = web-scraping, connectors`
 
 Notes
-- Control‑plane endpoints are also gated:
+- Control-plane endpoints are also gated:
   - `metrics` key: gates both `/metrics` (Prometheus text) and `/api/v1/metrics` (JSON).
   - `health` key: gates `/health`, `/ready`, and `/health/ready`, as well as health routers (`/healthz`, `/readyz`).
   - `webui` key: gates the WebUI static mount (`/webui`) and `/webui/config.json`.

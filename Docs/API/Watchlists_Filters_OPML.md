@@ -10,7 +10,7 @@ Filters are configured per job as `job_filters` with the following structure:
 - `filters` (array): Ordered by descending `priority`, short-circuiting on first match.
   - `type` (keyword|author|date_range|regex|all)
   - `action` (include|exclude|flag)
-  - `value` (object) — per-type shape:
+  - `value` (object) - per-type shape:
     - keyword: `{ keywords: ["ai", "ml"], match: "any|all", fields?: ["title","summary","content","author"] }`
     - author: `{ names: ["john"], match: "any|all" }`
     - regex: `{ pattern: "(?i)breaking", flags?: "ims", field?: "title|summary|content|author" }`
@@ -44,7 +44,7 @@ Run details include:
 
 ## Bulk JSON Create (Sources)
 
-- `POST /api/v1/watchlists/sources/bulk` — create multiple sources in one request.
+- `POST /api/v1/watchlists/sources/bulk` - create multiple sources in one request.
   - Request body: `{ sources: SourceCreateRequest[] }`
   - Response body:
     - `items[]`: `{ name, url, id?, status: "created"|"error", error?, source_type? }`
@@ -70,11 +70,11 @@ Example response with mixed valid/invalid entries:
 
 ## OPML Import/Export
 
-- `POST /api/v1/watchlists/sources/import` — multipart upload, supports defaults:
+- `POST /api/v1/watchlists/sources/import` - multipart upload, supports defaults:
   - form fields: `active` (bool), `tags[]` (multi-value), `group_id` (int)
   - returns per-entry results and totals
 
-- `GET /api/v1/watchlists/sources/export` — returns OPML for current RSS sources; optional query:
+- `GET /api/v1/watchlists/sources/export` - returns OPML for current RSS sources; optional query:
   - `type=rss` (default), `tag=...` (multi), etc.
 
 Examples are available via the tests under `tldw_Server_API/tests/Watchlists/`.

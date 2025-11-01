@@ -1,6 +1,6 @@
 # Workflow Brainstorming
 
-This document outlines concrete, production‑oriented workflow ideas, what each enables, and the minimal additions needed to implement them cleanly using the Workflows module. It also includes high‑leverage new step types to unlock broader scenarios.
+This document outlines concrete, production-oriented workflow ideas, what each enables, and the minimal additions needed to implement them cleanly using the Workflows module. It also includes high-leverage new step types to unlock broader scenarios.
 
 ## Quick Wins (Works Today)
 
@@ -18,10 +18,10 @@ This document outlines concrete, production‑oriented workflow ideas, what each
 
 - Podcast/video summary → narration
   - Graph: process_media(kind=podcast) → prompt(summarize) → tts(attach_download_link)
-  - Needs: ffmpeg for post‑process normalization (optional).
+  - Needs: ffmpeg for post-process normalization (optional).
 
 - Researcher “compare sources” brief
-  - Graph: map(items) → process_media(web_scraping) → prompt(per‑item summaries) → prompt(merge+compare) → webhook
+  - Graph: map(items) → process_media(web_scraping) → prompt(per-item summaries) → prompt(merge+compare) → webhook
   - Needs: None beyond map/branch.
 
 ## Content Engineering
@@ -36,7 +36,7 @@ This document outlines concrete, production‑oriented workflow ideas, what each
 
 - Social microcontent generator
   - Graph: process_media → prompt(generate thread/titles/captions) → webhook(schedule posts)
-  - Needs: Webhook allowlist; secrets injection for API keys (per‑run secrets).
+  - Needs: Webhook allowlist; secrets injection for API keys (per-run secrets).
 
 ## Ops/Knowledge Management
 
@@ -58,11 +58,11 @@ This document outlines concrete, production‑oriented workflow ideas, what each
   - Graph: process_media → prompt(extract structured cases) → webhook(store eval dataset) → evaluations run
   - Needs: Optional “eval” step adapter.
 
-- Retrieval re‑index job (nightly)
+- Retrieval re-index job (nightly)
   - Graph: media_ingest(batch) → prompt(tagging/metadata enrichment) → webhook(trigger embeddings/vector jobs)
   - Needs: Scheduling; vector/embeddings APIs.
 
-## User‑Facing/Assistant
+## User-Facing/Assistant
 
 - Meeting assistant (transcribe → action items)
   - Graph: process_media(audio) → prompt(extract action items) → webhook(create tasks)
@@ -78,37 +78,37 @@ This document outlines concrete, production‑oriented workflow ideas, what each
   - Detects PII/blocked terms/length to gate flow. Emits flags + blocked boolean.
 
 - Candidate future types (optional):
-  - rss_fetch/atom_fetch — pull items on demand for monitors.
-  - embed — vectorize + upsert into configured vector stores.
-  - translate — provider‑agnostic translate wrapper.
-  - stt_transcribe + diarize — first‑class audio transcription steps.
-  - notify — simplified internal notifier for common channels.
-  - diff/change_detector — compare snapshots for material changes.
+  - rss_fetch/atom_fetch - pull items on demand for monitors.
+  - embed - vectorize + upsert into configured vector stores.
+  - translate - provider-agnostic translate wrapper.
+  - stt_transcribe + diarize - first-class audio transcription steps.
+  - notify - simplified internal notifier for common channels.
+  - diff/change_detector - compare snapshots for material changes.
 
 ## Triggers & Scheduling
 
 - Cron: via /api/v1/scheduler/workflows (CRUD) and “workflow_run” job.
-- Event‑driven (future): signed inbound trigger endpoint; file‑drop watcher.
+- Event-driven (future): signed inbound trigger endpoint; file-drop watcher.
 
 ## Ops Considerations
 
 - Egress/SSRF allowlist enforcement for webhooks/providers.
-- Per‑run secrets injection, never persisted; mask logs.
-- Quotas/rate‑limits by tenant/user.
+- Per-run secrets injection, never persisted; mask logs.
+- Quotas/rate-limits by tenant/user.
 - Prefer Postgres for heavy Workflows usage; SQLite fine for dev.
 - Artifacts retention + GC.
 
-## WebUI Enhancements (nice‑to‑have)
+## WebUI Enhancements (nice-to-have)
 
 - Cron helper presets, templates gallery, approve/resume UX for wait_for_human.
-- Node palette from /step‑types schemas/examples.
+- Node palette from /step-types schemas/examples.
 - Event filtering and payload modal polish (partially present).
 
-## Quick‑Start Templates To Ship
+## Quick-Start Templates To Ship
 
 - Site Watch + Digest + TTS (cron)
-- PDF → Q&A (single‑run)
+- PDF → Q&A (single-run)
 - Paper Roundup (rag_search → summary)
 - Policy Checker (policy_check + branch)
-- Podcast → Summary → Narration (single‑run)
+- Podcast → Summary → Narration (single-run)
 

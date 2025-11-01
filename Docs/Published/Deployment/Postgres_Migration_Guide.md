@@ -11,7 +11,7 @@ See also: `Docs/Deployment/Postgres_Migration_Guide.md` in the repository for th
 - Install `psycopg` (e.g., `pip install "psycopg[binary]"`).
 - Configure the server once against PostgreSQL so the schema exists (set `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API).
 
-## Step 1 – Prepare connection details
+## Step 1 - Prepare connection details
 
 ```bash
 export PGHOST=localhost
@@ -21,7 +21,7 @@ export PGUSER=tldw_user
 export PGPASSWORD=super-secret
 ```
 
-## Step 2 – Run the migration utility
+## Step 2 - Run the migration utility
 
 ```bash
 python -m tldw_Server_API.app.core.DB_Management.migration_tools \
@@ -37,11 +37,11 @@ python -m tldw_Server_API.app.core.DB_Management.migration_tools \
       --batch-size 500
 ```
 
-## Step 3 – Validate the migration
+## Step 3 - Validate the migration
 
 Compare row counts in SQLite vs Postgres, run dual-backend tests as needed, and check stress suite if applicable.
 
-## Step 4 – Switch the application configuration
+## Step 4 - Switch the application configuration
 
 Set environment variables (examples):
 
@@ -58,6 +58,6 @@ Restart the stack and confirm logs mention PostgreSQL usage for content and work
 
 ## Troubleshooting
 
-- Foreign-key errors – ensure schema exists (start API once before migrating).
-- Sequence mismatch – rerun with small batch size or reseed sequences.
-- Large datasets – increase `--batch-size` or migrate one DB at a time.
+- Foreign-key errors - ensure schema exists (start API once before migrating).
+- Sequence mismatch - rerun with small batch size or reseed sequences.
+- Large datasets - increase `--batch-size` or migrate one DB at a time.

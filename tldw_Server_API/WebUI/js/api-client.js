@@ -462,7 +462,7 @@ class APIClient {
                 if (response.status === 403) {
                     const notifyCsrfReset = () => {
                         if (typeof Toast !== 'undefined') {
-                            Toast.warning('Your session security token expired. A new one was issued—please retry the action.');
+                            Toast.warning('Your session security token expired. A new one was issued-please retry the action.');
                         }
                     };
                     try {
@@ -809,7 +809,7 @@ class APIClient {
                 curl += ` \\
   -H "Authorization: Bearer ${shownToken}"`;
             } else {
-                // Unknown mode — default to API key header
+                // Unknown mode - default to API key header
                 curl += ` \\
   -H "X-API-KEY: ${shownToken}"`;
             }

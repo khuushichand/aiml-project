@@ -83,7 +83,7 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
   - Root-level path `Databases/Media_DB_v2.db` is deprecated
   - Backends layer wired for PostgreSQL but SQLite is default
 - AuthNZ (Users):
-  - `DATABASE_URL` (env) — default in single-user mode resolves to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - `DATABASE_URL` (env) - default in single-user mode resolves to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`
   - PostgreSQL recommended for multi-user mode
 - Evaluations DB: `Databases/evaluations.db` (unified schema + audit; DI can map per-user audit paths)
 - Per-user notes/chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`

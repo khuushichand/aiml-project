@@ -6,9 +6,9 @@ Targeted troubleshooting tips for Workflows runs, artifacts, webhooks, and human
 
 Set environment flags before starting the server:
 
-- `WORKFLOWS_DEBUG=1` – broad debug logs for endpoints and engine
-- `WORKFLOWS_ARTIFACTS_DEBUG=1` – artifact endpoints (IDs, file paths, Range parsing, containment decisions)
-- `WORKFLOWS_DLQ_DEBUG=1` – webhook DLQ list/replay endpoints and worker
+- `WORKFLOWS_DEBUG=1` - broad debug logs for endpoints and engine
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` - artifact endpoints (IDs, file paths, Range parsing, containment decisions)
+- `WORKFLOWS_DLQ_DEBUG=1` - webhook DLQ list/replay endpoints and worker
 
 Check application logs for lines prefixed with `Workflows:` or `Artifacts:` hints.
 

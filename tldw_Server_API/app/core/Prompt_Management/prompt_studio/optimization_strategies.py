@@ -41,10 +41,15 @@ class HyperparameterOptimizer:
             "presence_penalty": (0.0, 2.0)
         }
     
-    async def optimize(self, prompt_id: int, test_case_ids: List[int],
-                       base_model_config: Dict[str, Any],
-                       max_iterations: int = 20,
-                       params_to_optimize: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def optimize(
+        self,
+        prompt_id: int,
+        test_case_ids: List[int],
+        base_model_config: Dict[str, Any],
+        max_iterations: int = 20,
+        params_to_optimize: Optional[List[str]] = None,
+        optimization_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Optimize hyperparameters using Bayesian optimization.
         
@@ -58,58 +63,63 @@ class HyperparameterOptimizer:
         Returns:
             Optimization results with best parameters
         """
+        # Populate optional context for logging/observability
+        try:
+            self.optimization_id = optimization_id
+        except Exception:
+            pass
         with log_context(ps_component="opt_strategies", strategy="hyperparams", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
             logger.info("Starting hyperparameter optimization for prompt {}", prompt_id)
-        
-        if params_to_optimize is None:
-            params_to_optimize = ["temperature", "max_tokens", "top_p"]
-        
-        # Initialize with random samples
-        observations = []
-        
-        # Random exploration phase
-        for i in range(min(5, max_iterations)):
-            params = self._sample_random_params(params_to_optimize)
-            score = await self._evaluate_params(
-                prompt_id, test_case_ids, base_model_config, params
-            )
-            observations.append((params, score))
-            logger.info("Random sample {}: score={:.3f}, params={}", i + 1, score, params)
-        
-        # Bayesian optimization phase
-        best_params = observations[0][0]
-        best_score = observations[0][1]
-        
-        for i in range(5, max_iterations):
-            # Use Gaussian Process to predict next point
-            next_params = self._get_next_params(observations, params_to_optimize)
             
-            # Evaluate
-            score = await self._evaluate_params(
-                prompt_id, test_case_ids, base_model_config, next_params
-            )
+            if params_to_optimize is None:
+                params_to_optimize = ["temperature", "max_tokens", "top_p"]
             
-            observations.append((next_params, score))
-            logger.info("Iteration {}: score={:.3f}, params={}", i + 1, score, next_params)
+            # Initialize with random samples
+            observations = []
             
-            # Update best
-            if score > best_score:
-                best_score = score
-                best_params = next_params
-                logger.info("New best score: {:.3f}", best_score)
+            # Random exploration phase
+            for i in range(min(5, max_iterations)):
+                params = self._sample_random_params(params_to_optimize)
+                score = await self._evaluate_params(
+                    prompt_id, test_case_ids, base_model_config, params
+                )
+                observations.append((params, score))
+                logger.info("Random sample {}: score={:.3f}, params={}", i + 1, score, params)
             
-            # Early stopping if converged
-            if self._has_converged(observations):
-                logger.info("Convergence detected")
-                break
-        
-        return {
-            "best_params": best_params,
-            "best_score": best_score,
-            "iterations": len(observations),
-            "all_observations": observations,
-            "improvement": best_score - observations[0][1]
-        }
+            # Bayesian optimization phase
+            best_params = observations[0][0]
+            best_score = observations[0][1]
+            
+            for i in range(5, max_iterations):
+                # Use Gaussian Process to predict next point
+                next_params = self._get_next_params(observations, params_to_optimize)
+                
+                # Evaluate
+                score = await self._evaluate_params(
+                    prompt_id, test_case_ids, base_model_config, next_params
+                )
+                
+                observations.append((next_params, score))
+                logger.info("Iteration {}: score={:.3f}, params={}", i + 1, score, next_params)
+                
+                # Update best
+                if score > best_score:
+                    best_score = score
+                    best_params = next_params
+                    logger.info("New best score: {:.3f}", best_score)
+                
+                # Early stopping if converged
+                if self._has_converged(observations):
+                    logger.info("Convergence detected")
+                    break
+            
+            return {
+                "best_params": best_params,
+                "best_score": best_score,
+                "iterations": len(observations),
+                "all_observations": observations,
+                "improvement": best_score - observations[0][1]
+            }
     
     def _sample_random_params(self, params_to_optimize: List[str]) -> Dict[str, Any]:
         """Sample random parameters from search space."""
@@ -223,9 +233,14 @@ class IterativeRefinementOptimizer:
         self.executor = PromptExecutor(db)
         self.optimization_id: Optional[int] = None
     
-    async def optimize(self, prompt_id: int, test_case_ids: List[int],
-                       model_config: Dict[str, Any],
-                       max_iterations: int = 10) -> Dict[str, Any]:
+    async def optimize(
+        self,
+        prompt_id: int,
+        test_case_ids: List[int],
+        model_config: Dict[str, Any],
+        max_iterations: int = 10,
+        optimization_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Iteratively refine prompt based on errors.
         
@@ -238,77 +253,82 @@ class IterativeRefinementOptimizer:
         Returns:
             Optimization results
         """
+        # Populate optional context for logging/observability
+        try:
+            self.optimization_id = optimization_id
+        except Exception:
+            pass
         with log_context(ps_component="opt_strategies", strategy="iterative", prompt_id=prompt_id, optimization_id=getattr(self, "optimization_id", None)):
             logger.info("Starting iterative refinement for prompt {}", prompt_id)
-        
-        current_prompt_id = prompt_id
-        iteration_history = []
-        
-        for iteration in range(max_iterations):
-            logger.info(f"Refinement iteration {iteration + 1}")
             
-            # Run evaluation
-            test_runs = []
-            for test_case_id in test_case_ids:
-                result = await self.test_runner.run_single_test(
-                    prompt_id=current_prompt_id,
-                    test_case_id=test_case_id,
-                    model_config=model_config
+            current_prompt_id = prompt_id
+            iteration_history = []
+            
+            for iteration in range(max_iterations):
+                logger.info(f"Refinement iteration {iteration + 1}")
+                
+                # Run evaluation
+                test_runs = []
+                for test_case_id in test_case_ids:
+                    result = await self.test_runner.run_single_test(
+                        prompt_id=current_prompt_id,
+                        test_case_id=test_case_id,
+                        model_config=model_config
+                    )
+                    test_runs.append(result)
+                
+                # Analyze errors
+                errors = self._analyze_errors(test_runs)
+                
+                if not errors:
+                    logger.info("No errors found, optimization complete")
+                    break
+                
+                # Generate refinement based on errors
+                refinement = await self._generate_refinement(current_prompt_id, errors)
+                
+                if not refinement:
+                    logger.warning("Could not generate refinement")
+                    break
+                
+                # Create refined prompt
+                new_prompt_id = await self._create_refined_prompt(
+                    current_prompt_id, refinement
                 )
-                test_runs.append(result)
+                
+                # Evaluate refined prompt
+                new_score = await self._evaluate_prompt(
+                    new_prompt_id, test_case_ids, model_config
+                )
+                
+                iteration_history.append({
+                    "iteration": iteration + 1,
+                    "prompt_id": new_prompt_id,
+                    "score": new_score,
+                    "errors_addressed": len(errors),
+                    "refinement": refinement
+                })
+                
+                current_prompt_id = new_prompt_id
+                
+                # Check if errors are decreasing
+                if len(errors) <= 2:
+                    logger.info("Few errors remaining, stopping refinement")
+                    break
             
-            # Analyze errors
-            errors = self._analyze_errors(test_runs)
+            # Calculate final improvement
+            initial_score = await self._evaluate_prompt(prompt_id, test_case_ids, model_config)
+            final_score = iteration_history[-1]["score"] if iteration_history else initial_score
             
-            if not errors:
-                logger.info("No errors found, optimization complete")
-                break
-            
-            # Generate refinement based on errors
-            refinement = await self._generate_refinement(current_prompt_id, errors)
-            
-            if not refinement:
-                logger.warning("Could not generate refinement")
-                break
-            
-            # Create refined prompt
-            new_prompt_id = await self._create_refined_prompt(
-                current_prompt_id, refinement
-            )
-            
-            # Evaluate refined prompt
-            new_score = await self._evaluate_prompt(
-                new_prompt_id, test_case_ids, model_config
-            )
-            
-            iteration_history.append({
-                "iteration": iteration + 1,
-                "prompt_id": new_prompt_id,
-                "score": new_score,
-                "errors_addressed": len(errors),
-                "refinement": refinement
-            })
-            
-            current_prompt_id = new_prompt_id
-            
-            # Check if errors are decreasing
-            if len(errors) <= 2:
-                logger.info("Few errors remaining, stopping refinement")
-                break
-        
-        # Calculate final improvement
-        initial_score = await self._evaluate_prompt(prompt_id, test_case_ids, model_config)
-        final_score = iteration_history[-1]["score"] if iteration_history else initial_score
-        
-        return {
-            "initial_prompt_id": prompt_id,
-            "optimized_prompt_id": current_prompt_id,
-            "initial_score": initial_score,
-            "final_score": final_score,
-            "improvement": final_score - initial_score,
-            "iterations": len(iteration_history),
-            "iteration_history": iteration_history
-        }
+            return {
+                "initial_prompt_id": prompt_id,
+                "optimized_prompt_id": current_prompt_id,
+                "initial_score": initial_score,
+                "final_score": final_score,
+                "improvement": final_score - initial_score,
+                "iterations": len(iteration_history),
+                "iteration_history": iteration_history
+            }
     
     def _analyze_errors(self, test_runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Analyze test runs to identify error patterns."""

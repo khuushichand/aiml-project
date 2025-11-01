@@ -6,11 +6,11 @@ This document outlines the design for refactoring the current synchronous audio 
 
 ## Implementation Status (WIP)
 
-- MVP fan‑out is implemented using the existing Jobs module under the `audio` domain.
+- MVP fan-out is implemented using the existing Jobs module under the `audio` domain.
 - New endpoints: Audio Jobs API (`/api/v1/audio/jobs/...`) for submit/status/admin list/summary.
-- An in‑process Audio Jobs worker is wired to app startup behind `AUDIO_JOBS_WORKER_ENABLED` and supports stage chaining:
+- An in-process Audio Jobs worker is wired to app startup behind `AUDIO_JOBS_WORKER_ENABLED` and supports stage chaining:
   `audio_download → audio_convert → audio_transcribe → audio_chunk → audio_analyze → audio_store`.
-- File‑based STT remains available synchronously at `/api/v1/audio/transcriptions`; real‑time STT remains via WebSocket (`/api/v1/audio/stream/transcribe`).
+- File-based STT remains available synchronously at `/api/v1/audio/transcriptions`; real-time STT remains via WebSocket (`/api/v1/audio/stream/transcribe`).
 - The Jobs-based pipeline complements, not replaces, the synchronous and WS paths.
 
 ### Practical Migration Path (suggested)
@@ -20,7 +20,7 @@ This document outlines the design for refactoring the current synchronous audio 
 - Add a thin “AudioJobManager” wrapper that emits stage tasks to the Jobs table and reuses the existing leasing/renewal patterns.
 
 2) Phase 1: Implement workers as FastAPI background tasks (single process)
-- Status: Completed. In‑process worker polls the Jobs table; stage boundaries and retries are handled via Jobs.
+- Status: Completed. In-process worker polls the Jobs table; stage boundaries and retries are handled via Jobs.
 - Next: add a dedicated GPU worker process/container for `audio_transcribe` under a separate deployment unit.
 
 3) Phase 2: Move heavy stages to separate worker processes/containers

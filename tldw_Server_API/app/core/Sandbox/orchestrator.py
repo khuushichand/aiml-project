@@ -243,12 +243,6 @@ class SandboxOrchestrator:
         with self._lock:
             return self._enqueue_index.get(run_id)
 
-
-class QueueFull(Exception):
-    def __init__(self, retry_after: int = 30) -> None:
-        super().__init__("queue_full")
-        self.retry_after = int(retry_after)
-
     # -----------------
     # Lookups (stubs)
     # -----------------
@@ -480,3 +474,9 @@ class QueueFull(Exception):
         except Exception as e:
             logger.debug(f"store.count_runs failed: {e}")
             return 0
+
+
+class QueueFull(Exception):
+    def __init__(self, retry_after: int = 30) -> None:
+        super().__init__("queue_full")
+        self.retry_after = int(retry_after)

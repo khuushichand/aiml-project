@@ -12,8 +12,8 @@ Sizing and tuning guidance for SQLite and PostgreSQL. See the full guide at `../
 ## PostgreSQL
 
 - Pooling: size min/max pool, lifetime, and idle timeouts to match workload.
-- Indexes: ensure unique `(run_id, event_seq)`; add GIN on `workflow_events.payload_json` (v3); B‑tree on `(tenant_id, status, created_at)`.
-- Autovacuum: keep aggressive for high‑churn `workflow_events`.
+- Indexes: ensure unique `(run_id, event_seq)`; add GIN on `workflow_events.payload_json` (v3); B-tree on `(tenant_id, status, created_at)`.
+- Autovacuum: keep aggressive for high-churn `workflow_events`.
 
 ## Engine & Queues
 

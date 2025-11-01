@@ -281,7 +281,7 @@ class BaseChunkingStrategy(ABC):
             ValueError: If parameters are invalid
         
         Notes:
-            This method performs validation only. Implementations must re‑clamp
+            This method performs validation only. Implementations must re-clamp
             `overlap` at the strategy level to ensure forward progress, i.e.,
             when `overlap >= max_size` set `overlap = max_size - 1` before
             windowing. Do not rely on this helper to mutate caller state.

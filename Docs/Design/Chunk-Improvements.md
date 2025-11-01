@@ -5,21 +5,21 @@
   - Reliable filtering by `chunk_type` (text, table, list, code, media)
   - Precise citation and UI highlighting using offsets/page/timestamps
   - Cleaner hierarchy context (`ancestry_titles`, `section_path`)
-  - Compact, JSON‑safe payloads for Chroma while keeping heavy details in SQL
+  - Compact, JSON-safe payloads for Chroma while keeping heavy details in SQL
 
 ## Scope
 - Map external “Block” models to tldw_server metadata keys
 - Extend chunker outputs with normalized fields (plaintext first)
-- Persist plaintext chunks and enable chunk‑level FTS search
+- Persist plaintext chunks and enable chunk-level FTS search
 - Ensure RAG pipeline can filter and surface new fields
-- Backfill/migrate minimal metadata for existing embeddings (best‑effort)
+- Backfill/migrate minimal metadata for existing embeddings (best-effort)
 
-Non‑Goals
+Non-Goals
 - Replacing current chunking strategies
 - Rewriting the vector store or DB schema
 - Moving large binary/geometry metadata into Chroma
 
-## Current State (Relevant Touch‑Points)
+## Current State (Relevant Touch-Points)
 - Hierarchical chunk metadata produced in chunker:
   - `ancestry_titles`, `section_path`, `paragraph_kind`, offsets
   - File: `tldw_Server_API/app/core/Chunking/chunker.py:361`
@@ -36,11 +36,11 @@ Non‑Goals
 
 ## Proposed Metadata (Normalized)
 
-Top‑level (stored in Chroma metadata):
-- `media_id: str` — lineage
+Top-level (stored in Chroma metadata):
+- `media_id: str` - lineage
 - `file_name: str`
 - `chunk_index: int`, `total_chunks: int`
-- `start_char: int?`, `end_char: int?` — text offsets
+- `start_char: int?`, `end_char: int?` - text offsets
 - `chunk_type: "text"|"table"|"list"|"code"|"media"|"heading"`
 - `section_path: str?`, `ancestry_titles: list[str]?`
 - `language: str?`
@@ -75,7 +75,7 @@ Heavier or verbose fields (images, full table structures, long annotations) stay
 - Always set `chunk_type` to unlock existing filter support.
 - Offsets (`start_char`, `end_char`) align with RAG `Document` for precise citation rendering.
 - When contextual chunking is enabled, also store `context_header` and `contextual_summary_ref`.
-- FTS‑first emphasis: plaintext chunk storage + FTS drives retrieval; vector search remains optional and secondary.
+- FTS-first emphasis: plaintext chunk storage + FTS drives retrieval; vector search remains optional and secondary.
 
 ## Configuration
 - Default FTS granularity can be set globally:
@@ -112,22 +112,22 @@ Tests:
 - Update/extend chunking tests to assert `chunk_type` presence
 
 ### Stage 2.5: Plaintext Chunk Persistence + FTS (Primary)
-Goal: Persist normalized plaintext chunks and enable chunk‑level FTS search.
+Goal: Persist normalized plaintext chunks and enable chunk-level FTS search.
 Success Criteria:
 - `UnvectorizedMediaChunks` receives records with `chunk_type`, `start_char`, `end_char`, and compact `metadata` JSON
-- Optionally, a chunk‑level FTS virtual table exists and is populated (or a retrieval path that searches chunk text directly)
-- RAG retrieval can run FTS on chunk text (media‑level remains available)
+- Optionally, a chunk-level FTS virtual table exists and is populated (or a retrieval path that searches chunk text directly)
+- RAG retrieval can run FTS on chunk text (media-level remains available)
 Changes:
-- Use `MediaDatabase.update_media(..., chunks=[...])` to persist chunks (auto‑inserts into `UnvectorizedMediaChunks`)
+- Use `MediaDatabase.update_media(..., chunks=[...])` to persist chunks (auto-inserts into `UnvectorizedMediaChunks`)
   - File: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:3305`
-- Add a minimal worker/utility to (re)build chunk‑level FTS if adopted, e.g.,
+- Add a minimal worker/utility to (re)build chunk-level FTS if adopted, e.g.,
   - `CREATE VIRTUAL TABLE IF NOT EXISTS unvectorized_chunks_fts USING fts5(chunk_text, media_id UNINDEXED, chunk_index UNINDEXED, content='UnvectorizedMediaChunks', content_rowid='id');`
   - After inserts, run `INSERT INTO unvectorized_chunks_fts(unvectorized_chunks_fts) VALUES('rebuild');` or maintain via triggers.
-- Retrieval: extend `MediaDBRetriever` or add `MediaChunkFTSRetriever` to query chunk‑level FTS when `fts_level='chunk'`.
+- Retrieval: extend `MediaDBRetriever` or add `MediaChunkFTSRetriever` to query chunk-level FTS when `fts_level='chunk'`.
 - API: expose a parameter (e.g., `fts_level: 'media'|'chunk'`) in RAG unified requests (default 'media').
 Tests:
 - Integration test: persisting chunks writes rows into `UnvectorizedMediaChunks` with correct fields
-- FTS test: a query finds the correct chunk(s) via chunk‑level FTS and returns mapped `Document` with metadata
+- FTS test: a query finds the correct chunk(s) via chunk-level FTS and returns mapped `Document` with metadata
 
 ### Stage 3 (Optional): Embedding Metadata Enrichment
 Goal: Upsert normalized metadata to Chroma consistently.
@@ -142,7 +142,7 @@ Files:
 Tests:
 - Integration test: process_and_store_content produces metadatas with `chunk_type`
 
-### Stage 4: RAG Retrieval & Filtering (FTS‑first)
+### Stage 4: RAG Retrieval & Filtering (FTS-first)
 Goal: Leverage `chunk_type` and surfaces citation/location in responses.
 Success Criteria:
 - `chunk_type_filter` works against enriched metadata
@@ -154,8 +154,8 @@ Files:
 - `tldw_Server_API/app/core/RAG/rag_service/database_retrievers.py:236`
 - `tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:835`
 Tests:
-- End‑to‑end RAG test validates filtering and citation fields in results
-- End‑to‑end test for `fts_level='chunk'` returns chunk‑granular matches
+- End-to-end RAG test validates filtering and citation fields in results
+- End-to-end test for `fts_level='chunk'` returns chunk-granular matches
 
 ### Stage 5: Backfill (Optional)
 Goal: Opportunistic metadata enrichment for existing collections.
@@ -164,12 +164,12 @@ Success Criteria:
 Changes:
 - Add a maintenance script that scans collections and updates metadatas in place (guarded and idempotent)
 Tests:
-- Dry‑run mode test verifying planned updates without mutation
+- Dry-run mode test verifying planned updates without mutation
 
 ## Test Plan
 - Unit: adapter mapping, metadata models, hierarchical flattening chunk_type
 - Integration: plaintext persistence writes rows; FTS queries return expected chunks; RAG filter returns only requested `chunk_type`
-- Property tests: metadata keys remain JSON‑safe, no large payloads in Chroma
+- Property tests: metadata keys remain JSON-safe, no large payloads in Chroma
 
 ## Migration / Compatibility
 - New fields are additive; existing clients unaffected
@@ -179,12 +179,12 @@ Tests:
 ## Metrics & Logging
 - Observe proportion of chunks with `chunk_type`
 - Track average metadata size per upsert
-- Log citation fields presence for multi‑modal sources
+- Log citation fields presence for multi-modal sources
 
 ## Risks & Mitigations
 - Chroma metadata bloat → keep fields compact; move heavy data to SQL
 - Inconsistent `chunk_type` from sources → normalize via adapter and chunker
-- PDF bbox variability → constrain to 4‑point quads only
+- PDF bbox variability → constrain to 4-point quads only
 
 ## Open Questions
 - Do we want a dedicated UI overlay for table cell/row citations?

@@ -286,3 +286,18 @@ def test_channel_uppercase_videos_with_query_normalizes(client_with_user: TestCl
     assert r.status_code == 200, r.text
     assert r.headers.get("X-YouTube-Normalized") == "1"
     assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?channel_id=UCXYZZ"
+
+
+def test_channel_http_no_www_normalizes_to_https(client_with_user: TestClient):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "YT No WWW",
+            "url": "http://youtube.com/channel/UC123NO",
+            "source_type": "rss",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("X-YouTube-Normalized") == "1"
+    assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?channel_id=UC123NO"

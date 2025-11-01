@@ -8,7 +8,7 @@ Provides per-user tiered limits for:
 - per-request max file size
 
 Backed by the AuthNZ database via DatabasePool for durable daily minute tracking.
-In‑process maps are used for concurrency caps (MVP, single-process safety).
+In-process maps are used for concurrency caps (MVP, single-process safety).
 """
 
 from __future__ import annotations
@@ -74,10 +74,10 @@ def _get_stream_ttl_seconds() -> int:
     
     Checks for a value in this order: the AUDIO_STREAM_TTL_SECONDS environment variable, the
     Audio-Quota stream_ttl_seconds config setting, then a hard default of 120. The resulting
-    value is clamped to the inclusive range 30–3600.
+    value is clamped to the inclusive range 30-3600.
     
     Returns:
-        int: TTL in seconds (clamped to 30–3600).
+        int: TTL in seconds (clamped to 30-3600).
     """
     # 1) Environment variable override
     val_env = os.getenv("AUDIO_STREAM_TTL_SECONDS")

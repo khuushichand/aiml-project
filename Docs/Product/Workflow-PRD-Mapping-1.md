@@ -1,6 +1,6 @@
-# Workflows v0.1/v0.2 – PRD Mapping to Code
+# Workflows v0.1/v0.2 - PRD Mapping to Code
 
-This document maps the high‑level PRD (Workflows-PRD-1.md) to concrete files, modules, and endpoints implemented in this repository. It highlights what is in place now, what is intentionally stubbed for v0.1, and what remains TODO.
+This document maps the high-level PRD (Workflows-PRD-1.md) to concrete files, modules, and endpoints implemented in this repository. It highlights what is in place now, what is intentionally stubbed for v0.1, and what remains TODO.
 
 ## Scope Implemented (current)
 
@@ -48,7 +48,7 @@ This document maps the high‑level PRD (Workflows-PRD-1.md) to concrete files, 
 
 - HTTP endpoints use `get_request_user` (single-user API key and multi-user JWT modes).
 - Tenant isolation enforced for list/get definition, get run, events, and artifacts.
-- WS auth: JWT verification and run‑level authorization enforced (subject must match `run.user_id`).
+- WS auth: JWT verification and run-level authorization enforced (subject must match `run.user_id`).
 - Egress protections: `is_url_allowed` for webhooks and HTTP ingest (allowlist + private IP block). Webhooks support HMAC signing.
 
 ## Observability
@@ -68,7 +68,7 @@ This document maps the high‑level PRD (Workflows-PRD-1.md) to concrete files, 
 
 - `workflows`: definition storage with versioning, soft delete.
 - `workflow_runs`: lifecycle and snapshot fields, plus optional `tokens_input|tokens_output|cost_usd`.
-- `workflow_events`: append‑only event log with `event_seq` and `created_at`.
+- `workflow_events`: append-only event log with `event_seq` and `created_at`.
 - `workflow_step_runs`: includes `attempt`, leases/heartbeat, and subprocess fields (`pid|pgid|workdir|stdout|stderr`).
 - `workflow_artifacts`: artifact metadata per run/step (v0.2 surface).
 

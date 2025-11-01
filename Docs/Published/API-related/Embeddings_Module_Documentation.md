@@ -16,21 +16,21 @@
 
 ## Overview
 
-The Embeddings Module provides a unified interface for generating text embeddings across multiple providers with built‑in caching, optional rate limiting, resource management, and observability. Today the production path supports OpenAI and HuggingFace; the core engine also supports ONNX (optimum + onnxruntime) and a Local API mode. Additional providers (Cohere, Google, Mistral, Voyage) are defined in configuration and provider resolution but are not yet fully integrated end‑to‑end in the embedding engine.
+The Embeddings Module provides a unified interface for generating text embeddings across multiple providers with built-in caching, optional rate limiting, resource management, and observability. Today the production path supports OpenAI and HuggingFace; the core engine also supports ONNX (optimum + onnxruntime) and a Local API mode. Additional providers (Cohere, Google, Mistral, Voyage) are defined in configuration and provider resolution but are not yet fully integrated end-to-end in the embedding engine.
 
 ### Key Features
-- OpenAI‑compatible synchronous API with circuit breaker and resilient connection handling
-- Token‑array inputs supported (single `List[int]` or batch `List[List[int]]`)
-- TTL‑based caching with background cleanup and Prometheus metrics
+- OpenAI-compatible synchronous API with circuit breaker and resilient connection handling
+- Token-array inputs supported (single `List[int]` or batch `List[List[int]]`)
+- TTL-based caching with background cleanup and Prometheus metrics
 - Provider fallback chain with model mapping and response headers (`X-Embeddings-Provider`, `X-Embeddings-Fallback-From`)
-- Dimension policy for non‑native sizes (`reduce`, `pad`, `ignore`) with `X-Embeddings-Dimensions-Policy`
+- Dimension policy for non-native sizes (`reduce`, `pad`, `ignore`) with `X-Embeddings-Dimensions-Policy`
 - Resource management and model caching (LRU eviction) in the core engine
 - Security hardening with input validation and audit logging
 - Optional rate limiting (disabled by default; enable with `EMBEDDINGS_RATE_LIMIT=on`)
 
 ### Current Version
 - Production System: `embeddings_v5_production_enhanced.py` (circuit breaker, caching, metrics)
-- Future System: Worker‑based scale‑out architecture (implemented under `/app/core/Embeddings/`, not yet exposed via API routes)
+- Future System: Worker-based scale-out architecture (implemented under `/app/core/Embeddings/`, not yet exposed via API routes)
 
 ---
 
@@ -133,11 +133,11 @@ app/core/Embeddings/
 
 Notes:
 - Inputs may be a string, list of strings, or token arrays (`List[int]` or `List[List[int]]`). Token arrays are decoded to text using the model’s tokenizer when available or `cl100k_base` fallback; usage accounting uses the supplied token counts.
-- Up to 2048 inputs per request; per‑model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
-- Dimensions: For OpenAI `text-embedding-3-*`, the `dimensions` parameter is honored by the upstream API. For HuggingFace/ONNX/Local backends, `dimensions` is applied as a post‑processing step (policy: `reduce` slices to first‑N, `pad` zero‑pads, `ignore` leaves native size). Configure via `EMBEDDINGS_DIMENSION_POLICY`.
-- Encoding: Set `encoding_format` to `"base64"` to receive base64‑encoded vectors; otherwise vectors are returned as normalized float arrays.
-- Provider selection: set header `x-provider: openai|huggingface|onnx|local_api`, or prefix the model `provider:model` (e.g., `huggingface:sentence-transformers/all-MiniLM-L6-v2`). If omitted, the server auto‑detects from the model name or defaults to OpenAI.
-- Authentication: Multi‑user mode uses `Authorization: Bearer <JWT>`. In single‑user mode the `X-API-KEY: <key>` header is required (the `Authorization` header alone is not sufficient).
+- Up to 2048 inputs per request; per-model token limits are enforced with a dedicated error payload (`{"error":"input_too_long", ...}`).
+- Dimensions: For OpenAI `text-embedding-3-*`, the `dimensions` parameter is honored by the upstream API. For HuggingFace/ONNX/Local backends, `dimensions` is applied as a post-processing step (policy: `reduce` slices to first-N, `pad` zero-pads, `ignore` leaves native size). Configure via `EMBEDDINGS_DIMENSION_POLICY`.
+- Encoding: Set `encoding_format` to `"base64"` to receive base64-encoded vectors; otherwise vectors are returned as normalized float arrays.
+- Provider selection: set header `x-provider: openai|huggingface|onnx|local_api`, or prefix the model `provider:model` (e.g., `huggingface:sentence-transformers/all-MiniLM-L6-v2`). If omitted, the server auto-detects from the model name or defaults to OpenAI.
+- Authentication: Multi-user mode uses `Authorization: Bearer <JWT>`. In single-user mode the `X-API-KEY: <key>` header is required (the `Authorization` header alone is not sufficient).
 
 **Error Responses:**
 - `400 Bad Request`: Invalid input or parameters
@@ -225,10 +225,10 @@ Preload or prepare a model.
 
 ### ChromaDB Collection Management
 
-- `POST /api/v1/embeddings/collections` — Create a collection (auto‑detects embedding dimension)
-- `GET /api/v1/embeddings/collections` — List collections
-- `DELETE /api/v1/embeddings/collections/{collection_name}` — Delete a collection
-- `GET /api/v1/embeddings/collections/{collection_name}/stats` — Collection size and embedding dimension
+- `POST /api/v1/embeddings/collections` - Create a collection (auto-detects embedding dimension)
+- `GET /api/v1/embeddings/collections` - List collections
+- `DELETE /api/v1/embeddings/collections/{collection_name}` - Delete a collection
+- `GET /api/v1/embeddings/collections/{collection_name}/stats` - Collection size and embedding dimension
 
 ---
 
@@ -363,7 +363,7 @@ Security events are logged to `logs/embeddings_audit.jsonl`:
 
 ### Rate Limiting
 
-Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`), the create‑embeddings endpoint applies a limit of `5/second` using SlowAPI. Adjust the limit string in code if you need different rates.
+Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`), the create-embeddings endpoint applies a limit of `5/second` using SlowAPI. Adjust the limit string in code if you need different rates.
 
 ---
 
@@ -371,13 +371,13 @@ Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`),
 
 ### Adding a New Provider (engine path)
 
-The current engine implements OpenAI, HuggingFace, ONNX, and Local API. Additional providers (Cohere, Google, Mistral, Voyage) are scaffolded in configuration but not yet wired end‑to‑end in the engine.
+The current engine implements OpenAI, HuggingFace, ONNX, and Local API. Additional providers (Cohere, Google, Mistral, Voyage) are scaffolded in configuration but not yet wired end-to-end in the engine.
 
-To add a new provider end‑to‑end:
+To add a new provider end-to-end:
 
 1. Extend the model config types in `Embeddings_Create.py` (add a new `BaseModelCfg` subclass if needed).
 2. Add a provider branch in `create_embeddings_batch(...)` to call the new backend and return `List[List[float]]`.
-3. Update `build_provider_config(...)` in `embeddings_v5_production_enhanced.py` to construct the provider‑specific config.
+3. Update `build_provider_config(...)` in `embeddings_v5_production_enhanced.py` to construct the provider-specific config.
 4. Optionally update provider detection in `guess_provider_for_model(...)` and model mapping in `map_model_for_provider(...)`.
 5. Wire any keys via `Config_Files/config.txt` (merged under `EMBEDDING_CONFIG`).
 
@@ -473,7 +473,7 @@ embedding_requests_total{provider="openai",model="text-embedding-3-small",status
 embedding_cache_hits_total{provider="openai",model="text-embedding-3-small"} 6789
 embedding_cache_size 5678
 
-# In‑flight
+# In-flight
 active_embedding_requests 2
 
 # Latency (histogram)

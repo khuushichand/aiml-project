@@ -1,4 +1,4 @@
-# Watchlists Job Filters – Schema and Examples (v0.1)
+# Watchlists Job Filters - Schema and Examples (v0.1)
 
 Status: In Progress
 Owners: Watchlists Backend + WebUI
@@ -96,8 +96,8 @@ Flag suspicious terms:
 
 ## API Endpoints (planned)
 
-- `PATCH /api/v1/watchlists/jobs/{id}/filters` — replace full set
-- `POST /api/v1/watchlists/jobs/{id}/filters:add` — append one or more
+- `PATCH /api/v1/watchlists/jobs/{id}/filters` - replace full set
+- `POST /api/v1/watchlists/jobs/{id}/filters:add` - append one or more
 
 Refer to: `Docs/Product/Watchlists_Subscriptions_Bridge_PRD.md` for the full Watchlists bridge and feature scope.
 

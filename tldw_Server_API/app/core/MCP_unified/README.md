@@ -102,7 +102,7 @@ MCP_unified/
 - Enforce client certs by enabling `MCP_CLIENT_CERT_REQUIRED=true`
 - Configure the header asserted by your proxy (default `x-ssl-client-verify`)
 - Set `MCP_CLIENT_CERT_HEADER_VALUE` to the exact success sentinel (e.g., `SUCCESS`)
-- Only trusted proxies may assert this header — set `MCP_TRUSTED_PROXY_IPS` to your proxy CIDRs
+- Only trusted proxies may assert this header - set `MCP_TRUSTED_PROXY_IPS` to your proxy CIDRs
 - X-Forwarded-For is honored only from trusted proxies (`MCP_TRUST_X_FORWARDED=true` if desired)
 
 Note: In test mode (`TEST_MODE=true`) the harness peer is treated as trusted for convenience.
@@ -168,7 +168,7 @@ ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
 - `POST /api/v1/mcp/request` - Process MCP request
 - `GET /api/v1/mcp/status` - Server status
 - `GET /api/v1/mcp/metrics` - Server metrics (admin only)
-- `GET /api/v1/mcp/tools` - List available tools (auth required; RBAC‑filtered)
+- `GET /api/v1/mcp/tools` - List available tools (auth required; RBAC-filtered)
 - `POST /api/v1/mcp/tools/execute` - Execute tool (auth required)
 - `GET /api/v1/mcp/health` - Health check
 
@@ -176,7 +176,7 @@ ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
 - Reduce discovery size by grouping tools into catalogs (global, org, team).
 - Filtering:
   - HTTP: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>`
-  - JSON‑RPC: `tools/list` with `{ catalog?: string, catalog_id?: number }`
+  - JSON-RPC: `tools/list` with `{ catalog?: string, catalog_id?: number }`
 - Name resolution respects caller context with precedence `team > org > global`; `catalog_id` takes precedence.
 - Responses include `canExecute` per tool; catalog membership does not grant execution rights.
 - See `Docs/MCP/mcp_tool_catalogs.md` for admin/manager APIs to create/manage catalogs.
@@ -186,7 +186,7 @@ ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
 - Set secure secrets: `MCP_JWT_SECRET`, `MCP_API_KEY_SALT`
 - Enforce WS auth: `MCP_WS_AUTH_REQUIRED=true`
 - Configure `MCP_WS_ALLOWED_ORIGINS`
-- Keep WS query‑parameter auth disabled (default): `MCP_WS_ALLOW_QUERY_AUTH=0`; use headers/subprotocol instead
+- Keep WS query-parameter auth disabled (default): `MCP_WS_ALLOW_QUERY_AUTH=0`; use headers/subprotocol instead
 - If using mTLS via proxy: set `MCP_CLIENT_CERT_REQUIRED=true`, `MCP_CLIENT_CERT_HEADER_VALUE`, and `MCP_TRUSTED_PROXY_IPS`
 - Keep rate limiting enabled; configure Redis for multi-instance
 - Do not use wildcard CORS in production
@@ -313,10 +313,10 @@ Recommended hardening steps for Internet-exposed deployments:
 - Restrict module autoloads
   - Only classes under `tldw_Server_API.app.core.MCP_unified.modules.implementations` are allowed when auto-loading.
 - Write tools safety & validation (Security knobs)
-  - `MCP_DISABLE_WRITE_TOOLS=0|1` — If set to `1`, the protocol blocks all write-capable tools (category `ingestion`/`management`).
-  - `MCP_VALIDATE_INPUT_SCHEMA=0|1` — Validate tool `inputSchema` at the protocol layer (required fields, primitive types, unknown fields).
-  - `MCP_IDEMPOTENCY_TTL_SECONDS` — TTL for protocol-level idempotency cache for write tools (default: 300s).
-  - `MCP_IDEMPOTENCY_CACHE_SIZE` — Max entries for idempotency cache (LRU, default: 512).
+  - `MCP_DISABLE_WRITE_TOOLS=0|1` - If set to `1`, the protocol blocks all write-capable tools (category `ingestion`/`management`).
+  - `MCP_VALIDATE_INPUT_SCHEMA=0|1` - Validate tool `inputSchema` at the protocol layer (required fields, primitive types, unknown fields).
+  - `MCP_IDEMPOTENCY_TTL_SECONDS` - TTL for protocol-level idempotency cache for write tools (default: 300s).
+  - `MCP_IDEMPOTENCY_CACHE_SIZE` - Max entries for idempotency cache (LRU, default: 512).
   - Client hint: pass `idempotencyKey` in JSON-RPC `tools/call` params to dedupe writes.
 - Demo auth (dev only)
   - `MCP_ENABLE_DEMO_AUTH` is for development/testing. If enabled in non-debug environments, the server logs a loud warning.
@@ -343,9 +343,9 @@ Recommended hardening steps for Internet-exposed deployments:
 
 Configure WS behavior to protect the server from idle and bursty sessions:
 
-- `MCP_WS_IDLE_TIMEOUT_SECONDS` (default: 300) — If no activity for this many seconds, the server closes the WS with code 1001 (Idle timeout).
-- `MCP_WS_SESSION_RATE_COUNT` (default: 120) — Max JSON-RPC requests allowed per session over the configured window.
-- `MCP_WS_SESSION_RATE_WINDOW_SECONDS` (default: 60) — Sliding window in seconds used for per-session rate counting.
+- `MCP_WS_IDLE_TIMEOUT_SECONDS` (default: 300) - If no activity for this many seconds, the server closes the WS with code 1001 (Idle timeout).
+- `MCP_WS_SESSION_RATE_COUNT` (default: 120) - Max JSON-RPC requests allowed per session over the configured window.
+- `MCP_WS_SESSION_RATE_WINDOW_SECONDS` (default: 60) - Sliding window in seconds used for per-session rate counting.
 
 Notes
 - When the session rate is exceeded, the server sends a JSON-RPC error (-32002) and closes the connection with code 1013 (session rate limit exceeded).
@@ -416,11 +416,11 @@ Scrape MCP metrics at `GET /api/v1/mcp/metrics/prometheus` (text exposition form
 - Cache hit/miss rates
 - System resource usage
  - Validation metrics:
-   - `mcp_tool_invalid_params_total{module,tool}` — schema/validator failures
-   - `mcp_tool_validator_missing_total{module,tool}` — write tools missing custom validators
+   - `mcp_tool_invalid_params_total{module,tool}` - schema/validator failures
+   - `mcp_tool_validator_missing_total{module,tool}` - write tools missing custom validators
  - Idempotency metrics:
-   - `mcp_idempotency_hits_total{module,tool}` — protocol-level idempotency cache hits
-   - `mcp_idempotency_misses_total{module,tool}` — protocol-level idempotency cache misses
+   - `mcp_idempotency_hits_total{module,tool}` - protocol-level idempotency cache hits
+   - `mcp_idempotency_misses_total{module,tool}` - protocol-level idempotency cache misses
 
 Security: The Prometheus endpoint is gated by default (admin required). Only set `MCP_PROMETHEUS_PUBLIC=1` behind an internal network or ingress with auth.
 
@@ -433,17 +433,17 @@ Security: The Prometheus endpoint is gated by default (admin required). Only set
 Tune module behavior and resilience without changing code.
 
 - Concurrency guard (per module)
-  - `ModuleConfig.max_concurrent` — Maximum concurrent operations per module (default: 20). Set to 0 to disable the guard.
+  - `ModuleConfig.max_concurrent` - Maximum concurrent operations per module (default: 20). Set to 0 to disable the guard.
 - Circuit breaker backoff (per module)
-  - `ModuleConfig.circuit_breaker_threshold` — Failures before opening (default: 5)
-  - `ModuleConfig.circuit_breaker_timeout` — Initial open window in seconds (default: 60)
-  - `ModuleConfig.circuit_breaker_backoff_factor` — Multiplier applied when re‑opening after half‑open failure (default: 2.0)
-  - `ModuleConfig.circuit_breaker_max_timeout` — Cap for backoff window (default: 300)
+  - `ModuleConfig.circuit_breaker_threshold` - Failures before opening (default: 5)
+  - `ModuleConfig.circuit_breaker_timeout` - Initial open window in seconds (default: 60)
+  - `ModuleConfig.circuit_breaker_backoff_factor` - Multiplier applied when re-opening after half-open failure (default: 2.0)
+  - `ModuleConfig.circuit_breaker_max_timeout` - Cap for backoff window (default: 300)
 
 How it works
-- When the breaker opens and the timeout elapses, the next call enters half‑open state (one probe).
+- When the breaker opens and the timeout elapses, the next call enters half-open state (one probe).
 - If the probe succeeds, the breaker heals and the timeout resets to baseline.
-- If the probe fails, the breaker re‑opens with an exponentially increased timeout (capped).
+- If the probe fails, the breaker re-opens with an exponentially increased timeout (capped).
 
 ## 🛡️ Security Checklist
 
@@ -481,9 +481,9 @@ How it works
 Part of tldw_server project - see main LICENSE file.
 ### Authorization (RBAC)
 
-MCP Unified now uses the project's AuthNZ RBAC (roles, permissions, overrides). Tool execution uses fine‑grained permissions:
+MCP Unified now uses the project's AuthNZ RBAC (roles, permissions, overrides). Tool execution uses fine-grained permissions:
 
-- Per‑tool permission: `tools.execute:<tool_name>`
+- Per-tool permission: `tools.execute:<tool_name>`
 - Wildcard permission: `tools.execute:*`
 
 Admin endpoints for managing tool permissions:

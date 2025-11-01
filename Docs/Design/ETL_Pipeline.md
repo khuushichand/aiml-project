@@ -132,7 +132,7 @@ Confluence
 
 
  	
-llm_trw 26 minutes ago | unvote | prev | next [–]
+llm_trw 26 minutes ago | unvote | prev | next [-]
 
 This is using exactly the wrong tools at every stage of the OCR pipeline, and the cost is astronomical as a result.
 
@@ -144,7 +144,7 @@ You then feed each box of text to a regular OCR model, also gives you a confiden
 
 You feed each image box into a multimodal model to describe what the image is about.
 
-For tables, use a specialist model that does nothing but extract tables—models like GridFormer that aren't hyped to hell and back.
+For tables, use a specialist model that does nothing but extract tables-models like GridFormer that aren't hyped to hell and back.
 
 You then stitch everything together in an XML file because Markdown is for human consumption.
 

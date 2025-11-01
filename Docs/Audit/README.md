@@ -1,4 +1,4 @@
-# Unified Audit Service – Developer Guide
+# Unified Audit Service - Developer Guide
 
 This page documents the unified Audit module: event schema, categories, risk scoring, storage, exports, configuration, and recommended usage patterns.
 
@@ -150,10 +150,10 @@ curl -H "X-API-KEY: $KEY" \
 # In-memory JSON or CSV content
 content = await svc.export_events(user_id="42", format="json", max_rows=1000)
 
-# Streaming to file – CSV
+# Streaming to file - CSV
 count = await svc.export_events(user_id="42", format="csv", file_path="/tmp/audit.csv", chunk_size=5000)
 
-# Streaming to file – JSON
+# Streaming to file - JSON
 count = await svc.export_events(user_id="42", format="json", file_path="/tmp/audit.json", chunk_size=5000)
 
 # Streaming JSON generator to client code

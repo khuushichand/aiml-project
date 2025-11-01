@@ -26,7 +26,7 @@ class VLMDetection:
 class VLMResult:
     """Structured result containing detections and any optional text summaries."""
     detections: List[VLMDetection]
-    # Optional textual outputs (e.g., captions) – empty for detectors-only backends
+    # Optional textual outputs (e.g., captions) - empty for detectors-only backends
     texts: Optional[List[str]] = None
     extra: Optional[Dict[str, Any]] = None
 

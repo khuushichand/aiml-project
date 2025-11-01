@@ -116,15 +116,15 @@ This tool is designed for:
 - Character Chat API: `Docs/CHARACTER_CHAT_API_DOCUMENTATION.md`
 
 ### Audio Endpoints
-- `POST /api/v1/audio/speech` — Text-to-Speech (streaming and non-streaming)
-- `GET  /api/v1/audio/voices/catalog` — List available TTS voices (supports `?provider=openai|elevenlabs`)
+- `POST /api/v1/audio/speech` - Text-to-Speech (streaming and non-streaming)
+- `GET  /api/v1/audio/voices/catalog` - List available TTS voices (supports `?provider=openai|elevenlabs`)
 
 #### Recording Settings (TTS & Audio Tabs)
 - The TTS tab (per provider) and the Audio → TTS / File Transcription panels include a collapsible “Recording Settings” section.
 - Use “Max sec” to set a soft cap for microphone recordings; a countdown shows remaining seconds during capture.
 - On the TTS tab, caps persist per provider; in Audio → TTS and File Transcription, caps persist per panel.
 - If a recording is present, it overrides the file input and shows a “Using recorded sample” badge. Click “Clear” to restore file selection.
-- Recommended reference clips: 3–15 seconds, mono, minimal background noise.
+- Recommended reference clips: 3-15 seconds, mono, minimal background noise.
 
 ### OCR Providers
 
@@ -202,7 +202,7 @@ WebUI/
 - Location: Chat → Dictionaries
 - Capabilities:
   - Create/activate/deactivate/delete dictionaries
-  - Add entries (pattern, replacement, type literal/regex, probability 0.0–1.0, enabled, case sensitivity, group, max replacements)
+  - Add entries (pattern, replacement, type literal/regex, probability 0.0-1.0, enabled, case sensitivity, group, max replacements)
   - Inline edit entries and toggle enabled state
   - Filter entries by pattern and type
   - Process sample text through a dictionary with optional token budget and group filter
@@ -240,7 +240,7 @@ When testing the RAG endpoint from the WebUI, you can add the following guardrai
 ```
 
 Notes:
-- The response will include `metadata.hard_citations` (per‑sentence citations with `doc_id` and `start/end` offsets) and `metadata.numeric_fidelity` (present/missing/source_numbers).
+- The response will include `metadata.hard_citations` (per-sentence citations with `doc_id` and `start/end` offsets) and `metadata.numeric_fidelity` (present/missing/source_numbers).
 - In production mode (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the server defaults to enabling numeric fidelity and hard citations; you can still tighten behavior per request.
 
 ### RAG Streaming Tip: Contexts and "Why These Sources"
@@ -255,7 +255,7 @@ The streaming endpoint `POST /api/v1/rag/search/stream` now emits early context 
 {"type":"final_claims", ...}                          // final overlay summary
 ```
 
-- The non‑streaming search (`/api/v1/rag/search`) response includes `metadata.why_these_sources` with:
+- The non-streaming search (`/api/v1/rag/search`) response includes `metadata.why_these_sources` with:
   - `diversity` (unique host/source ratio), `freshness` (recentness portion), `topicality` (normalized score), and `top_contexts` list.
 - In the WebUI RAG tab, you can watch the Response area for the initial `contexts` line to quickly preview which documents are being considered and a lightweight `why` summary.
 
@@ -387,7 +387,7 @@ This module is part of the TLDW Server project and follows the same licensing te
 ---
 
 *Version 1.2.0 - Auto-configuration support for local installations*
-#### RAG Post‑Verification (Adaptive)
+#### RAG Post-Verification (Adaptive)
 
 The RAG tab supports the unified pipeline. To validate answers against evidence and optionally run a bounded repair pass, include these fields in your request JSON (Advanced section → Custom payload), or in your client code:
 
@@ -405,14 +405,14 @@ The RAG tab supports the unified pipeline. To validate answers against evidence 
 ```
 
 Environment toggles:
-- `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) — uses HyDE + multi‑strategy rewrites + diversity during the adaptive pass; set `false` to use a simpler single‑query retrieval.
-- `RAG_ADAPTIVE_TIME_BUDGET_SEC` — optional hard cap (seconds) for the post‑verification phase.
+- `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) - uses HyDE + multi-strategy rewrites + diversity during the adaptive pass; set `false` to use a simpler single-query retrieval.
+- `RAG_ADAPTIVE_TIME_BUDGET_SEC` - optional hard cap (seconds) for the post-verification phase.
 
 When generation is enabled, the response attaches `metadata.post_verification` with `unsupported_ratio`, `total_claims`, `unsupported_count`, `fixed`, and `reason`.
 
-#### RAG Two‑Tier Reranking (Overrides)
+#### RAG Two-Tier Reranking (Overrides)
 
-To enable cost‑aware reranking with cross‑encoder shortlist → LLM rerank and optional per‑request gating overrides, use the RAG tab’s Advanced → Custom payload with the following fields:
+To enable cost-aware reranking with cross-encoder shortlist → LLM rerank and optional per-request gating overrides, use the RAG tab’s Advanced → Custom payload with the following fields:
 
 ```
 {
@@ -424,7 +424,7 @@ To enable cost‑aware reranking with cross‑encoder shortlist → LLM rerank a
   // Optional request-level gating overrides (fall back to env defaults if omitted)
   "rerank_min_relevance_prob": 0.5,
   "rerank_sentinel_margin": 0.15,
-  // Optional corpus namespace for per‑corpus synonyms
+  // Optional corpus namespace for per-corpus synonyms
   "corpus": "my_corpus"
 }
 ```
@@ -447,7 +447,7 @@ Place a JSON file with term → aliases under `Config_Files/Synonyms/<corpus>.js
 Then include `"corpus": "<corpus>"` (or `"index_namespace"`) in your RAG request payload to enrich query rewrites with these aliases.
 
 ### Feedback & Learning Tip
-To enable the learning loop and per‑user personalization while testing from the WebUI, add the following fields to your RAG payload (Advanced → Custom payload):
+To enable the learning loop and per-user personalization while testing from the WebUI, add the following fields to your RAG payload (Advanced → Custom payload):
 
 ```
 {
@@ -457,4 +457,4 @@ To enable the learning loop and per‑user personalization while testing from th
 }
 ```
 
-The WebUI also emits lightweight implicit feedback (click/expand/copy) for the documents in the response list. These signals are stored per‑user under `Databases/user_databases/<user_id>/` to learn simple priors and pairwise preferences for learning‑to‑rank. No sensitive content is sent back to the server beyond the document id and event type.
+The WebUI also emits lightweight implicit feedback (click/expand/copy) for the documents in the response list. These signals are stored per-user under `Databases/user_databases/<user_id>/` to learn simple priors and pairwise preferences for learning-to-rank. No sensitive content is sent back to the server beyond the document id and event type.

@@ -209,7 +209,7 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
 - Get definition: `GET /api/v1/workflows/{workflow_id}` and `GET /api/v1/workflows/{workflow_id}/versions/{version}`
 - Delete definition: `DELETE /api/v1/workflows/{workflow_id}` (soft delete)
 - Run (saved): `POST /api/v1/workflows/{workflow_id}/run?mode=async|sync` (body: inputs)
-- Run (ad-hoc): `POST /api/v1/workflows/run?mode=async|sync` (body: {definition, inputs}) — stricter rate limits; can be disabled via config.
+- Run (ad-hoc): `POST /api/v1/workflows/run?mode=async|sync` (body: {definition, inputs}) - stricter rate limits; can be disabled via config.
   - API gateway limits: Enforce `max_definition_bytes` (default 256 KB), `max_steps` (default 50), and `max_step_config_bytes` (default 32 KB per step). Reject with 413/422. Validate unknown step types are disallowed.
 - Run status: `GET /api/v1/workflows/runs/{run_id}`
 - Run events: `GET /api/v1/workflows/runs/{run_id}/events?since=event_seq` (poll) and `WS /api/v1/workflows/ws?run_id=...` (JWT required)
@@ -218,9 +218,9 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
 - Approve/reject human step: `POST /api/v1/workflows/runs/{run_id}/steps/{step_id}/{approve|reject}` (body: optional edits)
 - (v0.2) Reassign/expire human step: `POST /api/v1/workflows/runs/{run_id}/steps/{step_id}/reassign|expire`
 - Artifacts: `GET /api/v1/workflows/runs/{run_id}/artifacts`
-- Options discovery: `GET /api/v1/workflows/options/chunkers` — returns the chunker registry (names, versions, parameter schemas, defaults) from `Ingestion_Media_Processing`.
+- Options discovery: `GET /api/v1/workflows/options/chunkers` - returns the chunker registry (names, versions, parameter schemas, defaults) from `Ingestion_Media_Processing`.
   - Versioning: Response includes `name`, `versions` (semver), and parameter schemas per version. Workflow definitions must pin `chunker.name` and `chunker.version` exactly in v0.1.
- - Options discovery: `GET /api/v1/workflows/options/chunkers` — returns the chunker registry (names, versions, parameter schemas, defaults) from `Ingestion_Media_Processing`.
+ - Options discovery: `GET /api/v1/workflows/options/chunkers` - returns the chunker registry (names, versions, parameter schemas, defaults) from `Ingestion_Media_Processing`.
  - Options discovery: Reuse `GET /api/v1/rag/capabilities` to populate builder UI with supported search modes, strategies, and defaults; no extra workflows-specific endpoint needed.
 
 ## Schemas (key Pydantic models)
@@ -471,12 +471,12 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
   - sources: ["media_db", "notes", "characters", "chats"] (default: ["media_db"]).
   - search_mode: "fts" | "vector" | "hybrid" (default: "hybrid").
   - hybrid_alpha: Number in [0,1] that blends FTS vs vector in hybrid (default: 0.7).
-  - top_k: Max results (default: 10). min_score: 0.0–1.0 threshold.
+  - top_k: Max results (default: 10). min_score: 0.0-1.0 threshold.
   - expand_query: bool; expansion_strategies: ["acronym", "synonym", "domain", "entity"]. spell_check: bool.
-  - enable_cache: bool; cache_threshold: float (0–1); adaptive_cache: bool.
+  - enable_cache: bool; cache_threshold: float (0-1); adaptive_cache: bool.
   - enable_table_processing: bool; table_method: "markdown" | "html" | "hybrid".
   - Context & hierarchy: include_sibling_chunks: bool; sibling_window: int.
-    - enable_parent_expansion, include_parent_document, parent_max_tokens exist in API but are not wired end‑to‑end in v0.1; sibling inclusion is implemented.
+    - enable_parent_expansion, include_parent_document, parent_max_tokens exist in API but are not wired end-to-end in v0.1; sibling inclusion is implemented.
     - enable_enhanced_chunking and chunk_type_filter are exposed in schema; full pipeline wiring is planned for v0.2.
   - Reranking: enable_reranking: bool; reranking_strategy: "flashrank" | "cross_encoder" | "hybrid" | "none"; rerank_top_k: int.
   - Citations: enable_citations: bool; citation_style: "apa" | "mla" | "chicago" | "harvard" | "ieee"; include_page_numbers: bool.
@@ -520,14 +520,14 @@ Note: `branch`, `tts`, and `transcribe_audio` are targeted for v0.2.
 
 ## Acceptance Criteria
 
-- Engine: Implemented — linear workflows with retries, timeouts, durable checkpoints, leases/heartbeats, and safe resume; pause/cancel semantics enforced.
-- APIs: Implemented — versioned immutable definitions; run lifecycle; retry failed runs; events with `event_seq`; WS with JWT and run-level auth; idempotency key support.
+- Engine: Implemented - linear workflows with retries, timeouts, durable checkpoints, leases/heartbeats, and safe resume; pause/cancel semantics enforced.
+- APIs: Implemented - versioned immutable definitions; run lifecycle; retry failed runs; events with `event_seq`; WS with JWT and run-level auth; idempotency key support.
 - Media ingest: Workflows support all chunking options exposed by `Ingestion_Media_Processing` via a chunker registry (including hierarchical); pass-through `params` validated against registry; outputs include hierarchy links.
 - Chunking registry: Chunker discovery endpoint returns versioned schemas; workflow definitions pin `name` and `version`; engine persists `chunker_version` in outputs.
 - Sync UX: Guided sync runs are re-attachable after disconnect via `run_id` and event replay; no progress lost while waiting for human action.
-- Cancellation: Implemented — subprocess-backed steps record pid/pgid and are terminated via process‑group escalation; non‑killable steps honor cancellation flag and timeouts.
-- Ad-hoc security: Implemented — size/steps/config limits; endpoint can be disabled via config; stricter rate limits applied.
+- Cancellation: Implemented - subprocess-backed steps record pid/pgid and are terminated via process-group escalation; non-killable steps honor cancellation flag and timeouts.
+- Ad-hoc security: Implemented - size/steps/config limits; endpoint can be disabled via config; stricter rate limits applied.
 - RAG: `rag_search` integrates with the unified RAG API: supports FTS/vector/hybrid with `hybrid_alpha`, reranking (flashrank/cross_encoder/hybrid), caching, table processing, citations, and sibling inclusion (`include_sibling_chunks`). Parent expansion/grouped hierarchical returns are targeted for v0.2.
 - Security: Webhook/tool SSRF protections, egress allowlists, HMAC signing, and idempotency headers; CSRF and CSP in WebUI.
-- WebUI: Pending — API/WS ready; run detail timeline, approvals, and live updates supported server-side.
+- WebUI: Pending - API/WS ready; run detail timeline, approvals, and live updates supported server-side.
 - Docs: This PRD and quickstart examples added under Docs/Design when implemented.

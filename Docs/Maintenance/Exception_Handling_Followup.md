@@ -1,10 +1,10 @@
-Exception Handling Follow‑Up (BLE001)
+Exception Handling Follow-Up (BLE001)
 
 Goal
 - Improve observability and safety for broad exception handlers that are intentionally tolerated today (marked with `# noqa: BLE001`).
 - Where feasible, narrow exception scopes or add structured context to logs without changing behavior.
 
-Scope Candidates (non‑exhaustive)
+Scope Candidates (non-exhaustive)
 - tldw_Server_API/app/main.py
   - Import gating for optional routers (audio, tools, workflows, evals, sandbox)
   - Route gating for metrics
@@ -15,7 +15,7 @@ Scope Candidates (non‑exhaustive)
   - Action: keep defensive catches; add debug log with the offending header value when parsing fails.
 
 - tldw_Server_API/app/core/Setup/install_manager.py
-  - Install plan validation and per‑engine installers (STT/TTS/Embeddings)
+  - Install plan validation and per-engine installers (STT/TTS/Embeddings)
   - Action: maintain DownloadBlockedError flow; add structured fields (engine, variant/model, repo) in error logs.
 
 - tldw_Server_API/app/core/Prompt_Management/prompt_studio/*
@@ -31,11 +31,11 @@ Scope Candidates (non‑exhaustive)
   - Action: keep catch around rollback; include connection dsn/label and operation in error log.
 
 Proposed Changes (incremental)
-1) Replace silent `except: pass` with low‑level debug/warn (DONE where present under app/ and endpoints/).
+1) Replace silent `except: pass` with low-level debug/warn (DONE where present under app/ and endpoints/).
 2) For BLE001 blocks, add contextual fields to logger calls:
    - keys: `module`, `operation`, `entity_id`, `user_id`, `request_id`, `db_path`/`dsn`, `engine`, `variant`, `repo`.
 3) Where a broad catch protects optional features, include a short "enablement hint" in logs (e.g., required env or extras).
-4) Avoid behavior changes — keep existing return values and status codes.
+4) Avoid behavior changes - keep existing return values and status codes.
 
 Validation Plan
 - Focused pytest runs for changed modules:
@@ -45,7 +45,7 @@ Validation Plan
 - Verify no additional warnings are promoted to errors; logs visible at DEBUG/INFO.
 
 Tracking
-- Open a small PR per sub‑area to keep diffs reviewable.
+- Open a small PR per sub-area to keep diffs reviewable.
 - Link PRs to this doc; check off modules as completed.
 
 Status

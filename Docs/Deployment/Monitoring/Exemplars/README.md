@@ -1,6 +1,6 @@
 Exemplar Sampling
 
-The RAG pipeline can optionally sample redacted payload “exemplars” on failure conditions (e.g., post‑verification low confidence, generation gating, retrieval/rerank errors).
+The RAG pipeline can optionally sample redacted payload “exemplars” on failure conditions (e.g., post-verification low confidence, generation gating, retrieval/rerank errors).
 
 Where
 - Default sink: `Databases/observability/rag_payload_exemplars.jsonl` (JSONL). One exemplar per line.

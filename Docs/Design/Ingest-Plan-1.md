@@ -1,6 +1,6 @@
 # Ingest-Plan-1
 
-This document defines a standalone plan to deliver five improvements to the Retrieval‑Augmented Generation (RAG) stack. It is self-contained and does not rely on other documents.
+This document defines a standalone plan to deliver five improvements to the Retrieval-Augmented Generation (RAG) stack. It is self-contained and does not rely on other documents.
 
 ## Goals
 
@@ -9,10 +9,10 @@ This document defines a standalone plan to deliver five improvements to the Retr
 - Enhance the agentic planner’s effectiveness while preserving graceful fallback.
 - Keep backwards compatibility and provide clear acceptance criteria and tests for each phase.
 
-## Non‑Goals
+## Non-Goals
 
 - Replacing existing databases or LLM providers.
-- Introducing new external services by default (Redis, external tracing backends) — these are optional.
+- Introducing new external services by default (Redis, external tracing backends) - these are optional.
 
 ## Assumptions
 
@@ -23,14 +23,14 @@ This document defines a standalone plan to deliver five improvements to the Retr
 ## Definitions
 
 - Structure Index: A persisted index of document boundaries (sections, paragraphs, lists, tables) containing start/end character offsets and optional titles/levels.
-- Hard Citations: Per‑sentence mapping of generated content to supporting source spans (doc id + start/end).
-- Agentic Cache: A cache of query‑specific, synthetic “ephemeral” context assembled at query time.
+- Hard Citations: Per-sentence mapping of generated content to supporting source spans (doc id + start/end).
+- Agentic Cache: A cache of query-specific, synthetic “ephemeral” context assembled at query time.
 
 ---
 
 ## Rollout Roadmap (Five Phases)
 
-### Phase 1 — Structure Index + Ingestion Population; Retrieval Surfaces Section Info
+### Phase 1 - Structure Index + Ingestion Population; Retrieval Surfaces Section Info
 
 Objectives
 - Persist document structure (headings/paragraphs/tables/lists) with character offsets.
@@ -59,7 +59,7 @@ Risks & Mitigations
 Rollback Plan
 - Table is additive; disable with `RAG_ENABLE_STRUCTURE_INDEX=0`. Existing flows continue.
 
-### Phase 2 — Observability Parity (Tool/Budget Metrics; Compact Plan in Metadata)
+### Phase 2 - Observability Parity (Tool/Budget Metrics; Compact Plan in Metadata)
 
 Objectives
 - Provide uniform metrics for tool usage and budgets across standard and agentic strategies.
@@ -84,10 +84,10 @@ Risks & Mitigations
 Rollback Plan
 - Feature flags to disable additional metadata fields and metrics emission.
 
-### Phase 3 — Persistent Agentic Cache (SQLite Backend + Invalidation on Updates)
+### Phase 3 - Persistent Agentic Cache (SQLite Backend + Invalidation on Updates)
 
 Objectives
-- Introduce a shared, file‑backed cache for agentic synthetic chunks to survive process restarts and support multi‑worker setups.
+- Introduce a shared, file-backed cache for agentic synthetic chunks to survive process restarts and support multi-worker setups.
 - Ensure robust invalidation on document updates and deletes.
 
 Scope & Work Items
@@ -97,7 +97,7 @@ Scope & Work Items
 - Configuration: `RAG_AGENTIC_CACHE_BACKEND`, `RAG_AGENTIC_CACHE_TTL_SEC`.
 
 Deliverables
-- SQLite backend stored under per‑user dir (e.g., `Databases/user_databases/<user_id>/Agentic_Cache/`).
+- SQLite backend stored under per-user dir (e.g., `Databases/user_databases/<user_id>/Agentic_Cache/`).
 - Invalidation hooks invoked from write paths and soft deletes.
 
 Acceptance Criteria
@@ -110,14 +110,14 @@ Risks & Mitigations
 Rollback Plan
 - Switch backend to `memory`; stale entries naturally expire.
 
-### Phase 4 — Smarter Planner (Few‑Shot/Tool‑Aware; Fallback; Tracing)
+### Phase 4 - Smarter Planner (Few-Shot/Tool-Aware; Fallback; Tracing)
 
 Objectives
-- Improve planner quality with curated few‑shot examples and explicit tool guidance.
+- Improve planner quality with curated few-shot examples and explicit tool guidance.
 - Preserve deterministic heuristic fallback when LLM access is constrained.
 
 Scope & Work Items
-- Prompting: Curate few‑shot prompts demonstrating when to use `open_section`, `search_within`, `expand_window`, and budget reasoning.
+- Prompting: Curate few-shot prompts demonstrating when to use `open_section`, `search_within`, `expand_window`, and budget reasoning.
 - Fallbacks: If planner errors, timing out, or disabled, use deterministic heuristics without breaking behavior.
 - Tracing: Add compact tool trace (steps with cost/time) to `metadata.plan` (bounded and redacted where needed).
 
@@ -127,7 +127,7 @@ Deliverables
 
 Acceptance Criteria
 - With LLM disabled, fallback path matches current heuristic behavior.
-- With LLM enabled, steps reflect tool‑aware reasoning and do not exceed budgets.
+- With LLM enabled, steps reflect tool-aware reasoning and do not exceed budgets.
 
 Risks & Mitigations
 - Latency: apply strict time budgets and early exits; test prompts for brevity.
@@ -135,7 +135,7 @@ Risks & Mitigations
 Rollback Plan
 - Disable planner with a flag; keep heuristic path.
 
-### Phase 5 — Strict Extractive Mode; Consistent Ask/Decline Using Hard‑Citation/NLI Thresholds
+### Phase 5 - Strict Extractive Mode; Consistent Ask/Decline Using Hard-Citation/NLI Thresholds
 
 Objectives
 - Ensure the standard strategy can operate in a strict extractive mode.
@@ -147,14 +147,14 @@ Scope & Work Items
 - Config: `RAG_STRICT_EXTRACTIVE`, `RAG_REQUIRE_HARD_CITATIONS`, `RAG_LOW_CONFIDENCE_BEHAVIOR`.
 
 Deliverables
-- Strict extractive generation path; consistent gate logic for hard‑citations and NLI results.
+- Strict extractive generation path; consistent gate logic for hard-citations and NLI results.
 
 Acceptance Criteria
 - Coverage=1.0 yields an answer; coverage<1.0 yields ask/decline per setting.
 - NLI unsupported ratio beyond threshold yields ask/decline per setting.
 
 Risks & Mitigations
-- Over‑abstention: keep thresholds configurable; document sensible defaults.
+- Over-abstention: keep thresholds configurable; document sensible defaults.
 
 Rollback Plan
 - Disable strict extractive and require_hard_citations flags.
@@ -165,20 +165,20 @@ Rollback Plan
 
 Test Types
 - Unit
-  - Guardrails gating: hard‑citation coverage gate; low_confidence_behavior logic; NLI threshold handling.
+  - Guardrails gating: hard-citation coverage gate; low_confidence_behavior logic; NLI threshold handling.
   - Structure index: insertion helpers validate parent/level/order; simple readback checks.
   - Cache adapters: memory and sqlite implementations (hit/miss/expiry/invalidations).
   - Planner fallback: deterministic path when planner is disabled/unavailable/timeout.
 - Integration
   - Ingestion → Retrieval flow: structured offsets persisted and surfaced in retrieval metadata; FTS unchanged.
-  - Hard‑citations + NLI: verify metadata includes per‑sentence citations and unsupported ratios lead to ask/decline as configured.
+  - Hard-citations + NLI: verify metadata includes per-sentence citations and unsupported ratios lead to ask/decline as configured.
   - Observability: metrics present; plan/metrics included in response metadata (bounded size).
 - Property
-  - Offsets monotonicity for structure rows; non‑overlapping ranges per paragraph.
+  - Offsets monotonicity for structure rows; non-overlapping ranges per paragraph.
   - `open_section` returns a valid [start,end) within document bounds.
 
 Fixtures & Environments
-- Minimal SQLite media DB with a few plaintext and small PDF cases; include headings and multi‑paragraph bodies.
+- Minimal SQLite media DB with a few plaintext and small PDF cases; include headings and multi-paragraph bodies.
 - Test config enabling each phase behind flags; CI runs with default (safe) flags.
 
 Coverage Targets
@@ -192,18 +192,18 @@ CI Gates
 ## Operational Readiness
 
 Metrics & Alerting
-- Phase timings: retrieval, reranking, citations, generation, post‑verification.
+- Phase timings: retrieval, reranking, citations, generation, post-verification.
 - Tool/budget counters: tool calls, tokens read, time budget exhausted.
-- Coverage gauges: hard‑citation coverage, unsupported ratio.
+- Coverage gauges: hard-citation coverage, unsupported ratio.
 - Add dashboards and basic alerts for persistent failures or budget exhaustions.
 
 Performance & Limits
 - Default TTLs for caches; conservative chunk sizes.
-- Planner and post‑verification time budgets; graceful degrade when exceeded.
+- Planner and post-verification time budgets; graceful degrade when exceeded.
 
 Security & Privacy
 - Never log secrets; redact long prompts/answers in plan metadata.
-- Optional PII detection toggle for retrieved chunks pre‑generation.
+- Optional PII detection toggle for retrieved chunks pre-generation.
 
 ---
 
@@ -214,11 +214,11 @@ Security & Privacy
 
 ## Timeline (Indicative)
 
-- Phase 1: 1–2 weeks
+- Phase 1: 1-2 weeks
 - Phase 2: 1 week
-- Phase 3: 1–2 weeks
+- Phase 3: 1-2 weeks
 - Phase 4: 1 week
-- Phase 5: 3–5 days
+- Phase 5: 3-5 days
 
 ---
 
@@ -232,17 +232,17 @@ Security & Privacy
 
 ## Implementation Steps & Code Touchpoints
 
-This section turns the roadmap into concrete, code‑level tasks and references. All items are additive and gated by flags.
+This section turns the roadmap into concrete, code-level tasks and references. All items are additive and gated by flags.
 
 ### Feature Flags (env or config)
-- `RAG_ENABLE_STRUCTURE_INDEX` (default: on) — enable structure index writes/lookups.
-- `RAG_STRICT_EXTRACTIVE` (default: off) — strict extractive generation path in standard strategy.
-- `RAG_REQUIRE_HARD_CITATIONS` (default: off) — enforce hard‑citation coverage gate.
-- `RAG_LOW_CONFIDENCE_BEHAVIOR` (default: continue) — one of continue|ask|decline.
-- `RAG_AGENTIC_CACHE_BACKEND` (default: memory) — one of memory|sqlite.
-- `RAG_AGENTIC_CACHE_TTL_SEC` (default: 600) — TTL for agentic cache entries.
+- `RAG_ENABLE_STRUCTURE_INDEX` (default: on) - enable structure index writes/lookups.
+- `RAG_STRICT_EXTRACTIVE` (default: off) - strict extractive generation path in standard strategy.
+- `RAG_REQUIRE_HARD_CITATIONS` (default: off) - enforce hard-citation coverage gate.
+- `RAG_LOW_CONFIDENCE_BEHAVIOR` (default: continue) - one of continue|ask|decline.
+- `RAG_AGENTIC_CACHE_BACKEND` (default: memory) - one of memory|sqlite.
+- `RAG_AGENTIC_CACHE_TTL_SEC` (default: 600) - TTL for agentic cache entries.
 
-### Phase 1 — Structure Index + Retrieval Surfacing
+### Phase 1 - Structure Index + Retrieval Surfacing
 Implementation steps
 - Database schema and migration
   - Add `DocumentStructureIndex` table with columns: `id`, `media_id`, `parent_id`, `kind`, `level`, `title`, `start_char`, `end_char`, `order_index`, `path`, `created_at`, `last_modified`, `version`, `client_id`, `deleted`.
@@ -254,17 +254,17 @@ Implementation steps
   - Start behind `RAG_ENABLE_STRUCTURE_INDEX` (default on).
   - File: `tldw_Server_API/app/services/document_processing_service.py`.
 - Retrieval enrichment
-  - When returning chunk‑level results, enrich metadata via nearest range lookup: `section_title`, `section_start`, `section_end`, `paragraph_start`, `paragraph_end`.
+  - When returning chunk-level results, enrich metadata via nearest range lookup: `section_title`, `section_start`, `section_end`, `paragraph_start`, `paragraph_end`.
   - Prefer DB lookups; fallback to existing heuristics when missing.
   - Files:
     - `tldw_Server_API/app/core/RAG/rag_service/database_retrievers.py` (metadata enrichment).
     - `tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py` (`open_section` consults DB first).
 - Tests
   - Unit: insert/read helpers; parent/level/order validations; range lookup returns expected section.
-  - Property: offsets monotonicity/non‑overlap; `open_section` returns valid `[start,end)`.
+  - Property: offsets monotonicity/non-overlap; `open_section` returns valid `[start,end)`.
   - Integration: ingestion→retrieval surfaces section metadata; no FTS regressions.
 
-### Phase 2 — Observability Parity
+### Phase 2 - Observability Parity
 Implementation steps
 - Metrics
   - Add/increment counters and gauges: `agentic_tool_calls_total`, `agentic_budget_tokens_read`, `rag_hard_citation_coverage`, `rag_claims_unsupported_ratio`; record phase timings.
@@ -277,24 +277,24 @@ Implementation steps
 - Tests
   - Verify presence/size bounds; counter increments; span attributes when telemetry is on.
 
-### Phase 3 — Persistent Agentic Cache (SQLite)
+### Phase 3 - Persistent Agentic Cache (SQLite)
 Implementation steps
 - Cache backend
   - Define a pluggable cache interface and add a `sqlite` backend stored under `Databases/user_databases/<user_id>/Agentic_Cache/`.
   - Extend cache key: `user:{user_id}:ver:{content_version_or_hash}:q:{sha256(query)}`.
   - Files: `tldw_Server_API/app/core/RAG/rag_service/advanced_cache.py`.
 - Invalidation hooks
-  - On media update/delete and post‑chunk writes, call invalidation by media/version/prefix.
+  - On media update/delete and post-chunk writes, call invalidation by media/version/prefix.
   - File: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py` (write paths) and any batch chunk upserts.
 - Config
   - Support `RAG_AGENTIC_CACHE_BACKEND` and `RAG_AGENTIC_CACHE_TTL_SEC`.
 - Tests
-  - Restart persistence and hit; TTL expiry; invalidation on updates; basic single‑writer/multi‑reader concurrency.
+  - Restart persistence and hit; TTL expiry; invalidation on updates; basic single-writer/multi-reader concurrency.
 
-### Phase 4 — Smarter Planner
+### Phase 4 - Smarter Planner
 Implementation steps
 - Prompting
-  - Add curated few‑shot exemplars for tool‑aware planning (`open_section`, `search_within`, `expand_window`, budgets) and a loader.
+  - Add curated few-shot exemplars for tool-aware planning (`open_section`, `search_within`, `expand_window`, budgets) and a loader.
   - File: `tldw_Server_API/app/core/RAG/rag_service/prompt_templates.py`.
 - Planner integration
   - In agentic path, add LLM planner option with time/token budgets and graceful deterministic fallback; emit compact tool trace in `metadata.plan`.
@@ -302,7 +302,7 @@ Implementation steps
 - Tests
   - Fallback determinism without LLM; budget cutoffs respected; plan/trace size caps.
 
-### Phase 5 — Strict Extractive Mode + Guardrails
+### Phase 5 - Strict Extractive Mode + Guardrails
 Implementation steps
 - API schema
   - Add `strict_extractive: bool` to standard pipeline request schema and document behavior.
@@ -319,4 +319,4 @@ Implementation steps
 - Keep DB migration additive and idempotent; do not break existing fixtures.
 - Prefer bounded DB lookups (use `(media_id, start_char)` index); batch inserts during ingestion.
 - Cap metadata fields and redact secrets; never log API keys.
-- All features are flag‑gated; disable flags to roll back behavior without schema rollbacks.
+- All features are flag-gated; disable flags to roll back behavior without schema rollbacks.

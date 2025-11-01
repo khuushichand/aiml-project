@@ -1,4 +1,4 @@
-# Prompt Studio – Phase 2 TODOs
+# Prompt Studio - Phase 2 TODOs
 
 This file enumerates follow-up tasks for Prompt Studio Phase 2 (Correctness + Concurrency). Each task includes an ID, scope, and acceptance criteria.
 

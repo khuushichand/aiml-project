@@ -179,7 +179,7 @@ async def mint_self_virtual_key(
     current_user: Dict[str, Any] = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
 ):
-    """Mint a short‑lived, scoped JWT for the current user.
+    """Mint a short-lived, scoped JWT for the current user.
 
     This is intended for automation and integrations to act on behalf of the
     requesting user with constrained scope, time window, and optional endpoint

@@ -147,7 +147,7 @@ Use an unbiased, journalistic tone, adapting the level of formality to match the
 • If the provided results are insufficient to answer the question, explicitly state what information is missing or unclear.
 
 Structure your answer like this:
-1. **Short introduction**: Briefly summarize the topic (1–2 sentences).
+1. **Short introduction**: Briefly summarize the topic (1-2 sentences).
 2. **Bulleted points**: Present key details, each with appropriate citations.
 3. **Conclusion**: Summarize the findings or restate the core answer (with citations if needed).
 
@@ -181,9 +181,9 @@ Scraped Content:
 
 Important Instructions:
 1. Structure your answer as follows:
-   - **Introduction**: Briefly summarize the topic or main point (1–2 sentences).
+   - **Introduction**: Briefly summarize the topic or main point (1-2 sentences).
    - **Details**: Provide key information, facts, or insights from the scraped content. Use bullet points or paragraphs for clarity.
-   - **Conclusion**: Summarize the findings or restate the core answer (1–2 sentences).
+   - **Conclusion**: Summarize the findings or restate the core answer (1-2 sentences).
 2. Adapt the tone and style of the answer to match the user’s question. Use a formal tone for technical or professional queries and a conversational tone for casual questions.
 3. If the scraped content contains conflicting information, present both perspectives clearly and neutrally, noting the discrepancy.
 4. Focus on the most relevant and important information in the scraped content, and avoid including minor or tangential details.
@@ -195,7 +195,7 @@ Important Instructions:
 10. If the user requests revisions, adjust the answer based on their feedback while adhering to the above guidelines.
 
 Examples:
-1. Short Answer (3–4 Sentences)
+1. Short Answer (3-4 Sentences)
     - **Question:** "What is photosynthesis?"
     - **Answer:**
         - **Introduction:** Photosynthesis is the process by which plants convert sunlight into energy.
@@ -203,7 +203,7 @@ Examples:
             * It occurs in the chloroplasts of plant cells, using chlorophyll to absorb light.
             * During photosynthesis, plants take in carbon dioxide and release oxygen as a byproduct.
         - **Conclusion:** This process is essential for plant growth and oxygen production, supporting life on Earth.
-2. Medium Answer (5–8 Sentences)
+2. Medium Answer (5-8 Sentences)
     - **Question:** "What are the benefits of exercise?"
     - **Answer:**
         - **Introduction:** Exercise offers numerous physical and mental health benefits.
@@ -213,7 +213,7 @@ Examples:
             * It also enhances mental health by reducing stress, anxiety, and depression through the release of endorphins.
             * Exercise can improve sleep quality and boost overall energy levels.
         - **Conclusion:** Incorporating regular exercise into your routine is essential for long-term physical and mental well-being.
-3. Long Answer (9–12 Sentences)
+3. Long Answer (9-12 Sentences)
     - **Question**: "What are the causes and effects of climate change?"
     - **Answer:**
         - **Introduction**: Climate change refers to long-term changes in temperature and weather patterns, primarily caused by human activities.
@@ -226,7 +226,7 @@ Examples:
             * Ecosystems are disrupted, causing species extinction and loss of biodiversity.
             * Climate change also has economic impacts, such as increased costs for disaster recovery and healthcare.
         - **Conclusion:** Addressing climate change requires global cooperation, sustainable practices, and a transition to renewable energy sources.
-4. Very Long Answer (13–20 Sentences)
+4. Very Long Answer (13-20 Sentences)
     - **Question:** "What are the pros and cons of remote work?"
     - **Answer:**
     - **Introduction**: Remote work has become increasingly popular, offering both advantages and disadvantages for employees and employers.

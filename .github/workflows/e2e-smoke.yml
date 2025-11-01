@@ -99,7 +99,7 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
-      - name: Run E2E tests (single-user) — exclude Jobs for now
+      - name: Run E2E tests (single-user) - exclude Jobs for now
         env:
           AUTH_MODE: single_user
           SINGLE_USER_API_KEY: "test-api-key-12345"

@@ -1,4 +1,4 @@
-# Claims Extraction — Deep Dive
+# Claims Extraction - Deep Dive
 
 This doc explains how claims (concise, verifiable factual statements) are extracted and optionally verified in two contexts:
 - Ingestion-time: Extract a small number of claims per chunk and store them for search/RAG workflows.
@@ -17,9 +17,9 @@ Flow (behind `ENABLE_INGESTION_CLAIMS`):
 - Hooked inside the embeddings pipeline (`ChromaDB_Library`). After chunking a document, the system optionally extracts claims (`heuristic` by default) and stores them in the `Claims` SQL table.
 - Optional embedding: when `CLAIMS_EMBED=True`, claim texts are embedded into a separate Chroma collection per user.
 - API clients can now control ingestion-time claims extraction per request:
-  - `perform_claims_extraction` — tri-state toggle. `true/false` overrides the server config; `null`/omitted falls back to `ENABLE_INGESTION_CLAIMS`.
-  - `claims_extractor_mode` — optional per-request override (e.g., `heuristic`, `ner`, provider id). When absent, `CLAIM_EXTRACTOR_MODE` is used.
-  - `claims_max_per_chunk` — optional per-request override (1–12). Defaults to `CLAIMS_MAX_PER_CHUNK` when omitted.
+  - `perform_claims_extraction` - tri-state toggle. `true/false` overrides the server config; `null`/omitted falls back to `ENABLE_INGESTION_CLAIMS`.
+  - `claims_extractor_mode` - optional per-request override (e.g., `heuristic`, `ner`, provider id). When absent, `CLAIM_EXTRACTOR_MODE` is used.
+  - `claims_max_per_chunk` - optional per-request override (1-12). Defaults to `CLAIMS_MAX_PER_CHUNK` when omitted.
   These fields are exposed on `/media/add` as well as the `/process-*` helper endpoints so WebUI and API consumers can surface them directly in their UX.
 
 Extractor modes:
@@ -40,10 +40,10 @@ Storage schema: see `Media_DB_v2.py` (table `Claims` + `claims_fts`)
 - Helpers: `upsert_claims`, `get_claims_by_media`, `soft_delete_claims_for_media`, `rebuild_claims_fts`.
 
 APIs and service:
-- `GET /api/v1/claims/{media_id}` — list stored claims
-- `POST /api/v1/claims/{media_id}/rebuild` — enqueue rebuild for one item
-- `POST /api/v1/claims/rebuild/all` — enqueue rebuild for many items (policies: `missing|all|stale`)
-- `POST /api/v1/claims/rebuild_fts` — rebuild FTS
+- `GET /api/v1/claims/{media_id}` - list stored claims
+- `POST /api/v1/claims/{media_id}/rebuild` - enqueue rebuild for one item
+- `POST /api/v1/claims/rebuild/all` - enqueue rebuild for many items (policies: `missing|all|stale`)
+- `POST /api/v1/claims/rebuild_fts` - rebuild FTS
 - Background worker: `ClaimsRebuildService` (chunks content, extracts claims, stores/replaces; see `services/claims_rebuild_service.py`).
 
 ## Answer-Time Claims (Extraction + Verification)
@@ -78,7 +78,7 @@ Verifier: `HybridClaimVerifier`
 
 Notes:
 - `claim_extractor="auto"` in `ClaimsEngine.run` currently uses the LLM path by default with heuristic fallback. The ingestion-time module’s `auto` may behave differently (see above).
-- `claims_concurrency` bounds parallel verifications (default 8; range 1–32).
+- `claims_concurrency` bounds parallel verifications (default 8; range 1-32).
 - `nli_model` can be passed to override the default NLI model.
 
 ## Prompt Customization

@@ -1,4 +1,4 @@
-# Full SQLite Database Export/Import (Single-User Mode) – PRD
+# Full SQLite Database Export/Import (Single-User Mode) - PRD
 
 - **Status:** Draft  
 - **Last Updated:** 2024-09-09  
@@ -179,18 +179,18 @@ Telemetry is not collected; metrics captured via logs/tests and support feedback
 
 ## 8. Rollout Plan
 
-1. **Phase 0 – Design (this document)**
+1. **Phase 0 - Design (this document)**
    - Finalize requirements and cross-team agreement.
-2. **Phase 1 – Backend API & Jobs**
+2. **Phase 1 - Backend API & Jobs**
    - Implement service, API endpoints, job worker changes.
    - Unit + integration tests (export/import success, schema mismatch, checksum failure).
-3. **Phase 2 – WebUI + Helper Script**
+3. **Phase 2 - WebUI + Helper Script**
    - Build Maintenance UI.
    - Add CLI helper for cron.
-4. **Phase 3 – Documentation & Release**
+4. **Phase 3 - Documentation & Release**
    - Update README, Admin Guide, new How-To.
    - Include migration notes in release changelog.
-5. **Phase 4 – Hardening**
+5. **Phase 4 - Hardening**
    - Gather community feedback.
    - Consider optional encryption & scheduling enhancements.
 

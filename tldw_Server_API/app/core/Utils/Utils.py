@@ -395,7 +395,7 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
 
     Order of extension preference:
       1. The URL path (e.g. “.md”, “.rst”, “.txt” …)
-      2. The HTTP Content‑Type header
+      2. The HTTP Content-Type header
       3. Fallback: “.bin”
     """
     # ---------- 1) try URL  -------------------------------------------------

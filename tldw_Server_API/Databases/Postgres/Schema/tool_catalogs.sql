@@ -1,4 +1,4 @@
--- Tool Catalogs (MCP) — PostgreSQL DDL (additive)
+-- Tool Catalogs (MCP) - PostgreSQL DDL (additive)
 -- This file can be applied after the core AuthNZ schema to add tool catalog tables.
 
 -- tool_catalogs: scoped by (org_id, team_id) with name unique per scope

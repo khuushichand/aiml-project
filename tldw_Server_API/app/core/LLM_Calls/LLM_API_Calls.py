@@ -105,6 +105,31 @@ def _safe_cast(value: Any, cast_to: type, default: Any = None) -> Any:
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
+def _resolve_openai_api_base(openai_cfg: Dict[str, Any]) -> str:
+    """Resolve the OpenAI API base URL.
+
+    Precedence: config keys (api_base_url, api_base, base_url),
+    then environment vars (OPENAI_API_BASE_URL, OPENAI_API_BASE, OPENAI_BASE_URL, MOCK_OPENAI_BASE_URL),
+    then default 'https://api.openai.com/v1'.
+    """
+    try:
+        cfg_base = (
+            openai_cfg.get('api_base_url')
+            or openai_cfg.get('api_base')
+            or openai_cfg.get('base_url')
+        )
+    except Exception:
+        cfg_base = None
+
+    env_api_base = (
+        os.getenv('OPENAI_API_BASE_URL')
+        or os.getenv('OPENAI_API_BASE')
+        or os.getenv('OPENAI_BASE_URL')
+        or os.getenv('MOCK_OPENAI_BASE_URL')
+    )
+    return (cfg_base or env_api_base or 'https://api.openai.com/v1')
+
+
 async def _async_retry_sleep(base_delay: float, attempt: int) -> None:
     """Async sleep helper applying linear backoff per attempt (1-indexed)."""
     delay = base_delay * (attempt + 1)
@@ -540,20 +565,8 @@ def get_openai_embeddings(input_data: str, model: str, app_config: Optional[Dict
         "input": input_data,
         "model": model,
     }
-    # Prefer configured base URL over environment when provided
-    cfg_base = (
-        openai_cfg.get('api_base_url')
-        or openai_cfg.get('api_base')
-        or openai_cfg.get('base_url')
-    )
-    # Environment fallbacks used only if config not provided
-    env_api_base = (
-        os.getenv('OPENAI_API_BASE_URL')
-        or os.getenv('OPENAI_API_BASE')
-        or os.getenv('OPENAI_BASE_URL')
-        or os.getenv('MOCK_OPENAI_BASE_URL')
-    )
-    api_base = (cfg_base or env_api_base or 'https://api.openai.com/v1')
+    # Resolve OpenAI API base URL using shared helper
+    api_base = _resolve_openai_api_base(openai_cfg)
     api_url = api_base.rstrip('/') + '/embeddings'
     try:
         logging.debug(f"OpenAI Embeddings (single): Posting request to embeddings API at {api_url}")
@@ -638,20 +651,8 @@ def get_openai_embeddings_batch(texts: List[str], model: str, app_config: Option
         "input": texts,
         "model": model,
     }
-    # Prefer configured base URL over environment when provided
-    cfg_base = (
-        openai_cfg.get('api_base_url')
-        or openai_cfg.get('api_base')
-        or openai_cfg.get('base_url')
-    )
-    # Environment fallbacks used only if config not provided
-    env_api_base = (
-        os.getenv('OPENAI_API_BASE_URL')
-        or os.getenv('OPENAI_API_BASE')
-        or os.getenv('OPENAI_BASE_URL')
-        or os.getenv('MOCK_OPENAI_BASE_URL')
-    )
-    api_base = (cfg_base or env_api_base or 'https://api.openai.com/v1')
+    # Resolve OpenAI API base URL using shared helper
+    api_base = _resolve_openai_api_base(openai_cfg)
     api_url = api_base.rstrip('/') + '/embeddings'
     try:
         logging.debug(f"OpenAI Embeddings (batch): Posting batch request of {len(texts)} items to API: {api_url}")
@@ -2295,7 +2296,7 @@ def chat_with_cohere(
                                 # stream-start or other events: ignore
                                 continue
                         else:
-                            # Plain text fallback — wrap as OpenAI-style delta
+                            # Plain text fallback - wrap as OpenAI-style delta
                             yield openai_delta_chunk(decoded_line)
 
                 except requests.exceptions.ChunkedEncodingError as e:

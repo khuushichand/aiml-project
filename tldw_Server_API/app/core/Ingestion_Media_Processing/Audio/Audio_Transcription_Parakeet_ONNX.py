@@ -17,7 +17,6 @@
 
 import os
 import json
-import logging
 from loguru import logger
 import tempfile
 from pathlib import Path
@@ -29,13 +28,13 @@ try:
     import onnxruntime as ort
 except ImportError:
     ort = None
-    logging.warning("ONNX Runtime not installed. Install with: pip install onnxruntime")
+    logger.warning("ONNX Runtime not installed. Install with: pip install onnxruntime")
 
 try:
     from huggingface_hub import snapshot_download
 except ImportError:
     snapshot_download = None
-    logging.warning("huggingface_hub not installed. Install with: pip install huggingface_hub")
+    logger.warning("huggingface_hub not installed. Install with: pip install huggingface_hub")
 
 # Global cache for model and tokenizer
 _onnx_model_cache: Dict[str, Any] = {}

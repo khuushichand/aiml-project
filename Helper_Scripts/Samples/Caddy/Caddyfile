@@ -1,4 +1,4 @@
-# Caddyfile – HTTPS reverse proxy for tldw_server
+# Caddyfile - HTTPS reverse proxy for tldw_server
 # Replace your.domain.com and email. Run with: docker run -p 443:443 -p 80:80 \
 #   -v $(pwd)/Samples/Caddy/Caddyfile:/etc/caddy/Caddyfile:ro caddy:2
 

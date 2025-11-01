@@ -510,7 +510,7 @@
           const opt = document.createElement('option');
           opt.value = it.name;
           const pretty = wfHumanTitle(it.title || it.name);
-          const label = (it.name && pretty && pretty !== it.name) ? `${pretty} — ${it.name}` : pretty || it.name;
+          const label = (it.name && pretty && pretty !== it.name) ? `${pretty} - ${it.name}` : pretty || it.name;
           opt.textContent = label;
           grpBuiltIn.appendChild(opt);
         }
@@ -2348,7 +2348,7 @@
     }, '');
   }
   function wfDiffValueSummary(value){
-    if (value === undefined) return '—';
+    if (value === undefined) return '-';
     if (value === null) return 'null';
     if (typeof value === 'string') return value;
     try{

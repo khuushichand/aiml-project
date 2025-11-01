@@ -71,10 +71,10 @@
 ## 9. Roadmap
 | Stage | Timeline | Scope |
 | --- | --- | --- |
-| **Stage 0 – Completed** | Q4 2025 | Centralized factory, in-memory stub, updated call sites, unit tests, documentation. |
-| **Stage 1 – Observability Enhancements (in progress)** | Q4 2025 | Connection attempt/duration/fallback/error metrics shipped; next step is wiring dashboards/alerts that consume these series and adding optional trace attributes. |
-| **Stage 2 – Additional Infrastructure Helpers** | Q1 2026 | Introduce similar factories for Postgres pools, object storage, and optional task queues (Celery/Redis Streams). Keep a consistent pattern (centralized config + stubs). |
-| **Stage 3 – Deployment Tooling** | Q1 2026 | Provide Docker Compose overlays and Terraform snippets for Redis (standalone + HA) plus health-check scripts. |
+| **Stage 0 - Completed** | Q4 2025 | Centralized factory, in-memory stub, updated call sites, unit tests, documentation. |
+| **Stage 1 - Observability Enhancements (in progress)** | Q4 2025 | Connection attempt/duration/fallback/error metrics shipped; next step is wiring dashboards/alerts that consume these series and adding optional trace attributes. |
+| **Stage 2 - Additional Infrastructure Helpers** | Q1 2026 | Introduce similar factories for Postgres pools, object storage, and optional task queues (Celery/Redis Streams). Keep a consistent pattern (centralized config + stubs). |
+| **Stage 3 - Deployment Tooling** | Q1 2026 | Provide Docker Compose overlays and Terraform snippets for Redis (standalone + HA) plus health-check scripts. |
 
 ## 10. Risks & Mitigations
 - **Stub drift:** New Redis commands might be unsupported. Mitigate via gatekeeping in PR review + expanding tests.

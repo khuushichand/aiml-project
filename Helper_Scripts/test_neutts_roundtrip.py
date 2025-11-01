@@ -1,4 +1,4 @@
-"""Minimal NeuTTS round‑trip test against a running server.
+"""Minimal NeuTTS round-trip test against a running server.
 
 Usage:
   python Helper_Scripts/test_neutts_roundtrip.py \
@@ -79,4 +79,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

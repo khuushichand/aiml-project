@@ -26,7 +26,7 @@ function TreeRow({ k, v, level }: { k: string | number; v: any; level: number })
       <div className="flex items-start">
         {complex ? (
           <button className="mr-1 mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded border text-[10px] text-gray-600" onClick={() => setOpen(!open)} aria-label={open ? 'Collapse' : 'Expand'}>
-            {open ? '–' : '+'}
+            {open ? '-' : '+'}
           </button>
         ) : (
           <span className="mr-1 inline-block h-4 w-4" />

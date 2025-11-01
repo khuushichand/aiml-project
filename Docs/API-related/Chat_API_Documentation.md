@@ -4,7 +4,7 @@
 - Base path: `/api/v1`
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
-- Scope note: Chat Dictionaries and the Document Generator are implemented as sub‑routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
+- Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
 ## Auth + Rate Limits
@@ -37,7 +37,7 @@ Provider-specific extensions:
   - `extra_headers`: include Bedrock guardrail headers like `X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, optional `X-Amzn-Bedrock-Trace`.
   - `extra_body`: include `amazon-bedrock-guardrailConfig` object when needed.
 
-Minimal example (non‑streaming):
+Minimal example (non-streaming):
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -108,7 +108,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
 - If no provider is specified, the server uses `DEFAULT_LLM_PROVIDER`.
 - API key loading (precedence high → low):
   - Environment variables (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
-  - Dotenv files in project root or `Config_Files`: `.env` and `.ENV` (both names supported, non‑overriding by default).
+  - Dotenv files in project root or `Config_Files`: `.env` and `.ENV` (both names supported, non-overriding by default).
   - `tldw_Server_API/Config_Files/config.txt` under `[API]` (e.g., `openai_api_key=...`).
 - Optional failover: when enabled via server config, the Chat module may fallback to a healthy provider on upstream errors (disabled by default for stability).
   - Config key: `[Chat-Module] enable_provider_fallback = True` (default: `False`)
@@ -151,11 +151,11 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 
 
 ## Responses
-- Non‑streaming JSON uses OpenAI’s `choices` shape and includes `tldw_conversation_id` to help clients track state.
+- Non-streaming JSON uses OpenAI’s `choices` shape and includes `tldw_conversation_id` to help clients track state.
 
 ## Persistence
 - Default behavior is ephemeral (no DB writes).
-- Per-request opt‑in: set `"save_to_db": true` to persist conversation/messages.
+- Per-request opt-in: set `"save_to_db": true` to persist conversation/messages.
 - Server default can be toggled without client changes:
   - Env: `CHAT_SAVE_DEFAULT=true` (highest precedence) or `DEFAULT_CHAT_SAVE=true`
   - Config file (`Config_Files/config.txt`): `[Chat-Module] chat_save_default = True` (or `default_save_to_db = True`)
@@ -173,14 +173,14 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 | Config file `[Chat-Module]`                | `chat_save_default = True`      | Default persistence (preferred key)                   | Medium     |
 | Config file `[Chat-Module]` (legacy)       | `default_save_to_db = True`     | Default persistence (legacy compatibility)            | Medium     |
 | Fallback legacy                            | `[Auto-Save] save_character_chats` | Used only if above unset                              | Low        |
-| Response (non‑stream)                      | `tldw_conversation_id`          | Returned in JSON to help clients retain context       | —          |
-| Response (stream)                          | `event: stream_start`           | Includes `conversation_id` at stream start            | —          |
+| Response (non-stream)                      | `tldw_conversation_id`          | Returned in JSON to help clients retain context       | -          |
+| Response (stream)                          | `event: stream_start`           | Includes `conversation_id` at stream start            | -          |
 
 
 ## Validation & Limits
 - Images: Accepts `image/png`, `image/jpeg`, `image/webp`. Base64 data URI validation; default max base64 payload ≈ 3MB.
 - Messages: Default max messages per request: 1000.
-- Text: Default per‑message text limit: 400,000 characters.
+- Text: Default per-message text limit: 400,000 characters.
 - Images per request: Default max: 10.
 - Oversized or invalid payloads return `400`/`413` with details.
 
@@ -222,12 +222,12 @@ Queued execution (optional):
 - Audit: When enabled, logs API request metadata (user_id, request_id, model/provider, streaming) via the unified audit service.
 - Logging: The server never logs API keys by default. For troubleshooting in non-production environments, you can enable masked key logging by setting `ALLOW_MASKED_KEY_LOG=true`. When enabled, logs may include a masked form of the key (first/last 4 chars). Do not enable in production.
 
-Image metrics now track per‑image sizes when multiple images are included in a single user message.
+Image metrics now track per-image sizes when multiple images are included in a single user message.
 
 ### Queue Diagnostics (Admins)
 - Endpoints (read-only operational state):
-  - `GET /api/v1/chat/queue/status` – Queue size, concurrency, processed/rejected counts
-  - `GET /api/v1/chat/queue/activity?limit=50` – Recent processed job summaries (most recent last)
+  - `GET /api/v1/chat/queue/status` - Queue size, concurrency, processed/rejected counts
+  - `GET /api/v1/chat/queue/activity?limit=50` - Recent processed job summaries (most recent last)
 - RBAC: Requires permission `system.logs`. In single-user mode, all actions are permitted.
 - Intended for administrators/operations; avoid exposing in multi-tenant environments without RBAC.
 
@@ -242,10 +242,10 @@ Image metrics now track per‑image sizes when multiple images are included in a
 
 ## Providers API
 Supporting endpoints for discovering providers and models:
-- `GET /api/v1/llm/providers` – Configured providers and models
-- `GET /api/v1/llm/providers/{provider}` – Details for a specific provider
-- `GET /api/v1/llm/models` – Flat list of `<provider>/<model>` values
-- `GET /api/v1/llm/models/metadata` – Flattened model capability metadata
+- `GET /api/v1/llm/providers` - Configured providers and models
+- `GET /api/v1/llm/providers/{provider}` - Details for a specific provider
+- `GET /api/v1/llm/models` - Flat list of `<provider>/<model>` values
+- `GET /api/v1/llm/models/metadata` - Flattened model capability metadata
 
 ## Commercial Tests
 - Scope: Optional integration tests for supported providers (OpenAI, Anthropic, Cohere, DeepSeek, Google, Groq, Qwen, HuggingFace, Mistral, Bedrock, OpenRouter) and local backends (llama.cpp, Kobold, Ollama, Oobabooga, TabbyAPI, vLLM). Disabled by default to avoid accidental network calls. The exact set is determined at runtime from configuration.
@@ -280,11 +280,11 @@ Notes:
 ## Notes & Limitations
 - Provider failover is disabled by default for production stability (can be enabled in `[Chat-Module]`).
 - Images in chat messages must be base64 data URIs within `image_url.url` (PNG, JPEG, WEBP).
-- The API returns `tldw_conversation_id` in non‑streaming responses to let clients maintain context.
+- The API returns `tldw_conversation_id` in non-streaming responses to let clients maintain context.
 
 ## Troubleshooting
 - Keys not detected for a provider (e.g., OpenAI): verify env and dotenv files.
-  - Check presence via `GET /api/v1/llm/providers` – the provider appears only when a usable key/base URL is configured.
+  - Check presence via `GET /api/v1/llm/providers` - the provider appears only when a usable key/base URL is configured.
   - The loader reads `.env`/`.ENV` from project root and `tldw_Server_API/Config_Files/`, plus `[API]` keys in `config.txt`.
 - Quick Python sanity check (no secrets printed):
   ```python

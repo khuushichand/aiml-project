@@ -1,4 +1,4 @@
-# Prompt Studio — Ablation Scripts
+# Prompt Studio - Ablation Scripts
 
 Compare optimization strategies (iterative vs mcts vs genetic) on a shared test set.
 

@@ -1,25 +1,25 @@
 # Ingestion_Media_Processing (Developer Guide)
 
-Core ingestion and media processing for audio, video, PDFs, EPUBs, documents (txt/md/html/xml/docx/rtf), and MediaWiki dumps. This module focuses on safe ingestion, extraction, optional chunking/analysis, and returns DB‑agnostic results. FastAPI endpoints handle persistence and response shaping.
+Core ingestion and media processing for audio, video, PDFs, EPUBs, documents (txt/md/html/xml/docx/rtf), and MediaWiki dumps. This module focuses on safe ingestion, extraction, optional chunking/analysis, and returns DB-agnostic results. FastAPI endpoints handle persistence and response shaping.
 
 - Full guide: `Docs/Code_Documentation/Ingestion_Media_Processing.md`
 - Related pipelines: see `Docs/Code_Documentation/Ingestion_Pipeline_*.md`
 
 **Directory Map**
-- `Audio/` – STT (faster_whisper, Nemo/Parakeet/Qwen2Audio), diarization, streaming
-- `Video/` – yt‑dlp download + audio transcription
-- `PDF/` – parsing via PyMuPDF/pymupdf4llm/Docling; optional OCR & VLM
-- `VLM/` – pluggable vision backends (e.g., HF Table Transformer)
-- `Books/` – EPUB extraction and ZIP of EPUBs
-- `Plaintext/` – txt/md/html/xml/docx/rtf conversion
-- `MediaWiki/` – XML dump parsing (evented, optional persistence)
-- `Claims/` – ingestion‑time claim extraction helpers
-- `Upload_Sink.py` – secure upload validation (MIME/size/Yara/archive scanning)
-- `Media_Update_lib.py` – DB‑level update utilities (versioning/keywords)
-- `XML_Ingestion_Lib.py` – legacy XML helper (writes to DB)
+- `Audio/` - STT (faster_whisper, Nemo/Parakeet/Qwen2Audio), diarization, streaming
+- `Video/` - yt-dlp download + audio transcription
+- `PDF/` - parsing via PyMuPDF/pymupdf4llm/Docling; optional OCR & VLM
+- `VLM/` - pluggable vision backends (e.g., HF Table Transformer)
+- `Books/` - EPUB extraction and ZIP of EPUBs
+- `Plaintext/` - txt/md/html/xml/docx/rtf conversion
+- `MediaWiki/` - XML dump parsing (evented, optional persistence)
+- `Claims/` - ingestion-time claim extraction helpers
+- `Upload_Sink.py` - secure upload validation (MIME/size/Yara/archive scanning)
+- `Media_Update_lib.py` - DB-level update utilities (versioning/keywords)
+- `XML_Ingestion_Lib.py` - legacy XML helper (writes to DB)
 
 **Design Principles**
-- DB‑agnostic processors: functions return structured dicts the API layer can persist.
+- DB-agnostic processors: functions return structured dicts the API layer can persist.
 - Safety first: strict file validation, size caps, optional Yara, controlled archive scanning.
 - Pluggable extras: OCR and VLM use registries so backends can be added or swapped.
 - Chunking as a service: consistent chunk outputs via `app/core/Chunking` utilities.
@@ -60,19 +60,19 @@ Quick entry points
 **Persistence Boundary**
 - Processors here do not write to databases by default.
 - API endpoints wire persistence using `Media_DB_v2` and helpers in `app/core/DB_Management/`.
-- When needed, DB‑level helpers exist, e.g. `Media_Update_lib.py:process_media_update` to create new document versions or update keywords.
+- When needed, DB-level helpers exist, e.g. `Media_Update_lib.py:process_media_update` to create new document versions or update keywords.
 
 Contribution Guide (for this module)
-- Follow PEP‑8, type hints, and comprehensive docstrings.
-- Prefer DB‑agnostic functions that accept paths/bytes and return dicts.
+- Follow PEP-8, type hints, and comprehensive docstrings.
+- Prefer DB-agnostic functions that accept paths/bytes and return dicts.
 - Use `loguru` via `app/core/Utils/Utils.py:logging` helper for consistency.
 - Respect configuration via `app/core/config.py` (`loaded_config_data`).
 - Add tests under `tldw_Server_API/tests` mirroring structure; mark with `unit`/`integration` as appropriate.
-- Mock external services (LLMs, STT, yt‑dlp) in tests; avoid real network.
+- Mock external services (LLMs, STT, yt-dlp) in tests; avoid real network.
 
 Adding a new media pipeline
 - Place code under a new folder here (e.g., `XYZ/`) with a clear public `process_*` entry.
-- Keep the function DB‑agnostic; return the standard result dict.
+- Keep the function DB-agnostic; return the standard result dict.
 - Reuse `improved_chunking_process` for chunking and `analyze` for optional summarization.
 - Add secure handling to `Upload_Sink.py` if new file types are supported (extension/MIME/size policy).
 - Wire the API endpoint in `app/api/v1/endpoints/media.py` and add Pydantic schemas.

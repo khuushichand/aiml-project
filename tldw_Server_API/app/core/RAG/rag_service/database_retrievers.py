@@ -804,7 +804,7 @@ class MediaDBRetriever(BaseRetriever):
             k_hyde = max(1, int(k * hyde_k_frac))
             hyde_results = await _search_with_filter("hyde_q", k_hyde)
 
-            # 3) Merge — two modes: media-level (default) and optional chunk-level (by parent_chunk_id)
+            # 3) Merge - two modes: media-level (default) and optional chunk-level (by parent_chunk_id)
             try:
                 dedupe_by_parent = bool(_settings.get("HYDE_DEDUPE_BY_PARENT", False))
             except Exception:

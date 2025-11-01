@@ -1,6 +1,6 @@
 """
 test_rag_deep_checks.py
-Description: Deep RAG configuration checks — hybrid + rerank + tight context.
+Description: Deep RAG configuration checks - hybrid + rerank + tight context.
 
 Uploads a couple of small docs (idempotent), then runs searches with
 different max_context_size and reranking settings and asserts structural

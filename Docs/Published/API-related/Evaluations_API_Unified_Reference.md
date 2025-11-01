@@ -381,9 +381,9 @@ Request (example):
 ```
 
 ### OCR Evaluation
-`POST /api/v1/evaluations/ocr` — Evaluate OCR text quality on provided content
+`POST /api/v1/evaluations/ocr` - Evaluate OCR text quality on provided content
 
-`POST /api/v1/evaluations/ocr-pdf` — Evaluate OCR text quality on uploaded PDF
+`POST /api/v1/evaluations/ocr-pdf` - Evaluate OCR text quality on uploaded PDF
 
 ### RAG Pipeline Presets
 `POST /api/v1/evaluations/rag/pipeline/presets`  

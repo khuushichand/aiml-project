@@ -248,9 +248,9 @@ Returns unified response with common features enabled.
 
 ### Capabilities & Features {#capabilities--features}
 
-GET `/api/v1/rag/capabilities` — service capabilities, defaults, limits
+GET `/api/v1/rag/capabilities` - service capabilities, defaults, limits
 
-GET `/api/v1/rag/features` — available feature list and parameters
+GET `/api/v1/rag/features` - available feature list and parameters
 
 ### Health Check
 

@@ -114,7 +114,7 @@ class AuthDatabaseConfig:
                     return str(Path(combined).resolve())
                 except Exception:
                     return combined
-            # Relative path — resolve against project root
+            # Relative path - resolve against project root
             return str((Path.cwd() / combined).resolve())
 
         if base_scheme in {"sqlite", "file", ""}:

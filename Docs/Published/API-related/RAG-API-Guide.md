@@ -421,11 +421,11 @@ The advanced agent endpoint (`POST /agent/advanced`) supports multiple modes and
 
 - Modes
   - `rag` (default): Retrieve context from your configured sources and generate an answer.
-  - `research`: Enable research tools (e.g., web search) and multi‑step reasoning; may stream intermediate events.
+  - `research`: Enable research tools (e.g., web search) and multi-step reasoning; may stream intermediate events.
 
 - Tools (examples)
   - `web_search`: Use configured web search providers to augment retrieval.
-  - `reasoning`: Invoke a chain‑of‑thought style assistant to plan sub‑queries (streaming supported).
+  - `reasoning`: Invoke a chain-of-thought style assistant to plan sub-queries (streaming supported).
   - `rerank`: Apply reranking models to retrieved chunks for improved relevance.
 
 Enable tools via `tools: ["web_search", "reasoning"]` in the request body. Each tool emits usage/latency metrics and may contribute to token and cost accounting in admin reports.

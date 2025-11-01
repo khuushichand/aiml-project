@@ -2,7 +2,7 @@
 
 ## Overview
 
-Downloads videos (yt-dlp) or uses local files, extracts audio (audio-only by default), then transcribes, optionally chunks the transcript, and runs analysis/summarization. Batch-oriented and DB‑agnostic.
+Downloads videos (yt-dlp) or uses local files, extracts audio (audio-only by default), then transcribes, optionally chunks the transcript, and runs analysis/summarization. Batch-oriented and DB-agnostic.
 
 ## Primary Functions
 

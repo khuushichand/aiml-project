@@ -4,7 +4,7 @@
 - Base path: `/api/v1`
 - Endpoint: `POST /api/v1/chat/completions` (OpenAI-compatible)
 - Purpose: Route chat requests to configured LLM providers with optional streaming and persistence.
-- Scope note: Chat Dictionaries and the Document Generator are implemented as sub‑routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
+- Scope note: Chat Dictionaries and the Document Generator are implemented as sub-routes under `/api/v1/chat`, but documented in Chatbook features. See `./Chatbook_Features_API_Documentation.md`.
 - OpenAPI tags: `chat`, `chat-dictionaries`, `chat-documents`
 
 ## Authentication
@@ -28,7 +28,7 @@ Key fields:
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
 - Chat extensions: `character_id`, `conversation_id` (context hooks), `save_to_db` (persistence toggle).
 
-Minimal example (non‑streaming):
+Minimal example (non-streaming):
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -139,11 +139,11 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 
 
 ## Responses
-- Non‑streaming JSON uses OpenAI’s `choices` shape and includes `tldw_conversation_id` to help clients track state.
+- Non-streaming JSON uses OpenAI’s `choices` shape and includes `tldw_conversation_id` to help clients track state.
 
 ## Persistence
 - Default behavior is ephemeral (no DB writes).
-- Per-request opt‑in: set `"save_to_db": true` to persist conversation/messages.
+- Per-request opt-in: set `"save_to_db": true` to persist conversation/messages.
 - Server default can be toggled without client changes:
   - Env: `CHAT_SAVE_DEFAULT=true` (highest precedence) or `DEFAULT_CHAT_SAVE=true`
   - Config file (`Config_Files/config.txt`): `[Chat-Module] chat_save_default = True` (or `default_save_to_db = True`)
@@ -160,14 +160,14 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 | Config file `[Chat-Module]`                | `chat_save_default = True`      | Default persistence (preferred key)                   | Medium     |
 | Config file `[Chat-Module]` (legacy)       | `default_save_to_db = True`     | Default persistence (legacy compatibility)            | Medium     |
 | Fallback legacy                            | `[Auto-Save] save_character_chats` | Used only if above unset                              | Low        |
-| Response (non‑stream)                      | `tldw_conversation_id`          | Returned in JSON to help clients retain context       | —          |
-| Response (stream)                          | `event: stream_start`           | Includes `conversation_id` at stream start            | —          |
+| Response (non-stream)                      | `tldw_conversation_id`          | Returned in JSON to help clients retain context       | -          |
+| Response (stream)                          | `event: stream_start`           | Includes `conversation_id` at stream start            | -          |
 
 
 ## Validation & Limits
 - Images: Accepts `image/png`, `image/jpeg`, `image/webp`. Base64 data URI validation; default max base64 payload ≈ 3MB.
 - Messages: Default max messages per request: 1000.
-- Text: Default per‑message text limit: 400,000 characters.
+- Text: Default per-message text limit: 400,000 characters.
 - Images per request: Default max: 10.
 - Oversized or invalid payloads return `400`/`413` with details.
 
@@ -214,12 +214,12 @@ When exceeded, the endpoint returns `429`.
 
 ## Providers API
 Supporting endpoints for discovering providers and models:
-- `GET /api/v1/llm/providers` – Configured providers and models
-- `GET /api/v1/llm/providers/{provider}` – Details for a specific provider
-- `GET /api/v1/llm/models` – Flat list of `<provider>/<model>` values
-- `GET /api/v1/llm/models/metadata` – Flattened model capability metadata
+- `GET /api/v1/llm/providers` - Configured providers and models
+- `GET /api/v1/llm/providers/{provider}` - Details for a specific provider
+- `GET /api/v1/llm/models` - Flat list of `<provider>/<model>` values
+- `GET /api/v1/llm/models/metadata` - Flattened model capability metadata
 
 ## Notes & Limitations
 - Provider failover is disabled by default for production stability (can be enabled in `[Chat-Module]`).
 - Images in chat messages must be base64 data URIs within `image_url.url` (PNG, JPEG, WEBP).
-- The API returns `tldw_conversation_id` in non‑streaming responses to let clients maintain context.
+- The API returns `tldw_conversation_id` in non-streaming responses to let clients maintain context.

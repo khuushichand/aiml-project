@@ -1,6 +1,6 @@
 # NeuTTS Air Integration (Local, Voice Cloning)
 
-NeuTTS Air is a high‑quality on‑device TTS with instant voice cloning. This guide explains how to enable and use the NeuTTS adapter in tldw_server.
+NeuTTS Air is a high-quality on-device TTS with instant voice cloning. This guide explains how to enable and use the NeuTTS adapter in tldw_server.
 
 ## Overview
 
@@ -9,7 +9,7 @@ NeuTTS Air is a high‑quality on‑device TTS with instant voice cloning. This 
 - Output sample rate: 24 kHz
 - Voice cloning: Required (reference audio + matching reference text)
 - Streaming: Only when using GGUF backbones with `llama-cpp-python`
-- Watermarking: Uses Perth (optional; no‑op if not installed)
+- Watermarking: Uses Perth (optional; no-op if not installed)
 
 ## Prerequisites
 
@@ -59,12 +59,12 @@ Provider priority includes `neutts` after `kokoro` by default.
 Endpoint: `POST /api/v1/audio/speech`
 
 Required request fields for NeuTTS voice cloning:
-- `voice_reference`: Base64 encoded reference audio (3–15 seconds, mono, 16–44 kHz). Alternatively, pre‑encode to codes.
+- `voice_reference`: Base64 encoded reference audio (3-15 seconds, mono, 16-44 kHz). Alternatively, pre-encode to codes.
 - `extra_params.reference_text`: Text spoken in the reference sample (must correspond to the audio).
 
 Recommended formats: `wav`, `mp3`, `opus`, `flac`, `pcm`.
 
-Example (non‑streaming):
+Example (non-streaming):
 ```
 curl -X POST 'http://127.0.0.1:8000/api/v1/audio/speech' \
   -H 'Authorization: Bearer <API_KEY>' \
@@ -98,9 +98,9 @@ curl -X POST 'http://127.0.0.1:8000/api/v1/audio/speech' \
   }'
 ```
 
-### Pre‑encoding Reference Codes (optional)
+### Pre-encoding Reference Codes (optional)
 
-If you want to avoid sending raw audio every time, pre‑compute codes using the upstream example and then pass them in `extra_params.ref_codes` along with `extra_params.reference_text`:
+If you want to avoid sending raw audio every time, pre-compute codes using the upstream example and then pass them in `extra_params.ref_codes` along with `extra_params.reference_text`:
 ```
 extra_params: {
   "ref_codes": [12, 34, 56, ...],

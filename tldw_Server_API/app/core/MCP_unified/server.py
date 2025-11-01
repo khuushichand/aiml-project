@@ -189,7 +189,7 @@ class MCPServer:
             try:
                 import os as _os
                 if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
-                    logger.warning("MCP_ENABLE_DEMO_AUTH is enabled — for development only; DO NOT USE IN PRODUCTION")
+                    logger.warning("MCP_ENABLE_DEMO_AUTH is enabled - for development only; DO NOT USE IN PRODUCTION")
             except Exception:
                 pass
             # Start module health monitoring
@@ -348,7 +348,7 @@ class MCPServer:
                     })
                     logger.info("TEST_MODE auto-enabled MediaModule for deterministic tool catalogs")
 
-            # 5) Optional: Sandbox module (code interpreter) — disabled by default
+            # 5) Optional: Sandbox module (code interpreter) - disabled by default
             if os.getenv("MCP_ENABLE_SANDBOX_MODULE", "").lower() in {"1", "true", "yes", "on"}:
                 modules_to_load.append({
                     "id": "sandbox",

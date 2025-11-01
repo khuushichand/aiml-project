@@ -1,21 +1,21 @@
-# MCP Unified — Client Snippets
+# MCP Unified - Client Snippets
 
-Quick, copy‑paste examples to authenticate, initialize, discover tools, and call tools against the MCP Unified API.
+Quick, copy-paste examples to authenticate, initialize, discover tools, and call tools against the MCP Unified API.
 
 ## Prerequisites
 - Server running with MCP Unified endpoints mounted at `/api/v1/mcp`
 - Auth token (preferred) or API key
 
-## JSON‑RPC over HTTP (Initialize → Tools List → Tools Call)
+## JSON-RPC over HTTP (Initialize → Tools List → Tools Call)
 
 ```bash
-# Initialize (optional) — negotiates an mcp-session-id and can carry a base64 safe config
+# Initialize (optional) - negotiates an mcp-session-id and can carry a base64 safe config
 cfg=$(printf '{"snippet_length": 200}' | base64)
 curl -i -H "Authorization: Bearer <token>" \
   "http://127.0.0.1:8000/api/v1/mcp/request?config=$cfg" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"clientInfo":{"name":"demo"}},"id":1}'
 
-# List tools (RBAC‑filtered; add &catalog=... or &catalog_id=... if desired)
+# List tools (RBAC-filtered; add &catalog=... or &catalog_id=... if desired)
 curl -H "Authorization: Bearer <token>" \
   "http://127.0.0.1:8000/api/v1/mcp/tools"
 
@@ -26,7 +26,7 @@ curl -H "Authorization: Bearer <token>" \
   http://127.0.0.1:8000/api/v1/mcp/tools/execute
 ```
 
-## WebSocket (JavaScript) — Subprotocol Auth
+## WebSocket (JavaScript) - Subprotocol Auth
 
 ```javascript
 const token = "<jwt token>";
@@ -41,7 +41,7 @@ ws.onopen = () => {
     id: 1,
   }));
 
-  // List tools via JSON‑RPC
+  // List tools via JSON-RPC
   ws.send(JSON.stringify({ jsonrpc: "2.0", method: "tools/list", params: {}, id: 2 }));
 
   // Call a tool
@@ -56,7 +56,7 @@ ws.onopen = () => {
 ws.onmessage = (ev) => console.log("MCP:", JSON.parse(ev.data));
 ```
 
-## Python (HTTP JSON‑RPC helper)
+## Python (HTTP JSON-RPC helper)
 
 ```python
 import requests
@@ -89,5 +89,5 @@ print(exec_resp.json())
 ## Notes
 - Tool discovery can be narrowed with catalogs: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>`.
 - Results include `canExecute` for each tool; catalog membership doesn’t grant execute permissions.
-- Prefer WS headers/subprotocol for auth; query‑param tokens are disabled by default.
+- Prefer WS headers/subprotocol for auth; query-param tokens are disabled by default.
 

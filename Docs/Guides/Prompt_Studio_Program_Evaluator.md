@@ -1,4 +1,4 @@
-# Prompt Studio — Program Evaluator (Feature Flag)
+# Prompt Studio - Program Evaluator (Feature Flag)
 
 The Program Evaluator executes Python code produced by the LLM and scores outputs against objectives and constraints. It is disabled by default.
 

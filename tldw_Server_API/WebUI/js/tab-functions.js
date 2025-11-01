@@ -749,7 +749,7 @@ function segRenderResults(result, totalCount) {
         box.className = 'result-item';
         const speakers = (seg.speakers || []).join(', ');
         const header = document.createElement('div');
-        header.innerHTML = `<strong>Segment ${idx + 1}</strong> | Indices: ${seg.start_index}-${seg.end_index} | Speakers: ${speakers || '—'}`;
+        header.innerHTML = `<strong>Segment ${idx + 1}</strong> | Indices: ${seg.start_index}-${seg.end_index} | Speakers: ${speakers || '-'}`;
 
         const pre = document.createElement('pre');
         pre.textContent = (seg.text || '').slice(0, 800);
@@ -1291,7 +1291,7 @@ function renderFileTranscriptionResult(result) {
             box.className = 'result-item';
             const speakers = (s.speakers || []).join(', ');
             const header = document.createElement('div');
-            header.innerHTML = `<strong>Segment ${i + 1}</strong> | Indices: ${s.start_index}-${s.end_index} | Speakers: ${speakers || '—'}`;
+            header.innerHTML = `<strong>Segment ${i + 1}</strong> | Indices: ${s.start_index}-${s.end_index} | Speakers: ${speakers || '-'}`;
             const pre = document.createElement('pre');
             pre.textContent = (s.text || '').slice(0, 800);
             pre.style.whiteSpace = 'pre-wrap';
@@ -5135,8 +5135,8 @@ async function watchlistsGetRun() {
             const hist = (r?.stats && r.stats.history) ? r.stats.history : null;
             const pages = document.getElementById('watchlistsRun_histPages');
             const stop = document.getElementById('watchlistsRun_histStopOnSeen');
-            if (pages) pages.textContent = hist && typeof hist.pages_fetched !== 'undefined' ? String(hist.pages_fetched) : '—';
-            if (stop) stop.textContent = hist && typeof hist.stop_on_seen_triggered !== 'undefined' ? String(!!hist.stop_on_seen_triggered) : '—';
+            if (pages) pages.textContent = hist && typeof hist.pages_fetched !== 'undefined' ? String(hist.pages_fetched) : '-';
+            if (stop) stop.textContent = hist && typeof hist.stop_on_seen_triggered !== 'undefined' ? String(!!hist.stop_on_seen_triggered) : '-';
         } catch (_) {}
         watchlistsSetResponse('watchlistsRun_response', r);
     } catch (err) {

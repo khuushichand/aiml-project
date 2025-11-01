@@ -22,7 +22,7 @@ See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for th
 #### Chat
 
 - Chat API (OpenAI-compatible): `POST /api/v1/chat/completions`
-  - Streaming (SSE), persistence toggle, multi‑provider support
+  - Streaming (SSE), persistence toggle, multi-provider support
   - See: [Chat API Documentation](Chat_API_Documentation.md)
 
 - Character Chat API: sessions and messages under `/api/v1/chats` and `/api/v1/messages`

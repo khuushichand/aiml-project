@@ -44,7 +44,7 @@ docker run --rm -e JOBS_DB_URL="sqlite:///./Databases/jobs.db" tldw-audio-gpu-wo
 
 ## Metrics (What to Watch)
 
-- Active streams (WS) and active jobs (HTTP/jobs) — per owner.
+- Active streams (WS) and active jobs (HTTP/jobs) - per owner.
 - Quota hits (daily minutes, concurrent streams/jobs).
 - Jobs by status and by owner (queued/processing/completed/failed).
 

@@ -39,7 +39,7 @@ Runtime Controls
 - Circuit breaker knobs:
   - `circuit_breaker_threshold`: Failures before opening (default 5)
   - `circuit_breaker_timeout`: Initial open window (s, default 60)
-  - `circuit_breaker_backoff_factor`: Multiplier on half‑open failure (default 2.0)
+  - `circuit_breaker_backoff_factor`: Multiplier on half-open failure (default 2.0)
   - `circuit_breaker_max_timeout`: Cap for backoff window (default 300)
 
 Tips

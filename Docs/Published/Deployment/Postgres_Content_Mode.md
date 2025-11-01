@@ -1,4 +1,4 @@
-# PostgreSQL Content Mode — Quick Start
+# PostgreSQL Content Mode - Quick Start
 
 Run the content databases (Media, ChaChaNotes, Workflows, etc.) on PostgreSQL instead of SQLite.
 

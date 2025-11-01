@@ -238,7 +238,7 @@ Ensure that the synchronization architecture, originally designed for small team
 | Milestone | Trigger to Begin Next Phase |
 |:--|:--|
 | Local-first SQLite sync | ✅  (Now) |
-| Small team (5–20 devices) | **Start server timestamp enforcement, deferred persistence** |
+| Small team (5-20 devices) | **Start server timestamp enforcement, deferred persistence** |
 | Shared team-wide sync server | **Implement `sync_log` ACK tracking and garbage collection** |
 | Multi-team/multi-tenant deployments | **Postgres hardening + OAuth/RLS** |
 

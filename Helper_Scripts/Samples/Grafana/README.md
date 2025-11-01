@@ -1,6 +1,6 @@
 # Grafana Provisioning (Samples)
 
-This folder contains provisioning examples for Grafana so it can auto‑load a Prometheus datasource and dashboards at startup.
+This folder contains provisioning examples for Grafana so it can auto-load a Prometheus datasource and dashboards at startup.
 
 - Provisioning files:
   - `provisioning/datasources/prometheus.yml`

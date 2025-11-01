@@ -242,6 +242,7 @@ class MCTSOptimizer:
                 feedback_enabled=feedback_enabled,
                 feedback_threshold=feedback_threshold,
                 feedback_max_retries=feedback_max_retries,
+                optimization_id=optimization_id,
             )
 
             # Backpropagate
@@ -607,6 +608,7 @@ class MCTSOptimizer:
         feedback_enabled: bool,
         feedback_threshold: float,
         feedback_max_retries: int,
+        optimization_id: Optional[int] = None,
     ) -> Tuple[float, int]:
         # Caching by content to reduce repeated evaluations
         eval_cache_key = self._make_eval_cache_key(system_text, user_text, model_config, test_case_ids)
@@ -647,6 +649,7 @@ class MCTSOptimizer:
                     test_case_ids=test_case_ids,
                     model_config=model_config,
                     max_iterations=1,
+                    optimization_id=optimization_id,
                 )
                 cand_id = int(result.get("optimized_prompt_id", best_prompt_id))
                 cand_score = await self._evaluate_prompt(cand_id, test_case_ids, model_config, target_metric)

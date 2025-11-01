@@ -230,11 +230,11 @@ function displayOcrBackendsStatus(data) {
         if (name === 'points') {
             const mode = info.mode || (info.describe && info.describe.mode) || 'n/a';
             const reach = info.sglang_reachable === true ? ' (SGLang reachable)' : (info.sglang_reachable === false ? ' (SGLang unreachable)' : '');
-            html += ` — mode: ${mode}${reach}`;
+            html += ` - mode: ${mode}${reach}`;
         } else if (name === 'dots') {
             const reach = info.vllm_reachable === true ? ' (vLLM reachable)' : (info.vllm_reachable === false ? ' (vLLM unreachable)' : '');
             const prompt = (info.prompt || '').toString();
-            html += ` — prompt: ${prompt}${reach}`;
+            html += ` - prompt: ${prompt}${reach}`;
         }
         html += '</li>';
     });

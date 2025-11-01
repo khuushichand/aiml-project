@@ -51,7 +51,7 @@ setup.js assistant UI → show response + deep-link buttons
 
 ### `install_manager.py`
 
-- **Dependency bootstrap**: Before downloading models the installer aggregates all required Python packages (per backend) and runs `pip install` with `sys.executable`. A new env flag, `TLDW_SETUP_SKIP_PIP`, skips this phase – steps are marked as `skipped` and model downloads are suppressed to avoid half-configured states. Optional `TLDW_SETUP_PIP_INDEX_URL` rewires pip to a custom/simple index for air‑gapped environments.
+- **Dependency bootstrap**: Before downloading models the installer aggregates all required Python packages (per backend) and runs `pip install` with `sys.executable`. A new env flag, `TLDW_SETUP_SKIP_PIP`, skips this phase - steps are marked as `skipped` and model downloads are suppressed to avoid half-configured states. Optional `TLDW_SETUP_PIP_INDEX_URL` rewires pip to a custom/simple index for air-gapped environments.
 - **Model downloads**: Existing logic remains in place. When `TLDW_SETUP_SKIP_DOWNLOADS` is set the steps are recorded as skipped and no network calls occur.
 - **Status reporting**: Every dependency/model action is logged to `Config_Files/setup_install_status.json` (or the override specified by `TLDW_INSTALL_STATE_DIR`). The WebUI renders these steps verbatim in the “Installer Progress” panel.
 
@@ -104,8 +104,8 @@ Because `update_config()` now preserves comments, developers should continue to 
 - Mutating endpoints (POST `/api/v1/setup/config`, `/api/v1/setup/complete`, `/api/v1/setup/assistant`) are local-only.
 - Read endpoint GET `/api/v1/setup/config` is also local-only to reduce configuration surface exposure.
 - Environment variables:
-  - `TLDW_SETUP_ALLOW_REMOTE=1` — temporarily allows remote access to setup endpoints on trusted networks.
-  - `TLDW_SETUP_TRUST_PROXY=1` — when set, honors `X-Forwarded-For` to determine client origin; otherwise the header is ignored.
+  - `TLDW_SETUP_ALLOW_REMOTE=1` - temporarily allows remote access to setup endpoints on trusted networks.
+  - `TLDW_SETUP_TRUST_PROXY=1` - when set, honors `X-Forwarded-For` to determine client origin; otherwise the header is ignored.
 - Secret values never leave the server; snapshot marks them with `is_secret: true`, returns an empty `value`, and includes an `is_set` flag.
 
 ## Update Validation

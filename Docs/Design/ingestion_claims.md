@@ -1,4 +1,4 @@
-# Ingestion-Time Claims (Factual Statements) — Design
+# Ingestion-Time Claims (Factual Statements) - Design
 
 ## Goal
 
@@ -74,9 +74,9 @@ Feature is additive. If disabled, code paths do not write to `Claims`. Removing 
 
 ## APIs & Services
 
-- `GET /api/v1/claims/{media_id}` — list claims for a media item
-- `POST /api/v1/claims/{media_id}/rebuild` — enqueue rebuild for a media item
-- `POST /api/v1/claims/rebuild/all` — enqueue rebuild for all items (policies: `missing|all|stale`)
-- `POST /api/v1/claims/rebuild_fts` — rebuild `claims_fts` from `Claims`
+- `GET /api/v1/claims/{media_id}` - list claims for a media item
+- `POST /api/v1/claims/{media_id}/rebuild` - enqueue rebuild for a media item
+- `POST /api/v1/claims/rebuild/all` - enqueue rebuild for all items (policies: `missing|all|stale`)
+- `POST /api/v1/claims/rebuild_fts` - rebuild `claims_fts` from `Claims`
 
 Background service: `ClaimsRebuildService` manages a worker thread that rebuilds claims by chunking, extracting (`heuristic|llm|auto`), and storing with chunk hashes. See `tldw_Server_API.app.services.claims_rebuild_service`.

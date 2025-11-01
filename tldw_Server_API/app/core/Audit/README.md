@@ -1,23 +1,23 @@
 # Audit Module
 
 ## Purpose
-The audit module provides a single, async‑friendly service for capturing security,
+The audit module provides a single, async-friendly service for capturing security,
 compliance, and operational events across the tldw_server backend. It unifies audit
 logging for AuthNZ, RAG, Evaluations, Workflows, and API surfaces, enforcing a
 common schema, risk scoring, and optional PII redaction before data is persisted.
 
 ## Key Components
-- `AuditEventCategory` / `AuditEventType` / `AuditSeverity` – canonical enums that
-  describe high‑level categories, fine-grained event IDs, and severity levels.
-- `AuditContext` – request/session metadata (IDs, IP, UA, method, endpoint, etc.)
+- `AuditEventCategory` / `AuditEventType` / `AuditSeverity` - canonical enums that
+  describe high-level categories, fine-grained event IDs, and severity levels.
+- `AuditContext` - request/session metadata (IDs, IP, UA, method, endpoint, etc.)
   automatically folded into stored events using a `context_*` column prefix.
-- `AuditEvent` – dataclass representing a single entry; handles JSON encoding,
+- `AuditEvent` - dataclass representing a single entry; handles JSON encoding,
   metadata storage, and conversion to DB rows.
-- `PIIDetector` – configurable regex-driven detector with integration hooks into
+- `PIIDetector` - configurable regex-driven detector with integration hooks into
   the RAG PII patterns; can redact strings, nested dicts, or lists prior to storage.
-- `RiskScorer` – heuristic scorer that weights event type, result, metadata and
+- `RiskScorer` - heuristic scorer that weights event type, result, metadata and
   volume to produce a `0..100` score; high-risk events trigger immediate flushes.
-- `UnifiedAuditService` – the async facade that buffers, flushes, exports, and
+- `UnifiedAuditService` - the async facade that buffers, flushes, exports, and
   rotates audit data. It owns lifecycle management, schema creation, and stats.
 
 ## Storage & Schema
@@ -79,7 +79,7 @@ async def handle_request(user_id: int, payload: dict):
 ### Authentication Helpers
 `UnifiedAuditService.log_login()` wraps `log_event()` for login attempts, filling
 contextual fields automatically. Similar helpers can be added for domain-specific
-events—mirror the pattern so tests can stub them easily.
+events-mirror the pattern so tests can stub them easily.
 
 ### Export & Reporting
 The service exposes `export_events(...)` (CSV/JSONL), `get_daily_stats(...)`,
@@ -142,7 +142,7 @@ Constructor kwargs (`retention_days`, `buffer_size`, `flush_interval`, `enable_p
 4. Validate migrations or schema changes against an existing production DB copy;
    audit data is compliance-critical and must never be silently dropped.
 5. Coordinate with the security reviewers if you change risk scoring thresholds or
-   redaction logic—they feed into automated alerting.
+   redaction logic-they feed into automated alerting.
 
 With these guardrails, contributors can evolve the audit subsystem confidently
 while maintaining the guarantees expected by downstream modules and operators.

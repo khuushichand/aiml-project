@@ -52,7 +52,7 @@ Import the provided dashboards:
 In Grafana:
 1. Dashboards → New → Import
 2. Upload `grafana_embeddings_orchestrator.json`, `grafana_workflows.json`, `grafana_service_overview.json`, or `grafana_tenant_overview.json`
-3. For dashboards with variables, set the Prometheus data source and use the top‑left dropdowns to filter (Provider / Model / Pipeline / Tenant).
+3. For dashboards with variables, set the Prometheus data source and use the top-left dropdowns to filter (Provider / Model / Pipeline / Tenant).
 
 ## Alertmanager
 
@@ -86,11 +86,11 @@ Worker orchestrator metrics (from `worker_orchestrator.py`):
 
 - `embedding_queue_depth{queue_name}` (gauge)
 - `embedding_dlq_queue_depth{queue_name}` (gauge)
-- `embedding_queue_age_seconds_bucket` (histogram) – use histogram_quantile for p95
+- `embedding_queue_age_seconds_bucket` (histogram) - use histogram_quantile for p95
 - `embedding_stage_jobs_processed_total{stage}` (counter)
 - `embedding_stage_jobs_failed_total{stage}` (counter)
 
 ## Troubleshooting
 
-- Zeroed summary (all empty maps) indicates Redis/unavailable orchestrator – the WebUI shows a small fallback badge; alert if sustained.
+- Zeroed summary (all empty maps) indicates Redis/unavailable orchestrator - the WebUI shows a small fallback badge; alert if sustained.
 - If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).

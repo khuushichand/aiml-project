@@ -273,7 +273,7 @@ Notes:
 If you enable HYDE/doc2query vector generation, you can tune retrieval fusion behavior via env flags:
 
 ```bash
-# Fraction of top‑k to allocate to HYDE question vectors (0..1)
+# Fraction of top-k to allocate to HYDE question vectors (0..1)
 export HYDE_K_FRACTION=0.5
 
 # Additive weight applied to HYDE similarity before merging (0..1)
@@ -290,7 +290,7 @@ export HYDE_DEDUPE_BY_PARENT=false
 ```
 
 Notes
-- Media‑level dedupe (default) keeps one entry per media_id. Chunk‑level dedupe ranks distinct chunks from the same media when enabled.
+- Media-level dedupe (default) keeps one entry per media_id. Chunk-level dedupe ranks distinct chunks from the same media when enabled.
 - When HYDE_ONLY_IF_NEEDED is true and the baseline chunk search returns ≥k with a max score ≥ HYDE_SCORE_FLOOR, HYDE is skipped to reduce latency.
  
 ### HYDE Backfill CLI (optional)
@@ -303,12 +303,12 @@ python Helper_Scripts/hyde_backfill.py --collection <collection_name> --page-siz
 
 Notes:
 - Respects HYDE_* configuration (provider, model, temperature, max tokens, language, prompt version).
-- Uses best‑effort generation; failures are logged and skipped (no DLQ for HYDE).
+- Uses best-effort generation; failures are logged and skipped (no DLQ for HYDE).
 - Use `--dry-run` to preview changes without writing.
-- Prefer running during off‑peak hours; set caps via `HYDE_MAX_VECTORS_PER_DOC` and orchestrator backpressure/quotas.
+- Prefer running during off-peak hours; set caps via `HYDE_MAX_VECTORS_PER_DOC` and orchestrator backpressure/quotas.
 - The WebUI → Embeddings → Admin view shows a HYDE status badge so operators can confirm the current provider/model at a glance.
 
-- HYDE vector generation itself is feature‑flagged separately (see HYDE‑Do‑1.md). Retrieval flags above affect only the search/merge phase.
+- HYDE vector generation itself is feature-flagged separately (see HYDE-Do-1.md). Retrieval flags above affect only the search/merge phase.
 
 
 ### Provider Configuration (model definitions)
@@ -353,10 +353,10 @@ scrape_configs:
 ```
 
 Key embeddings metrics (subset):
-- `embedding_requests_total` – Request counter
-- `embedding_request_duration_seconds` – Latency histogram
-- `embedding_cache_hits_total` – Cache hit rate
-- `active_embedding_requests` – Current load
+- `embedding_requests_total` - Request counter
+- `embedding_request_duration_seconds` - Latency histogram
+- `embedding_cache_hits_total` - Cache hit rate
+- `active_embedding_requests` - Current load
 - Circuit breaker status is available via admin endpoints
 
 ### pgvector backend metrics & admin
@@ -444,9 +444,9 @@ When the orchestrated embeddings pipeline is overloaded, the API gates selected 
 
 - Behavior
   - If any core embeddings queue’s depth or oldest message age exceeds a threshold, affected endpoints return HTTP 429 with a `Retry-After` header.
-  - In multi-user mode, per‑tenant request quotas (RPS) may also return HTTP 429 with `Retry-After: 1` and `X-RateLimit-*` headers.
+  - In multi-user mode, per-tenant request quotas (RPS) may also return HTTP 429 with `Retry-After: 1` and `X-RateLimit-*` headers.
 
-- Affected endpoints (non‑exhaustive)
+- Affected endpoints (non-exhaustive)
   - Embeddings: `POST /api/v1/embeddings`, `POST /api/v1/embeddings/batch`
   - Paper ingestion: `POST /api/v1/paper-search/arxiv/ingest`, `POST /api/v1/paper-search/earthrxiv/ingest`
   - Web ingestion: `POST /api/v1/ingest-web-content`
@@ -455,8 +455,8 @@ When the orchestrated embeddings pipeline is overloaded, the API gates selected 
 - Configuration
   - `EMB_BACKPRESSURE_MAX_DEPTH` (int, default 25000): max queue depth across `embeddings:{chunking|embedding|storage}` before 429.
   - `EMB_BACKPRESSURE_MAX_AGE_SECONDS` (float, default 300): max age (seconds) of oldest message before 429.
-  - `EMBEDDINGS_TENANT_RPS` (int, default 0): per‑tenant RPS for embeddings endpoints (429 when exceeded; 0 disables).
-  - `INGEST_TENANT_RPS` (int, default 0): per‑tenant RPS for ingestion endpoints (falls back to `EMBEDDINGS_TENANT_RPS` when unset).
+  - `EMBEDDINGS_TENANT_RPS` (int, default 0): per-tenant RPS for embeddings endpoints (429 when exceeded; 0 disables).
+  - `INGEST_TENANT_RPS` (int, default 0): per-tenant RPS for ingestion endpoints (falls back to `EMBEDDINGS_TENANT_RPS` when unset).
 
 - Operator tips
   - Use the orchestrator summary/SSE to watch `ages` and `queues` while tuning thresholds.
@@ -532,7 +532,7 @@ Structured JSON logs
 - Enable with `LOG_JSON=true` (or `ENABLE_JSON_LOGS=true`). The JSON sink includes request/trace correlation fields when available:
   - `request_id` (from `X-Request-ID` middleware)
   - `trace_id`, `span_id`, and computed `traceparent`
-  - Workers bind `job_id` and `stage` to aid operator drill‑down.
+  - Workers bind `job_id` and `stage` to aid operator drill-down.
   - Responses include `X-Trace-Id` and `traceparent` headers for easy hop-by-hop correlation.
 
 ### Dead-Letter Queues (DLQ)
@@ -549,11 +549,11 @@ How it works
 
 Security and privacy
 - PII/secret redaction: DLQ payload previews in the API/UI redact common secret fields (api_key, authorization, token, password). Avoid logging sensitive content.
-- Optional encryption at rest: set `EMBEDDINGS_DLQ_ENCRYPTION_KEY` to enable AES‑GCM encryption of DLQ payload bodies. The API will decrypt for previews when the key is present. Without the key, previews omit payloads.
+- Optional encryption at rest: set `EMBEDDINGS_DLQ_ENCRYPTION_KEY` to enable AES-GCM encryption of DLQ payload bodies. The API will decrypt for previews when the key is present. Without the key, previews omit payloads.
 
 RBAC and auditing
 - All DLQ admin endpoints require admin privileges.
-- Admin actions are audit‑logged (state changes, (bulk) requeues), including operator, stage, and results.
+- Admin actions are audit-logged (state changes, (bulk) requeues), including operator, stage, and results.
 
 Operator tasks
 - Inspect latest DLQ entries:
@@ -589,7 +589,7 @@ redis-cli XTRIM embeddings:storage:dlq   MAXLEN ~ 5000
 Recommendations
 - Alert on DLQ growth rate; sustained growth indicates systemic issues.
 - Build a small admin tool to list, filter by `job_id`, and requeue DLQ items safely.
-- Keep DLQ retention sized to your operating posture (e.g., 7–14 days worth of failures).
+- Keep DLQ retention sized to your operating posture (e.g., 7-14 days worth of failures).
 
 ### Prometheus Alerts (examples)
 

@@ -48,7 +48,7 @@ def test_uct_selection_behavior():
     parent.children_by_bin = {}
     parent.score_bin = -1
 
-    # Two children with different q/n — ensure UCT favors higher exploitation when visits equal
+    # Two children with different q/n - ensure UCT favors higher exploitation when visits equal
     def _mk(q_sum, n_vis):
         ch = MCTSOptimizer._Node.__new__(MCTSOptimizer._Node)
         ch.parent = parent

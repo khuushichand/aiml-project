@@ -107,7 +107,7 @@ What is the capital of Australia? ; Canberra
 
 
 #1: `Do not start writing yet, First explain everything I wanted you to do in this Prompt in Detail?`
-#2: `I need this written in human tone. Humans have fun when they write — robots don’t. Chat GPT, engagement is the highest priority. Be conversational, empathetic, and occasionally humorous. Use idioms, metaphors, anecdotes, and natural dialogue.`
+#2: `I need this written in human tone. Humans have fun when they write - robots don’t. Chat GPT, engagement is the highest priority. Be conversational, empathetic, and occasionally humorous. Use idioms, metaphors, anecdotes, and natural dialogue.`
 #3: `Before you answer, I want you to ask me all the missing information that I didn’t provide but it will help you better understand my needs and the specific output I want.`
 #4: `Criticize yourself/your answer.`
 #5: `Why did you write what you wrote? Give me all the reasons, Plus I want a full detailed analysis and breakdown of everything in a tabular format. Also add How could this be made better. Use my prompt as reference to further clarify the ‘Why’.`
@@ -143,7 +143,7 @@ I have implemented multiple approaches. In one, the domain selector and router L
 
 Additionally, in another experiment, I used a COT LoRA. For each step, the classifier identified the domain and selected the adapter to solve each of the given steps independetly. The process involved generating content from each of the "agents," aggregating the content and feeding it to the next step, aggregating the final answer, and presenting it to the user.
 
-I usually trained these adapters with 500–5000 samples. Most samples were generated using GPT-4o with few-shot prompts and domain-specific information to build the synthetic dataset. In my case this approach was effective in producing a tailored synthetic dataset.
+I usually trained these adapters with 500-5000 samples. Most samples were generated using GPT-4o with few-shot prompts and domain-specific information to build the synthetic dataset. In my case this approach was effective in producing a tailored synthetic dataset.
 
 Weak-Abbreviations15
 You definitely can.

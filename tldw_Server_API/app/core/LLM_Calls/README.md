@@ -6,11 +6,11 @@ Purpose
 - Provides consistent error mapping via ChatAPIError subclasses for clean API responses.
 
 Key Files
-- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py` — commercial providers
-- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls_Local.py` — local/OpenAI-compatible servers + native local engines
-- `tldw_Server_API/app/core/LLM_Calls/huggingface_api.py` — HF async client for GGUF discovery/download
-- `tldw_Server_API/app/core/LLM_Calls/Local_Summarization_Lib.py` — local summarization helpers
-- `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py` — summarization utilities
+- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py` - commercial providers
+- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls_Local.py` - local/OpenAI-compatible servers + native local engines
+- `tldw_Server_API/app/core/LLM_Calls/huggingface_api.py` - HF async client for GGUF discovery/download
+- `tldw_Server_API/app/core/LLM_Calls/Local_Summarization_Lib.py` - local summarization helpers
+- `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py` - summarization utilities
 
 Supported Providers (commercial)
 - OpenAI, Anthropic, Cohere, DeepSeek, Google (Gemini), Qwen, Groq, HuggingFace (OpenAI-compatible endpoints),

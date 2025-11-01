@@ -33,7 +33,7 @@ Operational guidance for migrations, backups, retention, and incident triage. Se
   - Deletes DB rows and file:// paths older than cutoff.
 
 - Runs/Events
-  - No hard cutoff by default. Consider periodic deletion by age for high‑volume deployments.
+  - No hard cutoff by default. Consider periodic deletion by age for high-volume deployments.
 
 ## Incident Triage
 
@@ -55,7 +55,7 @@ Operational guidance for migrations, backups, retention, and incident triage. Se
 
 ## Debug Flags
 
-- `WORKFLOWS_DEBUG=1` – broad Workflows debug logs
-- `WORKFLOWS_ARTIFACTS_DEBUG=1` – artifact endpoint logs (IDs, paths, Range)
-- `WORKFLOWS_DLQ_DEBUG=1` – DLQ list/replay and worker logs
+- `WORKFLOWS_DEBUG=1` - broad Workflows debug logs
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` - artifact endpoint logs (IDs, paths, Range)
+- `WORKFLOWS_DLQ_DEBUG=1` - DLQ list/replay and worker logs
 

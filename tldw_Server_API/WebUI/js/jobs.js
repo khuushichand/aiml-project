@@ -236,7 +236,7 @@ function adminOpenRotateKeysModal() {
         <div class="form-group"><label>Limit</label><input type="number" id="rk_limit" value="500" min="1"></div>
         <div class="form-group"><label>Type 'rotate' to confirm</label><input type="text" id="rk_confirm" placeholder="rotate"></div>
         <div id="rk_errors" class="text-error" style="min-height:18px;"></div>
-        <pre id="rk_result" style="max-height:200px; overflow:auto;">—</pre>
+        <pre id="rk_result" style="max-height:200px; overflow:auto;">-</pre>
       </div>
     `;
     const footer = `
@@ -491,7 +491,7 @@ async function adminPruneJobs() {
     const topbar = document.getElementById('adminJobs_topbar');
     if (topbar) {
       const ts = new Date().toLocaleString();
-      topbar.textContent = `${dryRun ? 'Dry run:' : 'Pruned'} ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days${scope ? `, ${scope}` : ''}] — ${ts}`;
+      topbar.textContent = `${dryRun ? 'Dry run:' : 'Pruned'} ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days${scope ? `, ${scope}` : ''}] - ${ts}`;
     }
     if (summaryEl) summaryEl.textContent = dryRun
       ? `Dry run: would prune ${deleted} job(s) matching filters`
@@ -502,7 +502,7 @@ async function adminPruneJobs() {
     const err = e && (e.response || e);
     resultEl.textContent = JSON.stringify(err, null, 2);
     Toast.error('Prune failed');
-    if (summaryEl) summaryEl.textContent = '—';
+    if (summaryEl) summaryEl.textContent = '-';
   } finally {
     if (btn) btn.disabled = false;
     Loading.hide(resultEl);
@@ -541,13 +541,13 @@ async function adminRunTTLSweep() {
     Toast.success(`TTL sweep affected ${affected} job(s)`);
     const ts = new Date().toLocaleString();
     const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
-    if (summaryEl) summaryEl.textContent = `TTL ${action} sweep affected ${affected} job(s) [${scope || 'unscoped'}] — ${ts}`;
+    if (summaryEl) summaryEl.textContent = `TTL ${action} sweep affected ${affected} job(s) [${scope || 'unscoped'}] - ${ts}`;
     if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
   } catch (e) {
     const err = e && (e.response || e);
     resultEl.textContent = JSON.stringify(err, null, 2);
     Toast.error('TTL sweep failed');
-    if (summaryEl) summaryEl.textContent = '—';
+    if (summaryEl) summaryEl.textContent = '-';
   } finally {
     if (btn) btn.disabled = false;
     Loading.hide(resultEl);
@@ -580,13 +580,13 @@ async function adminRequeueQuarantined() {
     Toast.success(`${dryRun ? 'Would requeue' : 'Requeued'} ${affected} job(s)`);
     const ts = new Date().toLocaleString();
     const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
-    if (summaryEl) summaryEl.textContent = `${dryRun ? 'Dry run' : 'Requeued'} ${affected} quarantined job(s) [${scope || 'unscoped'}] — ${ts}`;
+    if (summaryEl) summaryEl.textContent = `${dryRun ? 'Dry run' : 'Requeued'} ${affected} quarantined job(s) [${scope || 'unscoped'}] - ${ts}`;
     if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
   } catch (e) {
     const err = e && (e.response || e);
     resultEl.textContent = JSON.stringify(err, null, 2);
     Toast.error('Requeue failed');
-    if (summaryEl) summaryEl.textContent = '—';
+    if (summaryEl) summaryEl.textContent = '-';
   } finally {
     if (btn) btn.disabled = false;
     Loading.hide(resultEl);

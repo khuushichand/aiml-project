@@ -8,7 +8,7 @@ Guidance for sizing and tuning the Workflows module under different backends.
 - Keep concurrent writers modest. For heavier workloads, prefer Postgres.
 - Use SSD/NVMe storage; avoid network filesystems.
 - Tune busy timeout via `PRAGMA busy_timeout=5000` (default in code) and keep batch writes small.
-- Consider Litestream or sqlite‑backup for continuous backups; ensure I/O doesn’t starve the main process.
+- Consider Litestream or sqlite-backup for continuous backups; ensure I/O doesn’t starve the main process.
 
 ## PostgreSQL (Recommended for Production)
 
@@ -19,10 +19,10 @@ Guidance for sizing and tuning the Workflows module under different backends.
 - Indexes & Constraints
   - Unique `(run_id, event_seq)` guarantees ordered events per run.
   - JSONB payloads with GIN on `workflow_events.payload_json` (migrated in v3) enable JSON filtering when needed.
-  - Add B‑tree indexes on `workflow_runs(tenant_id, status, created_at)` to speed up filtered listings.
+  - Add B-tree indexes on `workflow_runs(tenant_id, status, created_at)` to speed up filtered listings.
 
 - Vacuum/Analyze
-  - Use autovacuum; configure aggressive settings for high‑churn tables like `workflow_events`.
+  - Use autovacuum; configure aggressive settings for high-churn tables like `workflow_events`.
 
 ## Engine & Queues
 
@@ -30,8 +30,8 @@ Guidance for sizing and tuning the Workflows module under different backends.
   - `WORKFLOWS_TENANT_CONCURRENCY` and `WORKFLOWS_WORKFLOW_CONCURRENCY`.
 
 - Quotas/Rate Limits
-  - Keep endpoint rate limits and per‑user quotas enabled outside tests; adjust for bursty clients.
-  - Prefer batched submissions where possible; avoid thundering herds of ad‑hoc runs.
+  - Keep endpoint rate limits and per-user quotas enabled outside tests; adjust for bursty clients.
+  - Prefer batched submissions where possible; avoid thundering herds of ad-hoc runs.
 
 ## Monitoring
 

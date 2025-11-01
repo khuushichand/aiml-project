@@ -385,7 +385,7 @@ async def owner_processing_summary(
         try:
             from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user
             limits = await get_limits_for_user(int(owner_user_id))
-        except Exception as e:
+        except (ImportError, ValueError, KeyError, RuntimeError) as e:
             get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
                 "Failed to get limits for owner %s; returning limit=None: %s", owner_user_id, e
             )

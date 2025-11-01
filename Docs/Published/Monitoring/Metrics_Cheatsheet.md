@@ -1,15 +1,15 @@
 # Metrics Cheatsheet
 
-The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Some categories require OpenTelemetry or module‑specific collectors to be enabled (noted below).
+The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, system, security, chat, chunking, MCP, and Prompt Studio. Some categories require OpenTelemetry or module-specific collectors to be enabled (noted below).
 
 - Text format: `GET /metrics` (or `GET /api/v1/metrics/text`)
 - JSON: `GET /api/v1/metrics/json`
 - Health: `GET /api/v1/metrics/health`
 - Chat metrics (JSON): `GET /api/v1/metrics/chat` (includes `token_costs`)
-- Reset metrics: `POST /api/v1/metrics/reset` (admin‑only; clears in‑memory counters; enforced by AuthNZ)
+- Reset metrics: `POST /api/v1/metrics/reset` (admin-only; clears in-memory counters; enforced by AuthNZ)
 
 Installation (optional OpenTelemetry):
-- To enable OTel exporters and auto‑instrumentation, install extras:
+- To enable OTel exporters and auto-instrumentation, install extras:
   - `pip install "tldw-server[otel]"` or `pip install -r requirements-otel.txt`
   - Set env: `OTEL_METRICS_EXPORTER=prometheus,otlp`, `OTEL_TRACES_EXPORTER=otlp`, `PROMETHEUS_PORT=9090`
 
@@ -62,7 +62,7 @@ Example PromQL:
 - `embedding_request_duration_seconds{provider,model}`: Histogram of request latency.
 - `embedding_cache_hits_total{provider,model}`: Counter of cache hits.
 - `embedding_cache_size`: Gauge of current embedding cache size.
-- `active_embedding_requests`: Gauge of in‑flight embedding requests.
+- `active_embedding_requests`: Gauge of in-flight embedding requests.
 
 ## Uploads & Storage
 - `uploads_total{user_id,media_type}`: Counter of uploaded files.
@@ -87,10 +87,10 @@ Note: System gauges appear when a resource monitor/collector is running; they ar
 - `security_headers_responses_total`: Counter of responses with security headers applied.
 
 ## Circuit Breakers
-- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half‑open).
+- `circuit_breaker_state{service}`: Gauge of state (0=closed, 1=open, 2=half-open).
 - `circuit_breaker_trips_total{service,reason}`: Counter of trips.
 
-## Chat (OpenAI‑compatible Chat API)
+## Chat (OpenAI-compatible Chat API)
 - Requests: `chat_requests_total{provider,model,status}`; latency: `chat_request_duration_seconds{provider,model}`.
 - Streaming: `chat_streaming_duration_seconds{conversation_id}`, `chat_streaming_chunks_total{conversation_id}`, `chat_streaming_heartbeats_total{conversation_id}`, `chat_streaming_timeouts_total{conversation_id}`.
 - Tokens: `chat_tokens_prompt{provider,model}`, `chat_tokens_completion{provider,model}`, `chat_tokens_total{provider,model}`.
@@ -106,7 +106,7 @@ Example PromQL:
 Notes:
 - Chat metrics are produced via OpenTelemetry meters; Prometheus export depends on your OTel → Prom exporter configuration.
 - The JSON endpoint `GET /api/v1/metrics/chat` always returns `active_operations` and `token_costs`; counter/histogram stats appear only if exported.
- - Function decorators in `app/core/Metrics/decorators.py` auto‑register their metrics on first use; no manual pre‑registration needed.
+ - Function decorators in `app/core/Metrics/decorators.py` auto-register their metrics on first use; no manual pre-registration needed.
  - General `cache_hits_total`/`cache_misses_total` are aliased to `rag_cache_hits_total`/`rag_cache_misses_total` in Prometheus exposition with label `cache_type` for consistency with RAG dashboards.
 
 ## Chunking Module
@@ -126,7 +126,7 @@ Notes:
 - Cache: `mcp_cache_hits_total{cache_name}`, `mcp_cache_misses_total{cache_name}`.
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
 Notes:
-- JSON metrics: `GET /api/v1/mcp/metrics` (admin‑only).
+- JSON metrics: `GET /api/v1/mcp/metrics` (admin-only).
 - Prometheus scrape (unauthenticated, for internal networks): `GET /api/v1/mcp/metrics/prometheus`.
   - Security: expose only on trusted networks or behind an authing proxy.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.

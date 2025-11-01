@@ -237,7 +237,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             return (
                 "You extract high-quality factual claims. "
                 "Given the input, identify atomic, verifiable claims expressed explicitly. "
-                "Guidelines: (1) One claim per item; (2) Avoid pronouns – restate entities; (3) No speculation; "
+                "Guidelines: (1) One claim per item; (2) Avoid pronouns - restate entities; (3) No speculation; "
                 "(4) Use present or past tense as appropriate; (5) Be precise, concise, and faithful to the text; "
                 "(6) Do not add information; (7) Normalize units and dates when explicit.\n\n"
                 "Return ONLY a JSON array of strings with each string a single claim.\n\n"
@@ -356,9 +356,9 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
     def _split_on_punct(self, s: str) -> List[str]:
         # Split on semicolons and em/en dashes; keep colon splits cautiously
         # Use regex that keeps delimiters by splitting on boundary while later trimming
-        s = s.replace("—", " — ").replace("–", " – ")
+        s = s.replace("-", " - ").replace("-", " - ")
         # Split on ; or standalone dashes
-        parts = re.split(r"\s*[;]+\s*|\s+[—–-]\s+", s)
+        parts = re.split(r"\s*[;]+\s*|\s+[---]\s+", s)
         # Further split around parentheses content as its own proposition when long
         final = []
         for p in parts:

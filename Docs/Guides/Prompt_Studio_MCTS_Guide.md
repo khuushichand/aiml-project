@@ -1,4 +1,4 @@
-# Prompt Studio — Running MCTS (Canary)
+# Prompt Studio - Running MCTS (Canary)
 
 This guide walks you through running the MCTS optimizer, controlling costs, and watching WebSocket progress.
 

@@ -281,18 +281,18 @@ export default function PrivilegesPage() {
       key: 'sensitivity_tier',
       label: 'Sensitivity',
       width: 120,
-      render: (row) => row.sensitivity_tier || '—',
+      render: (row) => row.sensitivity_tier || '-',
     },
     {
       key: 'feature_flag_id',
       label: 'Feature Flag',
       width: 160,
-      render: (row) => row.feature_flag_id || '—',
+      render: (row) => row.feature_flag_id || '-',
     },
     {
       key: 'dependencies',
       label: 'Dependencies',
-      render: (row) => (row.dependencies || []).map((dep) => dep.id).join(' · ') || '—',
+      render: (row) => (row.dependencies || []).map((dep) => dep.id).join(' · ') || '-',
     },
     {
       key: 'actions',
@@ -326,7 +326,7 @@ export default function PrivilegesPage() {
       key: 'endpoints',
       label: 'Endpoints',
       width: 110,
-      render: (row) => row.endpoints ?? '—',
+      render: (row) => row.endpoints ?? '-',
     },
   ];
 
@@ -346,7 +346,7 @@ export default function PrivilegesPage() {
       key: 'user_name',
       label: 'User',
       width: '18%',
-      render: (row) => row.user_name || row.user_id || '—',
+      render: (row) => row.user_name || row.user_id || '-',
     },
     {
       key: 'status',
@@ -362,18 +362,18 @@ export default function PrivilegesPage() {
       key: 'sensitivity_tier',
       label: 'Sensitivity',
       width: 120,
-      render: (row) => row.sensitivity_tier || '—',
+      render: (row) => row.sensitivity_tier || '-',
     },
     {
       key: 'rate_limit_class',
       label: 'Rate Limit',
       width: 120,
-      render: (row) => row.rate_limit_class || '—',
+      render: (row) => row.rate_limit_class || '-',
     },
     {
       key: 'dependencies',
       label: 'Dependencies',
-      render: (row) => (row.dependencies || []).map((dep) => dep.id).join(' · ') || '—',
+      render: (row) => (row.dependencies || []).map((dep) => dep.id).join(' · ') || '-',
     },
   ];
 
@@ -399,13 +399,13 @@ export default function PrivilegesPage() {
       key: 'targetScope',
       label: 'Scope',
       width: 120,
-      render: (row) => row.targetScope || '—',
+      render: (row) => row.targetScope || '-',
     },
     {
       key: 'summaryUsers',
       label: 'Users',
       width: 100,
-      render: (row) => row.summaryUsers ?? '—',
+      render: (row) => row.summaryUsers ?? '-',
     },
     {
       key: 'actions',

@@ -40,7 +40,7 @@ curl -H "X-API-KEY: your-api-key" http://localhost:8000/api/v1/media/search
 
 Note on tokens in single-user mode
 - Login endpoints are disabled/hidden; there are no JWTs. Authenticate with the `X-API-KEY` header only.
-- Bearer tokens are ignored in single-user mode. Some OpenAI-compatible clients send `Authorization: Bearer ...` — set the same value in `X-API-KEY` to authenticate.
+- Bearer tokens are ignored in single-user mode. Some OpenAI-compatible clients send `Authorization: Bearer ...` - set the same value in `X-API-KEY` to authenticate.
 
 ## Multi-User Setup (Team/Production)
 
@@ -165,7 +165,7 @@ Key settings in `.env`:
 
 - AuthNZ API Guide: `../API-related/AuthNZ-API-Guide.md`
 
-## Quick Setup (Multi‑User with SQLite – Dev)
+## Quick Setup (Multi-User with SQLite - Dev)
 
 For local/dev multi-user without Postgres:
 

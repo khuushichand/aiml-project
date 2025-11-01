@@ -59,7 +59,7 @@ export default function LandingPage() {
               Your always-on, street-smart primer.
             </h1>
             <p className="mt-4 max-w-2xl text-base text-zinc-300 md:text-lg">
-              Placeholder: one-liner describing <strong>tldw_server</strong>—a lightweight, open source service that distills streams into actionable guidance, anywhere.
+              Placeholder: one-liner describing <strong>tldw_server</strong>-a lightweight, open source service that distills streams into actionable guidance, anywhere.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a href="#cta" className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-100">
@@ -100,7 +100,7 @@ export default function LandingPage() {
             <div>
               <h3 className="text-xl font-semibold tracking-tight md:text-2xl">What is tldw_server?</h3>
               <p className="mt-3 text-zinc-300">
-                Placeholder: a few sentences describing the core idea—capture audio/video/streams, summarize, ground in tools, and deliver step-by-step guidance like the Primer.
+                Placeholder: a few sentences describing the core idea-capture audio/video/streams, summarize, ground in tools, and deliver step-by-step guidance like the Primer.
               </p>
               <p className="mt-3 text-zinc-300">
                 Placeholder: note security model, privacy stance, and extensible plugin surface.
@@ -111,7 +111,7 @@ export default function LandingPage() {
                 <li className="flex items-start gap-3"><Terminal className="mt-0.5 h-5 w-5 text-fuchsia-400" /> Placeholder: CLI and REST endpoints for ingestion and retrieval.</li>
                 <li className="flex items-start gap-3"><Cpu className="mt-0.5 h-5 w-5 text-fuchsia-400" /> Placeholder: model-agnostic summarization with retrieval and tool-use.</li>
                 <li className="flex items-start gap-3"><Cloud className="mt-0.5 h-5 w-5 text-fuchsia-400" /> Placeholder: self-host or one-click deploy to your infra.</li>
-                <li className="flex items-start gap-3"><BookOpen className="mt-0.5 h-5 w-5 text-fuchsia-400" /> Placeholder: examples—classroom tutoring, field manuals, on-the-job primers.</li>
+                <li className="flex items-start gap-3"><BookOpen className="mt-0.5 h-5 w-5 text-fuchsia-400" /> Placeholder: examples-classroom tutoring, field manuals, on-the-job primers.</li>
               </ul>
             </div>
           </div>

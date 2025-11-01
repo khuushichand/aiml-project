@@ -26,7 +26,7 @@ Key Directories
   - tabs/admin_content.html: Admin Moderation tab sections and JS helpers.
   - js/api-client.js: Frontend API client used by the Admin UI.
 
-Chat Flow (Non‑Streaming)
+Chat Flow (Non-Streaming)
 1) Validate request (size, images, limits) in chat.py
 2) Moderation input pass
    - ModerationService.get_effective_policy(user_id)
@@ -68,7 +68,7 @@ Moderation/Guardrails
   - /regex/ -> block|warn|redact:[REPL] #cat1,cat2
 - Decision API: evaluate_action(text, policy, phase)
   - Returns (action, redacted_text?, matched_pattern?, category?)
-  - Applies categories_enabled gating and per‑pattern overrides; obeys scan budgets and replacement limits.
+  - Applies categories_enabled gating and per-pattern overrides; obeys scan budgets and replacement limits.
 
 Runtime Overrides & Persistence
 - Runtime overrides file (JSON): default tldw_Server_API/Config_Files/moderation_runtime_overrides.json
@@ -106,7 +106,7 @@ Testing
   - `python -m pytest -q tldw_Server_API/tests/Chat_NEW/integration/test_moderation_categories.py`
 
 Extensibility Notes
-- Add new categories via blocklist lines with `#category` or by extending built‑in rules in moderation_service.
+- Add new categories via blocklist lines with `#category` or by extending built-in rules in moderation_service.
 - To persist per-user categories, update their override with `categories_enabled` (comma-separated or list).
 - To integrate external moderation services, wrap results into PatternRule or extend evaluate_action to consult providers.
 

@@ -1444,7 +1444,7 @@ class UnifiedEvaluationService:
 _service_instance = None
 _service_instances_lock = None
 
-# LRU cache for per-user services to bound memory in long‑lived servers
+# LRU cache for per-user services to bound memory in long-lived servers
 try:
     from collections import OrderedDict
 except Exception:  # pragma: no cover - stdlib guard

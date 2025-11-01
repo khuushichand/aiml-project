@@ -2,18 +2,18 @@
 
 ## Overview
 
-This document proposes extracting a generic, domain‑agnostic Job Manager from the existing Prompt Studio queue so it can be reused across subsystems (Chatbooks, Embeddings, RAG batch tasks, etc.). The new module lives under `tldw_Server_API/app/core/Jobs/` and offers a consistent API for creating, leasing, processing, cancelling, and observing background jobs, with DB‑backed persistence (SQLite/Postgres) and metrics.
+This document proposes extracting a generic, domain-agnostic Job Manager from the existing Prompt Studio queue so it can be reused across subsystems (Chatbooks, Embeddings, RAG batch tasks, etc.). The new module lives under `tldw_Server_API/app/core/Jobs/` and offers a consistent API for creating, leasing, processing, cancelling, and observing background jobs, with DB-backed persistence (SQLite/Postgres) and metrics.
 
 ## Goals
 
 - Provide a single, reusable job queue for all modules.
 - Preserve proven behaviors (leases, priority, retries, metrics) from Prompt Studio.
 - Maintain backward compatibility for Prompt Studio while enabling adoption by Chatbooks and others.
-- Keep multi‑backend support (SQLite + Postgres) with the existing DB backend abstraction.
+- Keep multi-backend support (SQLite + Postgres) with the existing DB backend abstraction.
 
-## Non‑Goals
+## Non-Goals
 
-- Replace all module‑specific workers in this iteration.
+- Replace all module-specific workers in this iteration.
 - Introduce external brokers (Redis/RabbitMQ). Optional in later phases.
 
 ## Current State (Prompt Studio)
@@ -71,12 +71,12 @@ Indexes:
 - `(owner_user_id, status, created_at)`
 
 Notes:
-- Use existing backend adapters in `DB_Management/backends/*` to maintain dual‑backend support.
+- Use existing backend adapters in `DB_Management/backends/*` to maintain dual-backend support.
 - For Postgres, prefer `JSONB` for `payload`/`result` and `UUID` for `uuid` (e.g., `DEFAULT gen_random_uuid()`).
 - Keep timestamps timezone-aware in Postgres (`TIMESTAMPTZ`) and ISO8601 strings in SQLite; ensure `updated_at` is set on every write (trigger or application code).
 
 Priority semantics:
-- Lower number = higher priority. Tie‑break on `available_at` then `created_at` to reduce starvation.
+- Lower number = higher priority. Tie-break on `available_at` then `created_at` to reduce starvation.
 
 Retention:
 - Prune completed/failed jobs after a configurable TTL.
@@ -145,13 +145,13 @@ Metric definitions:
 - `JOBS_MAX_CONCURRENCY` (per processor instance)
 - `JOBS_ENABLE_METRICS=true|false`
 - Feature flags for rollout:
-  - `TLDW_JOBS_BACKEND=prompt_studio|core` (module‑wide default)
+  - `TLDW_JOBS_BACKEND=prompt_studio|core` (module-wide default)
   - Domain overrides, e.g., `CHATBOOKS_JOBS_BACKEND=prompt_studio|core` (overrides module default)
   - Precedence: domain override > module default
 
-## Security & Multi‑Tenant
+## Security & Multi-Tenant
 
-- The core Jobs module is domain‑agnostic and treats payloads as opaque.
+- The core Jobs module is domain-agnostic and treats payloads as opaque.
 - Enforce `owner_user_id` and RBAC scoping at the service/endpoint layer using the existing AuthNZ system.
 - Within the Jobs module, ensure isolation via `domain`/`queue` and enforce correctness with leases (`worker_id`, `lease_id`, `leased_until`).
 - Validate payload schemas at domain adapters (e.g., Chatbooks/Prompt Studio) with Pydantic.
@@ -173,16 +173,16 @@ Phase 2: Prompt Studio Adapter
 
 Phase 3: Prompt Studio Cutover
 - Route PS job creation/lease/cancel through core `JobManager` behind `TLDW_JOBS_BACKEND=core` (or domain override) flag.
-- Keep legacy table/views as needed or migrate records into `jobs` with a one‑time migration.
-- Dual‑path tests: assert equivalent behavior on SQLite/Postgres.
+- Keep legacy table/views as needed or migrate records into `jobs` with a one-time migration.
+- Dual-path tests: assert equivalent behavior on SQLite/Postgres.
 
 Phase 4: Chatbooks Adoption
-- Replace in‑process task registry with core `JobManager` (`domain="chatbooks"`, `job_type="export"|"import"`).
+- Replace in-process task registry with core `JobManager` (`domain="chatbooks"`, `job_type="export"|"import"`).
 - Implement cancellable workers that check lease/cancellation points between steps (export packaging, import item loops).
 - Endpoint tests for async jobs + cancellation.
 
 Phase 5: Broader Adoption
-- Embeddings and other long‑running operations adopt the core manager incrementally.
+- Embeddings and other long-running operations adopt the core manager incrementally.
 
 Phase 6: Deprecation
 - Deprecate old Prompt Studio queue API; maintain compatibility via adapter for one release.
@@ -198,23 +198,23 @@ Phase 6: Deprecation
 - Unit tests in `tests/Jobs/`:
   - create/list/get, lease/renew, retries, cancel, metrics, dual backend
 - Integration tests per domain adopter (PS, Chatbooks):
-  - end‑to‑end job lifecycle + cancellation + metrics sanity
+  - end-to-end job lifecycle + cancellation + metrics sanity
 - Property tests for lease correctness (no duplicate processing).
 
 ## Risks & Mitigations
 
-- Schema drift: keep explicit migrations and views; dual‑path tests reduce risk.
+- Schema drift: keep explicit migrations and views; dual-path tests reduce risk.
 - Metrics regressions: map existing metrics to new labels; alert on deltas.
 - Cancellation depth: ensure workers check cancellation/lease between chunks.
-- SQLite concurrency: use `BEGIN IMMEDIATE` and atomic update‑with‑select to avoid double leases under write contention.
+- SQLite concurrency: use `BEGIN IMMEDIATE` and atomic update-with-select to avoid double leases under write contention.
 
 ## Timeline (Estimate)
 
-- Phase 1 (core module): 1–2 days
-- Phase 2 (PS façade + wiring): 1–2 days
-- Phase 3 (PS cutover + tests): 0.5–1 day
+- Phase 1 (core module): 1-2 days
+- Phase 2 (PS façade + wiring): 1-2 days
+- Phase 3 (PS cutover + tests): 0.5-1 day
 - Phase 4 (Chatbooks adopt + tests): 1 day
-- Total: ~3.5–6.5 days across short iterations
+- Total: ~3.5-6.5 days across short iterations
 
 ## Acceptance Criteria (DoD)
 
@@ -244,7 +244,7 @@ Fairness:
 ## Open Questions
 
 - Should we standardize queue names across domains (`default`, `high`, `low`)?
-- Do we want optional Redis broker in a future phase for scale‑out workers?
+- Do we want optional Redis broker in a future phase for scale-out workers?
 - How strict should we enforce payload schemas per domain (lightweight Pydantic in adapters)?
 
 ## Appendix A: Example DDL (SQLite)
@@ -385,7 +385,7 @@ WHERE j.id = cte.id
 RETURNING j.*;
 ```
 
-SQLite (transaction + update‑with‑select):
+SQLite (transaction + update-with-select):
 
 ```sql
 BEGIN IMMEDIATE;

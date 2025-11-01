@@ -447,7 +447,7 @@ class LiveMeetingInsights:
             speaker = seg.get("speaker")
             prefix_parts = []
             if start is not None and end is not None:
-                prefix_parts.append(f"[{float(start):0.1f}s–{float(end):0.1f}s]")
+                prefix_parts.append(f"[{float(start):0.1f}s-{float(end):0.1f}s]")
             if speaker:
                 prefix_parts.append(f"{speaker}:")
             prefix = " ".join(prefix_parts)

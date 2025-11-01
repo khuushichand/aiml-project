@@ -482,7 +482,7 @@ def process_db_messages_to_rich_ui_history(
             user_messages_seen += 1
             continue
 
-        # Unknown sender handling – preserve legacy behaviour by treating as character
+        # Unknown sender handling - preserve legacy behaviour by treating as character
         # Redact message content in logs to avoid leaking sensitive data
         try:
             _len = len(processed_content) if isinstance(processed_content, str) else 0

@@ -455,7 +455,7 @@ def load_chat_history_from_file_and_save_to_db(
             logger.error("No chat history source provided (file_path or file_content required).")
             return None, None
 
-        # Parse content – prefer JSON, fall back to YAML, finally treat as plain text
+        # Parse content - prefer JSON, fall back to YAML, finally treat as plain text
         def _normalise_chat_data(raw_data: Any) -> Optional[Dict[str, Any]]:
             if isinstance(raw_data, dict):
                 return raw_data

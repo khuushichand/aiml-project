@@ -93,7 +93,7 @@ Voice cloning, also known as voice synthesis or voice mimicry, allows the TTS sy
 
 **Limitations:**
 - Requires GPU with ≥12GB VRAM for best performance (CPU-only works but is slow)
-- Needs at least 3 seconds of clean reference audio; 8–15 seconds recommended
+- Needs at least 3 seconds of clean reference audio; 8-15 seconds recommended
 - Model assets must be downloaded separately (config, semantic codec, emotion model)
 
 **Best Use Cases:**

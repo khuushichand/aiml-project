@@ -149,7 +149,7 @@ async def setup_database():
             print("✅ Database is up to date")
     else:
         # Basic Postgres bootstrap: ensure required tables exist
-        print("⚙️  Non-SQLite database detected – attempting basic schema bootstrap (users, sessions, api_keys, RBAC)...")
+        print("⚙️  Non-SQLite database detected - attempting basic schema bootstrap (users, sessions, api_keys, RBAC)...")
         try:
             # Ensure connection pool and users table
             users_db = await get_users_db()

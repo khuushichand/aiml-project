@@ -109,15 +109,15 @@ finally:
 ## 4. Database Schema
 
 Core tables and views (selected):
-- `character_cards` (+ FTS) – character profiles (JSON: `alternate_greetings`, `tags`, `extensions`)
-- `conversations` (+ FTS) – chat sessions (UUID primary key)
-- `messages` (+ FTS) – chat messages (UUID primary key; optional image fields)
-- `keywords` (+ FTS) – tag registry (unique, case-insensitive)
-- `keyword_collections` (+ FTS) – groups of keywords (optional parent)
-- `notes` (+ FTS) – free-form notes (UUID primary key)
-- Linking tables – `conversation_keywords`, `collection_keywords`, `note_keywords`
+- `character_cards` (+ FTS) - character profiles (JSON: `alternate_greetings`, `tags`, `extensions`)
+- `conversations` (+ FTS) - chat sessions (UUID primary key)
+- `messages` (+ FTS) - chat messages (UUID primary key; optional image fields)
+- `keywords` (+ FTS) - tag registry (unique, case-insensitive)
+- `keyword_collections` (+ FTS) - groups of keywords (optional parent)
+- `notes` (+ FTS) - free-form notes (UUID primary key)
+- Linking tables - `conversation_keywords`, `collection_keywords`, `note_keywords`
 - Flashcards/SRS (since V5): `decks`, `flashcards` (+ FTS), `flashcard_keywords`, `flashcard_reviews`
-- `sync_log` – append-only change log (entity, entity_id, operation, timestamp, client_id, version, payload)
+- `sync_log` - append-only change log (entity, entity_id, operation, timestamp, client_id, version, payload)
 
 Each main entity table (`character_cards`, `conversations`, `messages`, `notes`, `keywords`, `keyword_collections`) includes:
 *   `created_at`: Timestamp of creation.

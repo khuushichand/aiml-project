@@ -196,11 +196,11 @@ async def is_key_over_budget(key_id: int) -> Dict[str, Any]:
     
     Returns:
         A dictionary with:
-        - `over` — `True` if any configured limit is exceeded, `False` otherwise.
-        - `reasons` — list of strings describing which limits were exceeded and the observed/current values (e.g., "day_tokens_exceeded:1234/1000").
-        - `day` — daily usage summary with keys `tokens` (int) and `usd` (float).
-        - `month` — 30-day usage summary with keys `tokens` (int) and `usd` (float).
-        - `limits` — the stored limit configuration for the key (as returned by the database), or an empty dict when no limits exist.
+        - `over` - `True` if any configured limit is exceeded, `False` otherwise.
+        - `reasons` - list of strings describing which limits were exceeded and the observed/current values (e.g., "day_tokens_exceeded:1234/1000").
+        - `day` - daily usage summary with keys `tokens` (int) and `usd` (float).
+        - `month` - 30-day usage summary with keys `tokens` (int) and `usd` (float).
+        - `limits` - the stored limit configuration for the key (as returned by the database), or an empty dict when no limits exist.
     """
     limits = await get_key_limits(key_id)
     if not limits or not limits.get("is_virtual"):

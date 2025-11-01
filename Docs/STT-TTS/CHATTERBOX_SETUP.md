@@ -11,17 +11,17 @@ Key files:
 - Adapter: `tldw_Server_API/app/core/TTS/adapters/chatterbox_adapter.py:1`
 - Provider config (YAML): `tldw_Server_API/app/core/TTS/tts_providers_config.yaml:59`
 - Provider registry/mapping: `tldw_Server_API/app/core/TTS/adapter_registry.py:560`
-- TTS endpoint (OpenAI‑compatible): `tldw_Server_API/app/api/v1/endpoints/audio.py:120`
+- TTS endpoint (OpenAI-compatible): `tldw_Server_API/app/api/v1/endpoints/audio.py:120`
 
 ## Requirements
 - Python 3.11 recommended
 - FFmpeg installed and on PATH (audio resampling/conversion)
 - PyTorch 2.0+ (CUDA or MPS optional, CPU supported)
-- Internet access for first‑time model download, or pre‑download for offline mode
+- Internet access for first-time model download, or pre-download for offline mode
 
 ## Install Options
 
-Option A — Use repo’s extras (dependencies) + vendored chatterbox module (recommended for dev):
+Option A - Use repo’s extras (dependencies) + vendored chatterbox module (recommended for dev):
 ```bash
 pip install -e .[TTS_chatterbox]
 # Optional language preprocessing utilities for multilingual
@@ -29,7 +29,7 @@ pip install -e .[TTS_chatterbox_lang]
 ```
 The repo contains a `chatterbox/` package at the root, so `import chatterbox` resolves locally.
 
-Option B — Install upstream package (when available):
+Option B - Install upstream package (when available):
 ```bash
 pip install chatterbox-tts
 # Or from source
@@ -41,7 +41,7 @@ pip install -e .
 ## Model Weights
 The adapter loads upstream weights via `ChatterboxTTS.from_pretrained()` or `ChatterboxMultilingualTTS.from_pretrained()` which download assets from Hugging Face on first use.
 
-Pre‑download (recommended for servers/CI):
+Pre-download (recommended for servers/CI):
 ```bash
 # Populates the local HF cache and a mirror directory
 huggingface-cli download ResembleAI/chatterbox --local-dir ./models/chatterbox
@@ -75,8 +75,8 @@ providers:
 ```
 
 Additional behavior controlled by env:
-- `CHATTERBOX_AUTO_DOWNLOAD` / `TTS_AUTO_DOWNLOAD` — override auto‑download at runtime
-- `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE` — force offline cache usage
+- `CHATTERBOX_AUTO_DOWNLOAD` / `TTS_AUTO_DOWNLOAD` - override auto-download at runtime
+- `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE` - force offline cache usage
 
 What the adapter reads:
 - Device selection & multilingual: `chatterbox_device`, `chatterbox_use_multilingual`
@@ -100,7 +100,7 @@ You should see Chatterbox listed with its capabilities once the adapter imports 
 
 ## API Usage
 
-Streaming request (OpenAI‑compatible) to `POST /api/v1/audio/speech` (`audio.py:120`):
+Streaming request (OpenAI-compatible) to `POST /api/v1/audio/speech` (`audio.py:120`):
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
   -H "Authorization: Bearer <TOKEN>" \
@@ -114,7 +114,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
   }' --output out.mp3
 ```
 
-Voice cloning (send base64‑encoded reference; ideal duration 5–20s at 24kHz):
+Voice cloning (send base64-encoded reference; ideal duration 5-20s at 24kHz):
 ```bash
 BASE64_AUDIO=$(base64 -i my_voice_24k.wav)
 curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
@@ -145,7 +145,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
 
 Tuning generation (adapter maps emotion+intensity -> `exaggeration`):
 - `emotion`: one of neutral, happy, sad, angry, surprised, fearful, disgusted, excited, calm, confused
-- `emotion_intensity`: 0.0–2.0 (defaults scaled to `exaggeration` in [0.0–1.0])
+- `emotion_intensity`: 0.0-2.0 (defaults scaled to `exaggeration` in [0.0-1.0])
 - Extra params accepted: `cfg_weight`, `temperature`, `repetition_penalty`, `min_p`, `top_p`
 
 Example:
@@ -166,7 +166,7 @@ curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
 ## WebUI Usage
 1. Start the server and open `http://127.0.0.1:8000/webui/`.
 2. Go to the Audio tab, select “Chatterbox”.
-3. Provide input text; optionally upload/mic‑record a reference clip.
+3. Provide input text; optionally upload/mic-record a reference clip.
 4. Adjust emotion intensity (exaggeration), CFG weight, and sampling parameters.
 5. Click Generate to preview.
 
@@ -178,7 +178,7 @@ The WebUI uses the same `/api/v1/audio/speech` endpoint under the hood and will 
 - Adapter streams by encoding waveform into small chunks (~200ms) for immediate playback.
 
 ## Offline & Caching Checklist
-- Pre‑download model with `huggingface-cli` (see above).
+- Pre-download model with `huggingface-cli` (see above).
 - Set `CHATTERBOX_AUTO_DOWNLOAD=0`, `TTS_AUTO_DOWNLOAD=0`.
 - Set `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`.
 - Ensure HF cache contains required safetensors and tokenizer files.
@@ -188,10 +188,10 @@ The WebUI uses the same `/api/v1/audio/speech` endpoint under the hood and will 
 - Install upstream package: `pip install chatterbox-tts`, or use repo’s vendored module with `pip install -e .[TTS_chatterbox]`.
 
 2) Model download blocked/offline
-- Pre‑download via `huggingface-cli download ResembleAI/chatterbox --local-dir ./models/chatterbox` and set offline env vars.
+- Pre-download via `huggingface-cli download ResembleAI/chatterbox --local-dir ./models/chatterbox` and set offline env vars.
 
 3) Voice cloning fails or sounds wrong
-- Use 5–20s single‑speaker WAV/FLAC at 24kHz; avoid noisy or clipped audio.
+- Use 5-20s single-speaker WAV/FLAC at 24kHz; avoid noisy or clipped audio.
 - Convert with ffmpeg:
   ```bash
   ffmpeg -i input.wav -ar 24000 -ac 1 -t 15 ref_24k.wav
@@ -199,7 +199,7 @@ The WebUI uses the same `/api/v1/audio/speech` endpoint under the hood and will 
 
 4) Latency too high
 - Use `device: cuda` if available; reduce `temperature`; ensure no CPU throttling.
-- Adjust CFG weight (~0.3–0.5) for more stable pacing.
+- Adjust CFG weight (~0.3-0.5) for more stable pacing.
 
 5) Multilingual outputs have incorrect accent
 - Set `cfg_weight: 0.0` for language transfer if the reference is a different language.

@@ -1,7 +1,7 @@
 """
 Pydantic schemas for Personalization API.
 
-Scaffold only — minimal models to enable endpoint stubs.
+Scaffold only - minimal models to enable endpoint stubs.
 """
 from __future__ import annotations
 

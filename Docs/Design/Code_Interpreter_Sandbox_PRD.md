@@ -4,14 +4,67 @@ Owner: tldw_server Core Team
 Status: v0.2  
 Last updated: 2025-10-28
 
+## Table of Contents
+- [Revision History](#revision-history)
+- [1) Summary](#1-summary)
+ - [Implementation Status (v0.2)](#implementation-status-v02)
+ - [1) Summary](#1-summary)
+- [2) Problem Statement](#2-problem-statement)
+- [3) Goals and Non-Goals](#3-goals-and-non-goals)
+- [4) Personas](#4-personas)
+- [Glossary](#glossary)
+- [7) Requirements](#7-requirements)
+- [8) Architecture Overview](#8-architecture-overview)
+- [9) API Design (MVP)](#9-api-design-mvp)
+  - [Runtimes Defaults](#runtimes-defaults-quick-reference)
+  - [Spec Versioning](#spec-versioning)
+  - [WebSocket Protocol Details](#websocket-protocol-details)
+  - [State Machine (Runs)](#state-machine-runs)
+- [10) LSP Integration](#10-lsp-integration)
+- [11) MCP Integration](#11-mcp-integration)
+- [12) Security Model](#12-security-model)
+  - [Security Defaults](#security-defaults-quick-reference)
+  - [Policy Hash](#policy-hash)
+- [14) Storage & Artifacts](#14-storage--artifacts)
+- [15) Observability](#15-observability)
+- [16) Performance Targets](#16-performance-targets-mvp)
+- [17) Admin & Policy](#17-admin--policy)
+- [30) Admin API (Implemented)](#30-admin-api-implemented)
+- [28) Client Integration Notes](#28-client-integration-notes-idetools)
+- [33) v0.3 Plan (Draft)](#33-v03-plan-draft)
+
 ## Revision History
-- v0.3 (Draft): Firecracker runner GA (parity with Docker), persistent store + multi‑worker (Postgres/Redis) with shared artifacts, limited interactive runs over WS stdin (opt‑in, capped), egress allowlist policy (opt‑in, DNS pinning), Admin/observability expansions, resume logs via seq, spec_version 1.1 (backward‑compatible) exposing optional fields and runtime capabilities.
-- v0.2: Protocol/schema refinements (final WS envelope + seq on all frames; oneOf session vs one‑shot; startup vs execution timeouts; cancel TERM→grace→KILL + single end frame), runtimes discovery fields (caps: max_cpu/max_mem_mb/max_log_bytes, queue_max_length/queue_ttl_sec, workspace_cap_mb, artifact_ttl_hours, supported_spec_versions), Admin API list/details examples, policy_hash in sessions/runs, Security Defaults table, observability metrics/audit, and vNext outline.
+- v0.3 (Draft): Firecracker runner GA (parity with Docker), persistent store + multi-worker (Postgres/Redis) with shared artifacts, limited interactive runs over WS stdin (opt-in, capped), egress allowlist policy (opt-in, DNS pinning), Admin/observability expansions, resume logs via seq, spec_version 1.1 (backward-compatible) exposing optional fields and runtime capabilities.
+- v0.2: Protocol/schema refinements (final WS envelope + seq on all frames; oneOf session vs one-shot; startup vs execution timeouts; cancel TERM→grace→KILL + single end frame), runtimes discovery fields (caps: max_cpu/max_mem_mb/max_log_bytes, queue_max_length/queue_ttl_sec, workspace_cap_mb, artifact_ttl_hours, supported_spec_versions), Admin API list/details examples, policy_hash in sessions/runs, Security Defaults table, observability metrics/audit, and vNext outline.
 - v0.1: Initial draft of Sandbox PRD (endpoints, flows, and constraints).
 
 ## 1) Summary
 
 Build a secure, configurable code execution service that lets users, agents, and workflows run untrusted code snippets and full applications in isolated sandboxes. Provide an IDE-friendly LSP integration to surface diagnostics, logs, and results inline. Support both Docker containers (Linux/macOS/Windows hosts) and Firecracker microVMs (Linux-only) to balance broad compatibility with stronger isolation where available.
+
+## Implementation Status (v0.2)
+
+Implemented
+- Endpoints: POST `/sessions` (idempotent), POST `/sessions/{id}/files` (safe extract + caps), POST `/runs` (idempotent; oneOf session vs one‑shot), GET `/runs/{id}` (includes `policy_hash` and `resource_usage`), GET `/runtimes` (caps including queue fields), artifacts list and single‑range download, POST `/runs/{id}/cancel` (TERM→grace→KILL).
+- WebSocket logs: stdout/stderr/event/heartbeat/truncated frames with `seq` on all frames; backpressure, log caps, and heartbeats implemented.
+- Docker runner: non‑root UID/GID, read‑only root, tmpfs workdir (`noexec,nodev,nosuid`), `cap_drop=ALL`, `no‑new‑privileges`, pids/nofile ulimits, deny‑all egress by default.
+- Idempotency: TTL window, conflict handling (409) with `prior_id` and key echo.
+- Policy hash: returned on sessions/runs and included in run status; excludes test‑only toggles.
+- Queue/backpressure: queue length + TTL enforced; 429 with `Retry‑After` when full.
+- Admin API: list and details implemented; includes `resource_usage`, `policy_hash`, and `image_digest` when available.
+- Metrics: counters/histograms with `reason` label (e.g., `startup_timeout`, `execution_timeout`); WS heartbeats/disconnects/log truncations and queue drop metrics.
+
+Not yet (planned v0.3 unless noted)
+- Interactive runs over WS stdin and related limits (`stdin_*`).
+- Signed WS URLs tokens + `resume_from_seq` behavior; current servers may return unsigned `log_stream_url` (use auth headers).
+- Egress allowlist policy (domain/IP/CIDR with DNS pinning).
+- Firecracker runner.
+- Persistent shared store (Postgres/Redis) and cluster‑wide admin aggregates; current backends: memory (default) or SQLite.
+- `/runtimes` capability flags (`interactive_supported`, `egress_allowlist_supported`) and top‑level `store_mode` field.
+
+Clarifications
+- Artifact downloads: single‑range supported; multi‑range returns 416.
+- `supported_spec_versions`: default advertises `["1.0"]`; spec 1.1 fields are documented for v0.3.
 
 Primary use cases:
 - Validate LLM-generated code safely, before running it locally.
@@ -25,7 +78,7 @@ Primary use cases:
 Developers increasingly rely on LLMs to generate code. Executing untrusted snippets locally risks compromise, dependency pollution, and state corruption. There’s no unified, policy-controlled way to check code in-context and get actionable diagnostics inside IDEs and chat UIs. We need a safe, consistent, and observable mechanism to run code in isolation with guardrails, and to surface results where developers work.
 
 
-## 3) Goals and Non‑Goals
+## 3) Goals and Non-Goals
 
 ### Goals
 1. Provide a sandboxed code execution service with clear isolation guarantees.
@@ -35,7 +88,7 @@ Developers increasingly rely on LLMs to generate code. Executing untrusted snipp
 5. Support agent/workflow invocation (incl. MCP tool) with policy and approvals.
 6. Capture execution metadata for auditing, reproducibility, and debugging.
 
-### Non‑Goals (Initial)
+### Non-Goals (Initial)
 - Full interactive remote desktops. (Future: optional Jupyter/shell sessions.)
 - Long-running services with inbound ports. (Initial runs are batch-like.)
 - Arbitrary outbound network access. (Default: locked down; allowlist later.)
@@ -51,9 +104,9 @@ Developers increasingly rely on LLMs to generate code. Executing untrusted snipp
 
 ## Glossary
 - Session: An ephemeral workspace and runtime context (image + limits) with a TTL; can accept uploads and run multiple commands. See: [API Design (MVP)](#9-api-design-mvp).
-- Run: A single execution (command + env) either one‑shot or within a session; produces stdout/stderr, exit_code, and optional artifacts; progresses through phases. See: [State Machine (Runs)](#state-machine-runs).
+- Run: A single execution (command + env) either one-shot or within a session; produces stdout/stderr, exit_code, and optional artifacts; progresses through phases. See: [State Machine (Runs)](#state-machine-runs).
 - Artifact: A captured file produced during a run, stored under the run’s artifacts root, subject to size caps and retention TTL; symlinks are not dereferenced. See: [Storage & Artifacts](#14-storage--artifacts).
-- policy_hash: SHA‑256 of canonicalized sandbox policy/config inputs used for reproducibility; included in session/run responses and run status. See: [Policy Hash](#policy-hash).
+- policy_hash: SHA-256 of canonicalized sandbox policy/config inputs used for reproducibility; included in session/run responses and run status. See: [Policy Hash](#policy-hash).
 - spec_version: API/spec version string required in POST `/sessions` and `/runs`, validated against `SANDBOX_SUPPORTED_SPEC_VERSIONS`. See: [Spec Versioning](#spec-versioning).
 
 ## 5) User Stories (MVP → vNext)
@@ -125,7 +178,7 @@ Out of Scope (MVP)
    - Runtime policy: choose Docker or Firecracker; enable/disable networking; allowlist domains (vNext); secrets injection policy.
    - Audit and compliance logs for every run.
 
-### Non‑Functional Requirements
+### Non-Functional Requirements
 - Security/Isolation: Strong default isolation; zero host mounts; read-only base images; immutable root where possible; ephemeral writable layer; no privileged containers.
 - Reliability: Orphan reaper for stuck sessions; idempotent cleanup; retries for transient runtime errors.
 - Performance: P95 run start < 2s for Docker warm image, < 5s for Firecracker warm microVM; log latency < 200ms.
@@ -175,10 +228,10 @@ Endpoints
 
 - POST `/runs`
   - Start a run (one-shot or for existing session). Body: `spec_version`, session_id? base_image? command[], env, `startup_timeout_sec` (image pull/VM boot), `timeout_sec` (execution), resource overrides, network_policy, files? (optional inline small files), capture_patterns. Request shape enforces `oneOf`: either `{ session_id, command }` or `{ base_image, command }`; when `session_id` is omitted, `base_image` is required. Supports `Idempotency-Key` header to dedupe client retries.
-  - Returns: `run_id`, `session_id?`, `log_stream_url?` (pre‑signed or unsigned WS URL).
-  - v0.3 / spec 1.1 (Draft): optional fields for limited interactivity and WS resume:
+  - Returns: `run_id`, `session_id?`, `log_stream_url?` (pre-signed or unsigned WS URL).
+  - v0.3 / spec 1.1: optional fields for limited interactivity and WS resume:
     - `interactive` (bool; default false)
-    - `stdin_max_bytes`, `stdin_max_frame_bytes`, `stdin_bps`, `stdin_idle_timeout_sec` (limits; names TBD)
+    - `stdin_max_bytes`, `stdin_max_frame_bytes`, `stdin_bps`, `stdin_idle_timeout_sec` (limits; finalized names)
     - `resume_from_seq` (number; start WS stream from seq; for reconnect/resume)
 
 - GET `/runs/{run_id}`
@@ -305,22 +358,25 @@ See Timeouts & Defaults under Content Types & Limits for consolidated rules.
 - Field: `spec_version` (string) is required in POST `/sessions` and `/runs`.
 - Initial value: `"1.0"`.
 - Semantics:
-  - Minor (1.x): backward-compatible; server may accept a range (e.g., `1.0`–`1.2`).
+  - Minor (1.x): backward-compatible; server may accept a range (e.g., `1.0`-`1.2`).
   - Major (2.0): potentially breaking; server rejects unsupported majors with `invalid_spec_version`.
 - Discovery: GET `/runtimes` includes `supported_spec_versions` (e.g., `["1.0", "1.1"]`).
 - Validation errors include `details.supported` with accepted versions.
  - Config: Controlled via `SANDBOX_SUPPORTED_SPEC_VERSIONS` (comma- or JSON-list). The server validates `spec_version` against this list and rejects mismatches with `invalid_spec_version` including `details.supported` and `details.provided`.
 
- v0.3 (Spec 1.1 additions — Draft)
- - Backward‑compatible: 1.1 only adds optional fields; 1.0 clients remain supported.
- - POST `/runs` optional fields (names TBD):
-   - `interactive` (bool; default false)
-   - `stdin_max_bytes`, `stdin_max_frame_bytes`, `stdin_bps`, `stdin_idle_timeout_sec`
-   - `resume_from_seq` (number; start WS stream from seq)
- - GET `/runtimes` capability flags (names TBD):
-   - `interactive_supported` (bool)
-   - `egress_allowlist_supported` (bool)
-   - `store_mode` (string: `memory|sqlite|postgres|redis`)
+  v0.3 (Spec 1.1 additions — Finalized)
+  - Backward‑compatible: 1.1 only adds optional fields; 1.0 clients remain supported.
+  - POST `/runs` optional fields:
+    - `interactive` (bool; default false)
+    - `stdin_max_bytes` (integer; total stdin bytes allowed for the run)
+    - `stdin_max_frame_bytes` (integer; per-frame max for client→server `stdin` frames)
+    - `stdin_bps` (integer; max aggregate input bytes per second)
+    - `stdin_idle_timeout_sec` (integer; server closes stdin on idle)
+    - `resume_from_seq` (integer; start WS logs from this sequence if available)
+  - GET `/runtimes` capability flags:
+    - `interactive_supported` (bool)
+    - `egress_allowlist_supported` (bool)
+    - `store_mode` (string: `memory|sqlite|postgres|redis`)
 
 Runtime Limits Normalization
 
@@ -378,15 +434,17 @@ Timeout Outcomes (quick reference)
 ### WebSocket Protocol Details
 - Auth: same bearer/JWT or API key as REST. Optionally a short-lived signed token via `?token=...` may be provided.
 - Endpoint: `WS /runs/{run_id}/stream` with `run_id` path param; no additional subprotocol required.
-- Frames: always UTF‑8 text frames carrying JSON envelopes. For `stdout`/`stderr` payloads, set `encoding` to `base64` and base64‑encode `data` when output is binary; use `encoding`=`utf8` only when `data` is valid UTF‑8. Binary WS frames are not used.
+- Frames: always UTF-8 text frames carrying JSON envelopes. For `stdout`/`stderr` payloads, set `encoding` to `base64` and base64-encode `data` when output is binary; use `encoding`=`utf8` only when `data` is valid UTF-8. Binary WS frames are not used.
   - Sequence numbers: all WS frames include a per-run monotonically increasing `seq` starting at 1. Clients SHOULD use `seq` for ordering, dedup across reconnects, and resuming tails.
   - Heartbeats: server sends `{ "type": "heartbeat", "ts": "ISO", "seq": n }` every ~10s; clients should disconnect after ~30s of silence unless keepalive traffic observed.
-  - Future (vNext): optional client→server frames when interactive runs are enabled: `{ "type": "stdin", "encoding": "utf8"|"base64", "data": "<payload>" }`.
+  - Interactive (spec 1.1): client→server frames when `interactive=true`:
+    - `{ "type": "stdin", "encoding": "utf8"|"base64", "data": "<payload>" }`
+    - Server enforces `stdin_max_frame_bytes`, `stdin_max_bytes`, `stdin_bps`, and `stdin_idle_timeout_sec`. On violation, server emits `{ "type":"event", "event":"stdin_closed", "data": { "reason":"<limit>" }, "seq": <current> }` and closes stdin.
 
-Signed WS URLs (spec)
- - Server MAY return a pre-signed `log_stream_url` in responses (e.g., POST `/runs`, Admin details) containing a short‑lived `token` and an `exp` timestamp. Example:
+ Signed WS URLs (spec)
+ - Server MAY return a pre-signed `log_stream_url` in responses (e.g., POST `/runs`, Admin details) containing a short-lived `token` and an `exp` timestamp. Example:
    - `ws://host/api/v1/sandbox/runs/{run_id}/stream?token=eyJhbGci...&exp=2025-10-28T12:01:00Z`
- - Token semantics: scoped to `run_id`; expires at `exp`; bearer headers not required when `token` is present. TTL defaults are policy‑controlled (TBD).
+ - Token semantics: scoped to `run_id`; expires at `exp`; bearer headers not required when `token` is present. Default TTL: 60 seconds (policy-controlled via `SANDBOX_WS_SIGNED_URL_TTL_SEC`).
 - Clients SHOULD prefer `log_stream_url` when present; otherwise construct the WS URL and use standard auth headers.
  - Servers MAY also return an unsigned `log_stream_url` (no token) when using header-based auth; in that case, clients MUST send the normal auth headers when connecting.
 
@@ -395,10 +453,11 @@ Signed WS URLs (spec)
  - Client can request resume via either:
    - POST `/runs` optional field `resume_from_seq` (spec 1.1) to hint initial stream start; or
    - Query param on WS: `GET .../stream?from_seq=<n>` to start from a specific sequence (inclusive).
- - Server behavior:
-   - If buffered frames contain `from_seq`, stream from that sequence; otherwise stream from earliest retained and include a best‑effort gap note in the first `event` frame (TBD exact field).
+  - Server behavior:
+   - If buffered frames contain `from_seq`, stream from that sequence; otherwise stream from earliest retained and emit a resume note event before the first delivered frame:
+     - `{ "type": "event", "event": "resume", "data": { "requested_from_seq": n, "delivered_from_seq": m, "lost_count": m - n }, "seq": m }`
    - When neither provided, stream from the current tail.
- - Buffering limits are policy‑controlled; clients SHOULD handle gaps and reorder using `seq`.
+ - Buffering limits are policy-controlled; clients SHOULD handle gaps and reorder using `seq`.
 
 Deprecated envelopes: any WS shapes that omit `seq` or use `data_b64`, `channel`, or `chunk` fields are no longer supported.
   Example: Start a one-shot Python run
@@ -533,7 +592,7 @@ Key UX
 Protocol Hooks
 - `tldw.sandbox.run`
   - Args: file list or tar stream reference, working directory, runtime/image, command, env, startup_timeout_sec, timeout_sec, capture patterns.
-  - Resp: run_id, initial status, optional `log_stream_url`; client opens WS to stream logs. Note: URL may be unsigned when header-based auth is used—include auth headers.
+  - Resp: run_id, initial status, optional `log_stream_url`; client opens WS to stream logs. Note: URL may be unsigned when header-based auth is used-include auth headers.
 - `tldw.sandbox.configure`
   - Configure defaults (runtime/image, policy hints) per workspace.
 - `tldw.sandbox.openArtifacts`
@@ -676,6 +735,18 @@ Range: bytes=0-1023
   Notes
   - Path normalization is enforced: absolute paths and any `..` segments are rejected; downloads are scoped to the run's artifacts root.
   - Symlinks are not dereferenced; artifact listings show symlink metadata only.
+  - Content type is detected server-side using MIME sniffing; unknown types fall back to `application/octet-stream`.
+
+  Multi-Range behavior
+  - v0.2 does not support multi-range requests. When a `Range` header specifies multiple ranges, the server returns `416 Range Not Satisfiable`.
+  - Example
+  ```http
+  HTTP/1.1 416 Range Not Satisfiable
+  Content-Range: bytes */12345
+  Content-Type: application/problem+json
+  
+  { "error": { "code": "invalid_request", "message": "Multi-range not supported", "details": { "ranges": 2 } } }
+  ```
 
 
 ## 11) MCP Integration
@@ -706,7 +777,7 @@ Policy and RBAC are enforced server-side; agent invocations are auditable. When 
 
 Implementation (stub)
 - MCP Unified module now exposes `sandbox.run` (management tool) via a stub Sandbox module.
-- Tool schema with `oneOf` is returned by MCP; module validates arguments (session vs one‑shot) and executes via internal SandboxService.
+- Tool schema with `oneOf` is returned by MCP; module validates arguments (session vs one-shot) and executes via internal SandboxService.
 - Result includes `run_id`, `log_stream_url` (when streaming is enabled), `policy_hash`, and `image_digest` when available. Logs stream over WebSocket; for artifacts, use REST endpoints directly.
 - Enable module at runtime with `MCP_ENABLE_SANDBOX_MODULE=1`.
 
@@ -750,7 +821,7 @@ User Identity & Default Limits
 
 Profiles
 - Default profiles are shipped and enabled by default when present:
-  - Seccomp: `tldw_Server_API/Config_Files/sandbox/seccomp_default.json` (hardened baseline). Enable via `SANDBOX_DOCKER_SECCOMP` (path) — enabled by default when the file exists.
+  - Seccomp: `tldw_Server_API/Config_Files/sandbox/seccomp_default.json` (hardened baseline). Enable via `SANDBOX_DOCKER_SECCOMP` (path) - enabled by default when the file exists.
   - AppArmor: `tldw_Server_API/Config_Files/sandbox/apparmor/tldw-sandbox.profile` (example profile). Load with `apparmor_parser` and set `SANDBOX_DOCKER_APPARMOR_PROFILE=tldw-sandbox`.
 - Development opt-out (not recommended for production): unset `SANDBOX_DOCKER_SECCOMP` and/or set `SANDBOX_DOCKER_APPARMOR_PROFILE` to a non-enforcing profile. Document deviations in audit logs.
 
@@ -791,7 +862,7 @@ Storage Layout (reference)
 - GC: periodic sweeper deletes expired sessions/runs on a configurable interval (default 15 minutes); deletes are scoped strictly to these roots with path normalization and safeguards.
 
 -Store & Metadata (current)
-- MVP default store: `memory` (`SANDBOX_STORE_BACKEND=memory`) suitable for dev/tests and simple single‑node deployments.
+- MVP default store: `memory` (`SANDBOX_STORE_BACKEND=memory`) suitable for dev/tests and simple single-node deployments.
 - Optional persistent store: SQLite (`SANDBOX_STORE_BACKEND=sqlite`) to persist runs and idempotency across restarts; recommended for durability.
 - SQLite path defaults to `<PROJECT_ROOT>/tmp_dir/sandbox/meta/sandbox_store.db` (override with `SANDBOX_STORE_DB_PATH`).
 - Stored fields: run id, owner, spec_version, runtime, runtime_version, base_image, image_digest, phase, exit_code, timestamps, message, policy_hash; idempotency fingerprints with TTL.
@@ -810,12 +881,19 @@ Metrics
 - Suggested metrics (prefix `sandbox_`):
   - `sandbox_sessions_created_total{runtime}`
   - `sandbox_runs_started_total{runtime}`
-  - `sandbox_runs_completed_total{runtime,outcome}`
-  - `sandbox_run_duration_seconds{runtime,outcome}` (histogram)
+  - `sandbox_runs_completed_total{runtime,outcome,reason}`
+  - `sandbox_run_duration_seconds{runtime,outcome,reason}` (histogram)
   - `sandbox_queue_wait_seconds{runtime}` (histogram)
+  - `sandbox_queue_full_total{component,runtime,reason}`
+  - `sandbox_queue_ttl_expired_total{component,runtime,reason}`
   - `sandbox_upload_bytes_total{kind}` and `sandbox_upload_files_total{kind}`
-  - `sandbox_log_bytes_total{run_id?,runtime}` and `sandbox_log_truncated_total{reason}`
-  - `sandbox_ws_heartbeats_sent_total{runtime}` and `sandbox_ws_disconnects_total{reason}`
+  - `sandbox_log_bytes_total{runtime}` and `sandbox_log_truncations_total{component,reason}`
+  - `sandbox_ws_connections_opened_total{component}`
+  - `sandbox_ws_heartbeats_sent_total{component}` and `sandbox_ws_disconnects_total{component}`
+  - `sandbox_ws_queue_drops_total{component,reason}`
+
+Notes
+- The `reason` label conveys terminal outcome or truncation/drop cause when applicable, e.g., `startup_timeout`, `execution_timeout`, `killed`, `log_cap`, `drop_oldest`.
 
 Logs
 - Structured JSON logs with trace_id, user_id, run_id, runtime, image, command, exit_code, error class, and policy decisions.
@@ -890,7 +968,7 @@ Warm Pools & Caching
 ### Operations & Scaling (Summary)
 - Queue/backpressure defaults: `queue_max_length=100`, `queue_ttl_sec=120` (configurable via env). When full, return HTTP 429 with `Retry-After`. When accepted but queued, respond with `phase=queued` and optionally `estimated_start_time`.
 - Storage layout and GC: see Storage & Artifacts for directory scheme and GC schedule driven by `artifact_ttl_hours`. Artifacts never follow symlinks; path normalization enforced on download.
-- Persistence: MVP defaults to in‑memory store for simplicity; an optional SQLite store is available for durability. vNext: a persistent shared store (Redis/PostgreSQL) for multi‑worker durability and shared idempotency.
+- Persistence: MVP defaults to in-memory store for simplicity; an optional SQLite store is available for durability. vNext: a persistent shared store (Redis/PostgreSQL) for multi-worker durability and shared idempotency.
 
 
 ## 17) Admin & Policy
@@ -930,23 +1008,24 @@ See also: [Security Defaults](#security-defaults-quick-reference)
 - `SANDBOX_CANCEL_GRACE_SECONDS` (default 5)
 - `SANDBOX_QUEUE_MAX_LENGTH` (default 100)
   - `SANDBOX_QUEUE_TTL_SEC` (default 120)
-  - `SANDBOX_WS_POLL_TIMEOUT_SEC` (default 30) — server WS loop poll timeout for pending frames
-  - `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS` (default false) — test-only; when true, WS streams emit synthetic start/end frames and keep the socket open after `end` for CI stability. Not for production use.
+- `SANDBOX_WS_POLL_TIMEOUT_SEC` (default 30) — server WS loop poll timeout for pending frames
+- `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS` (default false) — test-only; when true, WS streams emit synthetic start/end frames and keep the socket open after `end` for CI stability. Not for production use.
+ - `SANDBOX_WS_SIGNED_URL_TTL_SEC` (default 60) — TTL for signed `log_stream_url` tokens when enabled
 
 ### Security Defaults (quick reference)
 
 | Feature | Default | Config/Path | Notes |
 |---|---|---|---|
-| Network egress | deny_all | `SANDBOX_NETWORK_DEFAULT=deny_all` | Git clones done server‑side pre‑start; sandbox has no egress |
-| Root filesystem | read‑only | fixed | Writes only to tmpfs mounts |
+| Network egress | deny_all | `SANDBOX_NETWORK_DEFAULT=deny_all` | Git clones done server-side pre-start; sandbox has no egress |
+| Root filesystem | read-only | fixed | Writes only to tmpfs mounts |
 | Writable mounts | tmpfs with `noexec,nodev,nosuid` | fixed | `/workspace`, `/tmp` |
-| User | non‑root randomized UID/GID | fixed | No supplemental groups |
-| Capabilities | drop all + no‑new‑privileges | fixed | Docker `cap_drop=ALL`, `--security-opt no-new-privileges` |
+| User | non-root randomized UID/GID | fixed | No supplemental groups |
+| Capabilities | drop all + no-new-privileges | fixed | Docker `cap_drop=ALL`, `--security-opt no-new-privileges` |
 | Seccomp | enabled when profile present | `SANDBOX_DOCKER_SECCOMP=.../seccomp_default.json` | Default bundled profile path |
 | AppArmor | optional (enabled when loaded) | `SANDBOX_DOCKER_APPARMOR_PROFILE=tldw-sandbox` | Example bundled profile name |
 | Ulimits | `nofile=1024`, `nproc=512` | `SANDBOX_ULIMIT_NOFILE`, `SANDBOX_ULIMIT_NPROC` | RLIMITs enforced in runner |
-| PIDs limit | 256 | `SANDBOX_PIDS_LIMIT` | Per‑container PIDs cap |
-| Logs cap | 10 MB | `SANDBOX_MAX_LOG_BYTES` | Per‑run WS log cap |
+| PIDs limit | 256 | `SANDBOX_PIDS_LIMIT` | Per-container PIDs cap |
+| Logs cap | 10 MB | `SANDBOX_MAX_LOG_BYTES` | Per-run WS log cap |
 | Workspace cap | 256 MB | `SANDBOX_WORKSPACE_CAP_MB` | Safe extract honors cap |
 | Artifacts TTL | 24 h | `SANDBOX_ARTIFACT_TTL_HOURS` | GC sweeper deletes expired |
 
@@ -965,7 +1044,7 @@ See also: [Security Defaults](#security-defaults-quick-reference)
   - Exclusions: Test-only toggles (e.g., `SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS`) are intentionally excluded from `policy_hash`.
 - Algorithm:
   - Construct a JSON object with the above keys and their effective values, normalize types (numbers as numbers, booleans as booleans), and sort keys lexicographically.
-  - Serialize to UTF‑8 JSON without whitespace differences (canonical form) and compute SHA‑256.
+  - Serialize to UTF-8 JSON without whitespace differences (canonical form) and compute SHA-256.
   - Represent as lowercase hex (64 chars). Example: `9f86d081884c7d659a2feaa0c55ad015...`.
   - Versioning: Prefix the hash input with a static string `tldw.sandbox.policy:v1\n` to allow future schema evolution without collisions.
 
@@ -973,7 +1052,6 @@ Feature Discovery Payload (example)
 ```
 GET /api/v1/sandbox/runtimes
 {
-  "store_mode": "memory",
   "runtimes": [
     {
       "name": "docker",
@@ -990,9 +1068,7 @@ GET /api/v1/sandbox/runtimes
       "queue_ttl_sec": 120,
       "workspace_cap_mb": 256,
       "artifact_ttl_hours": 24,
-      "supported_spec_versions": ["1.0", "1.1"],
-      "interactive_supported": true,
-      "egress_allowlist_supported": true,
+      "supported_spec_versions": ["1.0"],
       "notes": null
     },
     {
@@ -1015,16 +1091,25 @@ GET /api/v1/sandbox/runtimes
   ]
 }
 ```
+Note: v0.3 will add `store_mode` at the top level and capability flags like
+`interactive_supported` and `egress_allowlist_supported` per runtime when those
+features are enabled.
 
-Egress Allowlist (v0.3 — Draft)
-- Opt‑in policy; deny_all remains default. Applied per run/session per policy.
+Egress Allowlist (v0.3)
+- Opt-in policy; deny_all remains default. Applied per run/session. Server-wide policy may narrow but not widen per-run allowlists.
 - Rule format:
-  - Exact host: `example.com`
-  - Wildcard subdomains: `*.example.com`
-  - CIDR blocks: `203.0.113.0/24`
-- DNS pinning: resolve allowed hostnames at run start; pin IPs for duration to avoid TOCTOU; re-resolution disallowed mid-run.
+  - `hosts`: array of strings with exact hosts or wildcards (e.g., `"example.com"`, `"*.example.com"`)
+  - `cidrs`: array of CIDR blocks (e.g., `"203.0.113.0/24"`)
+  - `ips`: array of literal IPs (IPv4/IPv6)
+- Precedence
+  - Effective allowlist = intersection of server policy and per-run policy (per-run may only further restrict).
+  - Deny-by-default when no rule matches. No implicit wildcards.
+- DNS pinning: resolve allowed hostnames at run start; pin IPs for duration to avoid TOCTOU; no mid-run re-resolution.
 - Path/port rules: out of scope for v0.3; only egress domain/IP controls.
-- TBD: allowlist source of truth (policy vs static config), wildcard semantics, and audit event fields.
+- Audit fields (examples):
+  - `sandbox.run.egress_allowed` { host, ip, matched_rule, runtime, run_id }
+  - `sandbox.run.egress_denied` { host, ip, matched_rule?, reason, runtime, run_id }
+  - Reasons include: `no_match`, `dns_mismatch`, `policy_changed`.
 
 
 ## 18) IDE/Web UI Experience
@@ -1058,7 +1143,7 @@ Phase 2: Firecracker Support
 Phase 3: Sessions & Caching
 - Short-lived sessions; warm pools; optional read-only network allowlists.
 
-Phase 4: Approvals & Secrets (opt‑in)
+Phase 4: Approvals & Secrets (opt-in)
 - Manual approval gates; scoped secret mounts; enhanced auditing.
 
 
@@ -1234,7 +1319,7 @@ RFC 7807 (application/problem+json) mapping (optional)
 
 ## 27) Admin: Inspecting the SQLite Store (Appendix)
 
-This section provides quick, copy‑paste snippets to inspect the SQLite store when configured as the backend for the sandbox service.
+This section provides quick, copy-paste snippets to inspect the SQLite store when configured as the backend for the sandbox service.
 
 Defaults
 - Location (default): `<PROJECT_ROOT>/tmp_dir/sandbox/meta/sandbox_store.db`
@@ -1274,7 +1359,7 @@ ORDER BY created_at DESC
 LIMIT 5;
 ```
 
-Per‑user artifact bytes
+Per-user artifact bytes
 ```
 SELECT user_id, artifact_bytes FROM sandbox_usage ORDER BY artifact_bytes DESC;
 ```
@@ -1286,31 +1371,31 @@ DELETE FROM sandbox_idempotency WHERE created_at < strftime('%s','now') - 600; -
 ```
 
 Notes
-- The store is single‑node and intended for a single server process. For multi‑worker or multi‑node, migrate to a shared SQL database and a shared artifact bucket.
-- Timestamps in `sandbox_runs` are ISO‑8601 strings; prefer lexicographical order for recency.
+- The store is single-node and intended for a single server process. For multi-worker or multi-node, migrate to a shared SQL database and a shared artifact bucket.
+- Timestamps in `sandbox_runs` are ISO-8601 strings; prefer lexicographical order for recency.
 
 ## 28) Client Integration Notes (IDE/Tools)
 
 HTTP requests
-- Headers: `Authorization: Bearer <jwt>` (multi‑user) or `X-API-KEY: <key>` (single‑user), matching server auth mode.
+- Headers: `Authorization: Bearer <jwt>` (multi-user) or `X-API-KEY: <key>` (single-user), matching server auth mode.
 - Idempotency: set `Idempotency-Key` on POST `/sessions` and `/runs`; reuse the same value on retries to dedupe.
 - Content negotiation: `Content-Type: application/json` (uploads: `multipart/form-data` or `application/x-tar`); `Accept: application/json` or `application/problem+json`.
 
 WebSocket logs
 - URL: `ws(s)://<host>/api/v1/sandbox/runs/{run_id}/stream[?token=<signed>][&from_seq=<n>]`.
-- Auth: same headers as REST or short‑lived `token` query. No subprotocol.
-- Frames: UTF‑8 JSON envelopes; `stdout`/`stderr` set `encoding` to `utf8` or `base64` per payload.
+- Auth: same headers as REST or short-lived `token` query. No subprotocol.
+- Frames: UTF-8 JSON envelopes; `stdout`/`stderr` set `encoding` to `utf8` or `base64` per payload.
 - Ordering: all frames (including `heartbeat` and `truncated`) include `seq`; use it for ordering and dedup across reconnects.
 - Heartbeats: expect `{ "type": "heartbeat", "ts": "ISO", "seq": n }` every ~10s; if no frames for >30s, treat as dead and reconnect.
  - Reconnect: exponential backoff with jitter (1s → 2s → 4s … cap 30s). If run is already completed, skip reconnect and poll `GET /runs/{id}` for final status.
- - UI truncation: IDEs may truncate displayed logs (e.g., first 100KB per stream) and show a “View full logs in Web UI” link to `/webui/sandbox/runs/{id}`. Server enforces per‑run log caps independently.
+ - UI truncation: IDEs may truncate displayed logs (e.g., first 100KB per stream) and show a “View full logs in Web UI” link to `/webui/sandbox/runs/{id}`. Server enforces per-run log caps independently.
 
  
 
-Handling 429 with Retry‑After
-- When queue is full, server returns `429 Too Many Requests` with `Retry-After` (seconds or HTTP‑date). Wait at least that interval before retrying.
-- On retry, reuse the same `Idempotency-Key` and identical body to receive the original result if the first attempt succeeded server‑side.
-- Avoid retry storms: cap concurrent retries per workspace, add jitter (+/‑10%), and respect any provided `estimated_start_time` when requests are accepted but queued.
+Handling 429 with Retry-After
+- When queue is full, server returns `429 Too Many Requests` with `Retry-After` (seconds or HTTP-date). Wait at least that interval before retrying.
+- On retry, reuse the same `Idempotency-Key` and identical body to receive the original result if the first attempt succeeded server-side.
+- Avoid retry storms: cap concurrent retries per workspace, add jitter (+/-10%), and respect any provided `estimated_start_time` when requests are accepted but queued.
 
 ## 29) Store Data Model (Appendix)
 
@@ -1322,19 +1407,19 @@ Tables (current)
 
 - `sandbox_idempotency`
   - Keys: `(endpoint, user_key, key)` (PK)
-  - Columns: `fingerprint` (SHA‑256 of canonical request body), `object_id` (run/session id), `response_body` (JSON), `created_at` (epoch seconds).
+  - Columns: `fingerprint` (SHA-256 of canonical request body), `object_id` (run/session id), `response_body` (JSON), `created_at` (epoch seconds).
   - Purpose: Dedupe client retries across `/sessions` and `/runs`.
   - TTL: Old rows pruned by TTL (config: `SANDBOX_IDEMPOTENCY_TTL_SEC`).
 
 - `sandbox_usage`
   - Keys: `user_id` (PK)
   - Columns: `artifact_bytes` (cumulative snapshot updated by orchestrator).
-  - Purpose: Enforce per‑user artifact byte caps.
+  - Purpose: Enforce per-user artifact byte caps.
 
 Relationships & Notes
 - `sandbox_runs.user_id` is a string identifier; no foreign key to an auth table.
 - Idempotency rows are independent; `object_id` may reference `sandbox_runs.id` or a session id.
-- Cleanup jobs should combine DB row deletion with on‑disk artifact retention policy (`SANDBOX_ARTIFACT_TTL_HOURS`).
+- Cleanup jobs should combine DB row deletion with on-disk artifact retention policy (`SANDBOX_ARTIFACT_TTL_HOURS`).
 - For HA scenarios, use a shared SQL DB and a shared filesystem/object store for artifacts.
 
 Suggested Indexes (SQLite reference DDL)
@@ -1364,19 +1449,19 @@ Notes
 Status: Implemented in v0.2
 
 Purpose
-- Provide read‑only administrative endpoints to inspect sandbox runs, idempotency entries, and usage without direct DB access.
+- Provide read-only administrative endpoints to inspect sandbox runs, idempotency entries, and usage without direct DB access.
 - Scope is limited to metadata; no mutation beyond potential future GC/troubleshooting actions.
 
 Auth & RBAC
 - Require admin privileges (e.g., `is_admin=true` or specific RBAC role `sandbox_admin`).
 - All responses redact sensitive fields and respect tenant boundaries where applicable.
 
-Endpoints (read‑only)
+Endpoints (read-only)
 - `GET /api/v1/sandbox/admin/runs`
   - Query params: 
     - Paging/sort: `limit` (default 50, max 200), `offset` (default 0), `sort` (started_at|finished_at desc/asc)
     - Filters: `user_id?`, `phase?`, `runtime?`, `q?` (search base_image/message), `image_digest?` (exact digest, e.g., `sha256:...`), `base_image?` (e.g., `python:3.11-slim`),
-      `started_at_from?` (ISO‑8601), `started_at_to?` (ISO‑8601), `finished_at_from?` (ISO‑8601), `finished_at_to?` (ISO‑8601).
+      `started_at_from?` (ISO-8601), `started_at_to?` (ISO-8601), `finished_at_from?` (ISO-8601), `finished_at_to?` (ISO-8601).
       - Date filters are inclusive on boundaries and use server UTC.
   - Response: `{ items: [ { id, user_id, spec_version, runtime, runtime_version, base_image, phase, exit_code, started_at, finished_at, image_digest, policy_hash } ], total: number, limit: number, offset: number, has_more: boolean }`.
   - Example
@@ -1484,17 +1569,63 @@ Endpoints (read‑only)
   - Response: `{ items: [ { user_id, artifact_bytes } ] }` (top N by bytes; supports `limit`).
 
 Operational Notes
-- Backed by the configured store (memory or SQLite). For multi‑node, these endpoints should read from a shared DB.
+- Backed by the configured store (memory or SQLite). For multi-node, these endpoints should read from a shared DB.
 - Enforce rate limits and paging to avoid expensive scans.
 - Do not return inline artifact data; continue to use the artifacts endpoints with auth.
 
 See also: [Store Data Model (Appendix)](#29-store-data-model-appendix)
 
-v0.3 (Draft) — Cluster View and Aggregates
-- Extend list/details to operate cluster‑wide across workers; add `node_id` and `worker_id` to run metadata. TBD: exact field names.
-- Add aggregate endpoints for operational dashboards (TBD):
-  - `GET /api/v1/sandbox/admin/metrics` — returns counters/histograms (queue_full, ttl_expired, heartbeats, disconnects, log_truncated).
-  - `GET /api/v1/sandbox/admin/usage/summary` — totals by user/runtime/time window; supports date filters.
+v0.3 — Cluster View and Aggregates
+- Extend list/details to operate cluster‑wide across workers; add `node_id` and `worker_id` to run metadata.
+- Aggregate endpoints for operational dashboards:
+  - `GET /api/v1/sandbox/admin/metrics` — returns a map of metrics with series per label-set. Example:
+    ```json
+    {
+      "sandbox_runs_completed_total": [
+        {"labels": {"runtime":"docker","outcome":"completed","reason":"exit_code_0"}, "value": 128},
+        {"labels": {"runtime":"docker","outcome":"timed_out","reason":"execution_timeout"}, "value": 3}
+      ],
+      "sandbox_run_duration_seconds_sum": [
+        {"labels": {"runtime":"docker","outcome":"completed","reason":"exit_code_0"}, "value": 912.4}
+      ],
+      "sandbox_run_duration_seconds_count": [
+        {"labels": {"runtime":"docker","outcome":"completed","reason":"exit_code_0"}, "value": 128}
+      ],
+      "sandbox_queue_full_total": [
+        {"labels": {"component":"orchestrator","runtime":"docker","reason":"queue_full"}, "value": 7}
+      ],
+      "sandbox_ws_heartbeats_sent_total": [
+        {"labels": {"component":"ws"}, "value": 4521}
+      ],
+      "sandbox_log_truncations_total": [
+        {"labels": {"component":"ws","reason":"log_cap"}, "value": 2}
+      ],
+      "sandbox_ws_queue_drops_total": [
+        {"labels": {"component":"ws","reason":"drop_oldest"}, "value": 4}
+      ]
+    }
+    ```
+  - `GET /api/v1/sandbox/admin/usage/summary` — totals by user/runtime/time window; supports date filters. Example:
+    ```json
+    {
+      "window": {"from":"2025-10-28T12:00:00Z","to":"2025-10-28T13:00:00Z"},
+      "totals": {
+        "runs": 256,
+        "completed": 240,
+        "failed": 12,
+        "timed_out": 4,
+        "log_bytes": 1048576,
+        "artifact_bytes": 7340032
+      },
+      "by_runtime": [
+        {"runtime":"docker","runs":256,"completed":240,"log_bytes":1048576,"artifact_bytes":7340032}
+      ],
+      "top_users": [
+        {"user_id":"user_123","runs":40,"artifact_bytes":5242880},
+        {"user_id":"user_456","runs":38,"artifact_bytes":1048576}
+      ]
+    }
+    ```
 - Pagination and filters remain as in v0.2; add `node_id` filter.
 
 Future (optional)
@@ -1510,51 +1641,53 @@ Future (optional)
 
 ## 32) vNext (Document Only)
 
-Interactive Runs over WebSocket (opt‑in)
-- Mode: opt‑in per run (e.g., `"interactive": true`), disabled by default.
+Interactive Runs over WebSocket (opt-in)
+- Mode: opt-in per run (e.g., `"interactive": true`), disabled by default.
 - Client→server frames: `{ "type": "stdin", "encoding": "utf8"|"base64", "data": "<payload>" }`; server closes stdin automatically at terminal states. Optional `{ "type": "stdin_close" }` to signal EOF.
-- Non‑TTY: no PTY allocation by default; input is piped to the process’s stdin; no interactive shells are permitted unless explicitly enabled by policy.
-- Limits: per‑frame max size (e.g., 64KB), input rate limit (bytes/sec), and total input cap per run (e.g., 1 MB); idle timeout (e.g., 30s) after last client input.
-- Security posture: deny‑all egress remains; same sandbox isolation as non‑interactive runs; logs continue to stream via WS; inputs may be audited. Potential config keys (document only): `SANDBOX_INTERACTIVE_MAX_FRAME_BYTES`, `SANDBOX_INTERACTIVE_MAX_BYTES`, `SANDBOX_INTERACTIVE_INPUT_BPS`, `SANDBOX_INTERACTIVE_IDLE_TIMEOUT_SEC`.
+- Non-TTY: no PTY allocation by default; input is piped to the process’s stdin; no interactive shells are permitted unless explicitly enabled by policy.
+- Limits: per-frame max size (e.g., 64KB), input rate limit (bytes/sec), and total input cap per run (e.g., 1 MB); idle timeout (e.g., 30s) after last client input.
+- Security posture: deny-all egress remains; same sandbox isolation as non-interactive runs; logs continue to stream via WS; inputs may be audited. Potential config keys (document only): `SANDBOX_INTERACTIVE_MAX_FRAME_BYTES`, `SANDBOX_INTERACTIVE_MAX_BYTES`, `SANDBOX_INTERACTIVE_INPUT_BPS`, `SANDBOX_INTERACTIVE_IDLE_TIMEOUT_SEC`.
  - See also: [WebSocket Protocol Details](#websocket-protocol-details).
 
 Firecracker Runner (Phase 2)
 - Plan: implement a Firecracker runtime alongside Docker; one microVM per run/session; immutable root with writable scratch; snapshot lifecycle and kernel pinning.
-- Normalization notes: `resources.cpu` maps to rounded‑up vCPUs (e.g., 1.5 → 2 vCPU); `resources.memory_mb` maps to microVM RAM size (rounded to supported increments). Networking disabled by default; device exposure minimized.
+- Normalization notes: `resources.cpu` maps to rounded-up vCPUs (e.g., 1.5 → 2 vCPU); `resources.memory_mb` maps to microVM RAM size (rounded to supported increments). Networking disabled by default; device exposure minimized.
 - Telemetry: report `runtime=firecracker`, `runtime_version` (firecracker build), `image_digest` (base image → VM image mapping), and include in `policy_hash` inputs.
  - See also: [Firecracker vs Docker (Appendix)](#24-firecracker-vs-docker-appendix).
 
 Persistent Store (Pluggable backends)
 - Goal: multi‑worker durability and shared idempotency; support process restarts and horizontal scale.
-- Backends: `sqlite` (single‑node durable) and future `redis`/`postgres` (shared). Keys: runs, sessions, idempotency, usage, queue state; artifact metadata stored alongside filesystem/object store.
+- Backends: `memory` (dev), `sqlite` (single‑node durable), and future `postgres`/`redis` (shared).
+  - `store_mode` naming (as advertised by `/runtimes`): `memory|sqlite|postgres|redis`.
+  - Keys: runs, sessions, idempotency, usage, queue state; artifact metadata stored alongside filesystem/object store.
 - Semantics: idempotency scope preserved across workers; background workers pick up queued runs from shared store; GC operates with distributed locking.
 
 Security Test Suite (Documented cases)
 - Archive attacks: zip/tar bombs (deep nesting, huge file counts) must be detected and aborted within caps.
-- Path traversal/symlink escape: block `..`, absolute paths, symlinks/hardlinks/device nodes; never write outside workspace; symlinks treated as zero‑length metadata.
-- Fork‑bomb/process flood: enforce `--pids-limit` and RLIMIT_NPROC; ensure termination without host impact.
+- Path traversal/symlink escape: block `..`, absolute paths, symlinks/hardlinks/device nodes; never write outside workspace; symlinks treated as zero-length metadata.
+- Fork-bomb/process flood: enforce `--pids-limit` and RLIMIT_NPROC; ensure termination without host impact.
 - Stdout/stderr flood: enforce server log caps and WS backpressure; emit `truncated` frames.
-- File descriptor exhaustion: enforce `ulimit nofile`; validate stability under many‑FD attempts.
+- File descriptor exhaustion: enforce `ulimit nofile`; validate stability under many-FD attempts.
 - Signals/cancel: verify TERM→grace→KILL sequence and single final WS `end` frame.
 
 ## 33) v0.3 Plan (Draft)
 
 Scope
 - Firecracker GA: parity with Docker (timeouts, cancel, artifacts, logs); hardened defaults; snapshot lifecycle; kernel pinning. TBD: exact profiles/images.
-- Persistent Store: Postgres/Redis backends for runs/sessions/idempotency/queue; shared artifact bucket; process‑safe locks; queue TTL and pruning across workers. TBD: schema revisions and indexes.
-- Interactive Runs: WS stdin (utf8|base64), per‑frame/total caps, input rate limit, idle timeout; opt‑in policy flag; audited. TBD: final field names and limits.
-- Egress Allowlist: opt‑in domain/IP/CIDR rules with DNS pinning; deny_all default retained; optional signed proxy. TBD: policy format and precedence.
-- Admin/Observability: cluster‑wide list/details; aggregate metrics endpoints; additional counters (queue_full, ttl_expired, heartbeats, disconnects, log_truncated). TBD: metric names.
-- WS/Artifacts: resume logs via `resume_from_seq`; short‑lived signed WS URLs; artifact multi‑range support (or explicit 416 rejection).
+- Persistent Store: Postgres/Redis backends for runs/sessions/idempotency/queue; shared artifact bucket; process-safe locks; queue TTL and pruning across workers. TBD: schema revisions and indexes.
+- Interactive Runs: WS stdin (utf8|base64), per-frame/total caps, input rate limit, idle timeout; opt-in policy flag; audited. TBD: final field names and limits.
+- Egress Allowlist: opt-in domain/IP/CIDR rules with DNS pinning; deny_all default retained; optional signed proxy. TBD: policy format and precedence.
+- Admin/Observability: cluster-wide list/details; aggregate metrics endpoints; additional counters (queue_full, ttl_expired, heartbeats, disconnects, log_truncations, queue_drops). TBD: metric names.
+- WS/Artifacts: resume logs via `resume_from_seq`; short-lived signed WS URLs; artifact multi-range support (or explicit 416 rejection).
 
 API and Spec
-- Bump `spec_version` to `1.1` (backward‑compatible). New optional fields only.
+- Bump `spec_version` to `1.1` (backward-compatible). New optional fields only.
 - POST `/runs`: `interactive`, stdin limit keys, `resume_from_seq` (names TBD; see Spec Versioning notes).
 - GET `/runtimes`: add `interactive_supported`, `egress_allowlist_supported`, `store_mode`.
 
 Acceptance Criteria (v0.3)
 - Firecracker runner passes the same suite as Docker (timeouts, cancel, artifacts, logs, caps).
-- Persistent store supports multi‑worker idempotency, durable queue, and artifact metadata; shared bucket GC.
+- Persistent store supports multi-worker idempotency, durable queue, and artifact metadata; shared bucket GC.
 - Interactive runs work behind policy with audited stdin and enforced caps; reconnection resumes from seq.
 - Admin list/details operate across workers; aggregate metrics exposed; new counters recorded.
 - `/runtimes` reflects new capabilities; 1.0 clients unaffected; 1.1 clients can use new fields.
@@ -1572,6 +1705,6 @@ Open Decisions (TBD)
 
 End of PRD v0.2
 Workspace sync (uploads)
-- Prefer `.gitignore`‑style ignore patterns to exclude VCS dirs, build outputs, and large/binary assets from tar builds (e.g., `.git/`, `node_modules/`, `dist/`, `target/`, `*.png`, `*.zip`).
-- The server also applies `.dockerignore`‑like filtering; binaries are blocked unless explicitly whitelisted via capture patterns.
+- Prefer `.gitignore`-style ignore patterns to exclude VCS dirs, build outputs, and large/binary assets from tar builds (e.g., `.git/`, `node_modules/`, `dist/`, `target/`, `*.png`, `*.zip`).
+- The server also applies `.dockerignore`-like filtering; binaries are blocked unless explicitly whitelisted via capture patterns.
 - Honor max upload size, file count, and depth from feature discovery or Content Types & Limits; split large uploads into smaller sessions when needed.

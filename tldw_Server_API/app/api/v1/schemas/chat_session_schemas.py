@@ -200,7 +200,7 @@ class CharacterChatCompletionPrepResponse(BaseModel):
 
 
 class CharacterChatCompletionV2Request(BaseModel):
-    """Character Chat completion (v2) – builds context and calls a provider.
+    """Character Chat completion (v2) - builds context and calls a provider.
 
     Includes provider/model controls, optional appended user message,
     persistence toggle, and streaming control.

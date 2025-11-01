@@ -4,13 +4,13 @@ This directory contains the Model Context Protocol (MCP) documentation for the T
 
 ## Structure
 
-- **Unified/** – MCP Unified documentation set
-  - `README.md` – Orientation and quick links
-  - `Developer_Guide.md` – Architecture, module authoring, testing guidance
-  - `System_Admin_Guide.md` – Deployment, observability, hardening
-  - `User_Guide.md` – HTTP/WebSocket usage patterns and examples
-  - `Modules.md` – Authoring reference for pluggable MCP modules
-  - `Documentation_Ingestion_Playbook.md` – How to ingest project docs and query them via MCP tools
+- **Unified/** - MCP Unified documentation set
+  - `README.md` - Orientation and quick links
+  - `Developer_Guide.md` - Architecture, module authoring, testing guidance
+  - `System_Admin_Guide.md` - Deployment, observability, hardening
+  - `User_Guide.md` - HTTP/WebSocket usage patterns and examples
+  - `Modules.md` - Authoring reference for pluggable MCP modules
+  - `Documentation_Ingestion_Playbook.md` - How to ingest project docs and query them via MCP tools
 
 ## Picking the Right Guide
 

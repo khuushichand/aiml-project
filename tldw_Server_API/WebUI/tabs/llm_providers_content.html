@@ -352,7 +352,7 @@ function displayProvidersStatusEnhanced(data) {
     const thr = getSeverityThresholds();
     html += '<div class="legend" style="margin-top:8px; font-family: monospace; font-size: 12px; color:#555">'
           + `<span title="error rate < ${thr.low}%">🟢 LOW</span> `
-          + `<span title="${thr.low}–${thr.high - 0.1}% error rate" style="margin-left:10px;">🟠 MED</span> `
+          + `<span title="${thr.low}-${thr.high - 0.1}% error rate" style="margin-left:10px;">🟠 MED</span> `
           + `<span title=">= ${thr.high}% error rate" style="margin-left:10px;">🔴 HIGH</span>`
           + '</div>';
     statusDiv.innerHTML = html;

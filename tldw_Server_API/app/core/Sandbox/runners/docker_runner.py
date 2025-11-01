@@ -409,10 +409,16 @@ class DockerRunner:
         except Exception:
             pass
 
-        # Baseline CPU usage after container start (best-effort)
+        # Baseline CPU usage and resolved cgroup file after container start (best-effort)
         baseline_cpu_sec: Optional[int] = None
+        baseline_cgroup_file: Optional[tuple[str, str]] = None  # (file_path, format: 'v1'|'v2')
         try:
-            baseline_cpu_sec = self._read_cgroup_cpu_time_sec_by_cid(cid)
+            # Resolve cgroup stats file while container is running so we can reuse it later
+            baseline_cgroup_file = self._resolve_cgroup_cpu_file_by_cid(cid)
+            if baseline_cgroup_file is not None:
+                baseline_cpu_sec = self._read_cpu_file_to_seconds(baseline_cgroup_file)
+            else:
+                baseline_cpu_sec = self._read_cgroup_cpu_time_sec_by_cid(cid)
         except Exception:
             baseline_cpu_sec = None
 
@@ -450,7 +456,17 @@ class DockerRunner:
             except Exception:
                 exit_code = waited.returncode if waited.returncode is not None else 1
         except subprocess.TimeoutExpired:
-            # Kill, compute stats while container still exists, then remove
+            # Take a last CPU snapshot while the container is still running, before SIGKILL
+            prekill_cpu: Optional[int] = None
+            try:
+                if baseline_cgroup_file is not None:
+                    prekill_cpu = self._read_cpu_file_to_seconds(baseline_cgroup_file)
+                else:
+                    prekill_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
+            except Exception:
+                prekill_cpu = None
+
+            # Kill, compute stats, then remove
             try:
                 subprocess.check_call(["docker", "kill", cid])
             except Exception:
@@ -458,11 +474,16 @@ class DockerRunner:
             exit_code = None
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": exit_code, "reason": "execution_timeout"})
-            # CPU time: prefer cgroup delta if baseline captured
-            try:
-                final_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
-            except Exception:
-                final_cpu = None
+            # CPU time: prefer cgroup delta if baseline captured; use pre-kill snapshot first
+            final_cpu: Optional[int] = prekill_cpu
+            if final_cpu is None:
+                try:
+                    if baseline_cgroup_file is not None:
+                        final_cpu = self._read_cpu_file_to_seconds(baseline_cgroup_file)
+                    else:
+                        final_cpu = self._read_cgroup_cpu_time_sec_by_cid(cid)
+                except Exception:
+                    final_cpu = None
             if baseline_cpu_sec is not None and final_cpu is not None:
                 cpu_time_val = max(0, int(final_cpu - baseline_cpu_sec))
             else:
@@ -546,9 +567,12 @@ class DockerRunner:
                 art_bytes = sum(len(v) for v in artifacts_map.values())
         except Exception:
             art_bytes = 0
-        # CPU time: prefer cgroup delta when baseline available
+        # CPU time: prefer cgroup delta when baseline available; reuse persisted cgroup file if present
         try:
-            final_cpu2 = self._read_cgroup_cpu_time_sec_by_cid(cid)
+            if baseline_cgroup_file is not None:
+                final_cpu2 = self._read_cpu_file_to_seconds(baseline_cgroup_file)
+            else:
+                final_cpu2 = self._read_cgroup_cpu_time_sec_by_cid(cid)
         except Exception:
             final_cpu2 = None
         if baseline_cpu_sec is not None and final_cpu2 is not None:
@@ -641,6 +665,86 @@ class DockerRunner:
                             return int(usec / 1_000_000)
             except Exception:
                 pass
+        return None
+
+    @staticmethod
+    def _resolve_cgroup_cpu_file_by_cid(cid: str) -> Optional[tuple[str, str]]:
+        """Resolve the cgroup CPU stats file for a container by CID.
+
+        Returns a tuple of (file_path, format), where format is 'v1' or 'v2'.
+        Returns None if resolution fails.
+        """
+        try:
+            pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
+            pid = int(pid_out)
+            return DockerRunner._resolve_cgroup_cpu_file_by_pid(pid)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _resolve_cgroup_cpu_file_by_pid(pid: int) -> Optional[tuple[str, str]]:
+        """Resolve the cgroup CPU stats file for a process PID.
+
+        Returns (file_path, 'v1'|'v2') if found, else None.
+        """
+        cgroups: Dict[str, str] = {}
+        try:
+            with open(f"/proc/{pid}/cgroup", "r") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    if len(parts) == 3:
+                        subsystems = parts[1]
+                        path = parts[2]
+                        cgroups[subsystems] = path
+        except Exception:
+            return None
+
+        # cgroup v1: cpuacct
+        path_v1 = None
+        for key, val in cgroups.items():
+            if "cpuacct" in key:
+                path_v1 = val
+                break
+        if path_v1:
+            cg_file = os.path.join("/sys/fs/cgroup", "cpuacct", path_v1.lstrip("/"), "cpuacct.usage")
+            return (cg_file, "v1")
+
+        # cgroup v2 unified
+        path_v2 = cgroups.get("") or cgroups.get("0") or None
+        if not path_v2:
+            for key, val in cgroups.items():
+                if key == "0":
+                    path_v2 = val
+                    break
+        if path_v2:
+            cg_file2 = os.path.join("/sys/fs/cgroup", path_v2.lstrip("/"), "cpu.stat")
+            return (cg_file2, "v2")
+        return None
+
+    @staticmethod
+    def _read_cpu_file_to_seconds(file_info: tuple[str, str]) -> Optional[int]:
+        """Read a previously resolved cgroup CPU stats file and return seconds.
+
+        file_info is (file_path, 'v1'|'v2').
+        - v1: cpuacct.usage (nanoseconds)
+        - v2: cpu.stat with usage_usec line
+        Returns None if read/parse fails.
+        """
+        path, fmt = file_info
+        try:
+            if fmt == "v1":
+                with open(path, "r") as f:
+                    ns = int(f.read().strip())
+                    return int(ns / 1_000_000_000)
+            elif fmt == "v2":
+                with open(path, "r") as f:
+                    content = f.read()
+                    for ln in content.splitlines():
+                        if ln.startswith("usage_usec "):
+                            usec = int(ln.split()[1])
+                            return int(usec / 1_000_000)
+        except Exception:
+            return None
         return None
 
     @staticmethod

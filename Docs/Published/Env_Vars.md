@@ -1,4 +1,4 @@
-# Environment Variables – tldw_server (v0.1)
+# Environment Variables - tldw_server (v0.1)
 
 This reference lists environment variables recognized by the server. Environment variables take precedence over values from `Config_Files/.env`, which in turn take precedence over `Config_Files/config.txt` (where supported).
 
@@ -14,7 +14,7 @@ For the full, frequently updated raw reference (auto-generated), see `Env_Vars.m
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs, hardens WebUI config, enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
-- `ALLOWED_ORIGINS`: CORS allowlist. Comma‑separated or JSON array.
+- `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. The parent directory becomes the config root for auxiliary assets (e.g., `Synonyms/`).
 - `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.
 - `ENABLE_SECURITY_HEADERS`: Enable security headers middleware (defaults to true in production).
@@ -22,9 +22,9 @@ For the full, frequently updated raw reference (auto-generated), see `Env_Vars.m
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).
 - `MAGIC_FILE_PATH`: Path to `magic.mgc` for `python-magic` if needed.
 
-Startup Fast/Deferred Mode (CI/test‑friendly)
-- `DEFER_HEAVY_STARTUP`: When `true`, defers non‑critical initialization to a background task after the app starts serving requests. This reduces time‑to‑health for smoke checks. Deferred work includes MCP Unified init, Chat Provider Manager, Chat Request Queue + Rate Limiter, TTS service, chunking templates, and the optional embeddings dimension check. Implied when `TEST_MODE=true` or `DISABLE_HEAVY_STARTUP=1`.
-- `DISABLE_HEAVY_STARTUP`: Back‑compat flag used in CI; treated the same as `DEFER_HEAVY_STARTUP` by the server.
+Startup Fast/Deferred Mode (CI/test-friendly)
+- `DEFER_HEAVY_STARTUP`: When `true`, defers non-critical initialization to a background task after the app starts serving requests. This reduces time-to-health for smoke checks. Deferred work includes MCP Unified init, Chat Provider Manager, Chat Request Queue + Rate Limiter, TTS service, chunking templates, and the optional embeddings dimension check. Implied when `TEST_MODE=true` or `DISABLE_HEAVY_STARTUP=1`.
+- `DISABLE_HEAVY_STARTUP`: Back-compat flag used in CI; treated the same as `DEFER_HEAVY_STARTUP` by the server.
 
 Logging & OpenAPI URLs
 - `LOG_JSON` / `ENABLE_JSON_LOGS`: Enable structured JSON logs (`true|false`).
@@ -35,9 +35,9 @@ Logging & OpenAPI URLs
 
 WebUI Access Guard (remote access controls)
 - `TLDW_WEBUI_ALLOW_REMOTE` (or `WEBUI_ALLOW_REMOTE`): Temporarily allow remote access to the legacy WebUI (`/webui`). Only use on trusted networks.
-- `TLDW_WEBUI_ALLOWLIST`: Comma‑separated IPs/CIDRs allowed to access `/webui`.
-- `TLDW_WEBUI_DENYLIST`: Comma‑separated IPs/CIDRs denied from `/webui`.
-- `TLDW_TRUSTED_PROXIES`: Comma‑separated proxy IPs/CIDRs trusted for X‑Forwarded‑For/X‑Real‑IP.
+- `TLDW_WEBUI_ALLOWLIST`: Comma-separated IPs/CIDRs allowed to access `/webui`.
+- `TLDW_WEBUI_DENYLIST`: Comma-separated IPs/CIDRs denied from `/webui`.
+- `TLDW_TRUSTED_PROXIES`: Comma-separated proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP.
 
 ## AuthNZ (Authentication)
 - `AUTH_MODE`: `single_user` | `multi_user`.
@@ -52,9 +52,9 @@ WebUI Access Guard (remote access controls)
 Egress & Outbound Policy (global + Workflows)
 - `EGRESS_ALLOWLIST`, `EGRESS_DENYLIST`: Global DNS allow/deny lists for outbound requests.
 - `WORKFLOWS_EGRESS_PROFILE`: `strict|permissive|custom` profile for Workflows egress.
-- `WORKFLOWS_EGRESS_ALLOWLIST`, `WORKFLOWS_EGRESS_DENYLIST`: Workflows DNS allow/deny lists; support per‑tenant suffix `_TENANT`.
+- `WORKFLOWS_EGRESS_ALLOWLIST`, `WORKFLOWS_EGRESS_DENYLIST`: Workflows DNS allow/deny lists; support per-tenant suffix `_TENANT`.
 - `WORKFLOWS_EGRESS_BLOCK_PRIVATE`: Block RFC1918 and reserved ranges (`true|false`).
-- `WORKFLOWS_EGRESS_ALLOWED_PORTS`: Comma‑separated list of allowed ports (default `80,443`).
+- `WORKFLOWS_EGRESS_ALLOWED_PORTS`: Comma-separated list of allowed ports (default `80,443`).
 
 ## Jobs Backend / Worker
 - `JOBS_DB_URL`: Postgres DSN for Jobs backend; falls back to SQLite when unset.
@@ -81,10 +81,10 @@ Monitoring & Telemetry
 ## Workflows (Auth & Scheduler)
 - `WORKFLOWS_DEFAULT_BEARER_TOKEN`: Default Authorization bearer token used by Workflows steps when not explicitly provided in headers.
 - `WORKFLOWS_DEFAULT_API_KEY`: Default `X-API-KEY` used by Workflows steps when bearer is not provided.
-- `WORKFLOWS_VALIDATE_DEFAULT_AUTH`: `true|false` — optionally validate the default token once per run against `/api/v1/workflows/auth/check`.
+- `WORKFLOWS_VALIDATE_DEFAULT_AUTH`: `true|false` - optionally validate the default token once per run against `/api/v1/workflows/auth/check`.
 - `WORKFLOWS_INTERNAL_BASE_URL`: Base URL for validation requests; defaults to `http://127.0.0.1:8000`.
-- `WORKFLOWS_MINT_VIRTUAL_KEYS`: `true|false` — when enabled, the scheduler mints a short‑lived scoped JWT (`scope=workflows`) per scheduled run and injects it as `secrets.jwt`.
-- `WORKFLOWS_VIRTUAL_KEY_TTL_MIN`: TTL (minutes) for per‑run tokens; default `15`.
+- `WORKFLOWS_MINT_VIRTUAL_KEYS`: `true|false` - when enabled, the scheduler mints a short-lived scoped JWT (`scope=workflows`) per scheduled run and injects it as `secrets.jwt`.
+- `WORKFLOWS_VIRTUAL_KEY_TTL_MIN`: TTL (minutes) for per-run tokens; default `15`.
 
 ## Health Probes (CI smoke)
 - The smoke lifecycle script probes health endpoints in this order: `/healthz`, `/api/v1/healthz`, `/health`, `/api/v1/health`, `/ready`, `/api/v1/health/ready`.

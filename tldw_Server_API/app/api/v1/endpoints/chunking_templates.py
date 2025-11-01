@@ -73,7 +73,7 @@ def _emit_db_capability_headers(response: Response, db: Any, required: List[str]
                 "tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase"
             )
             logger.warning(
-                f"Chunking Templates DB missing methods {missing} on {response.headers.get('X-Template-DB-Class')} — "
+                f"Chunking Templates DB missing methods {missing} on {response.headers.get('X-Template-DB-Class')} - "
                 "using in-memory fallback; hint: use Media_DB_v2.MediaDatabase"
             )
         else:

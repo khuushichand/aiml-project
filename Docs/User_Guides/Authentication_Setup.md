@@ -175,7 +175,7 @@ Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 
 - AuthNZ API Guide: `../API-related/AuthNZ-API-Guide.md`
 
-## Quick Setup (Multi‑User with SQLite – Dev)
+## Quick Setup (Multi-User with SQLite - Dev)
 
 For local/dev multi-user without Postgres:
 
