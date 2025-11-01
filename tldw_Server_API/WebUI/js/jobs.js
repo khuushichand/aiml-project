@@ -682,7 +682,6 @@ async function adminStartJobsEvents() {
         if (events.length > EVENTS_MAX) {
           events.splice(0, events.length - EVENTS_MAX);
         }
-        if (events.length > 20) events.shift();
       } catch (_) {}
       if (tbody) {
         tbody.innerHTML = '';
