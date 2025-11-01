@@ -127,6 +127,10 @@
             </h3>
             <form class="form-grid" onsubmit="return false;">
                 <div class="form-group">
+                    <label for="watchlistsSource_updateId">Source ID (for update)</label>
+                    <input type="number" id="watchlistsSource_updateId" min="1" placeholder="Only used for Update">
+                </div>
+                <div class="form-group">
                     <label for="watchlistsSource_name">Name <span class="required">*</span></label>
                     <input type="text" id="watchlistsSource_name" placeholder="Tech News" required>
                 </div>
@@ -153,6 +157,45 @@
                     <div class="form-group">
                         <label for="watchlistsSource_rssLimit">Item limit per poll</label>
                         <input type="number" id="watchlistsSource_rssLimit" min="1" placeholder="50">
+                    </div>
+                    <div class="form-group span-2">
+                        <button type="button" class="api-button subtle" onclick="watchlistsToggleRssAdvanced()">
+                            Toggle History & RSS advanced
+                        </button>
+                    </div>
+                    <div id="watchlistsSource_rssAdvanced" class="span-2" style="display:none;">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="watchlistsSource_histStrategy">History strategy</label>
+                                <select id="watchlistsSource_histStrategy">
+                                    <option value="auto">auto</option>
+                                    <option value="atom">atom</option>
+                                    <option value="wordpress">wordpress</option>
+                                    <option value="none">none</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_histMaxPages">Max pages (incl. first)</label>
+                                <input type="number" id="watchlistsSource_histMaxPages" min="1" value="1">
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_histPerPage">Per-page item limit</label>
+                                <input type="number" id="watchlistsSource_histPerPage" min="1" placeholder="inherit">
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label><input type="checkbox" id="watchlistsSource_histOn304"> Backfill on 304</label>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label><input type="checkbox" id="watchlistsSource_histStopOnSeen"> Stop when page has no new items</label>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label><input type="checkbox" id="watchlistsSource_rssUseFeed"> Prefer feed full text when long</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="watchlistsSource_feedMinChars">Feed text min chars</label>
+                                <input type="number" id="watchlistsSource_feedMinChars" min="1" value="400">
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -249,10 +292,14 @@
             </form>
             <div class="form-actions">
                 <button class="api-button" onclick="watchlistsCreateSource()" id="watchlistsSource_createBtn">Create Source</button>
+                <button class="api-button subtle" onclick="watchlistsLoadSourceIntoForm()" id="watchlistsSource_loadBtn">Load Source</button>
+                <button class="api-button" onclick="watchlistsUpdateSource()" id="watchlistsSource_updateBtn">Update Source</button>
                 <button class="api-button subtle" onclick="watchlistsResetSourceForm()">Reset Form</button>
             </div>
             <h4>Response</h4>
             <pre id="watchlistsSource_createResponse">---</pre>
+            <h4>Update Response</h4>
+            <pre id="watchlistsSource_updateResponse">---</pre>
         </div>
     </div>
 </div>
@@ -449,6 +496,62 @@
         </div>
         <h3>Response</h3>
         <pre id="watchlistsPrefs_response">---</pre>
+    </div>
+</div>
+
+<!-- Watchlists Runs Tab -->
+<div id="tabWatchlistsRuns" class="tab-content" role="tabpanel" aria-labelledby="tabWatchlistsRuns">
+    <div class="endpoint-section" id="watchlists-runs-list">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/watchlists/runs</span>
+        </h2>
+        <p>List runs across all watchlist jobs. Shows history/backfill counters when present.</p>
+        <div class="form-inline">
+            <div class="form-group">
+                <label for="watchlistsRuns_q">Query</label>
+                <input type="text" id="watchlistsRuns_q" placeholder="status:completed or id:123">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsRuns_page">Page</label>
+                <input type="number" id="watchlistsRuns_page" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label for="watchlistsRuns_size">Size</label>
+                <input type="number" id="watchlistsRuns_size" value="50" min="1" max="200">
+            </div>
+        </div>
+        <button class="api-button" onclick="watchlistsListRuns()">List Runs</button>
+        <h3>Runs</h3>
+        <div id="watchlistsRuns_table"></div>
+        <h3>Response (raw)</h3>
+        <pre id="watchlistsRuns_response">---</pre>
+    </div>
+
+    <div class="endpoint-section" id="watchlists-runs-get">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/watchlists/runs/{id}</span>
+        </h2>
+        <div class="form-inline">
+            <div class="form-group">
+                <label for="watchlistsRun_id">Run ID</label>
+                <input type="number" id="watchlistsRun_id" min="1" placeholder="123">
+            </div>
+        </div>
+        <button class="api-button subtle" onclick="watchlistsGetRun()">Get Run</button>
+        <div class="form-grid" style="margin-top:8px">
+            <div class="form-group">
+                <label>History: pages_fetched</label>
+                <div id="watchlistsRun_histPages">—</div>
+            </div>
+            <div class="form-group">
+                <label>History: stop_on_seen_triggered</label>
+                <div id="watchlistsRun_histStopOnSeen">—</div>
+            </div>
+        </div>
+        <h3>Run (raw)</h3>
+        <pre id="watchlistsRun_response">---</pre>
     </div>
 </div>
 

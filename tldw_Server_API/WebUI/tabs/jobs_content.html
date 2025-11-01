@@ -3,7 +3,7 @@
     <div id="adminJobs_topbar" class="text-muted" style="margin: 8px 0; display:flex; align-items:center; gap:10px;">
         <span>No recent actions</span>
         <a href="/docs-static/Code_Documentation/Jobs_Module.md" target="_blank" rel="noopener" class="btn btn-link btn-sm" style="text-decoration:none;">Jobs Docs</a>
-        <button class="btn btn-secondary btn-sm" onclick="adminOpenRotateKeysModal()" title="Rotate encrypted payload/result keys (dry-run or execute)">Rotate Keys…</button>
+        <button class="btn btn-secondary btn-sm" id="btnAdminOpenRotateKeys" title="Rotate encrypted payload/result keys (dry-run or execute)">Rotate Keys…</button>
     </div>
     <div class="endpoint-section" id="adminJobsStats">
         <h2>
@@ -38,15 +38,15 @@
         </div>
 
         <div class="metrics-controls">
-            <button class="btn btn-primary" onclick="adminFetchJobsStats()">Refresh</button>
-            <button class="btn btn-secondary" onclick="adminStartJobsAutoRefresh()">Auto-Refresh (10s)</button>
-            <button class="btn btn-secondary" onclick="adminStopJobsAutoRefresh()">Stop</button>
+            <button class="btn btn-primary" id="btnAdminJobsRefresh">Refresh</button>
+            <button class="btn btn-secondary" id="btnAdminJobsAutoRefresh">Auto-Refresh (10s)</button>
+            <button class="btn btn-secondary" id="btnAdminJobsStop">Stop</button>
         </div>
         <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
             <div id="adminJobs_savedFiltersBadge" style="display:inline-block; padding:4px 8px; border:1px solid var(--color-border); border-radius:12px; font-size:12px; color:var(--color-text-secondary);">
                 Saved Filters: (none)
             </div>
-            <button id="adminJobs_resetFilters" class="btn btn-secondary btn-sm" style="padding:2px 8px; border-radius:12px; font-size:12px;" title="Clear saved filters and reset inputs" onclick="adminJobsResetFilters()">Reset Filters</button>
+            <button id="adminJobs_resetFilters" class="btn btn-secondary btn-sm" style="padding:2px 8px; border-radius:12px; font-size:12px;" title="Clear saved filters and reset inputs">Reset Filters</button>
         </div>
 
         <div class="table-responsive mt-2">
@@ -106,7 +106,7 @@
                     Warning: This will permanently delete matching jobs. Ensure filters are correct and include <code>X-Confirm: true</code>.
                 </div>
                 <div class="form-group">
-                    <button id="adminJobsPrune_btn" class="btn btn-warning" onclick="adminPruneJobs()" title="Requires X-Confirm: true header when Dry Run is unchecked">Prune Jobs</button>
+                    <button id="adminJobsPrune_btn" class="btn btn-warning" title="Requires X-Confirm: true header when Dry Run is unchecked">Prune Jobs</button>
                 </div>
             </div>
         </div>
@@ -147,7 +147,7 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <button id="adminJobsTTL_btn" class="btn btn-warning" onclick="adminRunTTLSweep()" title="Requires X-Confirm: true header">Run TTL Sweep</button>
+                    <button id="adminJobsTTL_btn" class="btn btn-warning" title="Requires X-Confirm: true header">Run TTL Sweep</button>
                 </div>
             </div>
         </div>
@@ -172,7 +172,7 @@
                     Heads up: This will move quarantined jobs back to the queue.
                 </div>
                 <div class="form-group">
-                    <button id="adminJobsRequeue_btn" class="btn btn-warning" onclick="adminRequeueQuarantined()">Requeue Quarantined</button>
+                    <button id="adminJobsRequeue_btn" class="btn btn-warning">Requeue Quarantined</button>
                 </div>
             </div>
         </div>
@@ -206,8 +206,8 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <button class="btn btn-warning" onclick="adminJobsQueueControl()">Apply Queue Control</button>
-                    <button class="btn btn-secondary" onclick="adminJobsQueueStatus()">Get Queue Status</button>
+                    <button class="btn btn-warning" id="btnAdminJobsQueueControl">Apply Queue Control</button>
+                    <button class="btn btn-secondary" id="btnAdminJobsQueueStatus">Get Queue Status</button>
                 </div>
                 <div id="adminJobs_ctrl_status" class="text-muted">—</div>
             </div>
@@ -224,10 +224,10 @@
                         <option value="artifact">artifact</option>
                         <option value="tag">tag</option>
                     </select>
-                    <button class="btn" onclick="adminJobsAddAttachment()">Add</button>
+                    <button class="btn" id="btnAdminJobsAddAttachment">Add</button>
                 </div>
                 <div class="form-group">
-                    <button class="btn btn-secondary" onclick="adminJobsListAttachments()">List Attachments</button>
+                    <button class="btn btn-secondary" id="btnAdminJobsListAttachments">List Attachments</button>
                 </div>
                 <pre id="adminJobs_attach_list">—</pre>
             </div>
@@ -242,8 +242,8 @@
                     <label><input type="checkbox" id="adminJobs_sla_enabled" checked> enabled</label>
                 </div>
                 <div class="form-group">
-                    <button class="btn btn-primary" onclick="adminJobsUpsertSla()">Upsert SLA</button>
-                    <button class="btn btn-secondary" onclick="adminJobsListSla()">List SLA</button>
+                    <button class="btn btn-primary" id="btnAdminJobsUpsertSla">Upsert SLA</button>
+                    <button class="btn btn-secondary" id="btnAdminJobsListSla">List SLA</button>
                 </div>
                 <pre id="adminJobs_sla_result">—</pre>
             </div>
@@ -272,8 +272,8 @@
                 <div class="form-group"><label>New Key (base64)</label><input type="text" id="adminJobs_crypto_new" placeholder="base64-encoded key"></div>
                 <div class="form-group"><label>Limit</label><input type="number" id="adminJobs_crypto_limit" value="1000" min="1"></div>
                 <div class="form-group">
-                    <button class="btn btn-secondary" onclick="adminJobsCryptoRotateDryRun()">Dry Run</button>
-                    <button class="btn btn-danger" onclick="adminJobsCryptoRotateExecute()">Execute (X-Confirm)</button>
+                    <button class="btn btn-secondary" id="btnAdminJobsCryptoDryRun">Dry Run</button>
+                    <button class="btn btn-danger" id="btnAdminJobsCryptoExec">Execute (X-Confirm)</button>
                 </div>
                 <div id="adminJobs_crypto_errors" class="text-error" style="min-height:18px;"></div>
                 <pre id="adminJobs_crypto_result">—</pre>
@@ -289,8 +289,8 @@
         </h2>
         <p>Live job events stream (append-only). Shows recent events and simple failure-timeline sparklines per job.</p>
         <div class="metrics-controls">
-            <button id="adminJobsEvents_start" class="btn btn-primary" onclick="adminStartJobsEvents()">Start Stream</button>
-            <button id="adminJobsEvents_stop" class="btn btn-secondary" onclick="adminStopJobsEvents()">Stop</button>
+            <button id="adminJobsEvents_start" class="btn btn-primary">Start Stream</button>
+            <button id="adminJobsEvents_stop" class="btn btn-secondary">Stop</button>
         </div>
         <div class="table-responsive mt-2">
             <table class="data-table">
@@ -311,7 +311,9 @@
         </div>
     </div>
 
-    <script>
+    <script src="js/jobs.js"></script>
+    <!-- Inline script migrated to js/jobs.js -->
+    <!--
         let adminJobsTimer = null;
         async function adminFetchJobsStats() {
             const domain = document.getElementById('adminJobs_domain').value.trim();
@@ -328,20 +330,31 @@
                 const data = Array.isArray(res) ? res : (res?.data || []);
                 tbody.innerHTML = '';
                 if (!data.length) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="text-muted">No data</td></tr>';
+                    const tr = document.createElement('tr');
+                    const td = document.createElement('td');
+                    td.colSpan = 6;
+                    td.className = 'text-muted';
+                    td.textContent = 'No data';
+                    tr.appendChild(td);
+                    tbody.appendChild(tr);
                     return;
                 }
                 for (const row of data) {
                     const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td>${row.domain ?? ''}</td>
-                        <td>${row.queue ?? ''}</td>
-                        <td>${row.job_type ?? ''}</td>
-                        <td>${row.queued ?? 0}</td>
-                        <td>${row.scheduled ?? 0}</td>
-                        <td>${row.processing ?? 0}</td>
-                        <td>${row.quarantined ?? 0}</td>
-                    `;
+                    const values = [
+                        row.domain ?? '',
+                        row.queue ?? '',
+                        row.job_type ?? '',
+                        row.queued ?? 0,
+                        row.scheduled ?? 0,
+                        row.processing ?? 0,
+                        row.quarantined ?? 0,
+                    ];
+                    for (const v of values) {
+                        const td = document.createElement('td');
+                        td.textContent = String(v);
+                        tr.appendChild(td);
+                    }
                     // Make rows clickable to apply filter
                     tr.style.cursor = 'pointer';
                     tr.title = 'Click to filter Admin → Jobs';
@@ -359,7 +372,14 @@
                     tbody.appendChild(tr);
                 }
             } catch (e) {
-                tbody.innerHTML = `<tr><td colspan=\"6\" class=\"text-error\">${(e && e.message) || 'Failed to load'}</td></tr>`;
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 6;
+                td.className = 'text-error';
+                td.textContent = (e && e.message) ? String(e.message) : 'Failed to load';
+                tr.appendChild(td);
+                tbody.innerHTML = '';
+                tbody.appendChild(tr);
             } finally {
                 Loading.hide(tbody.parentElement);
             }
@@ -881,7 +901,16 @@
             const controller = new AbortController();
             adminJobsEventsAbort = controller;
             const tbody = document.getElementById('adminJobsEvents_tableBody');
-            if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-muted">Connecting…</td></tr>';
+            if (tbody) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 6;
+                td.className = 'text-muted';
+                td.textContent = 'Connecting…';
+                tr.appendChild(td);
+                tbody.innerHTML = '';
+                tbody.appendChild(tr);
+            }
             const url = new URL((apiClient?.baseUrl || '') + '/api/v1/jobs/events/stream');
             url.searchParams.set('after_id', String(adminJobsEventsCursor || 0));
             let reader;
@@ -890,7 +919,16 @@
                 if (!res.ok || !res.body) throw new Error('Failed to open stream');
                 reader = res.body.getReader();
             } catch (e) {
-                if (tbody) tbody.innerHTML = `<tr><td colspan=\"6\" class=\"text-error\">${(e && e.message) || 'Stream failed'}</td></tr>`;
+                if (tbody) {
+                    const tr = document.createElement('tr');
+                    const td = document.createElement('td');
+                    td.colSpan = 6;
+                    td.className = 'text-error';
+                    td.textContent = (e && e.message) ? String(e.message) : 'Stream failed';
+                    tr.appendChild(td);
+                    tbody.innerHTML = '';
+                    tbody.appendChild(tr);
+                }
                 return;
             }
             const decoder = new TextDecoder();
@@ -933,25 +971,56 @@
                     for (const ev of last) {
                         const tr = document.createElement('tr');
                         const jid = ev.job_id || '';
-                        const corr = [];
-                        if (ev.request_id) corr.push(`<span class=\"chip\">req:${ev.request_id}</span>`);
-                        if (ev.trace_id) corr.push(`<span class=\"chip\">trace:${ev.trace_id}</span>`);
                         const tl = adminJobsFailureTimelines[jid] || [];
-                        tr.innerHTML = `
-                            <td>${jid || ''}</td>
-                            <td>${ev.event || ''}</td>
-                            <td>${[ev.domain, ev.queue, ev.job_type].filter(Boolean).join('/')}</td>
-                            <td style=\"font-family:monospace\">${renderSparkline(tl)}</td>
-                            <td>${corr.join(' ')}</td>
-                            <td><code style=\"font-size: 11px;\">${JSON.stringify(ev.attrs || {})}</code></td>
-                        `;
+                        const cells = [];
+                        // ID
+                        const tdId = document.createElement('td');
+                        tdId.textContent = String(jid || '');
+                        cells.push(tdId);
+                        // Event
+                        const tdEvent = document.createElement('td');
+                        tdEvent.textContent = String(ev.event || '');
+                        cells.push(tdEvent);
+                        // Domain/Queue/Type
+                        const tdDqt = document.createElement('td');
+                        tdDqt.textContent = [ev.domain, ev.queue, ev.job_type].filter(Boolean).join('/');
+                        cells.push(tdDqt);
+                        // Sparkline
+                        const tdSpark = document.createElement('td');
+                        tdSpark.style.fontFamily = 'monospace';
+                        tdSpark.textContent = renderSparkline(tl);
+                        cells.push(tdSpark);
+                        // Correlation chips
+                        const tdCorr = document.createElement('td');
+                        if (ev.request_id) {
+                            const s = document.createElement('span'); s.className = 'chip'; s.textContent = `req:${String(ev.request_id)}`; tdCorr.appendChild(s); tdCorr.appendChild(document.createTextNode(' '));
+                        }
+                        if (ev.trace_id) {
+                            const s = document.createElement('span'); s.className = 'chip'; s.textContent = `trace:${String(ev.trace_id)}`; tdCorr.appendChild(s);
+                        }
+                        cells.push(tdCorr);
+                        // Attrs JSON (pretty but safe)
+                        const tdAttrs = document.createElement('td');
+                        const code = document.createElement('code');
+                        code.style.fontSize = '11px';
+                        code.textContent = JSON.stringify(ev.attrs || {});
+                        tdAttrs.appendChild(code);
+                        cells.push(tdAttrs);
+                        // Append all
+                        for (const td of cells) tr.appendChild(td);
                         tbody.appendChild(tr);
                     }
                     if (!last.length) {
-                        tbody.innerHTML = '<tr><td colspan="6" class="text-muted">No events yet</td></tr>';
+                        const tr = document.createElement('tr');
+                        const td = document.createElement('td');
+                        td.colSpan = 6;
+                        td.className = 'text-muted';
+                        td.textContent = 'No events yet';
+                        tr.appendChild(td);
+                        tbody.appendChild(tr);
                     }
                 }
             }
         }
-    </script>
+    -->
 </div>

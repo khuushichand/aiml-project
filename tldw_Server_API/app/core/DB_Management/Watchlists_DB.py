@@ -1430,3 +1430,20 @@ class WatchlistsDatabase:
                     "INSERT INTO source_seen_items (source_id, item_key, etag, last_modified, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (source_id, item_key, etag, last_modified, ts, ts),
                 )
+
+    def list_seen_item_keys(self, source_id: int, *, limit: Optional[int] = None) -> List[str]:
+        sql = "SELECT item_key FROM source_seen_items WHERE source_id = ? ORDER BY last_seen_at DESC"
+        params: Tuple[Any, ...] = (source_id,)
+        if isinstance(limit, int) and limit > 0:
+            try:
+                sql = sql + " LIMIT ?"
+                params = (source_id, int(limit))
+            except Exception:
+                params = (source_id,)
+        rows = self.backend.execute(sql, params).rows
+        keys: List[str] = []
+        for r in rows:
+            k = r.get("item_key")
+            if isinstance(k, str) and k:
+                keys.append(k)
+        return keys

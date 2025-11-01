@@ -5,9 +5,9 @@
     <p class="text-muted">Opt-in and basic profile. This preview allows viewing and tweaking weights and adding a memory.</p>
 
     <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-      <button class="btn btn-primary" onclick="(async () => { const r = await fetch('/api/v1/personalization/profile'); const j = await r.json(); document.getElementById('persProfile').textContent = JSON.stringify(j,null,2); })()">View Profile</button>
-      <button class="btn" onclick="(async () => { await fetch('/api/v1/personalization/opt-in', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:true})}); alert('Opted in'); })()">Opt-In</button>
-      <button class="btn btn-danger" onclick="(async () => { await fetch('/api/v1/personalization/purge', { method:'POST' }); alert('Purge requested'); })()">Purge</button>
+      <button class="btn btn-primary" onclick="(async () => { const j = await apiClient.makeRequest('GET','/api/v1/personalization/profile'); document.getElementById('persProfile').textContent = JSON.stringify(j,null,2); })()">View Profile</button>
+      <button class="btn" onclick="(async () => { await apiClient.makeRequest('POST','/api/v1/personalization/opt-in',{ body: { enabled: true } }); alert('Opted in'); })()">Opt-In</button>
+      <button class="btn btn-danger" onclick="(async () => { await apiClient.makeRequest('POST','/api/v1/personalization/purge'); alert('Purge requested'); })()">Purge</button>
     </div>
 
     <pre id="persProfile" class="json-viewer" style="max-height:240px; overflow:auto; background: var(--color-surface-alt);"></pre>
@@ -20,7 +20,7 @@
       <label>half-life (days)<input id="persHalf" type="number" step="1" min="1" max="180" value="14" style="width:110px"></label>
       <button class="btn" onclick="(async () => {
         const body = { alpha: parseFloat(persAlpha.value), beta: parseFloat(persBeta.value), gamma: parseFloat(persGamma.value), recency_half_life_days: parseInt(persHalf.value||'14') };
-        await fetch('/api/v1/personalization/preferences', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+        await apiClient.makeRequest('POST','/api/v1/personalization/preferences',{ body });
         alert('Preferences updated');
       })()">Save</button>
     </div>
@@ -33,12 +33,10 @@
       <button class="btn" onclick="(async () => {
         const tags = (memTags.value||'').split(',').map(s=>s.trim()).filter(Boolean);
         const payload = { id: 'tmp', type: 'semantic', content: memContent.value||'', pinned: memPinned.checked, tags: tags.length? tags : null };
-        const r = await fetch('/api/v1/personalization/memories', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-        if (!r.ok) { alert('Failed to add memory'); return; }
-        const j = await r.json();
+        const j = await apiClient.makeRequest('POST','/api/v1/personalization/memories',{ body: payload });
         alert('Added memory: '+ j.id);
       })()">Add</button>
-      <button class="btn" onclick="(async () => { const r = await fetch('/api/v1/personalization/memories'); const j = await r.json(); document.getElementById('memList').textContent = JSON.stringify(j,null,2); })()">List</button>
+      <button class="btn" onclick="(async () => { const j = await apiClient.makeRequest('GET','/api/v1/personalization/memories'); document.getElementById('memList').textContent = JSON.stringify(j,null,2); })()">List</button>
     </div>
 
     <pre id="memList" class="json-viewer" style="max-height:240px; overflow:auto; background: var(--color-surface-alt);"></pre>

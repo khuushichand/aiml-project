@@ -183,6 +183,58 @@ GET /api/v1/watchlists/runs/{run_id}/tallies.csv
 ```
 Columns: `run_id,filter_key,count`
 
+## History/Backfill
+
+Watchlists can optionally fetch older pages of RSS/Atom feeds to build a fuller history.
+
+- Strategy: `auto` (try Atom RFC5005, then WordPress), `atom`, `wordpress`, or `none`.
+- Pagination budget: `max_pages` (includes the first page; e.g., 3 = first + 2 older pages).
+- Per-page trimming: `per_page_limit` (optional; limit items per page during backfill).
+- 304 behavior: `on_304` (when true, still attempt backfill when the first page returns 304 Not Modified).
+- Boundary mode: `stop_on_seen` (when true, stop traversing when a fetched page has no items that are new relative to the source’s seen keys in the DB).
+
+Per‑source settings example (create/update):
+
+```
+{
+  "settings": {
+    "history": {
+      "strategy": "auto",
+      "max_pages": 5,
+      "per_page_limit": 50,
+      "on_304": true,
+      "stop_on_seen": true
+    },
+    "rss": {
+      "use_feed_content_if_available": true,
+      "feed_content_min_chars": 600
+    }
+  }
+}
+```
+
+Run stats include history counters when backfill is used:
+
+```
+"stats": {
+  "items_found": 42,
+  "items_ingested": 37,
+  "history": {
+    "pages_fetched": 4,
+    "stop_on_seen_triggered": true
+  }
+}
+```
+
+Notes:
+- Atom RFC5005: we follow `<link rel="prev-archive" href="…"/>` to discover older pages.
+- WordPress feeds: we try common paged forms like `?paged=2` (heuristic and best‑effort).
+- Deduplication occurs across pages and against the source’s seen keys.
+- To reduce network fetches for full text, prefer feed content via `settings.rss.use_feed_content_if_available` with a reasonable minimum length.
+
+WebUI:
+- The Watchlists Sources editor should expose a compact “History & RSS” advanced panel to edit these settings. Until the UI ships, you can PATCH a source with the `settings` structure above.
+
 ## Admin UI Notes
 
 - Runs admin view: `/admin/watchlists-runs` (global/by-job browsing, search, pagination). When the dataset is large, prefer the server CSV export buttons in the UI.

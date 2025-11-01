@@ -4,6 +4,7 @@ import { Layout } from '@/components/layout/Layout';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { apiClient } from '@/lib/api';
+import VlmBackendsCard from '@/components/VlmBackendsCard';
 import { Tabs } from '@/components/ui/Tabs';
 import JsonEditor from '@/components/ui/JsonEditor';
 import JsonViewer from '@/components/ui/JsonViewer';
@@ -740,6 +741,7 @@ export default function SearchPage() {
                   <label className="mt-2 block text-sm"><input type="checkbox" checked={circuitBreaker} onChange={(e)=>setCircuitBreaker(e.target.checked)} /> <span>Circuit breaker</span></label>
                 </div>
               </details>
+              <VlmBackendsCard />
               <details className="rounded border p-3">
                 <summary className="cursor-pointer text-sm font-semibold">User Context</summary>
                 <div className="mt-2">

@@ -76,6 +76,14 @@ interface SourceFormState {
   tags: string;
   active: boolean;
   rssLimit: string;
+  // RSS History & Content
+  historyStrategy: string;
+  historyMaxPages: string;
+  historyPerPageLimit: string;
+  historyOn304: boolean;
+  historyStopOnSeen: boolean;
+  rssUseFeedContent: boolean;
+  rssFeedMinChars: string;
   siteTopN: string;
   siteDiscoverMethod: string;
   siteItemLimit: string;
@@ -131,6 +139,13 @@ const defaultSourceState = (): SourceFormState => ({
   tags: '',
   active: true,
   rssLimit: '25',
+  historyStrategy: 'auto',
+  historyMaxPages: '1',
+  historyPerPageLimit: '',
+  historyOn304: false,
+  historyStopOnSeen: false,
+  rssUseFeedContent: false,
+  rssFeedMinChars: '400',
   siteTopN: '1',
   siteDiscoverMethod: 'auto',
   siteItemLimit: '25',
@@ -603,6 +618,23 @@ export default function WatchlistsPage() {
     if (newSource.sourceType === 'rss') {
       const limit = toOptionalNumber(newSource.rssLimit);
       if (limit !== undefined) settings.limit = limit;
+      // History config
+      const hist: Record<string, any> = {};
+      const strat = nonEmpty(newSource.historyStrategy);
+      if (strat) hist.strategy = strat;
+      const maxPages = toOptionalNumber(newSource.historyMaxPages);
+      if (maxPages !== undefined) hist.max_pages = maxPages;
+      const perPage = toOptionalNumber(newSource.historyPerPageLimit, { allowZero: false });
+      if (perPage !== undefined) hist.per_page_limit = perPage;
+      if (newSource.historyOn304) hist.on_304 = true;
+      if (newSource.historyStopOnSeen) hist.stop_on_seen = true;
+      if (Object.keys(hist).length > 0) settings.history = hist;
+      // RSS content preferences
+      const rssCfg: Record<string, any> = {};
+      if (newSource.rssUseFeedContent) rssCfg.use_feed_content_if_available = true;
+      const minChars = toOptionalNumber(newSource.rssFeedMinChars, { allowZero: false });
+      if (minChars !== undefined) rssCfg.feed_content_min_chars = minChars;
+      if (Object.keys(rssCfg).length > 0) settings.rss = rssCfg;
     }
 
     if (newSource.sourceType === 'site') {
@@ -1127,13 +1159,74 @@ export default function WatchlistsPage() {
             </div>
 
             {newSource.sourceType === 'rss' && (
-              <div className="grid gap-4 md:grid-cols-2">
-                <Input
-                  label="Item limit per poll"
-                  value={newSource.rssLimit}
-                  onChange={(e) => updateSourceForm({ rssLimit: e.target.value })}
-                  placeholder="25"
-                />
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Input
+                    label="Item limit per poll"
+                    value={newSource.rssLimit}
+                    onChange={(e) => updateSourceForm({ rssLimit: e.target.value })}
+                    placeholder="25"
+                  />
+                </div>
+
+                <div className="rounded-md border border-dashed border-indigo-200 bg-indigo-50/50 p-4">
+                  <div className="mb-2">
+                    <h3 className="text-sm font-semibold text-indigo-900">History & RSS (advanced)</h3>
+                    <p className="text-xs text-indigo-700">Backfill older pages and prefer feed full text when available.</p>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <label className="flex flex-col text-sm text-gray-700">
+                      History strategy
+                      <select
+                        value={newSource.historyStrategy}
+                        onChange={(e) => updateSourceForm({ historyStrategy: e.target.value })}
+                        className="mt-1 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="auto">auto</option>
+                        <option value="atom">atom</option>
+                        <option value="wordpress">wordpress</option>
+                        <option value="none">none</option>
+                      </select>
+                    </label>
+                    <Input
+                      label="Max pages (incl. first)"
+                      value={newSource.historyMaxPages}
+                      onChange={(e) => updateSourceForm({ historyMaxPages: e.target.value })}
+                      placeholder="1"
+                    />
+                    <Input
+                      label="Per-page item limit"
+                      value={newSource.historyPerPageLimit}
+                      onChange={(e) => updateSourceForm({ historyPerPageLimit: e.target.value })}
+                      placeholder="inherit"
+                    />
+                  </div>
+                  <div className="mt-2 grid gap-3 md:grid-cols-2">
+                    <Switch
+                      checked={newSource.historyOn304}
+                      onChange={(checked) => updateSourceForm({ historyOn304: checked })}
+                      label="Backfill on 304"
+                    />
+                    <Switch
+                      checked={newSource.historyStopOnSeen}
+                      onChange={(checked) => updateSourceForm({ historyStopOnSeen: checked })}
+                      label="Stop when page has no new items"
+                    />
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <Switch
+                      checked={newSource.rssUseFeedContent}
+                      onChange={(checked) => updateSourceForm({ rssUseFeedContent: checked })}
+                      label="Prefer feed full text when long"
+                    />
+                    <Input
+                      label="Feed text min chars"
+                      value={newSource.rssFeedMinChars}
+                      onChange={(e) => updateSourceForm({ rssFeedMinChars: e.target.value })}
+                      placeholder="400"
+                    />
+                  </div>
+                </div>
               </div>
             )}
 

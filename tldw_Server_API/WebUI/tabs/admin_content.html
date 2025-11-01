@@ -945,21 +945,24 @@
                     let html = '<table class="api-table"><thead><tr><th>ID</th><th>Time</th><th>User</th><th>Source</th><th>Category</th><th>Severity</th><th>Pattern</th><th>Snippet</th><th>Actions</th></tr></thead><tbody>';
                     for (const it of items) {
                         html += `<tr>
-                            <td>${it.id}</td>
-                            <td>${it.created_at}</td>
-                            <td>${it.user_id || ''}</td>
-                            <td>${it.source}</td>
-                            <td>${it.rule_category || ''}</td>
-                            <td>${it.rule_severity || ''}</td>
-                            <td>${(it.pattern || '').slice(0,80)}</td>
-                            <td>${(it.text_snippet || '').replace(/</g,'&lt;').slice(0,120)}</td>
+                            <td>${Utils.escapeHtml(String(it.id ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.created_at ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.user_id ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.source ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_category ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_severity ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String((it.pattern || '').slice(0,80)))}</td>
+                            <td>${Utils.escapeHtml(String((it.text_snippet || '').slice(0,120)))}</td>
                             <td>${it.is_read ? '' : `<button class="btn" onclick="monitoringMarkRead(${it.id})">Mark read</button>`}</td>
                         </tr>`;
                     }
                     html += '</tbody></table>';
                     document.getElementById('monitoringAlerts_list').innerHTML = html;
                 } catch (e) {
-                    document.getElementById('monitoringAlerts_list').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    const el = document.getElementById('monitoringAlerts_list');
+                    if (el) {
+                        el.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                    }
                     Toast.error('Failed to list alerts');
                 }
             }
@@ -987,10 +990,10 @@
                     for (const it of items) {
                         html += `<tr>
                             <td>${it.created_at || ''}</td>
-                            <td>${it.user_id || ''}</td>
+                            <td>${Utils.escapeHtml(String(it.user_id ?? ''))}</td>
                             <td>${it.source || ''}</td>
-                            <td>${it.rule_category || ''}</td>
-                            <td>${it.rule_severity || ''}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_category ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_severity ?? ''))}</td>
                             <td>${(it.text_snippet || '').replace(/</g,'&lt;').slice(0,100)}</td>
                         </tr>`;
                     }
@@ -1007,7 +1010,10 @@
                     } catch (e) {}
                     window._monAlertsTick = null;
                 } catch (e) {
-                    document.getElementById('monitoringAlerts_recent').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    const el = document.getElementById('monitoringAlerts_recent');
+                    if (el) {
+                        el.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                    }
                     Toast.error('Failed to load recent alerts');
                 }
             }
@@ -1335,13 +1341,19 @@
                     const items = (res && res.items) || [];
                     let html = '<table class="api-table"><thead><tr><th>Time</th><th>Source</th><th>User</th><th>Category</th><th>Severity</th><th>Snippet</th></tr></thead><tbody>';
                     for (const it of items) {
+                        const ts = Utils.escapeHtml(String(it.ts || ''));
+                        const src = Utils.escapeHtml(String(it.source || ''));
+                        const uid = Utils.escapeHtml(String(it.user_id ?? ''));
+                        const cat = Utils.escapeHtml(String(it.rule_category ?? ''));
+                        const sev = Utils.escapeHtml(String(it.rule_severity ?? ''));
+                        const snip = Utils.escapeHtml(String((it.snippet || '').slice(0,140)));
                         html += `<tr>
-                            <td>${it.ts || ''}</td>
-                            <td>${it.source || ''}</td>
-                            <td>${it.user_id || ''}</td>
-                            <td>${it.rule_category || ''}</td>
-                            <td>${it.rule_severity || ''}</td>
-                            <td>${(it.snippet || '').replace(/</g,'&lt;').slice(0,140)}</td>
+                            <td>${ts}</td>
+                            <td>${src}</td>
+                            <td>${uid}</td>
+                            <td>${cat}</td>
+                            <td>${sev}</td>
+                            <td>${snip}</td>
                         </tr>`;
                     }
                     html += '</tbody></table>';
@@ -1360,7 +1372,10 @@
                     } catch (e) {}
                     window._monNotifTick = null;
                 } catch (e) {
-                    document.getElementById('monitoringNotif_recent').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    const el = document.getElementById('monitoringNotif_recent');
+                    if (el) {
+                        el.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                    }
                     Toast.error('Failed to load recent notifications');
                 }
             }
@@ -1990,7 +2005,7 @@
                 const lintClass = lint ? (lint.ok ? 'ok' : 'invalid') : '';
                 const lintIcon = lint ? (lint.ok ? '✓' : '⚠') : '';
                 html += `<tr>
-                    <td>${it.id}</td>
+                    <td>${Utils.escapeHtml(String(it.id ?? ''))}</td>
                     <td><code>${Utils.escapeHtml(String(it.line))}</code></td>
                     <td><span class="lint-${lintClass}" title="${Utils.escapeHtml(lintText)}"><span class="lint-icon">${lintIcon}</span>${Utils.escapeHtml(lint ? (lint.pattern_type || '') : '')}</span></td>
                     <td><button class="btn btn-danger" onclick="moderationDeleteManaged(${it.id})">Delete</button></td>
@@ -2700,13 +2715,19 @@
                 if (!items.length) { el.innerHTML = '<p>No audit events.</p>'; return; }
                 let html = '<table class="simple-table"><thead><tr><th>Time</th><th>Action</th><th>User</th><th>IP</th><th>User Agent</th><th>Details</th></tr></thead><tbody>';
                 for (const a of items) {
+                    const ts = Utils.escapeHtml(String(a.created_at || ''));
+                    const action = Utils.escapeHtml(String(a.action || ''));
+                    const uid = Utils.escapeHtml(String(a.user_id ?? ''));
+                    const ip = Utils.escapeHtml(String(a.ip_address || ''));
+                    const ua = Utils.escapeHtml(String(a.user_agent || ''));
+                    const det = Utils.escapeHtml(String(typeof a.details === 'object' ? JSON.stringify(a.details) : (a.details || '')));
                     html += `<tr>
-                        <td>${a.created_at || ''}</td>
-                        <td>${a.action || ''}</td>
-                        <td>${a.user_id ?? ''}</td>
-                        <td>${a.ip_address || ''}</td>
-                        <td>${a.user_agent || ''}</td>
-                        <td><code>${typeof a.details === 'object' ? JSON.stringify(a.details) : (a.details || '')}</code></td>
+                        <td>${ts}</td>
+                        <td>${action}</td>
+                        <td>${uid}</td>
+                        <td>${ip}</td>
+                        <td>${ua}</td>
+                        <td><code>${det}</code></td>
                     </tr>`;
                 }
                 html += '</tbody></table>';

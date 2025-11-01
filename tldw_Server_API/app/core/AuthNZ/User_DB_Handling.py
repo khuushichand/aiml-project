@@ -480,8 +480,8 @@ async def get_request_user(
             else:
                 # In explicit test contexts, we previously synthesized an API key when
                 # headers were missing. That behavior interferes with auth-required tests
-                # for sensitive routes (e.g., /api/v1/audio/*). Restrict synthesis to
-                # non-audio routes to preserve security semantics in tests.
+                # for sensitive routes (e.g., /api/v1/audio/*, /api/v1/chat/*). Restrict
+                # synthesis to non-sensitive routes to preserve security semantics in tests.
                 try:
                     import os as _os, sys as _sys
                     in_test = (
@@ -498,7 +498,10 @@ async def get_request_user(
                     path = getattr(getattr(request, "url", None), "path", "") or getattr(request, "scope", {}).get("path", "")
                 except Exception:
                     path = ""
-                synth_allowed = in_test and not str(path).startswith("/api/v1/audio/")
+                # Disallow synthesis for sensitive endpoints
+                _path_str = str(path)
+                _synth_disallowed_prefixes = ("/api/v1/audio/", "/api/v1/chat/")
+                synth_allowed = in_test and not any(_path_str.startswith(p) for p in _synth_disallowed_prefixes)
                 if synth_allowed:
                     try:
                         api_key = (

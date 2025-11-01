@@ -768,12 +768,256 @@ async def fetch_rss_feed(
             if guid:
                 rec["guid"] = guid
             items.append(rec)
+        # Atom RFC5005: collect top-level archive paging links when present
+        atom_links: List[Dict[str, str]] = []
+        try:
+            # Look for link rel="prev-archive"/"next-archive" on the root <feed>
+            for ln in list(root.findall(atom_link_tag)) + list(root.findall("link")):
+                href = (ln.get("href") or (ln.text or "")).strip()
+                if not href:
+                    continue
+                rel = (ln.get("rel") or "").strip().lower()
+                if rel in {"prev-archive", "next-archive", "current", "self"}:
+                    atom_links.append({"rel": rel, "href": href})
+        except Exception:
+            atom_links = []
+
         return {
             "status": 200,
             "items": items,
             "etag": resp.headers.get("ETag"),
             "last_modified": resp.headers.get("Last-Modified"),
+            "atom_links": atom_links,
         }
     except Exception as e:
         logger.debug(f"fetch_rss_feed error: {e}")
         return {"status": 500, "items": []}
+
+
+async def fetch_rss_feed_history(
+    url: str,
+    *,
+    etag: Optional[str] = None,
+    last_modified: Optional[str] = None,
+    timeout: float = 8.0,
+    tenant_id: str = "default",
+    strategy: str = "auto",
+    max_pages: int = 1,
+    per_page_limit: Optional[int] = None,
+    on_304: bool = False,
+    stop_on_seen: bool = False,
+    seen_keys: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Fetch a feed and optionally traverse history pages.
+
+    - strategy: "auto" | "atom" | "wordpress" | "none"
+    - max_pages: total pages to fetch including the first page
+    - per_page_limit: trim items per page (None = keep all)
+    - on_304: when True, still attempt history traversal when the first page returns 304
+    """
+    try:
+        max_pages = int(max_pages)
+    except Exception:
+        max_pages = 1
+    if max_pages < 1:
+        max_pages = 1
+
+    # First page with conditional headers
+    first = await fetch_rss_feed(
+        url,
+        etag=etag,
+        last_modified=last_modified,
+        timeout=timeout,
+        tenant_id=tenant_id,
+    )
+    status = int(first.get("status", 0) or 0)
+    agg_items: List[Dict[str, Any]] = []
+    etag_out = first.get("etag")
+    last_mod_out = first.get("last_modified")
+    pages_fetched = 0
+
+    def _trim(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if per_page_limit is None or per_page_limit <= 0:
+            return items
+        return items[: per_page_limit]
+
+    if status == 304 and not on_304:
+        return {"status": 304, "items": [], "etag": etag_out, "last_modified": last_mod_out, "pages_fetched": 0, "strategy_used": strategy}
+
+    if status == 429:
+        # Pass through rate-limit signal
+        out = {k: first.get(k) for k in ("status", "retry_after")}
+        out.update({"items": [], "pages_fetched": 0})
+        return out
+
+    if status // 100 != 2:
+        return {"status": status, "items": [], "pages_fetched": 0, "strategy_used": strategy}
+
+    base_items = list(first.get("items") or [])
+    agg_items.extend(_trim(base_items))
+    pages_fetched += 1
+    stop_triggered = False
+
+    # Early exit
+    if max_pages == 1:
+        return {
+            "status": 200,
+            "items": agg_items,
+            "etag": etag_out,
+            "last_modified": last_mod_out,
+            "pages_fetched": pages_fetched,
+        }
+
+    # Helper: follow Atom RFC5005 prev-archive links
+    async def _follow_atom_prev(href: str, remaining: int) -> int:
+        nonlocal agg_items, pages_fetched
+        current_url = href
+        # Track aggregate keys and DB-seen keys separately
+        agg_seen: set[str] = set()
+        for it in agg_items:
+            key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
+            if key:
+                agg_seen.add(key)
+        db_seen: set[str] = set((k.strip() for k in (seen_keys or []) if isinstance(k, str)))
+        fetched_here = 0
+        while remaining > 0 and current_url:
+            try:
+                res = await fetch_rss_feed(current_url, timeout=timeout, tenant_id=tenant_id)
+            except Exception:
+                break
+            if int(res.get("status", 0) or 0) // 100 != 2:
+                break
+            items = list(res.get("items") or [])
+            # Dedup across pages and check DB-seen condition
+            new: List[Dict[str, Any]] = []
+            for it in items:
+                key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
+                if not key or key in agg_seen:
+                    continue
+                agg_seen.add(key)
+                new.append(it)
+            if not new:
+                break
+            if stop_on_seen:
+                # If none of the items on this page are new relative to DB-seen keys, stop
+                page_new_vs_db = [it for it in new if ((it.get("guid") or it.get("url") or it.get("link") or "").strip()) not in db_seen]
+                if not page_new_vs_db:
+                    nonlocal stop_triggered
+                    stop_triggered = True
+                    break
+                # Update db_seen with truly-new keys so that further pages respect boundary condition
+                for it in page_new_vs_db:
+                    k = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
+                    if k:
+                        db_seen.add(k)
+            agg_items.extend(_trim(new))
+            pages_fetched += 1
+            fetched_here += 1
+            remaining -= 1
+            # Look for next prev-archive
+            next_links = [ln for ln in (res.get("atom_links") or []) if ln.get("rel") == "prev-archive" and ln.get("href")]
+            current_url = next_links[0]["href"] if next_links else None
+        return fetched_here
+
+    # Helper: try common WordPress paged feed patterns
+    from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+
+    def _wp_paged_urls(base: str, pages: int) -> List[str]:
+        out: List[str] = []
+        try:
+            parsed = urlparse(base)
+            qs = parse_qs(parsed.query)
+            # Case 1: ?feed=rss2 or ?feed=atom → add paged param
+            if "feed" in qs:
+                for p in range(2, pages + 1):
+                    new_qs = qs.copy()
+                    new_qs["paged"] = [str(p)]
+                    new_url = urlunparse(parsed._replace(query=urlencode(new_qs, doseq=True)))
+                    out.append(new_url)
+            # Case 2: path endswith /feed or /feed/ → append ?paged=N
+            path = parsed.path or ""
+            if path.rstrip("/").endswith("/feed"):
+                for p in range(2, pages + 1):
+                    q = urlencode({"paged": p})
+                    base2 = urlunparse(parsed._replace(query=q))
+                    out.append(base2)
+            # Fallback: append ?paged=N generally
+            if not out:
+                for p in range(2, pages + 1):
+                    q = urlencode({"paged": p})
+                    out.append(urlunparse(parsed._replace(query=q)))
+        except Exception:
+            pass
+        # Dedup preserve order
+        dedup: List[str] = []
+        seen: set[str] = set()
+        for u in out:
+            if u not in seen:
+                seen.add(u)
+                dedup.append(u)
+        return dedup
+
+    pages_left = max(0, max_pages - 1)
+    used_strategy = (strategy or "auto").lower()
+    strategy_used = used_strategy
+
+    # Try Atom prev-archive first when auto/atom
+    if used_strategy in {"auto", "atom"} and pages_left > 0:
+        prev_links = [ln for ln in (first.get("atom_links") or []) if ln.get("rel") == "prev-archive" and ln.get("href")]
+        if prev_links:
+            consumed = await _follow_atom_prev(prev_links[0]["href"], pages_left)
+            pages_left -= consumed
+            strategy_used = "atom"
+
+    # Then try WordPress style when auto/wordpress and still have budget
+    if used_strategy in {"auto", "wordpress"} and pages_left > 0 and not stop_triggered:
+        wp_urls = _wp_paged_urls(url, pages_left + 1)
+        # Track DB-seen and aggregate keys
+        prior_keys = {(it.get("guid") or it.get("url") or it.get("link") or "").strip() for it in agg_items}
+        db_seen_wp: set[str] = set((k.strip() for k in (seen_keys or []) if isinstance(k, str)))
+        for u in wp_urls:
+            if pages_left <= 0:
+                break
+            try:
+                res = await fetch_rss_feed(u, timeout=timeout, tenant_id=tenant_id)
+            except Exception:
+                continue
+            if int(res.get("status", 0) or 0) // 100 != 2:
+                continue
+            items = list(res.get("items") or [])
+            if not items:
+                continue
+            # Dedup vs aggregate and check DB-seen boundary condition
+            new: List[Dict[str, Any]] = []
+            for it in items:
+                key = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
+                if not key or key in prior_keys:
+                    continue
+                prior_keys.add(key)
+                new.append(it)
+            if not new:
+                continue
+            if stop_on_seen:
+                page_new_vs_db = [it for it in new if ((it.get("guid") or it.get("url") or it.get("link") or "").strip()) not in db_seen_wp]
+                if not page_new_vs_db:
+                    stop_triggered = True
+                    break
+                for it in page_new_vs_db:
+                    k = (it.get("guid") or it.get("url") or it.get("link") or "").strip()
+                    if k:
+                        db_seen_wp.add(k)
+            agg_items.extend(_trim(new))
+            pages_fetched += 1
+            pages_left -= 1
+        if pages_fetched > 1:
+            strategy_used = "wordpress" if strategy_used == "auto" else strategy_used
+
+    return {
+        "status": 200,
+        "items": agg_items,
+        "etag": etag_out,
+        "last_modified": last_mod_out,
+        "pages_fetched": pages_fetched,
+        "strategy_used": strategy_used,
+        "stop_on_seen_triggered": stop_triggered,
+    }

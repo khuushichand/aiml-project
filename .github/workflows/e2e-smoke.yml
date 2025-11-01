@@ -82,7 +82,17 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
+      - name: Wait for API health (single-user, Windows 5 min)
+        if: ${{ matrix.os == 'windows-latest' }}
+        env:
+          SERVER_LABEL: single
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '300'
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
+
       - name: Wait for API health (single-user)
+        if: ${{ matrix.os != 'windows-latest' }}
         env:
           SERVER_LABEL: single
         shell: bash
@@ -143,7 +153,17 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
+      - name: Wait for API health (multi-user, Windows 5 min)
+        if: ${{ matrix.os == 'windows-latest' }}
+        env:
+          SERVER_LABEL: multi
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '300'
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
+
       - name: Wait for API health (multi-user)
+        if: ${{ matrix.os != 'windows-latest' }}
         env:
           SERVER_LABEL: multi
         shell: bash

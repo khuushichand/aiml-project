@@ -131,17 +131,6 @@ function updateTTSProviderOptions() {
                 { value: 'excited', text: 'Excited' },
                 { value: 'calm', text: 'Calm' }
             ]
-        },
-        kokoro: {
-            models: [
-                { value: 'kokoro-v1', text: 'Kokoro v1' }
-            ],
-            voices: [
-                { value: 'default', text: 'Default Voice' },
-                { value: 'warm', text: 'Warm' },
-                { value: 'professional', text: 'Professional' },
-                { value: 'friendly', text: 'Friendly' }
-            ]
         }
     };
     
@@ -837,7 +826,40 @@ async function loadProviderVoices() {
                         </div>
                     </div>`;
                 }).join('');
-                voiceList.innerHTML = items;
+                // Replace HTML injection with safe DOM build
+                voiceList.innerHTML = '';
+                voices.forEach(v => {
+                    const id = v.id || v.name || 'voice';
+                    const name = v.name || v.id || 'Voice';
+                    const metaText = [v.language, v.gender].filter(Boolean).join(' · ');
+                    const row = document.createElement('div');
+                    row.className = 'voice-item';
+                    row.style.cssText = 'padding:6px 0; border-bottom: 1px dashed var(--color-border); display:flex; align-items:center; justify-content:space-between; gap:8px;';
+                    const meta = document.createElement('div');
+                    meta.className = 'voice-meta';
+                    const strong = document.createElement('strong');
+                    strong.textContent = name;
+                    const muted = document.createElement('div');
+                    muted.className = 'text-muted';
+                    muted.style.fontSize = '0.85em';
+                    muted.textContent = metaText || '';
+                    const desc = document.createElement('div');
+                    desc.style.fontSize = '0.85em';
+                    desc.textContent = v.description || '';
+                    meta.appendChild(strong);
+                    meta.appendChild(muted);
+                    meta.appendChild(desc);
+                    const actions = document.createElement('div');
+                    actions.className = 'voice-actions';
+                    const btn = document.createElement('button');
+                    btn.className = 'btn-small';
+                    btn.innerHTML = '<i class="icon-check"></i> Use Voice';
+                    btn.addEventListener('click', () => apiTTSUseVoice(provider, id, name));
+                    actions.appendChild(btn);
+                    row.appendChild(meta);
+                    row.appendChild(actions);
+                    voiceList.appendChild(row);
+                });
             }
         }
     } catch (err) {
@@ -845,7 +867,11 @@ async function loadProviderVoices() {
         const voiceList = document.getElementById('audioTTS_voiceList');
         if (voiceList) {
             voiceList.style.display = 'block';
-            voiceList.innerHTML = `<span class="error">Error loading voices: ${err?.message || err}</span>`;
+            const span = document.createElement('span');
+            span.className = 'error';
+            span.textContent = `Error loading voices: ${err?.message || err}`;
+            voiceList.innerHTML = '';
+            voiceList.appendChild(span);
         }
     }
 }
@@ -1176,6 +1202,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 500);
 });
 
+// Bind Enter-to-send for chat input when DOM ready
+document.addEventListener('DOMContentLoaded', function() {
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+    }
+});
+
 // ----------------------------------------------------------------------------
 // File-based Transcription UI
 // ----------------------------------------------------------------------------
@@ -1208,25 +1247,8 @@ async function audioFileTranscribeRun() {
         if (m) fd.append('seg_embeddings_model', m);
     }
 
-    const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
-    const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
-
     try {
-        const res = await fetch(`${baseUrl}/api/v1/audio/transcriptions`, {
-            method: 'POST',
-            headers: {
-                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-            },
-            body: fd,
-        });
-        const contentType = res.headers.get('content-type') || '';
-        let data;
-        if (contentType.includes('application/json')) {
-            data = await res.json();
-        } else {
-            const text = await res.text();
-            data = { text };
-        }
+        const data = await apiClient.makeRequest('POST', '/api/v1/audio/transcriptions', { body: fd });
         renderFileTranscriptionResult(data);
     } catch (e) {
         console.error('Transcription failed', e);
@@ -2572,6 +2594,102 @@ const MAX_CHAT_MESSAGES = 100;
 let chatMessages = [
     {role: 'system', content: 'You are a helpful assistant.'}
 ];
+let chatStreamHandle = null; // active SSE handle for streaming chat
+let chatConversationId = null; // current conversation id if any
+
+// ------------------------------------------------------------
+// Minimal Markdown Renderer (safe)
+// ------------------------------------------------------------
+function mdEscape(s) {
+    return Utils && typeof Utils.escapeHtml === 'function' ? Utils.escapeHtml(String(s || '')) : String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;');
+}
+
+function createCodeBlockElement(codeText, lang) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'code-block-wrapper';
+    wrapper.style.position = 'relative';
+
+    const pre = document.createElement('pre');
+    pre.className = 'code-block';
+    pre.style.padding = '8px';
+    pre.style.background = 'var(--code-bg, #f5f5f5)';
+    pre.style.border = '1px solid #ddd';
+    pre.style.borderRadius = '4px';
+    pre.style.overflow = 'auto';
+
+    const code = document.createElement('code');
+    if (lang) code.setAttribute('data-lang', lang);
+    code.textContent = codeText;
+    pre.appendChild(code);
+
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm';
+    btn.textContent = 'Copy';
+    btn.style.position = 'absolute';
+    btn.style.top = '4px';
+    btn.style.right = '4px';
+    btn.addEventListener('click', async () => {
+        const ok = await Utils.copyToClipboard(codeText);
+        if (typeof Toast !== 'undefined') {
+            ok ? Toast.success('Copied code') : Toast.error('Copy failed');
+        }
+    });
+
+    wrapper.appendChild(pre);
+    wrapper.appendChild(btn);
+    return wrapper;
+}
+
+function renderMarkdownToElement(text, container) {
+    // Clear container
+    container.innerHTML = '';
+    if (!text) return;
+
+    // Split by fenced code blocks: ```lang\n...```; keep non-greedy across blocks
+    const regex = /```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        const before = text.slice(lastIndex, match.index);
+        if (before) {
+            appendPlainMarkdown(before, container);
+        }
+        const lang = (match[1] || '').trim();
+        const codeText = match[2] || '';
+        container.appendChild(createCodeBlockElement(codeText, lang));
+        lastIndex = regex.lastIndex;
+    }
+    const tail = text.slice(lastIndex);
+    if (tail) appendPlainMarkdown(tail, container);
+}
+
+function appendPlainMarkdown(text, container) {
+    // paragraphs by double newline
+    const paras = String(text).split(/\n\n+/);
+    paras.forEach((p) => {
+        if (!p.trim()) return;
+        const div = document.createElement('div');
+        // Inline transforms (safe)
+        let html = mdEscape(p);
+        // inline code `code`
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        // bold **text**
+        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        // italic *text* (simple heuristic; avoids lookbehind)
+        html = html.replace(/(^|\s)\*([^*]+)\*(?=\s|$)/g, '$1<em>$2</em>');
+        // links [text](url)
+        html = html.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1<\/a>');
+        // line breaks
+        html = html.replace(/\n/g, '<br>');
+        div.innerHTML = html;
+        container.appendChild(div);
+    });
+}
 
 // Function to update the system prompt
 function updateSystemPrompt() {
@@ -2598,6 +2716,14 @@ async function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const messagesDiv = document.getElementById('chat-messages');
     const model = document.getElementById('chat-model').value;
+    const streamToggle = document.getElementById('chat-stream');
+    const saveToggle = document.getElementById('chat-save-to-db');
+    const convIdInput = document.getElementById('chat-conversation-id');
+    const sendBtn = document.getElementById('chat-send-btn');
+    const stopBtn = document.getElementById('chat-stop-btn');
+    const tempEl = document.getElementById('chat-temp');
+    const topPEl = document.getElementById('chat-top-p');
+    const maxTokEl = document.getElementById('chat-max-tokens');
     
     if (!input.value.trim()) return;
     
@@ -2629,12 +2755,16 @@ async function sendChatMessage() {
     assistantDiv.className = 'chat-message assistant';
     const assistantLabel = document.createElement('strong');
     assistantLabel.textContent = 'Assistant:';
-    const assistantContent = document.createElement('span');
-    assistantContent.className = 'typing';
-    assistantContent.textContent = 'Thinking...';
+    const answerContainer = document.createElement('div');
+    answerContainer.className = 'assistant-answer';
+    answerContainer.textContent = 'Thinking...';
+    const toolsContainer = document.createElement('div');
+    toolsContainer.className = 'assistant-tools';
+    toolsContainer.style.marginTop = '6px';
     assistantDiv.appendChild(assistantLabel);
     assistantDiv.appendChild(document.createTextNode(' '));
-    assistantDiv.appendChild(assistantContent);
+    assistantDiv.appendChild(answerContainer);
+    assistantDiv.appendChild(toolsContainer);
     messagesDiv.appendChild(assistantDiv);
     
     // Smooth scrolling
@@ -2651,15 +2781,105 @@ async function sendChatMessage() {
         const requestPayload = {
             model: model,
             messages: chatMessages,
-            temperature: 0.7,
-            max_tokens: 1000
+            temperature: tempEl && tempEl.value ? parseFloat(tempEl.value) : 0.7,
+            top_p: topPEl && topPEl.value ? parseFloat(topPEl.value) : 1,
+            max_tokens: maxTokEl && maxTokEl.value ? parseInt(maxTokEl.value) : 1000
         };
         
         // Add provider if selected
         if (provider) {
             requestPayload.api_provider = provider;
         }
-        
+        // Persist provider/model + sampling choices
+        try {
+            Utils.saveToStorage('chat-ui-selection', { provider, model });
+            Utils.saveToStorage('chat-ui-sampling', {
+                temperature: requestPayload.temperature,
+                top_p: requestPayload.top_p,
+                max_tokens: requestPayload.max_tokens
+            });
+        } catch (_) {}
+
+        // Include conversation id and save preference
+        if (typeof chatConversationId === 'string' && chatConversationId.length > 0) {
+            requestPayload.conversation_id = chatConversationId;
+        }
+        if (saveToggle && saveToggle.checked) {
+            requestPayload.save_to_db = true;
+        }
+
+        // Streaming path
+        if (streamToggle && streamToggle.checked) {
+            // Prepare assistant placeholder for deltas
+            answerContainer.textContent = '';
+            toolsContainer.innerHTML = '';
+
+            if (sendBtn) sendBtn.disabled = true;
+            if (stopBtn) stopBtn.style.display = '';
+
+            let assembled = '';
+            const toolCallsAcc = [];
+            let renderScheduled = false;
+            const scheduleRender = () => {
+                if (renderScheduled) return;
+                renderScheduled = true;
+                requestAnimationFrame(() => {
+                    renderScheduled = false;
+                    try {
+                        renderMarkdownToElement(assembled, answerContainer);
+                        renderToolCalls(toolCallsAcc, toolsContainer);
+                    } catch (_) {}
+                });
+            };
+            chatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+                method: 'POST',
+                body: requestPayload,
+                onEvent: (evt) => {
+                    try {
+                        const delta = evt?.choices?.[0]?.delta?.content;
+                        if (typeof delta === 'string' && delta.length > 0) {
+                            assembled += delta;
+                            scheduleRender();
+                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        }
+                        // Accumulate streamed tool calls
+                        const dTools = evt?.choices?.[0]?.delta?.tool_calls;
+                        if (Array.isArray(dTools) && dTools.length) {
+                            dTools.forEach((tc) => {
+                                const idx = typeof tc.index === 'number' ? tc.index : 0;
+                                if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { name: '', args: '' };
+                                const fn = tc.function || {};
+                                if (fn.name) toolCallsAcc[idx].name = fn.name;
+                                if (typeof fn.arguments === 'string') toolCallsAcc[idx].args += fn.arguments;
+                            });
+                            scheduleRender();
+                        }
+                        const meta = evt?.tldw_metadata || evt?.metadata;
+                        const cid = meta?.conversation_id || evt?.tldw_conversation_id;
+                        if (cid && cid !== chatConversationId) {
+                            chatConversationId = cid;
+                            if (convIdInput) convIdInput.value = cid;
+                        }
+                    } catch (_) { /* ignore */ }
+                },
+                timeout: 600000
+            });
+
+            try {
+                await chatStreamHandle.done;
+                chatMessages.push({ role: 'assistant', content: assembled });
+            } catch (e) {
+                // If aborted, leave partial text with marker
+                const suffix = (e && e.name === 'AbortError') ? ' [stopped]' : ` [error: ${e?.message || 'failed'}]`;
+                renderMarkdownToElement(assembled + suffix, answerContainer);
+            } finally {
+                if (stopBtn) stopBtn.style.display = 'none';
+                if (sendBtn) sendBtn.disabled = false;
+                chatStreamHandle = null;
+            }
+            return;
+        }
+
         const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
         
         if (response.choices && response.choices[0] && response.choices[0].message) {
@@ -2672,14 +2892,36 @@ async function sendChatMessage() {
                 chatMessages = [systemMsg, ...chatMessages.slice(-(MAX_CHAT_MESSAGES - 1))];
             }
             
+            // Rebuild assistantDiv contents with markdown + tools
             assistantDiv.innerHTML = '';
             const label = document.createElement('strong');
             label.textContent = 'Assistant:';
-            const content = document.createElement('span');
-            content.textContent = assistantMessage;
+            const ans = document.createElement('div');
+            const tools = document.createElement('div');
+            tools.className = 'assistant-tools';
+            tools.style.marginTop = '6px';
+            renderMarkdownToElement(assistantMessage || '', ans);
             assistantDiv.appendChild(label);
             assistantDiv.appendChild(document.createTextNode(' '));
-            assistantDiv.appendChild(content);
+            assistantDiv.appendChild(ans);
+            assistantDiv.appendChild(tools);
+            // Render tool calls if present in message
+            try {
+                const tcs = response.choices[0].message.tool_calls;
+                if (Array.isArray(tcs) && tcs.length) {
+                    const acc = tcs.map(tc => ({ name: tc?.function?.name || '', args: String(tc?.function?.arguments || '') }));
+                    renderToolCalls(acc, tools);
+                }
+            } catch (_) {}
+
+            // Capture conversation id from non-streaming response
+            try {
+                const cid = response?.tldw_conversation_id || response?.tldw_metadata?.conversation_id;
+                if (cid) {
+                    chatConversationId = cid;
+                    if (convIdInput) convIdInput.value = cid;
+                }
+            } catch (_) {}
         } else {
             assistantDiv.innerHTML = '';
             const label2 = document.createElement('strong');
@@ -2724,6 +2966,113 @@ function clearChat() {
     fragment.appendChild(systemDiv);
     messagesDiv.innerHTML = '';
     messagesDiv.appendChild(fragment);
+    // Clear conversation id (do not change stream/save toggles)
+    chatConversationId = null;
+    const convIdInput = document.getElementById('chat-conversation-id');
+    if (convIdInput) convIdInput.value = '';
+}
+
+// Stop streaming if active
+function stopChatStream() {
+    try {
+        if (chatStreamHandle && chatStreamHandle.abort) {
+            chatStreamHandle.abort();
+        }
+    } catch (_) {}
+}
+
+// Reset only the conversation id (keep messages)
+function resetChatConversation() {
+    chatConversationId = null;
+    const convIdInput = document.getElementById('chat-conversation-id');
+    if (convIdInput) convIdInput.value = '';
+    if (typeof Toast !== 'undefined' && Toast.info) {
+        Toast.info('Conversation ID cleared');
+    }
+}
+
+// Copy last assistant message
+async function copyLastAssistantMessage() {
+    try {
+        for (let i = chatMessages.length - 1; i >= 0; i--) {
+            if (chatMessages[i].role === 'assistant') {
+                await navigator.clipboard.writeText(chatMessages[i].content || '');
+                if (typeof Toast !== 'undefined' && Toast.success) Toast.success('Copied last answer');
+                return;
+            }
+        }
+        if (typeof Toast !== 'undefined' && Toast.info) Toast.info('No assistant message to copy');
+    } catch (e) {
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Copy failed');
+        else console.error('Copy failed', e);
+    }
+}
+
+// Retry last user message by re-sending it
+function retryLastUserMessage() {
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+        if (chatMessages[i].role === 'user') {
+            const input = document.getElementById('chat-input');
+            if (input) input.value = chatMessages[i].content || '';
+            sendChatMessage();
+            return;
+        }
+    }
+    if (typeof Toast !== 'undefined' && Toast.info) Toast.info('No user message to retry');
+}
+
+// Edit-and-resend: move last user message back to input and remove it from the history/DOM
+function editLastUserMessage() {
+    // Find last user message index
+    let idx = -1;
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+        if (chatMessages[i].role === 'user') { idx = i; break; }
+    }
+    if (idx === -1) {
+        if (typeof Toast !== 'undefined' && Toast.info) Toast.info('No user message to edit');
+        return;
+    }
+    const msg = chatMessages[idx].content || '';
+    // Remove from history (keep system and earlier messages)
+    chatMessages.splice(idx, 1);
+    // Remove from DOM: remove last .chat-message.user element
+    try {
+        const messagesDiv = document.getElementById('chat-messages');
+        const userNodes = messagesDiv ? messagesDiv.querySelectorAll('.chat-message.user') : [];
+        if (userNodes && userNodes.length) {
+            const lastUserNode = userNodes[userNodes.length - 1];
+            lastUserNode.parentElement.removeChild(lastUserNode);
+        }
+    } catch (_) {}
+    // Put content into input
+    const input = document.getElementById('chat-input');
+    if (input) input.value = msg;
+    if (typeof Toast !== 'undefined' && Toast.info) Toast.info('Editing last user message');
+}
+
+// Render tool calls (function name + JSON args) into a container
+function renderToolCalls(toolCalls, container) {
+    if (!container) return;
+    container.innerHTML = '';
+    const calls = (Array.isArray(toolCalls) ? toolCalls : []).filter(tc => (tc && (tc.name || tc.args)));
+    if (!calls.length) return;
+    const header = document.createElement('div');
+    header.className = 'assistant-tools-header';
+    header.textContent = 'Tool calls:';
+    container.appendChild(header);
+    calls.forEach((tc, i) => {
+        const block = document.createElement('div');
+        block.className = 'tool-call-block';
+        block.style.borderLeft = '3px solid #ccc';
+        block.style.paddingLeft = '8px';
+        block.style.margin = '4px 0';
+        const name = document.createElement('div');
+        name.innerHTML = `<strong>${mdEscape(tc.name || 'function')}</strong>`;
+        block.appendChild(name);
+        const codeEl = createCodeBlockElement(String(tc.args || ''), 'json');
+        block.appendChild(codeEl);
+        container.appendChild(block);
+    });
 }
 
 async function exportCharacter() {
@@ -3094,6 +3443,60 @@ function initializeChatCompletionsTab() {
     if (typeof populateModelDropdowns === 'function') {
         populateModelDropdowns();
     }
+    // Restore saved provider/model selection
+    try {
+        const saved = Utils.getFromStorage('chat-ui-selection');
+        if (saved) {
+            const p = document.getElementById('chat-provider');
+            const m = document.getElementById('chat-model');
+            if (p && typeof saved.provider === 'string') p.value = saved.provider;
+            if (m && typeof saved.model === 'string') m.value = saved.model;
+        }
+    } catch (_) {}
+    // Persist changes to selection
+    const pSel = document.getElementById('chat-provider');
+    const mSel = document.getElementById('chat-model');
+    const persist = () => {
+        try { Utils.saveToStorage('chat-ui-selection', { provider: (pSel && pSel.value) || '', model: (mSel && mSel.value) || '' }); } catch (_) {}
+    };
+    if (pSel) pSel.addEventListener('change', persist);
+    if (mSel) mSel.addEventListener('change', persist);
+
+    // Apply default Save to DB preference from server config if available
+    try {
+        const saveEl = document.getElementById('chat-save-to-db');
+        if (saveEl && window.apiClient && window.apiClient.loadedConfig) {
+            const def = window.apiClient.loadedConfig?.chat?.default_save_to_db;
+            if (typeof def === 'boolean') saveEl.checked = def;
+        }
+    } catch (_) {}
+
+    // Restore sampling controls
+    try {
+        const savedS = Utils.getFromStorage('chat-ui-sampling');
+        if (savedS) {
+            const t = document.getElementById('chat-temp');
+            const p = document.getElementById('chat-top-p');
+            const m = document.getElementById('chat-max-tokens');
+            if (t && typeof savedS.temperature !== 'undefined') t.value = String(savedS.temperature);
+            if (p && typeof savedS.top_p !== 'undefined') p.value = String(savedS.top_p);
+            if (m && typeof savedS.max_tokens !== 'undefined') m.value = String(savedS.max_tokens);
+        }
+        // Persist on change
+        const tEl = document.getElementById('chat-temp');
+        const pEl = document.getElementById('chat-top-p');
+        const mEl = document.getElementById('chat-max-tokens');
+        const persistSampling = () => {
+            try { Utils.saveToStorage('chat-ui-sampling', {
+                temperature: tEl && tEl.value ? parseFloat(tEl.value) : 0.7,
+                top_p: pEl && pEl.value ? parseFloat(pEl.value) : 1,
+                max_tokens: mEl && mEl.value ? parseInt(mEl.value) : 1000
+            }); } catch (_) {}
+        };
+        if (tEl) tEl.addEventListener('change', persistSampling);
+        if (pEl) pEl.addEventListener('change', persistSampling);
+        if (mEl) mEl.addEventListener('change', persistSampling);
+    } catch (_) {}
 }
 
 // Store provider data globally for filtering
@@ -4064,6 +4467,23 @@ async function watchlistsCreateSource() {
         if (type === 'rss') {
             const limit = watchlistsParseNumber(document.getElementById('watchlistsSource_rssLimit')?.value);
             if (limit !== undefined) settings.limit = limit;
+            // History config
+            const hist = {};
+            const strat = document.getElementById('watchlistsSource_histStrategy')?.value?.trim();
+            if (strat) hist.strategy = strat;
+            const maxPages = watchlistsParseNumber(document.getElementById('watchlistsSource_histMaxPages')?.value);
+            if (maxPages !== undefined) hist.max_pages = maxPages;
+            const perPage = watchlistsParseNumber(document.getElementById('watchlistsSource_histPerPage')?.value);
+            if (perPage !== undefined) hist.per_page_limit = perPage;
+            if (document.getElementById('watchlistsSource_histOn304')?.checked) hist.on_304 = true;
+            if (document.getElementById('watchlistsSource_histStopOnSeen')?.checked) hist.stop_on_seen = true;
+            if (Object.keys(hist).length > 0) settings.history = hist;
+            // RSS content prefs
+            const rssCfg = {};
+            if (document.getElementById('watchlistsSource_rssUseFeed')?.checked) rssCfg.use_feed_content_if_available = true;
+            const minChars = watchlistsParseNumber(document.getElementById('watchlistsSource_feedMinChars')?.value);
+            if (minChars !== undefined) rssCfg.feed_content_min_chars = minChars;
+            if (Object.keys(rssCfg).length > 0) settings.rss = rssCfg;
         } else {
             const topN = watchlistsParseNumber(document.getElementById('watchlistsSource_topN')?.value);
             if (topN !== undefined) settings.top_n = topN;
@@ -4138,13 +4558,238 @@ async function watchlistsCreateSource() {
     }
 }
 
-// Best-effort: revoke any recording object URLs on tab unload to prevent leaks
-try {
-    window.addEventListener('beforeunload', () => {
-        try { if (typeof _audioTTSRec !== 'undefined' && _audioTTSRec && _audioTTSRec.url) URL.revokeObjectURL(_audioTTSRec.url); } catch(_) {}
-        try { if (typeof _fileTransRec !== 'undefined' && _fileTransRec && _fileTransRec.url) URL.revokeObjectURL(_fileTransRec.url); } catch(_) {}
-    });
-} catch (_) {}
+function watchlistsToggleRssAdvanced(forceState) {
+    try {
+        const el = document.getElementById('watchlistsSource_rssAdvanced');
+        if (!el) return;
+        if (typeof forceState === 'boolean') {
+            el.style.display = forceState ? 'block' : 'none';
+            return;
+        }
+        el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    } catch (err) {
+        console.warn('toggle rss advanced failed', err);
+    }
+}
+
+// Build settings-only payload from the current form (safe for PATCH)
+function _watchlistsBuildSettingsPayloadFromForm() {
+    const settings = {};
+    const type = document.getElementById('watchlistsSource_type')?.value || 'site';
+
+    if (type === 'rss') {
+        const rssCfg = {};
+        const limit = watchlistsParseNumber(document.getElementById('watchlistsSource_rssLimit')?.value);
+        if (limit !== undefined) rssCfg.limit = limit;
+
+        const hist = {};
+        const strat = document.getElementById('watchlistsSource_histStrategy')?.value?.trim();
+        if (strat && strat !== 'auto') hist.strategy = strat;
+        const maxPages = watchlistsParseNumber(document.getElementById('watchlistsSource_histMaxPages')?.value);
+        if (maxPages !== undefined) hist.max_pages = maxPages;
+        const perPage = watchlistsParseNumber(document.getElementById('watchlistsSource_histPerPage')?.value);
+        if (perPage !== undefined) hist.per_page = perPage;
+        if (document.getElementById('watchlistsSource_histOn304')?.checked) hist.on_304 = true;
+        if (document.getElementById('watchlistsSource_histStopOnSeen')?.checked) hist.stop_on_seen = true;
+        if (Object.keys(hist).length > 0) settings.history = hist;
+
+        if (document.getElementById('watchlistsSource_rssUseFeed')?.checked) rssCfg.use_feed_content_if_available = true;
+        const minChars = watchlistsParseNumber(document.getElementById('watchlistsSource_feedMinChars')?.value);
+        if (minChars !== undefined) rssCfg.feed_text_min_chars = minChars;
+        if (Object.keys(rssCfg).length > 0) settings.rss = rssCfg;
+    } else {
+        const rules = {};
+        const topN = watchlistsParseNumber(document.getElementById('watchlistsSource_topN')?.value);
+        if (topN !== undefined) rules.top_n = topN;
+        const discover = document.getElementById('watchlistsSource_discover')?.value?.trim();
+        if (discover && discover !== 'auto') rules.discovery = discover;
+        const siteLimit = watchlistsParseNumber(document.getElementById('watchlistsSource_limit')?.value);
+        if (siteLimit !== undefined) rules.limit = siteLimit;
+        const listUrlRaw = document.getElementById('watchlistsSource_listUrl')?.value?.trim();
+        if (listUrlRaw) rules.list_url = listUrlRaw;
+
+        const entrySelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_entrySelectors')?.value || '');
+        if (entrySelectors) rules.entry_xpath = entrySelectors;
+        const linkSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_linkSelectors')?.value || '');
+        if (linkSelectors) rules.link_xpath = linkSelectors;
+        const titleSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_titleSelectors')?.value || '');
+        if (titleSelectors) rules.title_xpath = titleSelectors;
+        const summarySelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_summarySelectors')?.value || '');
+        if (summarySelectors) rules.summary_xpath = summarySelectors;
+        const contentSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_contentSelectors')?.value || '');
+        if (contentSelectors) rules.content_xpath = contentSelectors;
+        const authorSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_authorSelectors')?.value || '');
+        if (authorSelectors) rules.author_xpath = authorSelectors;
+        const publishedSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_publishedSelectors')?.value || '');
+        if (publishedSelectors) rules.published_xpath = publishedSelectors;
+        const publishedFormat = document.getElementById('watchlistsSource_publishedFormat')?.value?.trim();
+        if (publishedFormat) rules.published_format = publishedFormat;
+        const summaryJoin = document.getElementById('watchlistsSource_summaryJoin')?.value ?? '';
+        if (summaryJoin.trim().length > 0) rules.summary_join_with = summaryJoin;
+        const contentJoin = document.getElementById('watchlistsSource_contentJoin')?.value ?? '';
+        if (contentJoin.trim().length > 0) rules.content_join_with = contentJoin;
+        if (document.getElementById('watchlistsSource_skipArticle')?.checked) {
+            rules.skip_article_fetch = true;
+        }
+
+        const pagination = {};
+        const nextSelectors = watchlistsNormalizeSelectorsInput(document.getElementById('watchlistsSource_nextSelectors')?.value || '');
+        if (nextSelectors) pagination.next_xpath = nextSelectors;
+        const nextAttr = document.getElementById('watchlistsSource_nextAttr')?.value?.trim();
+        if (nextAttr && nextAttr !== 'href') {
+            pagination.next_attribute = nextAttr;
+        }
+        const maxPages = watchlistsParseNumber(document.getElementById('watchlistsSource_maxPages')?.value);
+        if (maxPages !== undefined) pagination.max_pages = maxPages;
+        if (Object.keys(pagination).length > 0) rules.pagination = pagination;
+
+        if (Object.keys(rules).length > 0) settings.scrape_rules = rules;
+    }
+    return settings;
+}
+
+async function watchlistsUpdateSource() {
+    try {
+        const idRaw = document.getElementById('watchlistsSource_updateId')?.value;
+        const sourceId = Number(idRaw || 0);
+        if (!sourceId || sourceId < 1) throw new Error('Source ID required for update');
+
+        const payload = {};
+        const settings = _watchlistsBuildSettingsPayloadFromForm();
+        if (Object.keys(settings).length > 0) payload.settings = settings;
+
+        const btn = document.getElementById('watchlistsSource_updateBtn');
+        if (btn) btn.disabled = true;
+        const res = await apiClient.patch(`/api/v1/watchlists/sources/${sourceId}`, payload);
+        watchlistsSetResponse('watchlistsSource_updateResponse', res);
+        if (btn) btn.disabled = false;
+        await watchlistsListSources();
+    } catch (err) {
+        const btn = document.getElementById('watchlistsSource_updateBtn');
+        if (btn) btn.disabled = false;
+        watchlistsSetResponse('watchlistsSource_updateResponse', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsLoadSourceIntoForm() {
+    try {
+        const idRaw = document.getElementById('watchlistsSource_updateId')?.value;
+        const sourceId = Number(idRaw || 0);
+        if (!sourceId || sourceId < 1) throw new Error('Source ID required to load');
+        const res = await apiClient.get(`/api/v1/watchlists/sources/${sourceId}`);
+        // Basic fields
+        const typeEl = document.getElementById('watchlistsSource_type');
+        if (typeEl) typeEl.value = res.source_type || 'site';
+        watchlistsSourceTypeChanged();
+
+        const nameEl = document.getElementById('watchlistsSource_name');
+        if (nameEl) nameEl.value = res.name || '';
+        const urlEl = document.getElementById('watchlistsSource_url');
+        if (urlEl) urlEl.value = res.url || '';
+        const activeEl = document.getElementById('watchlistsSource_active');
+        if (activeEl) activeEl.checked = !!res.active;
+        const tagsEl = document.getElementById('watchlistsSource_tags');
+        if (tagsEl && res.tags && Array.isArray(res.tags)) tagsEl.value = res.tags.join(', ');
+
+        const settings = res.settings || {};
+        // RSS/history
+        const hist = (settings.history || {});
+        const rss = (settings.rss || {});
+        if (document.getElementById('watchlistsSource_histStrategy')) document.getElementById('watchlistsSource_histStrategy').value = hist.strategy || 'auto';
+        if (document.getElementById('watchlistsSource_histMaxPages')) document.getElementById('watchlistsSource_histMaxPages').value = (hist.max_pages ?? 1);
+        if (document.getElementById('watchlistsSource_histPerPage')) document.getElementById('watchlistsSource_histPerPage').value = (hist.per_page ?? '');
+        if (document.getElementById('watchlistsSource_histOn304')) document.getElementById('watchlistsSource_histOn304').checked = !!hist.on_304;
+        if (document.getElementById('watchlistsSource_histStopOnSeen')) document.getElementById('watchlistsSource_histStopOnSeen').checked = !!hist.stop_on_seen;
+        if (document.getElementById('watchlistsSource_rssLimit')) document.getElementById('watchlistsSource_rssLimit').value = (rss.limit ?? '');
+        if (document.getElementById('watchlistsSource_rssUseFeed')) document.getElementById('watchlistsSource_rssUseFeed').checked = !!rss.use_feed_content_if_available;
+        if (document.getElementById('watchlistsSource_feedMinChars')) document.getElementById('watchlistsSource_feedMinChars').value = (rss.feed_text_min_chars ?? 400);
+        // Expand advanced when settings present
+        const hasRssAdv = (Object.keys(hist).length > 0 || Object.keys(rss).length > 0);
+        watchlistsToggleRssAdvanced(!!hasRssAdv);
+
+        // Site scrape rules
+        const rules = (settings.scrape_rules || {});
+        if (document.getElementById('watchlistsSource_topN')) document.getElementById('watchlistsSource_topN').value = (rules.top_n ?? '');
+        if (document.getElementById('watchlistsSource_discover')) document.getElementById('watchlistsSource_discover').value = (rules.discovery ?? 'auto');
+        if (document.getElementById('watchlistsSource_limit')) document.getElementById('watchlistsSource_limit').value = (rules.limit ?? '');
+        if (document.getElementById('watchlistsSource_listUrl')) document.getElementById('watchlistsSource_listUrl').value = (rules.list_url ?? '');
+        if (document.getElementById('watchlistsSource_entrySelectors')) document.getElementById('watchlistsSource_entrySelectors').value = (Array.isArray(rules.entry_xpath) ? rules.entry_xpath.join('\n') : (rules.entry_xpath || ''));
+        if (document.getElementById('watchlistsSource_linkSelectors')) document.getElementById('watchlistsSource_linkSelectors').value = (Array.isArray(rules.link_xpath) ? rules.link_xpath.join('\n') : (rules.link_xpath || ''));
+        if (document.getElementById('watchlistsSource_titleSelectors')) document.getElementById('watchlistsSource_titleSelectors').value = (Array.isArray(rules.title_xpath) ? rules.title_xpath.join('\n') : (rules.title_xpath || ''));
+        if (document.getElementById('watchlistsSource_summarySelectors')) document.getElementById('watchlistsSource_summarySelectors').value = (Array.isArray(rules.summary_xpath) ? rules.summary_xpath.join('\n') : (rules.summary_xpath || ''));
+        if (document.getElementById('watchlistsSource_contentSelectors')) document.getElementById('watchlistsSource_contentSelectors').value = (Array.isArray(rules.content_xpath) ? rules.content_xpath.join('\n') : (rules.content_xpath || ''));
+        if (document.getElementById('watchlistsSource_authorSelectors')) document.getElementById('watchlistsSource_authorSelectors').value = (Array.isArray(rules.author_xpath) ? rules.author_xpath.join('\n') : (rules.author_xpath || ''));
+        if (document.getElementById('watchlistsSource_publishedSelectors')) document.getElementById('watchlistsSource_publishedSelectors').value = (Array.isArray(rules.published_xpath) ? rules.published_xpath.join('\n') : (rules.published_xpath || ''));
+        if (document.getElementById('watchlistsSource_publishedFormat')) document.getElementById('watchlistsSource_publishedFormat').value = (rules.published_format ?? '');
+        if (document.getElementById('watchlistsSource_summaryJoin')) document.getElementById('watchlistsSource_summaryJoin').value = (rules.summary_join_with ?? ' ');
+        if (document.getElementById('watchlistsSource_contentJoin')) document.getElementById('watchlistsSource_contentJoin').value = (rules.content_join_with ?? '\n\n');
+        if (document.getElementById('watchlistsSource_skipArticle')) document.getElementById('watchlistsSource_skipArticle').checked = !!rules.skip_article_fetch;
+        const pagination = (rules.pagination || {});
+        if (document.getElementById('watchlistsSource_nextSelectors')) document.getElementById('watchlistsSource_nextSelectors').value = (Array.isArray(pagination.next_xpath) ? pagination.next_xpath.join('\n') : (pagination.next_xpath || ''));
+        if (document.getElementById('watchlistsSource_nextAttr')) document.getElementById('watchlistsSource_nextAttr').value = (pagination.next_attribute ?? 'href');
+        if (document.getElementById('watchlistsSource_maxPages')) document.getElementById('watchlistsSource_maxPages').value = (pagination.max_pages ?? '');
+        // Expand scrape advanced if we populated any
+        const hasScrapeAdv = (Object.keys(rules).length > 0);
+        watchlistsToggleScrapeAdvanced(!!hasScrapeAdv);
+
+        watchlistsSetResponse('watchlistsSource_createResponse', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsSource_createResponse', `Error: ${err.message}`);
+    }
+}
+
+// --------------------
+// Watchlists Runs (legacy UI surfacing)
+// --------------------
+async function watchlistsListRuns() {
+    try {
+        const q = (document.getElementById('watchlistsRuns_q')?.value || '').trim();
+        const page = Number(document.getElementById('watchlistsRuns_page')?.value || 1);
+        const size = Number(document.getElementById('watchlistsRuns_size')?.value || 50);
+        const params = new URLSearchParams();
+        if (q) params.set('q', q);
+        params.set('page', String(page));
+        params.set('size', String(size));
+        const res = await apiClient.get(`/api/v1/watchlists/runs?${params.toString()}`);
+        // Provide a compact table with history counters when present
+        const items = Array.isArray(res?.items) ? res.items : [];
+        let html = '';
+        html += '<table class="simple-table">';
+        html += '<thead><tr><th>Run ID</th><th>Job</th><th>Status</th><th>Started</th><th>Finished</th><th>Hist pages</th><th>StopOnSeen</th></tr></thead><tbody>';
+        for (const r of items) {
+            const hist = (r?.stats && r.stats.history) ? r.stats.history : {};
+            const pages = (hist && typeof hist.pages_fetched !== 'undefined') ? hist.pages_fetched : '';
+            const stop = (hist && typeof hist.stop_on_seen_triggered !== 'undefined') ? String(!!hist.stop_on_seen_triggered) : '';
+            html += `<tr><td>${r.id}</td><td>${r.job_id}</td><td>${r.status||''}</td><td>${r.started_at||''}</td><td>${r.finished_at||''}</td><td>${pages}</td><td>${stop}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        const tableDiv = document.getElementById('watchlistsRuns_table');
+        if (tableDiv) tableDiv.innerHTML = html;
+        watchlistsSetResponse('watchlistsRuns_response', res);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsRuns_response', `Error: ${err.message}`);
+    }
+}
+
+async function watchlistsGetRun() {
+    try {
+        const id = Number(document.getElementById('watchlistsRun_id')?.value || 0);
+        if (!id) throw new Error('Run ID required');
+        const r = await apiClient.get(`/api/v1/watchlists/runs/${id}`);
+        // History counters inline
+        try {
+            const hist = (r?.stats && r.stats.history) ? r.stats.history : null;
+            const pages = document.getElementById('watchlistsRun_histPages');
+            const stop = document.getElementById('watchlistsRun_histStopOnSeen');
+            if (pages) pages.textContent = hist && typeof hist.pages_fetched !== 'undefined' ? String(hist.pages_fetched) : '—';
+            if (stop) stop.textContent = hist && typeof hist.stop_on_seen_triggered !== 'undefined' ? String(!!hist.stop_on_seen_triggered) : '—';
+        } catch (_) {}
+        watchlistsSetResponse('watchlistsRun_response', r);
+    } catch (err) {
+        watchlistsSetResponse('watchlistsRun_response', `Error: ${err.message}`);
+    }
+}
+
 // Best-effort: revoke any recording object URLs on tab unload to prevent leaks
 try {
     window.addEventListener('beforeunload', () => {

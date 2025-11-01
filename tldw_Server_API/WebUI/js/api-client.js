@@ -14,6 +14,7 @@ class APIClient {
         this.websockets = new Map(); // Store active WebSocket connections
         this.activeRequests = new Map(); // Track active fetch requests
         this.csrfToken = null; // Cached CSRF token (double-submit pattern)
+        this.includeTokenInCurl = false; // UI preference for cURL token masking
         this.init();
     }
     
@@ -184,6 +185,14 @@ class APIClient {
         if (savedHistory && Array.isArray(savedHistory)) {
             this.requestHistory = savedHistory;
         }
+
+        // Load UI prefs
+        try {
+            const prefs = Utils.getFromStorage('webui-prefs');
+            if (prefs && typeof prefs.includeTokenInCurl === 'boolean') {
+                this.includeTokenInCurl = !!prefs.includeTokenInCurl;
+            }
+        } catch (e) { /* ignore */ }
     }
 
     setBaseUrl(url) {
@@ -201,6 +210,15 @@ class APIClient {
             baseUrl: this.baseUrl,
             token: this.token
         });
+    }
+
+    setIncludeTokenInCurl(val) {
+        this.includeTokenInCurl = !!val;
+        try {
+            const prefs = Utils.getFromStorage('webui-prefs') || {};
+            prefs.includeTokenInCurl = this.includeTokenInCurl;
+            Utils.saveToStorage('webui-prefs', prefs);
+        } catch (e) { /* ignore */ }
     }
 
     _determineCredentialsMode() {
@@ -527,6 +545,9 @@ class APIClient {
         let buffer = '';
         const chunks = [];
 
+        // Accumulate event lines until a blank line terminates the event
+        let eventLines = [];
+
         while (true) {
             const { value, done } = await reader.read();
             if (done) break;
@@ -535,21 +556,47 @@ class APIClient {
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.substring(6).trim();
-                    if (data === '[DONE]') {
-                        return chunks;
-                    }
-                    try {
-                        const parsed = JSON.parse(data);
-                        chunks.push(parsed);
-                        if (onProgress) {
-                            onProgress(parsed);
+            for (const rawLine of lines) {
+                const line = rawLine.replace(/\r$/, '');
+                if (line === '') {
+                    // End of event; join collected data lines
+                    if (eventLines.length > 0) {
+                        const dataStr = eventLines.join('\n').trim();
+                        eventLines = [];
+                        if (dataStr === '[DONE]') {
+                            return chunks;
                         }
-                    } catch (e) {
-                        console.warn('Failed to parse SSE data:', data);
+                        if (!dataStr) continue;
+                        try {
+                            const parsed = JSON.parse(dataStr);
+                            chunks.push(parsed);
+                            if (onProgress) onProgress(parsed);
+                        } catch (e) {
+                            console.warn('Failed to parse SSE data:', dataStr);
+                        }
                     }
+                    continue;
+                }
+
+                // Collect only data: lines; allow optional space after colon
+                if (line.startsWith('data:')) {
+                    const val = line.slice(5).trimStart();
+                    eventLines.push(val);
+                }
+                // Ignore other SSE fields (id:, event:, retry:)
+            }
+        }
+
+        // Flush any trailing event if stream ended without final blank line
+        if (eventLines.length > 0) {
+            const dataStr = eventLines.join('\n').trim();
+            if (dataStr && dataStr !== '[DONE]') {
+                try {
+                    const parsed = JSON.parse(dataStr);
+                    chunks.push(parsed);
+                    if (onProgress) onProgress(parsed);
+                } catch (e) {
+                    console.warn('Failed to parse SSE data:', dataStr);
                 }
             }
         }
@@ -595,6 +642,127 @@ class APIClient {
         return this.makeRequest('PATCH', path, { body, ...options });
     }
 
+    // ------------------------------------------------------------
+    // Streaming helpers
+    // ------------------------------------------------------------
+    /**
+     * Stream Server-Sent Events and emit parsed JSON events via callback.
+     * Returns a handle with abort() and a done promise.
+     */
+    streamSSE(path, { method = 'GET', query = {}, headers = {}, body = null, onEvent = null, timeout = 600000 } = {}) {
+        const url = new URL(`${this.baseUrl}${path}`);
+        Object.keys(query || {}).forEach((k) => {
+            const v = query[k];
+            if (v !== undefined && v !== null && v !== '') url.searchParams.append(k, v);
+        });
+
+        const ctrl = new AbortController();
+        const fetchHeaders = { 'Accept': 'text/event-stream', ...headers };
+
+        const credsMode = this._determineCredentialsMode();
+        if (this.token) {
+            if (this.authMode === 'single-user' || (this.authMode === 'multi-user' && this.preferApiKeyInMultiUser)) fetchHeaders['X-API-KEY'] = this.token;
+            else if (this.authMode === 'multi-user') fetchHeaders['Authorization'] = `Bearer ${this.token}`;
+            else fetchHeaders['X-API-KEY'] = this.token;
+        }
+
+        // CSRF for modifying requests (rare for SSE, but be safe)
+        const upper = (method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(upper)) {
+            const csrf = this._getCsrfToken();
+            if (csrf) fetchHeaders['X-CSRF-Token'] = csrf;
+        }
+
+        const fetchOptions = { method, headers: fetchHeaders, signal: ctrl.signal };
+        if (credsMode) fetchOptions.credentials = credsMode;
+        if (body) fetchOptions.body = (typeof body === 'string' || body instanceof FormData) ? body : JSON.stringify(body);
+
+        // Timeout support
+        const timer = timeout ? setTimeout(() => { try { ctrl.abort(); } catch(_){} }, timeout) : null;
+
+        const done = (async () => {
+            const response = await fetch(url.toString(), fetchOptions);
+            if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let eventLines = [];
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    for (const rawLine of lines) {
+                        const line = rawLine.replace(/\r$/, '');
+                        if (line === '') {
+                            if (eventLines.length > 0) {
+                                const dataStr = eventLines.join('\n').trim();
+                                eventLines = [];
+                                if (dataStr && dataStr !== '[DONE]') {
+                                    try {
+                                        const parsed = JSON.parse(dataStr);
+                                        if (onEvent) onEvent(parsed);
+                                    } catch (_) { /* ignore non-JSON */ }
+                                }
+                            }
+                            continue;
+                        }
+                        if (line.startsWith('data:')) {
+                            const val = line.slice(5).trimStart();
+                            eventLines.push(val);
+                        }
+                    }
+                }
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
+        })();
+
+        return { controller: ctrl, abort: () => ctrl.abort(), done };
+    }
+
+    /**
+     * Stream binary (or fetch non-streaming binary) with auth/CSRF handled.
+     * Returns { response, controller } so callers can read the stream.
+     */
+    async streamBinary(path, { method = 'POST', headers = {}, body = null, timeout = 600000 } = {}) {
+        const url = new URL(`${this.baseUrl}${path}`);
+        const ctrl = new AbortController();
+        const fetchHeaders = { ...headers };
+
+        const credsMode = this._determineCredentialsMode();
+        if (this.token) {
+            if (this.authMode === 'single-user' || (this.authMode === 'multi-user' && this.preferApiKeyInMultiUser)) fetchHeaders['X-API-KEY'] = this.token;
+            else if (this.authMode === 'multi-user') fetchHeaders['Authorization'] = `Bearer ${this.token}`;
+            else fetchHeaders['X-API-KEY'] = this.token;
+        }
+        const upper = (method || 'POST').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(upper)) {
+            const csrf = this._getCsrfToken();
+            if (csrf) fetchHeaders['X-CSRF-Token'] = csrf;
+        }
+
+        const fetchOptions = { method, headers: fetchHeaders, signal: ctrl.signal };
+        if (credsMode) fetchOptions.credentials = credsMode;
+        if (body) fetchOptions.body = (typeof body === 'string' || body instanceof FormData) ? body : JSON.stringify(body);
+        const timer = timeout ? setTimeout(() => { try { ctrl.abort(); } catch(_){} }, timeout) : null;
+        try {
+            const response = await fetch(url.toString(), fetchOptions);
+            if (!response.ok) {
+                let msg = `HTTP ${response.status}`;
+                try { const t = await response.text(); if (t) msg += `: ${t}`; } catch(_){}
+                const err = new Error(msg);
+                err.status = response.status;
+                throw err;
+            }
+            return { response, controller: ctrl };
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    }
+
     // Generate cURL command for a request
     generateCurl(method, path, options = {}) {
         return this.generateCurlV2(method, path, options);
@@ -619,18 +787,19 @@ class APIClient {
         curl += ` \\
   -H "Accept: application/json"`;
 
-        // Auth header mirrors request behavior
+        // Auth header mirrors request behavior (masked by default)
         if (this.token) {
+            const shownToken = this.includeTokenInCurl ? this.token : '[REDACTED]';
             if (this.authMode === 'single-user' || (this.authMode === 'multi-user' && this.preferApiKeyInMultiUser)) {
                 curl += ` \\
-  -H "X-API-KEY: ${this.token}"`;
+  -H "X-API-KEY: ${shownToken}"`;
             } else if (this.authMode === 'multi-user') {
                 curl += ` \\
-  -H "Authorization: Bearer ${this.token}"`;
+  -H "Authorization: Bearer ${shownToken}"`;
             } else {
                 // Unknown mode — default to API key header
                 curl += ` \\
-  -H "X-API-KEY: ${this.token}"`;
+  -H "X-API-KEY: ${shownToken}"`;
             }
         }
         

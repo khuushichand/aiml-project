@@ -345,23 +345,20 @@ const TTS = {
             request = await this.buildRequest();
         }
             
-            // Make API call
-            const apiToken = this.getApiToken();
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-            
-            // Add authorization header if token exists
-            if (apiToken) {
-                headers['Authorization'] = `Bearer ${apiToken}`;
+            // Make API call via apiClient (auth + CSRF handled)
+            let result;
+            try {
+                result = await apiClient.streamBinary('/api/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(request),
+                    timeout: 600000,
+                });
+            } catch (e) {
+                throw e;
             }
-            
-            const response = await fetch('/api/v1/audio/speech', {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(request),
-                signal: this.abortController.signal
-            });
+            const response = result.response;
+            this.abortController = result.controller;
             
             if (!response.ok) {
                 const error = await response.text();

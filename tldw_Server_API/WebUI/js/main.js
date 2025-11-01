@@ -290,6 +290,8 @@ class WebUI {
         const scripts = Array.from(temp.querySelectorAll('script'));
         scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
         mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
+        // For migrated groups, skip executing inline scripts (no eval) and only load external src scripts.
+        const MIGRATED_GROUPS = new Set(['keywords', 'jobs', 'rag', 'evaluations']);
         for (const s of scripts) {
             try {
                 if (s.src) {
@@ -299,9 +301,13 @@ class WebUI {
                     document.body.appendChild(newScript);
                     document.body.removeChild(newScript);
                 } else {
-                    // Inline script: evaluate in global scope
-                    const code = s.textContent || '';
-                    (0, eval)(code);
+                    // Inline script: only execute for non-migrated groups
+                    if (!MIGRATED_GROUPS.has(groupName)) {
+                        const code = s.textContent || '';
+                        (0, eval)(code);
+                    } else {
+                        console.debug(`Skipped inline script eval for migrated group: ${groupName}`);
+                    }
                 }
             } catch (e) {
                 console.error('Failed to execute inline script for group', groupName, e);
@@ -529,6 +535,21 @@ class WebUI {
                     apiClient.setPreferApiKeyInMultiUser(e.target.checked);
                     if (typeof Toast !== 'undefined' && Toast) {
                         Toast.success('Auth preference updated');
+                    }
+                });
+            } catch (e) { /* ignore */ }
+        }
+
+        // cURL token masking toggle
+        const curlToggle = document.getElementById('includeTokenInCurl');
+        if (curlToggle) {
+            try {
+                // Reflect current preference
+                curlToggle.checked = !!apiClient.includeTokenInCurl;
+                curlToggle.addEventListener('change', (e) => {
+                    apiClient.setIncludeTokenInCurl(e.target.checked);
+                    if (typeof Toast !== 'undefined' && Toast) {
+                        Toast.success(e.target.checked ? 'cURL will include token' : 'cURL will mask token');
                     }
                 });
             } catch (e) { /* ignore */ }
@@ -771,19 +792,23 @@ class WebUI {
             const statusClass = item.success ? 'success' : 'error';
             const timestamp = Utils.formatDate(item.timestamp);
             const duration = Utils.formatDuration(item.duration);
+            const safeMethod = Utils.escapeHtml(String(item.method || ''));
+            const safePath = Utils.escapeHtml(String(item.path || ''));
+            const safeStatus = Utils.escapeHtml(String(item.status || 'Error'));
+            const safeError = item.error ? Utils.escapeHtml(String(item.error)) : '';
 
             historyHtml += `
                 <div class="history-item ${statusClass}">
                     <div class="history-item-header">
-                        <span class="endpoint-method ${item.method.toLowerCase()}">${item.method}</span>
-                        <span class="history-path">${item.path}</span>
-                        <span class="history-status">${item.status || 'Error'}</span>
+                        <span class="endpoint-method ${safeMethod.toLowerCase()}">${safeMethod}</span>
+                        <span class="history-path">${safePath}</span>
+                        <span class="history-status">${safeStatus}</span>
                     </div>
                     <div class="history-item-details">
                         <span class="history-timestamp">${timestamp}</span>
                         <span class="history-duration">${duration}</span>
                     </div>
-                    ${item.error ? `<div class="history-error">${item.error}</div>` : ''}
+                    ${safeError ? `<div class="history-error">${safeError}</div>` : ''}
                 </div>
             `;
         });

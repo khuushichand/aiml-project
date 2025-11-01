@@ -560,6 +560,9 @@
                 <button class="sub-tab-button" data-content-id="tabWatchlistsOutputs" data-load-group="watchlists" role="tab">
                     Outputs
                 </button>
+                <button class="sub-tab-button" data-content-id="tabWatchlistsRuns" data-load-group="watchlists" role="tab">
+                    Runs
+                </button>
                 <button class="sub-tab-button" data-content-id="tabWatchlistsTemplates" data-load-group="watchlists" role="tab">
                     Templates
                 </button>
@@ -902,6 +905,15 @@
                                     Prefer X-API-KEY header in multi-user mode (SQLite)
                                 </label>
                                 <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
+                            </div>
+                        </div>
+                        <div class="column">
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="includeTokenInCurl" />
+                                    Include auth token in generated cURL commands
+                                </label>
+                                <small>When disabled (default), cURL masks tokens as [REDACTED].</small>
                             </div>
                         </div>
                     </div>
