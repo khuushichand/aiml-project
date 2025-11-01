@@ -270,6 +270,42 @@ def test_middleware_model_allowlist_allowed(monkeypatch, mock_middleware_depende
     assert r.json() == {"ok": True}
 
 
+def test_settings_cache_invalidation(monkeypatch):
+    # Verify middleware caches settings per generation and refreshes on change
+    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    m = mw.LLMBudgetMiddleware(app)
+
+    state = {"gen": 0, "calls": 0}
+    a = object()
+    b = object()
+
+    def fake_get_settings():
+        state["calls"] += 1
+        return a if state["gen"] == 0 else b
+
+    monkeypatch.setattr(mw, "get_settings", fake_get_settings)
+    monkeypatch.setattr(mw, "get_settings_generation", lambda: state["gen"]) 
+
+    s1 = m._get_settings_cached()
+    s2 = m._get_settings_cached()
+    assert s1 is s2
+    assert state["calls"] == 1  # only called once for same generation
+
+    # Bump generation -> should refresh
+    state["gen"] = 1
+    s3 = m._get_settings_cached()
+    assert s3 is b and s3 is not s1
+    assert state["calls"] == 2
+
+    # Same generation again -> no additional calls
+    s4 = m._get_settings_cached()
+    assert s4 is s3
+    assert state["calls"] == 2
+
+
 def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middleware_dependencies):
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure middleware path and settings are active and key resolves

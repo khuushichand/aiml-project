@@ -71,3 +71,32 @@ def test_compare_strategies_propagates_request_id_for_each_job(monkeypatch, over
     assert len(captured_payloads) == len(strategies)
     assert all(p.get("request_id") == "req-ps-compare-001" for p in captured_payloads)
 
+
+def test_compare_strategies_mixed_case_request_id_header(monkeypatch, override_db_dependency):
+    captured_payloads = []
+
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm
+
+    def fake_create_job(self, job_type, entity_id, payload, project_id=None, priority=5, max_retries=3):  # noqa: D401
+        captured_payloads.append(payload)
+        return {"id": 8000 + len(captured_payloads), "status": "queued"}
+
+    monkeypatch.setattr(ps_jm.JobManager, "create_job", fake_create_job, raising=True)
+
+    client = TestClient(app)
+    r = client.post(
+        "/api/v1/prompt-studio/optimizations/compare-strategies",
+        json={
+            "prompt_id": 1,
+            "test_case_ids": [3, 4],
+            "strategies": ["iterative"],
+            "model_configuration": {"model_name": "gpt-4o-mini"},
+        },
+        headers={
+            "X-API-KEY": "test-api-key-12345",
+            "x-request-id": "req-ps-compare-mixed-01",  # mixed-case header
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert len(captured_payloads) == 1
+    assert captured_payloads[0].get("request_id") == "req-ps-compare-mixed-01"

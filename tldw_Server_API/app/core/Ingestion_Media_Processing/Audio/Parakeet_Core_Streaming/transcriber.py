@@ -275,6 +275,13 @@ class ParakeetCoreTranscriber:
                 "is_final": True,
             }
             frame.update(self._prepare_final_metadata(chunk_seconds))
+            # include optional audio reference for downstream (e.g., diarization)
+            try:
+                import numpy as _np  # local import to avoid top-level cost
+                frame["_audio_chunk"] = _np.array(audio_np, copy=True)
+            except Exception:
+                # If numpy import or copy fails, omit audio reference gracefully
+                pass
             return frame
         return None
 

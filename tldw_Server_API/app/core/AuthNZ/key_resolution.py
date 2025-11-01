@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, Dict, Any
+import os
 import hmac
 import hashlib
 
@@ -34,6 +35,12 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
     digests: list[str] = []
     try:
         candidates = tuple(derive_hmac_key_candidates(s))
+        # Minimal debug insight with safe fallback
+        if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"} or os.getenv("PYTEST_CURRENT_TEST"):
+            try:
+                logger.debug(f"resolve_api_key_by_hash: hash candidates={len(candidates)}")
+            except Exception as _dbg_exc:
+                logger.trace(f"resolve_api_key_by_hash: debug logging failed: {_dbg_exc}")
     except Exception as e:
         logger.debug("resolve_api_key_by_hash: failed to derive candidates: {}", e)
         candidates = ()
@@ -50,13 +57,29 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         return None
 
     pool = await get_db_pool()
-    placeholders = ",".join("?" for _ in digests)
-    query = (
-        f"SELECT id, user_id FROM api_keys "
-        f"WHERE key_hash IN ({placeholders}) AND status = ? "
-        f"ORDER BY created_at DESC LIMIT 1"
-    )
-    row = await pool.fetchone(query, (*digests, "active"))
+    # Dialect-aware query (match api_key_manager implementation)
+    if getattr(pool, 'pool', None) is not None:
+        # Postgres
+        row = await pool.fetchone(
+            """
+            SELECT id, user_id
+            FROM api_keys
+            WHERE key_hash = ANY($1::text[]) AND status = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            digests,
+            "active",
+        )
+    else:
+        # SQLite
+        placeholders = ",".join("?" for _ in digests)
+        query = (
+            f"SELECT id, user_id FROM api_keys "
+            f"WHERE key_hash IN ({placeholders}) AND status = ? "
+            f"ORDER BY created_at DESC LIMIT 1"
+        )
+        row = await pool.fetchone(query, (*digests, "active"))
     if not row:
         return None
 
@@ -67,4 +90,3 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         return {"id": row[0], "user_id": row[1]}
     except Exception:
         return None
-

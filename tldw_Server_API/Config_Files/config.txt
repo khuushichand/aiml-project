@@ -544,6 +544,29 @@ kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
 
 # ---------------------------------------------
+# Optional: Audio streaming quota configuration
+# ---------------------------------------------
+# When the quota backing store (DB/Redis) is temporarily unavailable during
+# real-time transcription, the server can allow a bounded amount of audio per
+# WebSocket connection ("fail-open") before closing with quota_exceeded.
+#
+# You can configure this bounded allowance here or via env var:
+#   Env:  AUDIO_FAILOPEN_CAP_MINUTES=<positive float>
+#   INI:  [Audio-Quota] failopen_cap_minutes = <positive float>
+#         [Audio]       failopen_cap_minutes = <positive float>
+#
+# If both env and INI are set, the environment variable takes precedence.
+# Default (if unset): 5.0 minutes per connection.
+
+[Audio-Quota]
+# Bounded fail-open allowance (minutes) per connection when quota store is down
+# failopen_cap_minutes = 5.0
+
+# [Audio]
+# Alternative section to specify the same setting if [Audio-Quota] is not used
+# failopen_cap_minutes = 5.0
+
+# ---------------------------------------------
 # API Route Toggles (optional)
 # ---------------------------------------------
 # Control which API route groups are included at startup.

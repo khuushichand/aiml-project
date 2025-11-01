@@ -837,6 +837,10 @@ def _load_overrides_from_config() -> dict:
     return overrides
 
 
+# Internal generation counter for settings cache invalidation
+_settings_generation: int = 0
+
+
 def get_settings() -> Settings:
     """Get settings singleton instance with optional config.txt overrides"""
     global _settings
@@ -882,7 +886,23 @@ def get_settings() -> Settings:
 def reset_settings():
     """Reset settings singleton (mainly for testing)"""
     global _settings
+    global _settings_generation
     _settings = None
+    try:
+        _settings_generation += 1
+    except Exception:
+        # Best effort; generation is an optimization hint
+        _settings_generation = (_settings_generation or 0) + 1
+
+
+def get_settings_generation() -> int:
+    """Return a monotonic counter that increments when settings are reset.
+
+    Middleware and helpers can use this value to cache the settings object
+    per-process while still honoring explicit invalidations from tests or
+    configuration reload hooks.
+    """
+    return _settings_generation
 
 
 # ===== Utility Functions =====

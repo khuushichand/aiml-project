@@ -203,6 +203,7 @@ Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`
 Additional streaming quota/env controls:
 - `AUDIO_TIER_LIMITS_JSON`: JSON mapping to override per-tier limits, e.g. `{ "free": { "daily_minutes": 60, "concurrent_streams": 2 } }`
 - `AUDIO_STREAM_TTL_SECONDS`: TTL for Redis stream counters (default 120) to mitigate counter leaks on abrupt disconnects
+- `AUDIO_FAILOPEN_CAP_MINUTES`: Bounded fail-open allowance (minutes) per WebSocket connection when the quota backing store (DB/Redis) is unavailable. Defaults to `5.0`. Set to a positive float to change.
 
 Config file overrides (Config_Files/config.txt):
 ```ini
@@ -213,6 +214,12 @@ free_concurrent_jobs = 1
 free_max_file_size_mb = 25
 standard_daily_minutes = 480
 premium_daily_minutes = unlimited  # or 'none'
+# Optional bounded fail-open allowance (minutes) per connection when quota store is unavailable
+failopen_cap_minutes = 5.0
+
+[Audio]
+# You can also specify the fail-open cap here if [Audio-Quota] is not present
+failopen_cap_minutes = 5.0
 ```
 
 ## Live Transcription
@@ -228,7 +235,7 @@ premium_daily_minutes = unlimited  # or 'none'
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
-  - Server messages include:
+- Server messages include:
     - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
     - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false, "segment_id": 3, "segment_start": 12.5, "segment_end": 15.0 }`
     - `{ "type": "final", "text": "...", "timestamp": ..., "is_final": true, "segment_id": 3, "segment_start": 12.5, "segment_end": 14.0, "overlap": 0.5, "speaker_id": 1, "speaker_label": "SPEAKER_1" }` (speaker fields appear when diarization is enabled)
@@ -237,6 +244,16 @@ premium_daily_minutes = unlimited  # or 'none'
     - `{ "type": "diarization_summary", "speaker_map": [...], "audio_path": "...", "speakers": [...] }` after `commit` when diarization is enabled
     - `{ "type": "error", "message": "..." }`
     - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes" }` followed by close with code `4003`.
+
+#### Observability: Fail-open metrics
+
+When the quota backing store is unavailable, the server allows a bounded amount of streaming time per connection (fail-open). The following metrics are emitted:
+
+- `audio_failopen_minutes_total{reason=db_check|db_record}`: Minutes allowed during fail-open when quota checks or recording fail.
+- `audio_failopen_events_total{reason=db_check|db_record}`: Count of fail-open allowance events.
+- `audio_failopen_cap_exhausted_total{reason=db_check|db_record}`: Count of connections that hit the fail-open cap and were closed with `quota_exceeded`.
+
+Use these to build dashboards/alerts on fail-open frequency and potential quota-store outages.
 
   - Metadata fields (`segment_id`, `segment_start`, `segment_end`, `chunk_start`, `chunk_end`, `overlap`) allow clients to align transcripts on a timeline or build diarization overlays.
 

@@ -10,7 +10,7 @@ import os
 from loguru import logger
 from fastapi import HTTPException
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
 
@@ -29,11 +29,31 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
             app: The ASGI application to wrap.
         
         Notes:
-            Sets self._settings to None to avoid caching configuration across requests so settings are reloaded for every request (useful for tests and dynamic configuration).
+            Uses a lightweight settings cache with a generation-based invalidation
+            (see AuthNZ.settings.get_settings_generation). This avoids repeated
+            calls per request in production while allowing tests to call
+            reset_settings() to invalidate the cache deterministically.
         """
         super().__init__(app)
-        # Do not cache settings; fetch fresh each request to honor test resets
-        self._settings = None
+        # Lightweight settings cache with explicit invalidation via generation
+        self._settings_cache = None
+        self._settings_gen = -1
+
+    def _get_settings_cached(self):
+        """Return cached settings, refreshing when generation changes.
+
+        Uses get_settings_generation() so tests that call reset_settings() will
+        still invalidate the cache. Falls back to direct get_settings() when
+        generation is unavailable.
+        """
+        try:
+            gen = get_settings_generation()
+        except Exception:
+            gen = -1
+        if self._settings_cache is None or (gen >= 0 and gen != self._settings_gen):
+            self._settings_cache = get_settings()
+            self._settings_gen = gen
+        return self._settings_cache
 
     def _set_key_state(self, request: Request, key_id, user_id):
         """Helper to safely set API key state on request with robust error handling.
@@ -77,7 +97,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
             `True` if enforcement should be applied to the provided request path, `False` otherwise.
         """
         try:
-            settings = get_settings()
+            settings = self._get_settings_cached()
             if not getattr(settings, 'VIRTUAL_KEYS_ENABLED', True):
                 return False
             if not getattr(settings, 'LLM_BUDGET_ENFORCE', True):
@@ -122,7 +142,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         )
         if _mw_debug:
             try:
-                settings = get_settings()
+                settings = self._get_settings_cached()
                 logger.debug(
                     f"LLM budget dispatch path={path} enforce={getattr(settings,'LLM_BUDGET_ENFORCE', True)} vkeys={getattr(settings,'VIRTUAL_KEYS_ENABLED', True)}"
                 )
@@ -147,7 +167,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
             # 1) Direct DB lookup by HMAC(hash)
             if api_key:
                 try:
-                    info = await resolve_api_key_by_hash(api_key, settings=get_settings())
+                    info = await resolve_api_key_by_hash(api_key, settings=self._get_settings_cached())
                     if info:
                         key_id = info.get('id')
                         _resp = self._set_key_state(request, key_id, info.get('user_id'))

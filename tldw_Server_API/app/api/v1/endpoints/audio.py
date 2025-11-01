@@ -75,26 +75,44 @@ from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_sing
 # Optional DB/Redis drivers (for precise exception handling without hard dependencies)
 try:  # asyncpg is optional; used when PostgreSQL is configured
     import asyncpg  # type: ignore
-except Exception:  # pragma: no cover - absence is fine
+except ImportError:  # pragma: no cover - absence is fine
     asyncpg = None  # type: ignore
+try:  # aiosqlite may surface errors during SQLite operations
+    import aiosqlite  # type: ignore
+except ImportError:  # pragma: no cover
+    aiosqlite = None  # type: ignore
 try:  # redis is optional; used for active stream counters if enabled
     from redis import exceptions as redis_exceptions  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     redis_exceptions = None  # type: ignore
+try:
+    # Project-level DB error wrapper used by get_db_pool/DB layer
+    from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError as AuthNZDatabaseError  # type: ignore
+except ImportError:  # pragma: no cover
+    AuthNZDatabaseError = None  # type: ignore
 
 # Build precise exception tuples we’ll catch in quota-limit helpers
 EXPECTED_DB_EXC = (NameError,)  # NameError if optional imports are unavailable
 if hasattr(sqlite3, "Error"):
-    EXPECTED_DB_EXC = EXPECTED_DB_EXC + (sqlite3.Error,)  # type: ignore[attr-defined]
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, sqlite3.Error)  # type: ignore[attr-defined]
 if asyncpg and hasattr(asyncpg, "PostgresError"):
-    EXPECTED_DB_EXC = EXPECTED_DB_EXC + (asyncpg.PostgresError,)  # type: ignore[attr-defined]
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, asyncpg.PostgresError)  # type: ignore[attr-defined]
+if aiosqlite and hasattr(aiosqlite, "Error"):
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, aiosqlite.Error)  # type: ignore[attr-defined]
+if AuthNZDatabaseError is not None:
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, AuthNZDatabaseError)  # type: ignore
 
 EXPECTED_REDIS_EXC = (NameError,)
 if redis_exceptions and hasattr(redis_exceptions, "RedisError"):
-    EXPECTED_REDIS_EXC = EXPECTED_REDIS_EXC + (redis_exceptions.RedisError,)  # type: ignore[attr-defined]
+    EXPECTED_REDIS_EXC = (*EXPECTED_REDIS_EXC, redis_exceptions.RedisError)  # type: ignore[attr-defined]
 
 # For logging (if you use the same logger as in your PDF endpoint)
-from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+from tldw_Server_API.app.core.Metrics.metrics_manager import (
+    increment_counter,
+    get_metrics_registry,
+    MetricDefinition,
+    MetricType,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
@@ -128,6 +146,80 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"}
     },
 )
+
+
+# Register audio fail-open metrics (idempotent if already registered)
+try:
+    _reg = get_metrics_registry()
+    _reg.register_metric(
+        MetricDefinition(
+            name="audio_failopen_minutes_total",
+            type=MetricType.COUNTER,
+            description="Minutes allowed during fail-open when quota store unavailable",
+            unit="minutes",
+            labels=["reason"],
+        )
+    )
+    _reg.register_metric(
+        MetricDefinition(
+            name="audio_failopen_events_total",
+            type=MetricType.COUNTER,
+            description="Fail-open allowance events during streaming",
+            labels=["reason"],
+        )
+    )
+    _reg.register_metric(
+        MetricDefinition(
+            name="audio_failopen_cap_exhausted_total",
+            type=MetricType.COUNTER,
+            description="Fail-open cap exhausted; connection closed due to bounded fail-open",
+            labels=["reason"],
+        )
+    )
+except Exception:
+    # Metrics must never break imports
+    pass
+
+
+def _get_failopen_cap_minutes() -> float:
+    """Return per-connection fail-open cap in minutes for streaming quotas.
+
+    Resolution order:
+      1) Env var AUDIO_FAILOPEN_CAP_MINUTES (>0)
+      2) Config [Audio-Quota] failopen_cap_minutes (>0)
+      3) Config [Audio] failopen_cap_minutes (>0)
+      4) Default 5.0
+    """
+    # Env override
+    try:
+        v = os.getenv("AUDIO_FAILOPEN_CAP_MINUTES")
+        if v is not None:
+            f = float(v)
+            if f > 0:
+                return f
+    except Exception:
+        pass
+    # Config-based override
+    try:
+        cfg = load_comprehensive_config()
+        if cfg is not None:
+            if cfg.has_section("Audio-Quota"):
+                try:
+                    f = float(cfg.get("Audio-Quota", "failopen_cap_minutes", fallback=""))
+                    if f > 0:
+                        return f
+                except Exception:
+                    pass
+            if cfg.has_section("Audio"):
+                try:
+                    f = float(cfg.get("Audio", "failopen_cap_minutes", fallback=""))
+                    if f > 0:
+                        return f
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return 5.0
 
 
 
@@ -1441,6 +1533,9 @@ async def websocket_transcribe(
 
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
+        # Bounded fail-open budget in minutes if DB is unavailable while streaming
+        FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
+        failopen_remaining = FAIL_OPEN_CAP_MINUTES
 
         def _on_audio(seconds: float, sr: int) -> None:
             nonlocal used_minutes
@@ -1469,27 +1564,62 @@ async def websocket_transcribe(
                     - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
                       `used_minutes` counter and records the minutes via `add_daily_minutes`.
                 """
-                nonlocal used_minutes
+                nonlocal used_minutes, failopen_remaining
                 minutes_chunk = float(seconds) / 60.0
+                deducted = False
                 try:
                     allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
-                except Exception as e:
-                    # WebSocket does not carry request_id; include user and context
+                except EXPECTED_DB_EXC as e:
+                    # Backing store failed; allow temporarily but deduct from bounded fail-open budget
                     logger.warning(
-                        f"check_daily_minutes_allow failed during streaming; allowing by default: user_id={user_id_for_usage}, error={e}"
+                        f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
                     )
                     allow = True
+                    failopen_remaining -= minutes_chunk
+                    try:
+                        increment_counter(
+                            "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
+                        )
+                        increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
+                    except Exception:
+                        pass
+                    deducted = True
+                    if failopen_remaining <= 0:
+                        try:
+                            increment_counter(
+                                "audio_failopen_cap_exhausted_total", labels={"reason": "db_check"}
+                            )
+                        except Exception:
+                            pass
+                        raise _QuotaExceeded("daily_minutes")
                 if not allow:
                     # Raise structured signal to outer scope
                     raise _QuotaExceeded("daily_minutes")
                 used_minutes += minutes_chunk
                 try:
                     await add_daily_minutes(user_id_for_usage, minutes_chunk)
-                except Exception as e:
-                    # WebSocket does not carry request_id; include user and context
+                except EXPECTED_DB_EXC as e:
+                    # Could not record; continue streaming under bounded fail-open
                     logger.warning(
-                        f"Failed to record streaming minutes: user_id={user_id_for_usage}, error={e}"
+                        f"Failed to record streaming minutes (bounded fail-open). user_id={user_id_for_usage}, error={e}"
                     )
+                    if not deducted:
+                        failopen_remaining -= minutes_chunk
+                        try:
+                            increment_counter(
+                                "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_record"}
+                            )
+                            increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
+                        except Exception:
+                            pass
+                        if failopen_remaining <= 0:
+                            try:
+                                increment_counter(
+                                    "audio_failopen_cap_exhausted_total", labels={"reason": "db_record"}
+                                )
+                            except Exception:
+                                pass
+                            raise _QuotaExceeded("daily_minutes")
 
             try:
                 async def _on_heartbeat() -> None:
@@ -1500,8 +1630,8 @@ async def websocket_transcribe(
                     """
                     try:
                         await heartbeat_stream(user_id_for_usage)
-                    except Exception:
-                        pass
+                    except EXPECTED_REDIS_EXC as _hb_e:
+                        logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
                 await handle_unified_websocket(
                     websocket,
@@ -1611,12 +1741,12 @@ async def streaming_status():
 
         # Check for ONNX variant
         try:
-            import onnxruntime  # noqa: F401
+            import onnxruntime
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
                 load_parakeet_onnx_model
             )
             available_models.append("parakeet-onnx")
-        except Exception:
+        except ImportError:
             pass
         
         return JSONResponse({

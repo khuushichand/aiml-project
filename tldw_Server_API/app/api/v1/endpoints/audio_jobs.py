@@ -381,9 +381,9 @@ async def owner_processing_summary(
         # Correlate logs with request_id if available
         rid = None
         try:
-            if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+            if request is not None:
                 rid = str(request.state.request_id)
-        except Exception:
+        except (AttributeError, TypeError):
             rid = None
 
         try:
