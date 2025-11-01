@@ -50,7 +50,8 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
 
     for km in key_materials:
         try:
-            d = hmac.new(km, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+            # Compute a computationally expensive hash using PBKDF2-HMAC-SHA256 (100,000 iterations)
+            d = hashlib.pbkdf2_hmac("sha256", api_key.encode("utf-8"), km, 100_000).hex()
             if d not in digests:
                 digests.append(d)
         except Exception as _e:
