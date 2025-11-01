@@ -41,14 +41,12 @@ def test_ws_multi_subscribers_burst_identical_ordering() -> None:
              client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws2:
 
             def _publisher() -> None:
-                try:
-                    hub.publish_event(run_id, "start", {"source": "stress-multi"})
-                    for i in range(200):
-                        hub.publish_stdout(run_id, f"o{i}\n".encode("utf-8"))
-                        hub.publish_stderr(run_id, f"e{i}\n".encode("utf-8"))
-                    hub.publish_event(run_id, "end", {})
-                except Exception:
-                    pass
+                # Let exceptions surface to fail the test if publishing breaks
+                hub.publish_event(run_id, "start", {"source": "stress-multi"})
+                for i in range(200):
+                    hub.publish_stdout(run_id, f"o{i}\n".encode("utf-8"))
+                    hub.publish_stderr(run_id, f"e{i}\n".encode("utf-8"))
+                hub.publish_event(run_id, "end", {})
 
             t = threading.Thread(target=_publisher, daemon=True)
             t.start()

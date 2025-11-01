@@ -3,9 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Header
 from typing import Optional, Dict, Any
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
     get_key_limits,
     summarize_usage_for_key_day,
@@ -21,7 +19,9 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
     """
     Resolve an API key to its `api_key_id` and associated `user_id` for the incoming request.
     
-    The function prefers values previously set on `request.state` and otherwise extracts an API key from the provided `x_api_key` parameter or a Bearer token in the Authorization header. If an API key is found, it derives candidate HMAC-SHA256 digests and looks up the active API key record in the database, returning the most recently created match.
+    Prefers values previously set on `request.state` by auth middleware. Otherwise
+    extracts an API key from the provided `x_api_key` parameter or a Bearer token
+    in the Authorization header and resolves it via `resolve_api_key_by_hash`.
     
     Parameters:
         request (Request): The incoming FastAPI request; may contain pre-resolved `state.api_key_id` and `state.user_id`.
@@ -46,30 +46,11 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
     if not api_key:
         return {"api_key_id": None, "user_id": None}
 
-    digests = []
-    for key in derive_hmac_key_candidates(get_settings()):
-        import hashlib
-        digest = hashlib.pbkdf2_hmac('sha256', api_key.encode("utf-8"), key, 100_000).hex()
-        if digest not in digests:
-            digests.append(digest)
-    if not digests:
+    result = await resolve_api_key_by_hash(api_key)
+    if not result:
         return {"api_key_id": None, "user_id": None}
 
-    pool = await get_db_pool()
-    placeholders = ",".join("?" for _ in digests)
-    row = await pool.fetchone(
-        (
-            f"SELECT id, user_id FROM api_keys "
-            f"WHERE key_hash IN ({placeholders}) AND status = ? "
-            f"ORDER BY created_at DESC LIMIT 1"
-        ),
-        (*digests, "active"),
-    )
-    if not row:
-        return {"api_key_id": None, "user_id": None}
-
-    return {"api_key_id": int(row.get("id") if isinstance(row, dict) else row[0]),
-            "user_id": row.get("user_id") if isinstance(row, dict) else row[1]}
+    return {"api_key_id": int(result["id"]), "user_id": result["user_id"]}
 
 
 @router.get("/authnz/debug/api-key-id", tags=["authnz-debug"])
