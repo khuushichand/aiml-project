@@ -48,8 +48,8 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
 
     digests = []
     for key in derive_hmac_key_candidates(get_settings()):
-        import hmac, hashlib
-        digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+        import hashlib
+        digest = hashlib.pbkdf2_hmac('sha256', api_key.encode("utf-8"), key, 100_000).hex()
         if digest not in digests:
             digests.append(digest)
     if not digests:
