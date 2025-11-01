@@ -172,11 +172,12 @@ async function monListAlerts() {
     const list = Array.isArray(res.items) ? res.items : (res.alerts || []);
     const box = document.getElementById('monitoringAlerts_list');
     if (!list.length) { box.innerHTML = '<p>No alerts.</p>'; return; }
-    let html = '<table class="simple-table"><thead><tr><th>Time</th><th>User</th><th>Category</th><th>Severity</th><th>Pattern</th><th>Text Snippet</th><th>Actions</th></tr></thead><tbody>';
+    let html = '<table class="simple-table"><thead><tr><th>Time</th><th>User</th><th>Source</th><th>Category</th><th>Severity</th><th>Pattern</th><th>Text Snippet</th><th>Actions</th></tr></thead><tbody>';
     for (const a of list) {
       html += `<tr>
         <td>${esc(a.created_at || '')}</td>
         <td>${esc(a.user_id ?? '')}</td>
+        <td>${esc(a.source || '')}</td>
         <td>${esc(a.rule_category || '')}</td>
         <td>${esc(a.rule_severity || '')}</td>
         <td>${esc(a.pattern || '')}</td>
