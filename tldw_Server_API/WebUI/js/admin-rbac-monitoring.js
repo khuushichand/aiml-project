@@ -2,7 +2,18 @@
 // Move Admin Monitoring bindings + helpers off inline handlers.
 // RBAC: for now, only bind ID-based events to existing inline functions if present.
 
-function esc(x) { return (typeof Utils !== 'undefined' && Utils.escapeHtml) ? Utils.escapeHtml(String(x ?? '')) : String(x ?? ''); }
+function esc(x) {
+  const str = String(x ?? '');
+  if (typeof Utils !== 'undefined' && Utils.escapeHtml) return Utils.escapeHtml(str);
+  // Safe fallback: escape critical HTML characters
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\//g, '&#x2F;');
+}
 
 // -------- Monitoring: Watchlists --------
 async function monListWatchlists() {

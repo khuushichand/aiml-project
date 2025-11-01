@@ -98,7 +98,6 @@ async function performBatchOperation() {
       progressText.textContent = `Processing... ${progress}%`;
     },200);
     const response = await window.apiClient.post(endpoint, payload);
-    clearInterval(intv);
     progressBar.style.width = '100%';
     progressText.textContent = 'Complete';
     resultEl.textContent = JSON.stringify(response, null, 2);
@@ -106,6 +105,8 @@ async function performBatchOperation() {
   } catch (e) {
     resultEl.textContent = `Error: ${e.message}`;
     if (window.Toast) Toast.error(`Batch failed: ${e.message}`);
+  } finally {
+    clearInterval(intv);
   }
 }
 

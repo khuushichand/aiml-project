@@ -8236,7 +8236,12 @@ async def ingest_web_content(
                 include_external=getattr(request, 'include_external', None),
                 score_threshold=getattr(request, 'score_threshold', None),
             )
-            articles = service_result.get("articles", []) if isinstance(service_result, dict) else []
+            articles: List[Dict[str, Any]] = []
+            if isinstance(service_result, dict):
+                if service_result.get("articles"):
+                    articles = service_result["articles"]
+                elif service_result.get("results"):
+                    articles = service_result["results"]
             # Map summary->analysis for compatibility with Friendly endpoint
             for r in articles:
                 if isinstance(r, dict) and 'summary' in r and 'analysis' not in r:

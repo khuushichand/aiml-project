@@ -1435,11 +1435,8 @@ class WatchlistsDatabase:
         sql = "SELECT item_key FROM source_seen_items WHERE source_id = ? ORDER BY last_seen_at DESC"
         params: Tuple[Any, ...] = (source_id,)
         if isinstance(limit, int) and limit > 0:
-            try:
-                sql = sql + " LIMIT ?"
-                params = (source_id, int(limit))
-            except Exception:
-                params = (source_id,)
+            sql = sql + " LIMIT ?"
+            params = (source_id, limit)
         rows = self.backend.execute(sql, params).rows
         keys: List[str] = []
         for r in rows:
