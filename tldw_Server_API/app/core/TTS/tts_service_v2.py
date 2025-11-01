@@ -392,7 +392,7 @@ class TTSServiceV2:
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed: {e}")
             if self._stream_errors_as_audio:
-                yield f"ERROR: {str(e)}".encode()
+                yield b"ERROR: Unable to generate audio."
                 return
             else:
                 raise
