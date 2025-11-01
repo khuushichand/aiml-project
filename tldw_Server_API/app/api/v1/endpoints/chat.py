@@ -658,10 +658,18 @@ async def create_chat_completion(
                     try:
                         from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates as _derive_keys
                         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
-                        import hmac as _hmac, hashlib as _hashlib
+                        import hashlib as _hashlib
                         digests: list[str] = []
+                        # Use a salt from settings, or a constant (should migrate to per-key salt for best security)
+                        salt = getattr(_as, 'API_KEY_HASH_SALT', b'default_salt')
+                        iterations = getattr(_as, 'API_KEY_HASH_ITERATIONS', 120_000)
                         for k in _derive_keys(_as):
-                            d = _hmac.new(k, api_key_hdr.encode('utf-8'), _hashlib.sha256).hexdigest()
+                            # Combine salt with key for domain separation (if needed)
+                            full_salt = salt + k
+                            dk = _hashlib.pbkdf2_hmac(
+                                'sha256', api_key_hdr.encode('utf-8'), full_salt, iterations
+                            )
+                            d = dk.hex()
                             if d not in digests:
                                 digests.append(d)
                         if digests:
