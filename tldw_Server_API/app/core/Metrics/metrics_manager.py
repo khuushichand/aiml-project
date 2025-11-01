@@ -336,7 +336,7 @@ class MetricsRegistry:
                 name="sandbox_runs_completed_total",
                 type=MetricType.COUNTER,
                 description="Total sandbox runs finished",
-                labels=["runtime", "outcome"],
+                labels=["runtime", "outcome", "reason"],
             )
         )
         self.register_metric(
@@ -345,8 +345,65 @@ class MetricsRegistry:
                 type=MetricType.HISTOGRAM,
                 description="Sandbox run duration in seconds",
                 unit="s",
-                labels=["runtime", "outcome"],
+                labels=["runtime", "outcome", "reason"],
                 buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 60, 120, 300]
+            )
+        )
+        # WS & queue metrics used by sandbox endpoints/streams
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_log_truncations_total",
+                type=MetricType.COUNTER,
+                description="Total number of sandbox log truncations",
+                labels=["component", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_queue_full_total",
+                type=MetricType.COUNTER,
+                description="Total number of sandbox queue-full events",
+                labels=["component", "runtime", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_queue_ttl_expired_total",
+                type=MetricType.COUNTER,
+                description="Total number of sandbox queue TTL expirations",
+                labels=["component", "runtime", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_connections_opened_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox WS connections opened",
+                labels=["component"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_heartbeats_sent_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox WS heartbeats sent",
+                labels=["component"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_disconnects_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox WS disconnects",
+                labels=["component"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_queue_drops_total",
+                type=MetricType.COUNTER,
+                description="Total WS queue drops (oldest dropped)",
+                labels=["component", "reason"],
             )
         )
         self.register_metric(

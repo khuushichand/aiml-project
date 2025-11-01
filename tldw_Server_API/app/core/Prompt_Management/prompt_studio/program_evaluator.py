@@ -139,9 +139,9 @@ class ProgramEvaluator:
         # Prefer fenced blocks
         m = re.findall(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
         if m:
-            # Pick the largest block
+            # Pick the largest block and normalize indentation
             block = max(m, key=lambda s: len(s))
-            return block.strip()
+            return textwrap.dedent(block).strip()
         # Heuristic: find regions with many code-like lines
         lines = text.splitlines()
         buf: List[str] = []
@@ -167,64 +167,72 @@ class ProgramEvaluator:
         """
         cpu_lim = int(self.CPU_TIME_SEC)
         mem_lim = int(self.MEMORY_MB) * 1024 * 1024
-        import sys as _sys
-        enable_rlimits = _sys.platform not in ("darwin", "win32")
-        wrapper = textwrap.dedent(
-            f"""
-            import sys, json, builtins
-            # Try to set resource limits (best-effort)
-            try:
-                import resource
-                resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))
-                resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))
-            except Exception:
-                pass
-
-            # Best-effort isolation: disable file I/O via builtins.open
-            def _blocked(*a, **k):
-                raise RuntimeError("file/network operations are disabled")
-            for name in ("open",):
-                setattr(builtins, name, _blocked)
-
-            # Guarded import to block dangerous modules
-            _forbidden = {json.dumps(sorted(list(_FORBIDDEN_IMPORTS)))}
-            _orig_import = builtins.__import__
-            def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-                base = name.split('.')[0]
-                if base in _forbidden:
-                    raise ImportError(f"Forbidden import: {{name}}")
-                return _orig_import(name, globals, locals, fromlist, level)
-            builtins.__import__ = _guarded_import
-
-            # Execute user code
-            __code_globals = {{}}
-            __code_locals = None
-            __user_code = json.loads(r'''{json.dumps(code)}''')
-            try:
-                exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)
-            except Exception as e:
-                print(f"__EXEC_ERROR__: {{e}}", file=sys.stderr)
-                sys.exit(7)
-
-            # Serialize selected globals back to parent via stdout trailer
-            def _jsonable(v):
-                import math
-                if isinstance(v, (int, float, str, bool)) or v is None:
-                    return True
-                if isinstance(v, (list, tuple)):
-                    return all(_jsonable(x) for x in v[:50])
-                if isinstance(v, dict):
-                    return all(isinstance(k, str) and _jsonable(v[k]) for k in list(v.keys())[:50])
-                return False
-            _dump = {{}}
-            for k, v in list(__code_globals.items()):
-                if k.startswith('__'):
-                    continue
-                if _jsonable(v):
-                    _dump[k] = v
-            print("\n__GLOBALS_JSON__\n" + json.dumps(_dump, separators=(',',':')))
-            """
-        )
+        forbidden_json = json.dumps(sorted(list(_FORBIDDEN_IMPORTS)))
+        code_json = json.dumps(code)
+        wrapper_lines = [
+            "import sys, json, builtins",
+            "# Try to set resource limits (best-effort)",
+            "try:",
+            "    import resource",
+            f"    resource.setrlimit(resource.RLIMIT_CPU, ({cpu_lim}, {cpu_lim}))",
+            f"    resource.setrlimit(resource.RLIMIT_AS, ({mem_lim}, {mem_lim}))",
+            "except Exception:",
+            "    pass",
+            "",
+            "# Best-effort isolation: disable file I/O via builtins.open",
+            "def _blocked(*a, **k):",
+            "    raise RuntimeError(\"file/network operations are disabled\")",
+            "for name in (\"open\",):",
+            "    setattr(builtins, name, _blocked)",
+            "",
+            "# Guarded import to block dangerous modules",
+            f"_forbidden = {forbidden_json}",
+            "_orig_import = builtins.__import__",
+            "def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):",
+            "    base = name.split('.')[0]",
+            "    if base in _forbidden:",
+            "        raise ImportError(f\"Forbidden import: {name}\")",
+            "    return _orig_import(name, globals, locals, fromlist, level)",
+            "builtins.__import__ = _guarded_import",
+            "",
+            "# Execute user code",
+            "__code_globals = {}",
+            "__code_locals = None",
+            f"__user_code = json.loads(r'''{code_json}''')",
+            "try:",
+            "    # First try to execute as-is",
+            "    exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)",
+            "except IndentationError:",
+            "    # Fallback: normalize leading indentation per line and retry",
+            "    __user_code_fixed = '\\n'.join(line.lstrip() for line in __user_code.splitlines())",
+            "    try:",
+            "        exec(compile(__user_code_fixed, '<sandbox>', 'exec'), __code_globals, __code_locals)",
+            "    except Exception as e2:",
+            "        print(f\"__EXEC_ERROR__: {e2}\", file=sys.stderr)",
+            "        sys.exit(7)",
+            "except Exception as e:",
+            "    print(f\"__EXEC_ERROR__: {e}\", file=sys.stderr)",
+            "    sys.exit(7)",
+            "",
+            "# Serialize selected globals back to parent via stdout trailer",
+            "def _jsonable(v):",
+            "    import math",
+            "    if isinstance(v, (int, float, str, bool)) or v is None:",
+            "        return True",
+            "    if isinstance(v, (list, tuple)):",
+            "        return all(_jsonable(x) for x in v[:50])",
+            "    if isinstance(v, dict):",
+            "        return all(isinstance(k, str) and _jsonable(v[k]) for k in list(v.keys())[:50])",
+            "    return False",
+            "_dump = {}",
+            "for k, v in list(__code_globals.items()):",
+            "    if k.startswith('__'):",
+            "        continue",
+            "    if _jsonable(v):",
+            "        _dump[k] = v",
+            "print('\\n__GLOBALS_JSON__\\n' + json.dumps(_dump, separators=(',',':')))",
+        ]
+        wrapper = "\n".join(wrapper_lines)
         # Create temp dir and files
         with tempfile.TemporaryDirectory() as td:
             script_path = os.path.join(td, "sandbox_runner.py")

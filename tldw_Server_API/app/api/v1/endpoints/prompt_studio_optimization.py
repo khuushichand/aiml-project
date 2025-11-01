@@ -622,7 +622,7 @@ async def create_optimization(
                         pass
                     existing_opt = db.get_optimization(existing_id)
                     if existing_opt:
-                        return StandardResponse(success=True, data={"optimization": OptimizationResponse(**existing_opt), "job_id": None})
+                        return StandardResponse(success=True, data={"optimization": existing_opt, "job_id": None})
             except Exception:
                 pass
 
@@ -698,7 +698,7 @@ async def create_optimization(
             logger.debug("TEST_MODE: skipping background optimization task spawn")
 
         response_payload = {
-            "optimization": OptimizationResponse(**optimization_record),
+            "optimization": optimization_record,
             "job_id": job["id"],
         }
 

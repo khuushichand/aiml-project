@@ -477,7 +477,7 @@ class GeneticOptimizer:
             fitness_scores = []
             for individual in population:
                 score = await self._evaluate_fitness(
-                    individual, test_case_ids, model_config
+                    individual, test_case_ids, model_config, prompt_id
                 )
                 fitness_scores.append((individual, score))
             
@@ -584,10 +584,11 @@ Variation:"""
     
     async def _evaluate_fitness(self, individual: Dict[str, Any],
                                test_case_ids: List[int],
-                               model_config: Dict[str, Any]) -> float:
+                               model_config: Dict[str, Any],
+                               base_prompt_id: Optional[int]) -> float:
         """Evaluate fitness of an individual."""
-        # Create temporary prompt
-        prompt_id = await self._individual_to_prompt(individual, None)
+        # Create temporary prompt (link to base prompt's project when available)
+        prompt_id = await self._individual_to_prompt(individual, base_prompt_id)
         
         # Evaluate
         scores = []
@@ -702,6 +703,12 @@ Mutated user prompt:"""
             if row:
                 project_id = row[0]
         
+        # Build a unique name to avoid UNIQUE(project_id, name, version_number) collisions
+        # when creating many temporary prompts during optimization/evaluation.
+        # Keep a readable base name while guaranteeing uniqueness.
+        unique_suffix = f"{int(datetime.utcnow().timestamp()*1000)}-{random.randint(0, 99999):05d}"
+        prompt_name = f"Genetic Prompt {unique_suffix}"
+
         # Create prompt
         cursor.execute("""
             INSERT INTO prompt_studio_prompts (
@@ -711,7 +718,7 @@ Mutated user prompt:"""
         """, (
             f"genetic-{datetime.utcnow().timestamp()}",
             project_id,
-            "Genetic Prompt",
+            prompt_name,
             individual.get("system_prompt"),
             individual.get("user_prompt", ""),
             1,

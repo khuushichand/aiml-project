@@ -418,20 +418,36 @@ async def start_run(
                 "failed" if status.phase.value == "failed" else
                 status.phase.value
             )
-            # Metrics: completion + duration
+            # Metrics: completion + duration (include reason when available)
             try:
-                increment_counter(
-                    "sandbox_runs_completed_total",
-                    labels={"runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")), "outcome": outcome},
-                )
+                # Map reason where applicable
+                reason_code = None
+                try:
+                    if outcome in ("timeout", "failed", "killed"):
+                        reason_code = (status.message or None)
+                except Exception:
+                    reason_code = None
+                labels_completed = {
+                    "runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")),
+                    "outcome": outcome,
+                }
+                if reason_code:
+                    labels_completed["reason"] = str(reason_code)
+                else:
+                    labels_completed["reason"] = outcome
+                increment_counter("sandbox_runs_completed_total", labels=labels_completed)
             except Exception:
                 logger.debug("metrics: sandbox_runs_completed_total failed")
             try:
-                observe_histogram(
-                    "sandbox_run_duration_seconds",
-                    value=float(duration),
-                    labels={"runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")), "outcome": outcome},
-                )
+                labels_duration = {
+                    "runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")),
+                    "outcome": outcome,
+                }
+                if reason_code:
+                    labels_duration["reason"] = str(reason_code)
+                else:
+                    labels_duration["reason"] = outcome
+                observe_histogram("sandbox_run_duration_seconds", value=float(duration), labels=labels_duration)
             except Exception:
                 logger.debug("metrics: sandbox_run_duration_seconds failed")
 
@@ -673,7 +689,6 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
     q = hub.subscribe(run_id)
-    hub.drain_buffer(run_id, q)
     try:
         logger.debug(f"WS stream[{run_id}]: after drain_buffer qsize={getattr(q, 'qsize', lambda: -1)()} ")
     except Exception:
@@ -714,6 +729,40 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 asyncio.create_task(_enqueue_end_later())
     except Exception:
         pass
+    # If the run already ended, proactively deliver 'end' before anything else
+    try:
+        if bool(run_id in getattr(hub, "_ended", set())):
+            try:
+                seq_end = hub._next_seq(run_id)  # type: ignore[attr-defined]
+            except Exception:
+                seq_end = 1
+            await websocket.send_json({"type": "event", "event": "end", "data": {}, "seq": seq_end})
+    except Exception:
+        pass
+
+    # After subscribing, send buffered frames first in original order to avoid
+    # interleaving with fast test heartbeats and to guarantee deterministic
+    # delivery across reconnects.
+    try:
+        last_seq_sent: int | None = None
+        try:
+            bufs = getattr(hub, "_buffers", {})
+            snapshot = list(bufs.get(run_id) or [])
+            for frame0 in snapshot[-100:]:
+                await websocket.send_json(frame0)
+                try:
+                    if isinstance(frame0, dict) and isinstance(frame0.get("seq"), int):
+                        last_seq_sent = int(frame0["seq"])  # type: ignore[index]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # If the run already ended, ensure an 'end' is present for late subscribers
+    # (No second 'end' send here to avoid duplicates)
+
     # Metrics: connection opened
     try:
         increment_counter("sandbox_ws_connections_opened_total", labels={"component": "sandbox"})
@@ -737,7 +786,14 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         except Exception:
             return
 
-    hb_task = asyncio.create_task(_heartbeats())
+    spawn_hb = True
+    try:
+        # If run already ended, avoid spawning heartbeats that could interleave
+        if bool(run_id in getattr(hub, "_ended", set())):
+            spawn_hb = False
+    except Exception:
+        spawn_hb = True
+    hb_task = asyncio.create_task(_heartbeats()) if spawn_hb else None
     try:
         # Allow tests to reduce the poll timeout via settings/env (prefer env at runtime)
         try:
@@ -765,7 +821,8 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         logger.debug(f"WS stream error: {e}")
     finally:
         try:
-            hb_task.cancel()
+            if hb_task:
+                hb_task.cancel()
         except Exception:
             pass
         try:

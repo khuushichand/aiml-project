@@ -2726,6 +2726,12 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    # Include Jobs admin endpoints for tests that exercise jobs stats/counters
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+        app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+    except Exception as _e:
+        logger.debug(f"Skipping jobs_admin router in minimal test app: {_e}")
     # AuthNZ debug routes for tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router

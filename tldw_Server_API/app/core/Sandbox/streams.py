@@ -79,6 +79,15 @@ class RunStreamHub:
                 _ = q.get_nowait()
             except Exception:
                 pass
+            # Metrics: queue overflow/drop
+            try:
+                from tldw_Server_API.app.core.Metrics import increment_counter
+                increment_counter(
+                    "sandbox_ws_queue_drops_total",
+                    labels={"component": "sandbox", "reason": "drop_oldest"},
+                )
+            except Exception:
+                pass
             try:
                 q.put_nowait(item)
             except Exception:
@@ -116,7 +125,10 @@ class RunStreamHub:
                     # Metrics: log truncations
                     try:
                         from tldw_Server_API.app.core.Metrics import increment_counter
-                        increment_counter("sandbox_log_truncations_total", labels={"component": "sandbox"})
+                        increment_counter(
+                            "sandbox_log_truncations_total",
+                            labels={"component": "sandbox", "reason": "log_cap"},
+                        )
                     except Exception:
                         pass
                 return

@@ -334,8 +334,13 @@ class DockerRunner:
                 pass
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
+            # Attempt a best-effort CPU usage readback from cgroup before removal
+            try:
+                cpu_sec_cp = self._read_cgroup_cpu_time_sec_by_cid(cid)
+            except Exception:
+                cpu_sec_cp = None
             usage = {
-                "cpu_time_sec": 0,
+                "cpu_time_sec": int(max(0, (cpu_sec_cp or 0))),
                 "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
                 "peak_rss_mb": 0,
                 "log_bytes": int(get_hub().get_log_bytes(run_id)),
