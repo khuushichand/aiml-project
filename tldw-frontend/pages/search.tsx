@@ -4,7 +4,7 @@ import { Layout } from '@/components/layout/Layout';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { apiClient } from '@/lib/api';
-import VlmBackendsCard from '@/components/VlmBackendsCard';
+import { VlmBackendsCard } from '@/components/VlmBackendsCard';
 import { Tabs } from '@/components/ui/Tabs';
 import JsonEditor from '@/components/ui/JsonEditor';
 import JsonViewer from '@/components/ui/JsonViewer';
