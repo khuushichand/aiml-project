@@ -104,9 +104,6 @@ try:  # pragma: no cover - optional integration path
             )
             self._core = _CoreTranscriber(config=c)
             # Ensure chosen variant is available; if not, raise to trigger fallback logic
-            if getattr(self._core, 'decode_fn', None) is None:
-                raise RuntimeError(f"parakeet_variant_unavailable: {self._uconf.model_variant}")
-
         async def process_audio_chunk(self, audio_data: bytes):  # -> Optional[Dict[str, Any]]
             """
             Forward an incoming audio chunk to the underlying core transcriber and return any resulting transcription data.
