@@ -194,7 +194,8 @@ async function monListAlerts() {
 async function monMarkAlertRead(id) {
   try {
     if (!id) return;
-    await window.apiClient.post(`/api/v1/monitoring/alerts/${id}/read`, {});
+    const safeId = encodeURIComponent(id);
+    await window.apiClient.post(`/api/v1/monitoring/alerts/${safeId}/read`, {});
     Toast.success('Marked read');
     await monListAlerts();
   } catch (e) { Toast.error('Mark read failed'); }
@@ -290,7 +291,19 @@ async function monLoadRecentNotifications() {
 function monResetAllMonitoringUI() {
   try {
     const ids = ['monWl_filter_scope_type','monWl_filter_scope_id','monWl_col_id','monWl_col_scope','monWl_col_rules','monWl_id','monWl_name','monWl_desc','monWl_scope_id','monWl_rules'];
-    ids.forEach(id => { const el = document.getElementById(id); if (!el) return; if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value=''; else if (el.tagName === 'SELECT') el.selectedIndex = 0; else if (el.type === 'checkbox') el.checked = false; });
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === 'checkbox') {
+        el.checked = false;
+        return;
+      }
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        el.value = '';
+      } else if (el.tagName === 'SELECT') {
+        el.selectedIndex = 0;
+      }
+    });
   } catch (_) {}
   document.getElementById('monitoringWatchlists_list')?.replaceChildren();
   document.getElementById('monitoringWatchlists_result')?.replaceChildren();
