@@ -3334,7 +3334,7 @@ async function continueConversation() {
                 } catch (_) {}
             });
         };
-        const handle = apiClient.streamSSE('/api/v1/chat/completions', {
+        chatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
             method: 'POST',
             body: requestPayload,
             onEvent: (evt) => {
@@ -3371,7 +3371,7 @@ async function continueConversation() {
             timeout: 600000
         });
         try {
-            await handle.done;
+            await chatStreamHandle.done;
             chatMessages.push({ role: 'assistant', content: assembled });
         } catch (e) {
             const suffix = (e && e.name === 'AbortError') ? ' [stopped]' : ` [error: ${e?.message || 'failed'}]`;
@@ -3379,6 +3379,7 @@ async function continueConversation() {
         } finally {
             if (stopBtn) stopBtn.style.display = 'none';
             if (sendBtn) sendBtn.disabled = false;
+            chatStreamHandle = null;
             appendAssistantDebugPanel(assistantDiv, { chunks: debugChunks });
         }
         return;
