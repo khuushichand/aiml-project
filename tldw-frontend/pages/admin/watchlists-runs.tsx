@@ -15,6 +15,13 @@ interface RunRow {
   stats?: { [k: string]: any } | null;
 }
 
+/**
+ * Admin interface for browsing, inspecting, and exporting watchlists runs.
+ *
+ * Provides two viewing modes (by job or global), pagination, optional inclusion of per-run filter tallies and a filtered sample, client-side JSON/CSV exports, and links to server-side CSV exports for large datasets. When the NEXT_PUBLIC_RUNS_REQUIRE_ADMIN flag is set, access is restricted to users with administrative privileges.
+ *
+ * @returns The rendered admin Watchlists Runs page element
+ */
 export default function AdminWatchlistsRunsPage() {
   const { user } = useAuth();
   const { show } = useToast();

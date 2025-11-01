@@ -629,6 +629,16 @@ async def create_chat_completion(
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
+    """
+    Handle an incoming chat completion request: validate input, enforce budget and rate limits, run moderation, build conversation context, call the selected LLM provider (with optional provider fallback or mock in test mode), persist conversation turns as needed, and return either a streaming or non-streaming completion response.
+    
+    Parameters:
+        request_data (ChatCompletionRequest): The incoming chat completion payload (messages, model, streaming flag, tools, etc.).
+        request (Request | None): Optional FastAPI request object used for audit logging, IP extraction, and rate-limiting context.
+    
+    Returns:
+        Response: A StreamingResponse (for streaming requests) or JSONResponse containing the LLM completion payload or an error body; raises HTTPException for client/server errors.
+    """
     current_loop = asyncio.get_running_loop()
 
     # Generate unique request ID for tracking and set it in context

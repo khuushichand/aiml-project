@@ -15,14 +15,10 @@ from loguru import logger
 
 
 async def enforce_llm_budget(request: Request) -> None:
-    """FastAPI dependency to enforce LLM budgets for virtual API keys.
-
-    - Resolves the API key ID from headers (X-API-KEY or Authorization: Bearer) via
-      HMAC-SHA256 hash lookup in the AuthNZ DB. This avoids reliance on any
-      singleton manager state and works across reset settings during tests.
-    - If the key is virtual and over budget (token or USD, day or month), raises
-      HTTPException 402 before the handler executes.
-    - If no API key is present (e.g., JWT flow), this dependency is a no-op.
+    """
+    Enforces LLM budgets for virtual API keys on incoming requests.
+    
+    If budget enforcement is enabled and the request is associated with an API key that is marked virtual, verifies the key's token and USD limits and raises HTTPException(402) with a detail payload when the key is over its budget. This dependency is a no-op for requests without an API key or when virtual keys or budget enforcement are disabled.
     """
     settings = get_settings()
     _dbg = (

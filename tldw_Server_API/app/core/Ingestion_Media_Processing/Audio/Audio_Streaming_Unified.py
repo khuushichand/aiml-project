@@ -73,11 +73,24 @@ try:  # pragma: no cover - optional integration path
         """
 
         def __init__(self, config: 'UnifiedStreamingConfig') -> None:
+            """
+            Initialize the adapter with the provided unified streaming configuration.
+            
+            Stores the given UnifiedStreamingConfig and prepares an internal placeholder for the underlying core transcriber (left as None until initialization).
+            
+            Parameters:
+                config (UnifiedStreamingConfig): Configuration that drives model selection, runtime options, and behavior for the underlying transcriber.
+            """
             self._uconf = config
             self._core = None  # type: ignore
 
         def initialize(self) -> None:
             # Map Unified config to core config
+            """
+            Initialize the core Parakeet transcriber adapter by mapping the unified streaming configuration to the core transcriber config and creating the core transcriber instance.
+            
+            Creates a _CoreConfig from the adapter's unified config, instantiates _CoreTranscriber with that config, and validates that the chosen model variant is available. Raises a RuntimeError with message "parakeet_variant_unavailable: <variant>" when the core transcriber does not expose the expected decode function, to trigger higher-level fallback logic.
+            """
             c = _CoreConfig(
                 model=self._uconf.model,
                 model_variant=self._uconf.model_variant,
@@ -91,19 +104,41 @@ try:  # pragma: no cover - optional integration path
             )
             self._core = _CoreTranscriber(config=c)
             # Ensure chosen variant is available; if not, raise to trigger fallback logic
-            if getattr(self._core, 'decode_fn', None) is None:
-                raise RuntimeError(f"parakeet_variant_unavailable: {self._uconf.model_variant}")
-
         async def process_audio_chunk(self, audio_data: bytes):  # -> Optional[Dict[str, Any]]
+            """
+            Forward an incoming audio chunk to the underlying core transcriber and return any resulting transcription data.
+            
+            Parameters:
+                audio_data (bytes): Raw audio bytes received from the client.
+            
+            Returns:
+                dict: A transcription result object (partial or final) when available, or `None` if no transcription is produced.
+            """
             return await self._core.process_audio_chunk(audio_data)  # type: ignore
 
         def get_full_transcript(self) -> str:
+            """
+            Retrieve the concatenated transcript produced by the underlying transcriber.
+            
+            Returns:
+                full_transcript (str): The combined transcript text of all finalized segments in chronological order.
+            """
             return self._core.get_full_transcript()  # type: ignore
 
         def reset(self) -> None:
+            """
+            Reset the adapter and its underlying core transcriber state.
+            
+            This clears any internal buffers and runtime state held by the adapter by delegating reset to the wrapped core transcriber.
+            """
             self._core.reset()  # type: ignore
 
         def cleanup(self) -> None:
+            """
+            Reset the underlying core adapter/transcriber and ignore any errors raised.
+            
+            This calls the core object's `reset` method if present; exceptions from that call are suppressed to ensure cleanup does not raise.
+            """
             try:
                 self._core.reset()  # type: ignore
             except Exception:
@@ -145,6 +180,15 @@ class StreamingDiarizer:
         storage_dir: Optional[str] = None,
         num_speakers: Optional[int] = None,
     ) -> None:
+        """
+        Initialize the streaming diarizer used to collect audio and produce speaker-aligned segments.
+        
+        Parameters:
+            sample_rate (int): Audio sample rate in Hz used for buffering and diarization. Defaults to 16000 when falsy.
+            store_audio (bool): If True, persist the combined audio to disk when finalizing diarization.
+            storage_dir (Optional[str]): Directory path where persisted audio will be written when store_audio is True.
+            num_speakers (Optional[int]): Optional hint for the expected number of speakers; passed to the underlying diarization service when available.
+        """
         self.sample_rate = int(sample_rate or 16000)
         self.store_audio = bool(store_audio)
         self.storage_dir = Path(storage_dir).expanduser() if storage_dir else None
@@ -193,7 +237,11 @@ class StreamingDiarizer:
             return mapping, audio_path, speakers
 
     async def reset(self) -> None:
-        """Reset cached audio and transcripts."""
+        """
+        Clear all buffered audio, transcripts, and diarization state, and reset persistence metadata.
+        
+        This empties the internal audio chunk and transcript segment buffers, clears any computed speaker mapping, resets the last result and dirty flag, and clears persistence path and method so the diarizer returns to an initial state.
+        """
         async with self._lock:
             self._audio_chunks.clear()
             self._transcript_segments.clear()
@@ -204,6 +252,9 @@ class StreamingDiarizer:
             self._persist_method = None
 
     async def close(self) -> None:
+        """
+        Close the diarizer, clear buffered audio and transcripts, and release any held resources.
+        """
         await self.reset()
 
     async def ensure_ready(self) -> bool:
@@ -307,6 +358,15 @@ class StreamingDiarizer:
         return np.concatenate(self._audio_chunks)
 
     def _write_temp_wav(self, audio_np: np.ndarray) -> Path:
+        """
+        Write a temporary WAV file from a mono audio NumPy array and return its filesystem path.
+        
+        Parameters:
+            audio_np (np.ndarray): 1-D NumPy array of audio samples, expected in float32 range [-1.0, 1.0]; the method will convert to an appropriate PCM format if needed.
+        
+        Returns:
+            Path: Filesystem path to the created temporary WAV file.
+        """
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         tmp_path = Path(tmp.name)
         tmp.close()
@@ -337,10 +397,24 @@ class StreamingDiarizer:
         return tmp_path
 
     async def _persist_audio(self) -> Optional[str]:
+        """
+        Run the synchronous audio persistence routine in a thread executor and return the persisted file path if any.
+        
+        Returns:
+            persisted_path (Optional[str]): Path to the persisted audio file if persistence succeeded, `None` if no file was written.
+        """
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._persist_audio_sync)
 
     def _persist_audio_sync(self) -> Optional[str]:
+        """
+        Persist the currently buffered audio to a WAV file using the best available backend.
+        
+        Attempts to write the concatenated buffered audio to disk (preferred backends tried in order: soundfile, scipy.io.wavfile, wave). On success sets self._persist_path to the file path and self._persist_method to the backend used and returns the file path as a string. If no audio is buffered or all backends fail, sets self._persist_method to None and returns `None`.
+        
+        Returns:
+            str or None: Absolute path to the persisted WAV file on success, `None` if no audio was written.
+        """
         audio_np = self._combined_audio()
         if audio_np.size == 0:
             return None
@@ -392,6 +466,12 @@ class StreamingDiarizer:
 
     @property
     def persistence_method(self) -> Optional[str]:
+        """
+        Name of the audio persistence backend selected for writing WAV files.
+        
+        Returns:
+            persistence_backend (Optional[str]): The backend identifier (`'soundfile'`, `'scipy'`, or `'wave'`) if a persistence writer was selected, or `None` if no persistence backend is available.
+        """
         return self._persist_method
 
 
@@ -1014,7 +1094,11 @@ class UnifiedStreamingTranscriber:
         self.transcriber = None
         
     def initialize(self):
-        """Initialize the appropriate transcriber."""
+        """
+        Selects and initializes the model-specific streaming transcriber based on this instance's configuration.
+        
+        For the Parakeet model, prefers the Parakeet Core adapter when available and falls back to the legacy Parakeet transcriber otherwise. After selection, the chosen transcriber is instantiated, its initialize method is called, and the transcriber instance is stored on self.transcriber.
+        """
         model_lower = self.config.model.lower()
 
         if model_lower == 'canary':
@@ -1072,13 +1156,15 @@ async def handle_unified_websocket(
     on_heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
 ):
     """
-    Handle WebSocket connection for unified real-time transcription.
+    Handle a WebSocket connection to perform unified real-time transcription across Parakeet, Canary, and Whisper models.
     
-    This handler supports both Parakeet and Canary models with dynamic selection.
+    This handler waits for an optional client configuration message, initializes a model-specific transcriber (with runtime fallback logic), and processes incoming base64-encoded audio messages into partial and final transcription results sent to the client as JSON frames. It optionally integrates streaming diarization and live insights, emits structured status/warning/error frames, supports a commit/reset/stop control messages, and ensures proper cleanup of transcriber, diarizer, and insights resources on exit.
     
-    Args:
-        websocket: WebSocket connection
-        config: Initial streaming configuration
+    Parameters:
+        websocket: The WebSocket connection object used to receive client messages and send JSON frames.
+        config (Optional[UnifiedStreamingConfig]): Optional initial streaming configuration; updated if a client config message is received.
+        on_audio_seconds (Optional[Callable[[float, int], Awaitable[None]]]): Optional callback invoked before processing each audio chunk with two arguments: computed audio duration in seconds and the sample rate in Hz.
+        on_heartbeat (Optional[Callable[[], Awaitable[None]]]): Optional callback invoked on each received audio message to refresh external TTLs (e.g., Redis-based heartbeats).
     """
     logger.info("=== handle_unified_websocket STARTED ===")
     

@@ -311,6 +311,25 @@ async def start_run(
     request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
+    """
+    Start a sandbox run (immediate scaffold or queued) using the provided request payload and return its status.
+    
+    Builds a RunSpec from the request payload, initiates the run via the sandbox service (respecting an optional idempotency key), records metrics and audit events, and may publish synthetic start/end frames when test-synthetic frames are enabled.
+    
+    Parameters:
+        payload (SandboxRunCreateRequest): Run creation parameters (runtime, base_image, command, timeouts, resources, network policy, inline files, capture patterns, session association, and spec_version).
+        idempotency_key (Optional[str]): Optional Idempotency-Key header used to deduplicate requests.
+        request (Request): Incoming HTTP request (used for audit context and metadata).
+        current_user (User): Authenticated user initiating the run.
+        audit_service: Audit service dependency used to record API request/response events.
+    
+    Returns:
+        SandboxRunStatus: Current status of the created run, including id, spec_version, runtime, base_image, image_digest, policy_hash, phase, exit_code, start/finish timestamps, message, resource_usage, and estimated_start_time.
+    
+    Raises:
+        HTTPException: 409 with code "idempotency_conflict" when an idempotent request conflicts.
+        HTTPException: 400 with code "invalid_spec_version" when the provided spec_version is unsupported.
+    """
     files_inline = _service.parse_inline_files([f.dict() for f in (payload.files or [])])
     try:
         default_exec_to = int(getattr(app_settings, "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", 300))
@@ -625,6 +644,15 @@ async def cancel_run(
 
 @router.websocket("/runs/{run_id}/stream")
 async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
+    """
+    Stream live sandbox run events and frames to a connected WebSocket client.
+    
+    Subscribes to the run's event hub and forwards frames (events, logs, heartbeats) to the WebSocket. Periodically emits heartbeats and increments related metrics. When the configured synthetic-frames flag is enabled, publishes minimal synthetic start/end events to allow early-connected clients to observe non-heartbeat frames. Closes the connection after receiving an `end` event unless synthetic frames are enabled, and ensures heartbeat tasks are cancelled and the socket is closed on disconnect or error.
+    
+    Parameters:
+        websocket (WebSocket): The active WebSocket connection to send frames to.
+        run_id (str): Identifier of the sandbox run whose events should be streamed.
+    """
     await websocket.accept()
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
@@ -639,6 +667,11 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             if st is not None:
                 hub.publish_event(run_id, "start", {"source": "ws_synthetic"})
                 async def _publish_end_later():
+                    """
+                    Publish a synthetic "end" event to the run's hub after a short delay.
+                    
+                    Waits approximately 50 milliseconds, then publishes an event of type "end" to the surrounding `hub` for the current `run_id` with payload {"source": "ws_synthetic"}. Any exceptions raised during the sleep or publish are caught and ignored.
+                    """
                     try:
                         await asyncio.sleep(0.05)
                         hub.publish_event(run_id, "end", {"source": "ws_synthetic"})

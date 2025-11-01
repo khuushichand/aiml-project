@@ -3,6 +3,16 @@ import { useRouter } from 'next/router';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 
+/**
+ * Render the application's top navigation header with logo, primary links, and user controls.
+ *
+ * The rendered header includes a logo linking to home, a set of navigation links, and a user area that
+ * shows the signed-in username or a Login link. The "Runs" navigation link is included only when the
+ * NEXT_PUBLIC_ENABLE_RUNS_LINK environment flag is enabled and, if NEXT_PUBLIC_RUNS_REQUIRE_ADMIN is set,
+ * only when the current user is determined to be an admin (checks multiple user fields and roles).
+ *
+ * @returns The header element containing the logo, navigation links, and user session controls.
+ */
 export function Header() {
   const router = useRouter();
   const { isAuthenticated, user, logout } = useAuth();

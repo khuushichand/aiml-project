@@ -3,6 +3,15 @@ import pytest
 
 @pytest.mark.unit
 def test_stream_status_shape(client_user_only):
+    """
+    Verify the audio stream status endpoint returns the expected JSON structure and values.
+    
+    Asserts that the response from GET /api/v1/audio/stream/status has HTTP 200 and a JSON object containing:
+    - a "status" key with value "available" or "unavailable";
+    - an "available_models" list of strings whose entries start with a known model prefix;
+    - a "websocket_endpoint" equal to "/api/v1/audio/stream/transcribe";
+    - a "supported_features" dictionary containing feature flags: "partial_results", "multiple_languages", "concurrent_streams", "segment_metadata", "live_insights", "meeting_notes", "speaker_diarization", and "audio_persistence".
+    """
     client = client_user_only
     r = client.get("/api/v1/audio/stream/status")
     assert r.status_code == 200
@@ -38,4 +47,3 @@ def test_stream_status_shape(client_user_only):
     known_prefixes = ("parakeet-standard", "parakeet-onnx", "parakeet-mlx")
     for m in data["available_models"]:
         assert any(m.startswith(p.split("-")[0]) for p in known_prefixes)
-
