@@ -1,12 +1,15 @@
 from __future__ import annotations
-
+#
 from typing import Optional, Dict, Any
 import os
-import hmac
-import hashlib
-
+#
+# Third-Party-Libs
+from argon2 import PasswordHasher
 from loguru import logger
+from passlib.handlers import digests
 
+#
+# Local Imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -14,9 +17,9 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
 async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Dict[str, Any]]:
     """
-    Resolve an API key to its database identity via HMAC hash lookup.
+    Resolve an API key to its database identity via Argon2 password hash lookup.
 
-    Computes HMAC-SHA256 digests of the provided API key against all configured
+    Attempts Argon2 verification of the provided API key against all configured
     key-derivation candidates and queries the `api_keys` table for a matching
     active key. Returns a mapping with `id` and `user_id` when found, otherwise
     None.
@@ -32,7 +35,7 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         return None
 
     s = settings or get_settings()
-    digests: list[str] = []
+    hashes: list[str] = []
     try:
         candidates = tuple(derive_hmac_key_candidates(s))
         # Minimal debug insight with safe fallback
@@ -44,16 +47,19 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
     except Exception as e:
         logger.debug("resolve_api_key_by_hash: failed to derive candidates: {}", e)
         candidates = ()
+    ph = PasswordHasher()
 
     for key in candidates:
         try:
-            digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
-            if digest not in digests:
-                digests.append(digest)
+            # Instead of deriving HMAC digests, assume key is an argon2 hash candidate.
+            # In legacy case, adapt accordingly; here we treat 'key' as stored Argon2 hash
+            # Attempt Argon2 verification:
+            if ph.verify(key, api_key):
+                hashes.append(key)
         except Exception as _e:
-            logger.debug("resolve_api_key_by_hash: digest calc failed: {}", _e)
+            logger.debug("resolve_api_key_by_hash: Argon2 verify failed: {}", _e)
 
-    if not digests:
+    if not hashes:
         return None
 
     pool = await get_db_pool()
@@ -80,6 +86,13 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             f"ORDER BY created_at DESC LIMIT 1"
         )
         row = await pool.fetchone(query, (*digests, "active"))
+    placeholders = ",".join("?" for _ in hashes)
+    query = (
+        f"SELECT id, user_id FROM api_keys "
+        f"WHERE key_hash IN ({placeholders}) AND status = ? "
+        f"ORDER BY created_at DESC LIMIT 1"
+    )
+    row = await pool.fetchone(query, (*hashes, "active"))
     if not row:
         return None
 
