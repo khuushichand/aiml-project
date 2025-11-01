@@ -205,3 +205,67 @@ async def test_enforce_llm_budget_virtual_under_budget_ok(monkeypatch):
     assert getattr(req.state, "user_id", None) == 222
     # Ensure the budget checker was invoked
     assert called["over_budget"] is True
+
+
+@pytest.mark.asyncio
+async def test_enforce_llm_budget_virtual_over_budget_raises(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ import llm_budget_guard as guard
+
+    class StubSettings:
+        VIRTUAL_KEYS_ENABLED = True
+        LLM_BUDGET_ENFORCE = True
+
+    monkeypatch.setattr(guard, "get_settings", lambda: StubSettings())
+    monkeypatch.setattr(guard, "derive_hmac_key_candidates", lambda _s: [b"k"])
+
+    class FakePool:
+        async def fetchone(self, *_args, **_kwargs):
+            return {"id": 222, "user_id": 333}
+
+    async def fake_get_db_pool():
+        return FakePool()
+
+    monkeypatch.setattr(guard, "get_db_pool", fake_get_db_pool)
+
+    # Virtual key with limits and over budget
+    async def fake_get_key_limits(_key_id: int):
+        return {"is_virtual": True}
+
+    expected_result = {
+        "over": True,
+        "reasons": ["day_tokens"],
+        "day": {"tokens": 20000, "usd": 12.34},
+        "month": {"tokens": 50000, "usd": 50.00},
+        "limits": {
+            "llm_budget_day_tokens": 10000,
+            "llm_budget_day_usd": 5.0,
+            "llm_budget_month_tokens": 300000,
+            "llm_budget_month_usd": 150.0,
+        },
+    }
+
+    async def fake_is_key_over_budget(_key_id: int):
+        return expected_result
+
+    monkeypatch.setattr(guard, "get_key_limits", fake_get_key_limits)
+    monkeypatch.setattr(guard, "is_key_over_budget", fake_is_key_over_budget)
+
+    class NormalState:
+        pass
+
+    class OkRequest:
+        def __init__(self):
+            self.headers = {"X-API-KEY": "dummy-key"}
+            self.scope = {"path": "/unit/over-virtual"}
+            self.state = NormalState()
+
+    req = OkRequest()
+    with pytest.raises(guard.HTTPException) as ei:
+        await guard.enforce_llm_budget(req)
+
+    assert ei.value.status_code == 402
+    detail = ei.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("error") == "budget_exceeded"
+    assert "Virtual key budget exceeded" in detail.get("message", "")
+    assert detail.get("details") == expected_result
