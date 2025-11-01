@@ -5,6 +5,7 @@ from typing import Callable
 import hmac
 import hashlib
 
+from hashlib import pbkdf2_hmac
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -80,7 +81,13 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 try:
                     digests: list[str] = []
                     for key in derive_hmac_key_candidates(get_settings()):
-                        digest = hmac.new(key, api_key.encode('utf-8'), hashlib.sha256).hexdigest()
+                        # Use PBKDF2-HMAC-SHA256 with key as static salt for deterministic lookup
+                        digest = pbkdf2_hmac(
+                            hash_name='sha256',
+                            password=api_key.encode('utf-8'),
+                            salt=key,
+                            iterations=100_000,
+                        ).hex()
                         if digest not in digests:
                             digests.append(digest)
                     if digests:
