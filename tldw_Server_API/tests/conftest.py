@@ -15,6 +15,21 @@ pytest_plugins = (
 )
 
 import os
+import logging
+# Ensure problematic optional routers don't import during test collection
+# and enable test-friendly behaviors before importing the app.
+_log = logging.getLogger(__name__)
+try:
+    # Disable heavy 'research' router to avoid importing Web_Scraping during collection
+    existing_disable = os.getenv("ROUTES_DISABLE", "")
+    if "research" not in existing_disable:
+        os.environ["ROUTES_DISABLE"] = (existing_disable + ",research").strip(",")
+    # Enable deterministic test behaviors across subsystems
+    os.environ.setdefault("TEST_MODE", "1")
+    os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+except Exception as e:
+    # Surface environment setup failures in test output
+    _log.exception("Failed to apply test environment setup in conftest.py")
 import pytest
 from fastapi.testclient import TestClient
 

@@ -40,7 +40,12 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
-from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_article, fetch_site_items_with_rules
+from tldw_Server_API.app.core.Watchlists.fetchers import (
+    fetch_rss_feed,
+    fetch_rss_feed_history,
+    fetch_site_article,
+    fetch_site_items_with_rules,
+)
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evaluate_filters
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -212,8 +217,12 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
         _max_debug = 100
     _debug_count = 0
 
-    try:
-        for src in sources:
+    # History/backfill counters for the run
+    history_pages_total = 0
+    history_any_stop = False
+    history_used = False
+
+    for src in sources:
             try:
                 # Defer source if Retry-After previously set and not elapsed
                 if getattr(src, "defer_until", None):
@@ -270,10 +279,69 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     except Exception:
                         settings = {}
                     rss_limit = int(settings.get("limit", 50)) if isinstance(settings.get("limit", 50), int) else 50
+                    # Effective history/backfill options: merge job output_prefs.history over source.settings.history
+                    history_cfg = settings.get("history") if isinstance(settings.get("history"), dict) else {}
+                    try:
+                        job_output_prefs = json.loads(job.output_prefs_json or "{}") if getattr(job, "output_prefs_json", None) else {}
+                    except Exception:
+                        job_output_prefs = {}
+                    job_hist = job_output_prefs.get("history") if isinstance(job_output_prefs.get("history"), dict) else {}
+                    if job_hist:
+                        # shallow-merge, job overrides source
+                        merged = dict(history_cfg)
+                        merged.update(job_hist)
+                        history_cfg = merged
+                    hist_strategy = str(history_cfg.get("strategy", "auto")).lower() if isinstance(history_cfg, dict) else "auto"
+                    try:
+                        hist_max_pages = int(history_cfg.get("max_pages", 1)) if isinstance(history_cfg, dict) else 1
+                    except Exception:
+                        hist_max_pages = 1
+                    if hist_max_pages < 1:
+                        hist_max_pages = 1
+                    hist_on_304 = bool(history_cfg.get("on_304", False)) if isinstance(history_cfg, dict) else False
+                    try:
+                        hist_per_page = int(history_cfg.get("per_page_limit")) if isinstance(history_cfg.get("per_page_limit"), int) else None
+                    except Exception:
+                        hist_per_page = None
+                    hist_stop_on_seen = bool(history_cfg.get("stop_on_seen", False)) if isinstance(history_cfg, dict) else False
+                    # Load DB seen keys for boundary stop mode
+                    seen_keys: List[str] = []
+                    if hist_stop_on_seen:
+                        try:
+                            limit_base = rss_limit if rss_limit > 0 else 50
+                            if isinstance(hist_per_page, int) and hist_per_page > 0:
+                                limit_base = max(limit_base, hist_per_page)
+                            limit = limit_base * max(hist_max_pages, 1)
+                            seen_keys = db.list_seen_item_keys(int(src.id), limit=limit)
+                        except Exception:
+                            seen_keys = []
                     if test_mode:
                         res = {"status": 200, "items": [{"title": "Test Item", "url": "https://example.com/x", "summary": "Test"}]}
                     else:
-                        res = await fetch_rss_feed(src.url, etag=getattr(src, "etag", None), last_modified=getattr(src, "last_modified", None), timeout=8.0, tenant_id="default")
+                        # Use history-aware fetcher when configured
+                        use_history = hist_max_pages > 1 or hist_strategy in {"auto", "atom", "wordpress"}
+                        if use_history:
+                            res = await fetch_rss_feed_history(
+                                src.url,
+                                etag=getattr(src, "etag", None),
+                                last_modified=getattr(src, "last_modified", None),
+                                timeout=8.0,
+                                tenant_id="default",
+                                strategy=hist_strategy,
+                                max_pages=hist_max_pages,
+                                per_page_limit=hist_per_page,
+                                on_304=hist_on_304,
+                                stop_on_seen=hist_stop_on_seen,
+                                seen_keys=seen_keys,
+                            )
+                        else:
+                            res = await fetch_rss_feed(
+                                src.url,
+                                etag=getattr(src, "etag", None),
+                                last_modified=getattr(src, "last_modified", None),
+                                timeout=8.0,
+                                tenant_id="default",
+                            )
                     status = int(res.get("status", 0) or 0)
                     if status == 304:
                         # nothing new
@@ -350,7 +418,18 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0)
                         except Exception:
                             pass
+                    # Accumulate history counters for run stats when applicable
+                    try:
+                        if isinstance(res.get("pages_fetched"), int):
+                            history_pages_total += int(res.get("pages_fetched"))
+                            history_used = True
+                        if bool(res.get("stop_on_seen_triggered")):
+                            history_any_stop = True
+                    except Exception:
+                        pass
                     rss_items = list(res.get("items") or [])
+                    if isinstance(rss_limit, int) and rss_limit > 0:
+                        rss_items = rss_items[:rss_limit]
                     items_found += len(rss_items)
                     for it in rss_items:
                         link = it.get("url") or it.get("link")
@@ -428,7 +507,25 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         except Exception:
                             flagged = False
 
-                        article = None if test_mode else fetch_site_article(link)
+                        # Optional: if feed provides full text, skip article fetch
+                        rss_cfg = settings.get("rss") if isinstance(settings.get("rss"), dict) else {}
+                        prefer_feed = bool(rss_cfg.get("use_feed_content_if_available", False)) if isinstance(rss_cfg, dict) else False
+                        try:
+                            min_chars = int(rss_cfg.get("feed_content_min_chars", 400)) if isinstance(rss_cfg, dict) else 400
+                        except Exception:
+                            min_chars = 400
+                        article = None
+                        if prefer_feed:
+                            feed_text = (it.get("summary") or "").strip()
+                            if feed_text and len(feed_text) >= max(0, min_chars):
+                                article = {
+                                    "title": it.get("title") or "Untitled",
+                                    "url": link,
+                                    "content": feed_text,
+                                    "author": it.get("author"),
+                                }
+                        if article is None:
+                            article = None if test_mode else fetch_site_article(link)
                         if article is None and test_mode:
                             # In tests, fall back to summary as content
                             article = {
@@ -878,22 +975,26 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                 except Exception:
                     pass
 
-        stats = {"items_found": items_found, "items_ingested": items_ingested}
-        try:
-            if filter_stats["filters_matched"]:
-                stats["filters_matched"] = int(filter_stats["filters_matched"])  # type: ignore[assignment]
-                stats["filters_actions"] = filter_stats["filters_actions"]
-                stats["filter_tallies"] = filter_stats["filter_tallies"]
-        except Exception:
-            pass
-        db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
+    stats = {"items_found": items_found, "items_ingested": items_ingested}
+    try:
+        if filter_stats["filters_matched"]:
+            stats["filters_matched"] = int(filter_stats["filters_matched"])  # type: ignore[assignment]
+            stats["filters_actions"] = filter_stats["filters_actions"]
+            stats["filter_tallies"] = filter_stats["filter_tallies"]
+    except Exception:
+        pass
+    # Attach history/backfill counters when used
+    try:
+        if history_used:
+            stats["history"] = {
+                "pages_fetched": int(history_pages_total),
+                "stop_on_seen_triggered": bool(history_any_stop),
+            }
+    except Exception:
+        pass
+    db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
 
-        # Update job history
-        next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
-        db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=next_run)
-        return {"run_id": run.id, **stats}
-
-    except Exception as e:
-        logger.error(f"run_watchlist_job failed: {e}")
-        db.update_run(run.id, status="failed", finished_at=_utcnow_iso(), error_msg=str(e))
-        raise
+    # Update job history
+    next_run = _compute_next_run(job.schedule_expr, job.schedule_timezone)
+    db.set_job_history(job_id=job_id, last_run_at=_utcnow_iso(), next_run_at=next_run)
+    return {"run_id": run.id, **stats}

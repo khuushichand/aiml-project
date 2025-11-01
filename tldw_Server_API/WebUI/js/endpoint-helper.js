@@ -434,6 +434,25 @@ class EndpointHelper {
             
             curlEl.textContent = curlCommand;
             curlEl.style.display = curlEl.style.display === 'none' ? 'block' : 'none';
+
+            // Show a small note indicating whether the cURL token is masked
+            const noteId = `${endpointId}_curl_note`;
+            let note = document.getElementById(noteId);
+            if (!note) {
+                note = document.createElement('div');
+                note.id = noteId;
+                note.className = 'text-muted';
+                note.style.fontSize = '0.85em';
+                note.style.margin = '6px 0 0 0';
+                curlEl.parentNode.insertBefore(note, curlEl.nextSibling);
+            }
+            if (apiClient && apiClient.token && !apiClient.includeTokenInCurl) {
+                note.textContent = "Note: Token masked in cURL. Use Global Settings toggle to include it, or replace [REDACTED] with your token.";
+                note.style.display = 'block';
+            } else {
+                note.textContent = '';
+                note.style.display = 'none';
+            }
             
             // Copy to clipboard button
             if (!curlEl.nextElementSibling || !curlEl.nextElementSibling.classList.contains('copy-curl')) {

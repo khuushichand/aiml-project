@@ -128,34 +128,24 @@ def _trace_log_patcher(record):
         pass
 
 def _safe_log_format(record: dict) -> str:
-    try:
-        ts = record.get("time")
-        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ts else ""
-    except Exception:
-        ts_str = ""
-    level = record.get("level").name if record.get("level") else "INFO"
-    extra = record.get("extra") or {}
-    trace_id = extra.get("trace_id", "")
-    span_id = extra.get("span_id", "")
-    request_id = extra.get("request_id", "")
-    session_id = extra.get("session_id", "")
-    def _san(v: object) -> str:
-        try:
-            s = str(v)
-            return s.replace("<", "").replace(">", "")
-        except Exception:
-            return ""
-    name = _san(record.get("name", ""))
-    function = _san(record.get("function", ""))
-    line = record.get("line", "")
-    message = _san(record.get("message", ""))
-    # Colorized with Loguru markup tags (processed when colorize=True)
+    """
+    Build a safe format template for Loguru which defers insertion of
+    dynamic values (especially the message) to Loguru's own formatting.
+
+    Returning a template with placeholders avoids embedding the raw message
+    into the format string. This prevents Loguru's colorizer from parsing
+    curly braces coming from messages (e.g., JSON dicts) which previously
+    caused recursive parsing and "Max string recursion exceeded" errors.
+    """
+    # Note: Markup tags (<level>, <dim>, etc.) are parsed before placeholders
+    # are formatted, so the inserted {message} content will not be re‑parsed
+    # for markup. This removes the need to strip '<' or '>' from messages.
     return (
-        f"<dim>{ts_str}</dim> | "
-        f"<level>{level:<8}</level> | "
-        f"<cyan>trace={trace_id}</cyan> <cyan>span={span_id}</cyan> "
-        f"<yellow>req={request_id}</yellow> <yellow>ses={session_id}</yellow> | "
-        f"<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
+        "<dim>{time:YYYY-MM-DD HH:mm:ss.SSS}</dim> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>trace={extra[trace_id]}</cyan> <cyan>span={extra[span_id]}</cyan> "
+        "<yellow>req={extra[request_id]}</yellow> <yellow>ses={extra[session_id]}</yellow> | "
+        "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
     )
 
 # Reset Loguru and configure a single, thread-safe sink
@@ -229,11 +219,26 @@ logger.add = _safe_logger_add  # type: ignore[assignment]
 setattr(logger.add, "_tldw_safe_original", _original_unwrapped_logger_add)
 setattr(logger.add, "__wrapped__", _original_unwrapped_logger_add)
 
+# Sink-level filter to guarantee presence of common extra fields
+def _ensure_log_extra_fields(record: dict) -> bool:
+    try:
+        extra = record.setdefault("extra", {})
+        # Provide defaults to avoid KeyError in format templates
+        extra.setdefault("trace_id", "")
+        extra.setdefault("span_id", "")
+        extra.setdefault("request_id", "")
+        extra.setdefault("session_id", "")
+    except Exception:
+        # Never block a log line due to filter errors
+        pass
+    return True
+
 logger.add(
     _SafeStreamWrapper(_sink),
     level=_log_level,
     format=_safe_log_format,
     colorize=_use_color,
+    filter=_ensure_log_extra_fields,
     enqueue=False,
 )
 logger = logger.patch(_trace_log_patcher)
@@ -486,8 +491,12 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
     # Sync Endpoint
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
-    # Tools Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+    # Tools Endpoint (optional; guard import to avoid startup failure on optional module issues)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+    except Exception as _tools_import_err:  # noqa: BLE001
+        logger.warning(f"Tools endpoints unavailable at import time; deferring: {_tools_import_err}")
+        tools_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
     # Privilege Maps Endpoint
@@ -556,7 +565,7 @@ try:
             serialize=True,
             backtrace=False,
             diagnose=False,
-            filter=None,
+            filter=_ensure_log_extra_fields,
             enqueue=True,
         )
         try:
@@ -871,7 +880,7 @@ async def lifespan(app: FastAPI):
                         pass
                     return mms
 
-                auth_mode = str(_emb_settings.get("AUTH_MODE", _os.getenv("AUTH_MODE", "single_user")))
+                auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
                 mismatches: list[tuple[str, int, int, str]] = []
                 if auth_mode == "multi_user":
                     base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
@@ -2655,6 +2664,9 @@ else:
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
     _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    # Tools (MCP-backed server tool execution) — include if initial guarded import succeeded
+    if 'tools_router' in locals() and tools_router is not None:
+        _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
@@ -2749,7 +2761,7 @@ else:
     if _HAS_JOBS_ADMIN:
         _include_if_enabled("jobs", jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"], default_stable=False)
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
-    _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}/tools", tags=["tools"])
+    # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
     _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
     _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=False)

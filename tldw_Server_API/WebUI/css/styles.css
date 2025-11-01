@@ -225,6 +225,28 @@ header h1 {
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* ===========================
+   Chat: Code blocks, tools, debug
+   =========================== */
+.code-block-wrapper { position: relative; }
+.code-block-wrapper .btn { opacity: 0.85; }
+.code-block { font-family: var(--font-family-mono); font-size: 0.9em; background: var(--color-surface-alt); color: var(--color-text); }
+.assistant-tools { border-left: 2px solid var(--color-border); padding-left: 8px; margin-top: 6px; }
+.assistant-tools-header { font-size: 0.85em; color: var(--color-text-secondary); margin-bottom: 4px; }
+.assistant-debug { margin-top: 6px; }
+.assistant-debug summary { cursor: pointer; color: var(--color-text-secondary); }
+.assistant-debug pre { background: var(--color-surface-alt); padding: 8px; border: 1px solid var(--color-border); border-radius: 4px; overflow: auto; }
+
+/* Basic token colors for lightweight highlighting */
+.tok-key { color: #7a7; }
+.tok-string { color: #c22; }
+.tok-number { color: #164; }
+.tok-boolean { color: #07a; }
+.tok-null { color: #777; }
+.tok-kw { color: #795e26; }
+.tok-func { color: #6f42c1; }
+.tok-comment { color: #6a737d; font-style: italic; }
+
 .top-tab-row:last-child {
     border-bottom: none;
 }

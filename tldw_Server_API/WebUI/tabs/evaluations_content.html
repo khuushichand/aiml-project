@@ -9,7 +9,7 @@
         
         <div class="form-group">
             <label for="evalsCreate_model">Model:</label>
-            <select id="evalsCreate_model" class="llm-model-select" onchange="updateEvalsCreateJSON()">
+            <select id="evalsCreate_model" class="llm-model-select">
                 <option value="">Loading models...</option>
             </select>
         </div>
@@ -30,7 +30,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('evalsCreate', 'POST', '/api/v1/evaluations', 'json')">
+        <button class="api-button" data-req-section="evalsCreate" data-req-method="POST" data-req-path="/api/v1/evaluations" data-req-body-type="json">
             Create Evaluation
         </button>
         
@@ -63,7 +63,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('evalsRun', 'POST', '/api/v1/evaluations/{id}/runs', 'json')">
+        <button class="api-button" data-req-section="evalsRun" data-req-method="POST" data-req-path="/api/v1/evaluations/{id}/runs" data-req-body-type="json">
             Start Run
         </button>
         
@@ -86,7 +86,7 @@
         
         <div class="form-group">
             <label for="geval_model">Model:</label>
-            <select id="geval_model" class="llm-model-select" onchange="updateGEvalJSON()">
+            <select id="geval_model" class="llm-model-select">
                 <option value="">Loading models...</option>
             </select>
         </div>
@@ -102,7 +102,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('geval', 'POST', '/api/v1/evaluations/geval', 'json')">
+        <button class="api-button" data-req-section="geval" data-req-method="POST" data-req-path="/api/v1/evaluations/geval" data-req-body-type="json">
             Run G-Eval
         </button>
         
@@ -113,6 +113,9 @@
         <pre id="geval_response">---</pre>
     </div>
 </div>
+
+<!-- Load migrated Evals module -->
+<script src="js/evals.js"></script>
 
 <!-- RAG Evaluation Tab -->
 <div id="tabEvalsRAG" class="tab-content">
@@ -140,9 +143,9 @@
 
         <h4>Server Presets</h4>
         <div class="form-group">
-            <button class="api-button" onclick="ragEvalRefreshPresets()">Refresh Presets</button>
+            <button class="api-button" id="btnRagEvalRefreshPresets">Refresh Presets</button>
             <select id="ragEvalPreset_select" style="min-width: 260px;"></select>
-            <button class="api-button" onclick="ragEvalApplyPresetTemplate()">Apply Preset as Test Template</button>
+            <button class="api-button" id="btnRagEvalApplyPresetTemplate">Apply Preset as Test Template</button>
         </div>
         <script>
             async function ragEvalRefreshPresets() {
@@ -197,7 +200,7 @@
             }
         </script>
         
-        <button class="api-button" onclick="makeRequest('ragEval', 'POST', '/api/v1/evaluations/rag', 'json')">
+        <button class="api-button" data-req-section="ragEval" data-req-method="POST" data-req-path="/api/v1/evaluations/rag" data-req-body-type="json">
             Run RAG Evaluation
         </button>
         
@@ -247,7 +250,7 @@
 }</textarea>
         </div>
 
-        <button class="api-button" onclick="makeRequest('ragPipelineCreate', 'POST', '/api/v1/evaluations', 'json')">
+        <button class="api-button" data-req-section="ragPipelineCreate" data-req-method="POST" data-req-path="/api/v1/evaluations" data-req-body-type="json">
             Create rag_pipeline Evaluation
         </button>
 
@@ -261,7 +264,7 @@
             <textarea id="ragPipelineRun_config" class="code-input" rows="4">{}</textarea>
         </div>
 
-        <button class="api-button" onclick="makeRequest('ragPipelineRun', 'POST', '/api/v1/evaluations/{id}/runs', 'json')">
+        <button class="api-button" data-req-section="ragPipelineRun" data-req-method="POST" data-req-path="/api/v1/evaluations/{id}/runs" data-req-body-type="json">
             Start Run
         </button>
 
@@ -271,7 +274,7 @@
 
         <h3>Best Config Preset</h3>
         <div class="form-group">
-            <button class="api-button" onclick="extractBestConfigFromRun()">Extract Best Config From Last Run</button>
+            <button class="api-button" id="btnExtractBestConfig">Extract Best Config From Last Run</button>
         </div>
         <div class="form-group">
             <label for="ragPipelinePreset_name">Preset Name:</label>
@@ -282,17 +285,17 @@
             <textarea id="ragPipelinePreset_json" class="code-input" rows="8" placeholder="{\n  &quot;chunking&quot;: {...},\n  &quot;retriever&quot;: {...},\n  &quot;reranker&quot;: {...},\n  &quot;rag&quot;: {...}\n}"></textarea>
         </div>
         <div class="form-group">
-            <button class="api-button" onclick="saveRagPipelinePreset()">Save Preset</button>
-            <button class="api-button" onclick="applyPresetToCreatePayload()">Apply Preset to Create Payload</button>
-            <button class="api-button" onclick="savePresetToServer()">Save Preset (Server)</button>
-            <button class="api-button" onclick="loadPresetFromServer()">Load Preset (Server)</button>
+            <button class="api-button" id="btnSaveRagPipelinePreset">Save Preset</button>
+            <button class="api-button" id="btnApplyPresetToCreate">Apply Preset to Create Payload</button>
+            <button class="api-button" id="btnSavePresetToServer">Save Preset (Server)</button>
+            <button class="api-button" id="btnLoadPresetFromServer">Load Preset (Server)</button>
         </div>
 
         <h4>Server Presets</h4>
         <div class="form-group">
-            <button class="api-button" onclick="refreshServerPresets()">Refresh Presets</button>
+            <button class="api-button" id="btnRefreshServerPresets">Refresh Presets</button>
             <select id="ragPipelinePreset_select" style="min-width: 240px;"></select>
-            <button class="api-button" onclick="applySelectedServerPreset()">Apply Selected to Create Payload</button>
+            <button class="api-button" id="btnApplySelectedServerPreset">Apply Selected to Create Payload</button>
         </div>
 
         <script>
@@ -444,7 +447,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('datasetsCreate', 'POST', '/api/v1/evaluations/datasets', 'json')">
+        <button class="api-button" data-req-section="datasetsCreate" data-req-method="POST" data-req-path="/api/v1/evaluations/datasets" data-req-body-type="json">
             Create Dataset
         </button>
         
@@ -462,7 +465,7 @@
         </h2>
         <p>List all evaluation datasets.</p>
         
-        <button class="api-button" onclick="makeRequest('datasetsList', 'GET', '/api/v1/evaluations/datasets', 'none')">
+        <button class="api-button" data-req-section="datasetsList" data-req-method="GET" data-req-path="/api/v1/evaluations/datasets" data-req-body-type="none">
             List Datasets
         </button>
         
@@ -499,9 +502,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('responseQualityEval', 'POST', '/api/v1/evaluations/response-quality', 'json')">
-            Evaluate Response Quality
-        </button>
+        <button class="api-button" data-req-section="responseQualityEval" data-req-method="POST" data-req-path="/api/v1/evaluations/response-quality" data-req-body-type="json">Evaluate Response Quality</button>
         
         <h3>cURL Command:</h3>
         <pre id="responseQualityEval_curl">---</pre>
@@ -531,7 +532,7 @@
 }</textarea>
     </div>
 
-    <button class="api-button" onclick="makeRequest('ocrEval', 'POST', '/api/v1/evaluations/ocr', 'json')">Run OCR Text Eval</button>
+    <button class="api-button" data-req-section="ocrEval" data-req-method="POST" data-req-path="/api/v1/evaluations/ocr" data-req-body-type="json">Run OCR Text Eval</button>
 
     <h3>cURL Command:</h3>
     <pre id="ocrEval_curl">---</pre>
@@ -582,7 +583,7 @@
       <small>Optional: provides page-level ground truth for per-page CER/WER scoring</small>
     </div>
 
-    <button class="api-button" onclick="makeRequest('ocrEvalPdf', 'POST', '/api/v1/evaluations/ocr-pdf', 'form')">Run OCR PDF Eval</button>
+    <button class="api-button" data-req-section="ocrEvalPdf" data-req-method="POST" data-req-path="/api/v1/evaluations/ocr-pdf" data-req-body-type="form">Run OCR PDF Eval</button>
 
     <h3>cURL Command:</h3>
     <pre id="ocrEvalPdf_curl">---</pre>
@@ -617,7 +618,7 @@
             <input type="number" id="evalsList_limit" placeholder="10" value="10">
         </div>
         
-        <button class="api-button" onclick="makeRequest('evalsList', 'GET', '/api/v1/evaluations', 'query')">
+        <button class="api-button" data-req-section="evalsList" data-req-method="GET" data-req-path="/api/v1/evaluations" data-req-body-type="query">
             List Evaluations
         </button>
         
@@ -637,7 +638,7 @@
             <input type="text" id="evalsGet_id" placeholder="eval_123">
         </div>
         
-        <button class="api-button" onclick="makeRequest('evalsGet', 'GET', '/api/v1/evaluations/{id}', 'none')">
+        <button class="api-button" data-req-section="evalsGet" data-req-method="GET" data-req-path="/api/v1/evaluations/{id}" data-req-body-type="none">
             Get Evaluation
         </button>
         
@@ -668,7 +669,7 @@
 }</textarea>
         </div>
         
-        <button class="api-button" onclick="makeRequest('evalsUpdate', 'PATCH', '/api/v1/evaluations/{id}', 'json')">
+        <button class="api-button" data-req-section="evalsUpdate" data-req-method="PATCH" data-req-path="/api/v1/evaluations/{id}" data-req-body-type="json">
             Update Evaluation
         </button>
         
@@ -688,7 +689,7 @@
             <input type="text" id="evalsDelete_id" placeholder="eval_123">
         </div>
         
-        <button class="api-button btn-danger" onclick="if(confirm('Are you sure you want to delete this evaluation?')) makeRequest('evalsDelete', 'DELETE', '/api/v1/evaluations/{id}', 'none')">
+        <button class="api-button btn-danger" data-req-section="evalsDelete" data-req-method="DELETE" data-req-path="/api/v1/evaluations/{id}" data-req-body-type="none" data-confirm="Are you sure you want to delete this evaluation?">
             Delete Evaluation
         </button>
         
@@ -703,7 +704,7 @@
         </h2>
         <p>Check current rate limit status for evaluations.</p>
         
-        <button class="api-button" onclick="makeRequest('rateLimits', 'GET', '/api/v1/evaluations/rate-limits', 'none')">
+        <button class="api-button" data-req-section="rateLimits" data-req-method="GET" data-req-path="/api/v1/evaluations/rate-limits" data-req-body-type="none">
             Check Rate Limits
         </button>
         

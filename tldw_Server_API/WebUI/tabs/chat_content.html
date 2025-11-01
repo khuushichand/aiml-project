@@ -225,9 +225,38 @@
             
             <div class="chat-input-group">
                 <textarea id="chat-input" placeholder="Type your message..." style="width: 100%; min-height: 60px; margin-bottom: 10px;"></textarea>
-                <div class="btn-group">
-                    <button class="btn btn-primary" onclick="sendChatMessage()" aria-label="Send message" role="button">Send</button>
+
+                <!-- Controls row -->
+                <div class="form-row" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:8px;">
+                    <label style="display:flex; gap:6px; align-items:center;">
+                        <input type="checkbox" id="chat-stream"> Stream response
+                    </label>
+                    <label style="display:flex; gap:6px; align-items:center;">
+                        <input type="checkbox" id="chat-save-to-db"> Save to DB
+                    </label>
+                    <label style="display:flex; gap:6px; align-items:center;">
+                        <input type="checkbox" id="chat-auto-continue"> Auto-continue after tools
+                    </label>
+                    <div class="sampling-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <label for="chat-temp" class="muted">Temp</label>
+                        <input id="chat-temp" type="number" min="0" max="2" step="0.1" value="0.7" style="width:80px;">
+                        <label for="chat-top-p" class="muted">top_p</label>
+                        <input id="chat-top-p" type="number" min="0" max="1" step="0.01" value="1" style="width:80px;">
+                        <label for="chat-max-tokens" class="muted">max_tokens</label>
+                        <input id="chat-max-tokens" type="number" min="1" step="1" value="1000" style="width:100px;">
+                    </div>
+                    <label for="chat-conversation-id" class="muted" style="margin-left:auto;">Conversation ID:</label>
+                    <input id="chat-conversation-id" type="text" readonly style="flex:1; min-width:220px;" placeholder="(not set)">
+                    <button class="btn btn-sm" onclick="resetChatConversation()" title="Clear conversation id">Reset</button>
+                </div>
+
+                <div class="btn-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button class="btn btn-primary" id="chat-send-btn" onclick="sendChatMessage()" aria-label="Send message" role="button">Send</button>
+                    <button class="btn btn-warning" id="chat-stop-btn" onclick="stopChatStream()" aria-label="Stop streaming" role="button" style="display:none;">Stop</button>
                     <button class="btn btn-secondary" onclick="clearChat()" aria-label="Clear chat history" role="button">Clear Chat</button>
+                    <button class="btn" onclick="copyLastAssistantMessage()" title="Copy last answer">Copy Last Answer</button>
+                    <button class="btn" onclick="retryLastUserMessage()" title="Retry last user message">Retry</button>
+                    <button class="btn" onclick="editLastUserMessage()" title="Edit last user message inline">Edit Last</button>
                     <select id="chat-provider" style="margin-left: 10px;" title="You can also set the model as provider/model without selecting a provider here.">
                         <option value="">All Providers</option>
                         <option value="openai">OpenAI</option>
@@ -1021,12 +1050,17 @@ async function populateModelDropdowns() {
             console.warn('No LLM providers configured');
             // Update dropdowns to show no providers available
             document.querySelectorAll('.llm-model-select').forEach(select => {
-                select.innerHTML = '<option value="">No models available - check configuration</option>';
+                // Build via DOM APIs to avoid innerHTML
+                while (select.firstChild) select.removeChild(select.firstChild);
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No models available - check configuration';
+                select.appendChild(opt);
             });
             return;
         }
         
-        // Build options HTML grouped by provider
+        // Build options HTML grouped by provider (escaped)
         let optionsHtml = '';
         const defaultProvider = providersInfo.default_provider;
         let defaultModel = null;
@@ -1041,18 +1075,20 @@ async function populateModelDropdowns() {
         // Group models by provider
         sortedProviders.forEach(provider => {
             if (provider.models && provider.models.length > 0) {
-                optionsHtml += `<optgroup label="${provider.display_name}">`;
+                const safeGroup = Utils.escapeHtml(String(provider.display_name || provider.name || 'Provider'));
+                optionsHtml += `<optgroup label="${safeGroup}">`;
                 
                 provider.models.forEach(model => {
                     const value = `${provider.name}/${model}`;
-                    const displayName = model;
+                    const displayName = Utils.escapeHtml(String(model));
+                    const safeValue = Utils.escapeHtml(String(value));
                     const isDefault = provider.name === defaultProvider && provider.default_model === model;
                     
                     if (isDefault) {
                         defaultModel = value;
                     }
                     
-                    optionsHtml += `<option value="${value}"${isDefault ? ' data-default="true"' : ''}>${displayName}${isDefault ? ' (default)' : ''}</option>`;
+                    optionsHtml += `<option value="${safeValue}"${isDefault ? ' data-default="true"' : ''}>${displayName}${isDefault ? ' (default)' : ''}</option>`;
                 });
                 
                 optionsHtml += '</optgroup>';
@@ -1071,6 +1107,7 @@ async function populateModelDropdowns() {
             }
             html += optionsHtml;
             
+            // Safe replace of options
             select.innerHTML = html;
             
             // Restore previous selection or set default
@@ -1087,7 +1124,11 @@ async function populateModelDropdowns() {
         console.error('Failed to populate model dropdowns:', error);
         // Show error in dropdowns
         document.querySelectorAll('.llm-model-select').forEach(select => {
-            select.innerHTML = '<option value="">Error loading models</option>';
+            while (select.firstChild) select.removeChild(select.firstChild);
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Error loading models';
+            select.appendChild(opt);
         });
     }
 }
@@ -1161,39 +1202,36 @@ function filterModelsByProvider(providerSelectId, modelSelectId) {
 // Helper function to populate a single model dropdown
 function populateModelDropdown(selectElement, providersInfo) {
     const defaultProvider = providersInfo.default_provider;
-    let optionsHtml = '';
     let defaultModel = null;
-    
+    // Clear existing options
+    while (selectElement.firstChild) selectElement.removeChild(selectElement.firstChild);
+
     // Sort providers by type (commercial first, then local)
     const sortedProviders = providersInfo.providers.sort((a, b) => {
         if (a.type === 'commercial' && b.type === 'local') return -1;
         if (a.type === 'local' && b.type === 'commercial') return 1;
         return a.display_name.localeCompare(b.display_name);
     });
-    
-    // Group models by provider
+
+    // Build groups and options via DOM APIs
     sortedProviders.forEach(provider => {
         if (provider.models && provider.models.length > 0) {
-            optionsHtml += `<optgroup label="${provider.display_name}">`;
-            
+            const group = document.createElement('optgroup');
+            group.label = String(provider.display_name || provider.name || 'Provider');
             provider.models.forEach(model => {
                 const value = `${provider.name}/${model}`;
-                const displayName = model;
                 const isDefault = provider.name === defaultProvider && provider.default_model === model;
-                
-                if (isDefault) {
-                    defaultModel = value;
-                }
-                
-                optionsHtml += `<option value="${value}"${isDefault ? ' data-default="true"' : ''}>${displayName}${isDefault ? ' (default)' : ''}</option>`;
+                if (isDefault) defaultModel = value;
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = `${model}${isDefault ? ' (default)' : ''}`;
+                if (isDefault) opt.dataset.default = 'true';
+                group.appendChild(opt);
             });
-            
-            optionsHtml += '</optgroup>';
+            selectElement.appendChild(group);
         }
     });
-    
-    selectElement.innerHTML = optionsHtml;
-    
+
     if (defaultModel) {
         selectElement.value = defaultModel;
     }
@@ -2117,12 +2155,19 @@ async function sendConversationMessage() {
         if (stream) {
             // Handle streaming response
             responseEl.textContent = 'Streaming response...\n';
+            const headers = (() => {
+                const h = { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' };
+                try {
+                    if (apiClient && apiClient.token) {
+                        if (apiClient.authMode === 'single-user' || apiClient.preferApiKeyInMultiUser) h['X-API-KEY'] = apiClient.token;
+                        else h['Authorization'] = `Bearer ${apiClient.token}`;
+                    }
+                } catch (e) {}
+                return h;
+            })();
             const response = await fetch(`${apiClient.baseUrl}/api/v1/chats/${conversationId}/messages`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-KEY': apiClient.token
-                },
+                headers,
                 body: JSON.stringify({ role: 'user', content: body.message || '' })
             });
             

@@ -152,8 +152,8 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="createRegCode()">Create Code</button>
-            <button class="api-button" onclick="listRegCodes()">List Codes</button>
+            <button class="api-button" id="btnRegCodeCreate">Create Code</button>
+            <button class="api-button" id="btnRegCodeList">List Codes</button>
         </div>
 
         <h3>Latest Result:</h3>
@@ -224,59 +224,15 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="adminQueryLLMUsage()">Query</button>
-            <button class="api-button" onclick="adminDownloadLLMUsageCSV()">Download CSV</button>
+            <button class="api-button" id="btnAdminLLMUsageQuery">Query</button>
+            <button class="api-button" id="btnAdminLLMUsageCSV">Download CSV</button>
         </div>
 
         <h3>Latest Result:</h3>
         <pre id="adminLLMUsage_result">---</pre>
     </div>
 
-    <script>
-        function _llmUsageQueryParams() {
-            const q = new URLSearchParams();
-            const user_id = document.getElementById('adminLLM_user_id').value.trim();
-            const provider = document.getElementById('adminLLM_provider').value.trim();
-            const model = document.getElementById('adminLLM_model').value.trim();
-            const operation = document.getElementById('adminLLM_operation').value;
-            const status = document.getElementById('adminLLM_status').value.trim();
-            const limit = document.getElementById('adminLLM_limit').value.trim();
-            const start = document.getElementById('adminLLM_start').value.trim();
-            const end = document.getElementById('adminLLM_end').value.trim();
-            if (user_id) q.append('user_id', user_id);
-            if (provider) q.append('provider', provider);
-            if (model) q.append('model', model);
-            if (operation) q.append('operation', operation);
-            if (status) q.append('status', status);
-            if (limit) q.append('limit', limit);
-            if (start) q.append('start', start);
-            if (end) q.append('end', end);
-            return q.toString();
-        }
-
-        async function adminQueryLLMUsage() {
-            try {
-                const q = _llmUsageQueryParams();
-                const url = '/api/v1/admin/llm-usage' + (q ? ('?' + q) : '');
-                const res = await apiClient.get(url);
-                const pre = document.getElementById('adminLLMUsage_result');
-                if (!res || !Array.isArray(res.items) || res.items.length === 0) {
-                    pre.textContent = 'No data yet.';
-                } else {
-                    pre.textContent = JSON.stringify(res, null, 2);
-                }
-            } catch (e) {
-                document.getElementById('adminLLMUsage_result').textContent = JSON.stringify(e.response || e, null, 2);
-                Toast.error('Failed to fetch LLM usage');
-            }
-        }
-
-        function adminDownloadLLMUsageCSV() {
-            const q = _llmUsageQueryParams();
-            const url = '/api/v1/admin/llm-usage/export.csv' + (q ? ('?' + q) : '');
-            window.open(url, '_blank');
-        }
-    </script>
+    <!-- Inline script moved to js/admin-advanced.js -->
 
     <!-- Audit Export -->
     <div class="endpoint-section" id="adminAuditExport">
@@ -331,133 +287,21 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="adminAuditDownload()">Download</button>
-            <button class="api-button" onclick="adminAuditDownloadLast24hHighRisk()">Last 24h High-Risk (CSV)</button>
-            <button class="api-button" onclick="adminAuditDownloadApiEventsCSV()">API Events (CSV)</button>
-            <button class="api-button" onclick="adminAuditPreviewJSON()">Preview JSON</button>
+            <button class="api-button" id="btnAdminAuditDownload">Download</button>
+            <button class="api-button" id="btnAdminAuditLast24h">Last 24h High-Risk (CSV)</button>
+            <button class="api-button" id="btnAdminAuditApiEvents">API Events (CSV)</button>
+            <button class="api-button" id="btnAdminAuditPreview">Preview JSON</button>
         </div>
 
         <h3>Preview:</h3>
         <pre id="adminAuditPreview">---</pre>
 
-        <script>
-            function _buildAuditQueryParams(overrides = {}) {
-                const q = new URLSearchParams();
-                const fmt = (overrides.format ?? document.getElementById('audit_format').value || 'json');
-                q.append('format', fmt);
-                const minRisk = overrides.min_risk_score ?? document.getElementById('audit_min_risk').value.trim();
-                const userId = overrides.user_id ?? document.getElementById('audit_user_id').value.trim();
-                const ev = overrides.event_type ?? document.getElementById('audit_event_type').value.trim();
-                const cat = overrides.category ?? document.getElementById('audit_category').value.trim();
-                const fname = overrides.filename ?? document.getElementById('audit_filename').value.trim();
-                const start = overrides.start_time ?? document.getElementById('audit_start').value.trim();
-                const end = overrides.end_time ?? document.getElementById('audit_end').value.trim();
-                if (minRisk) q.append('min_risk_score', minRisk);
-                if (userId) q.append('user_id', userId);
-                if (ev) q.append('event_type', ev);
-                if (cat) q.append('category', cat);
-                if (fname) q.append('filename', fname);
-                if (start) q.append('start_time', start);
-                if (end) q.append('end_time', end);
-                return q.toString();
-            }
-
-            async function _fetchAuditAndDownload(qs, format) {
-                try {
-                    const url = `${apiClient.baseUrl}/api/v1/audit/export?${qs}`;
-                    const headers = {};
-                    if (apiClient.token) {
-                        if (apiClient.authMode === 'single-user' || (apiClient.authMode === 'multi-user' && apiClient.preferApiKeyInMultiUser)) {
-                            headers['X-API-KEY'] = apiClient.token;
-                        } else if (apiClient.authMode === 'multi-user') {
-                            headers['Authorization'] = `Bearer ${apiClient.token}`;
-                        } else {
-                            headers['X-API-KEY'] = apiClient.token;
-                        }
-                    }
-                    const res = await fetch(url, { headers });
-                    const text = await res.text();
-                    if (!res.ok) {
-                        throw new Error(text || `HTTP ${res.status}`);
-                    }
-                    const fname = (new URLSearchParams(qs).get('filename')) || (format === 'csv' ? 'audit_export.csv' : 'audit_export.json');
-                    const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8';
-                    Utils.downloadData(text, fname, mime);
-                    Toast.success('Audit export downloaded');
-                } catch (e) {
-                    console.error('Audit export failed:', e);
-                    Toast.error(`Audit export failed: ${e.message || e}`);
-                }
-            }
-
-            function adminAuditDownload() {
-                const fmt = document.getElementById('audit_format').value || 'json';
-                const qs = _buildAuditQueryParams({ format: fmt });
-                _fetchAuditAndDownload(qs, fmt);
-            }
-
-            function adminAuditDownloadLast24hHighRisk() {
-                const now = new Date();
-                const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-                const isoStart = dayAgo.toISOString().replace('Z', '+00:00');
-                const overrides = {
-                    format: 'csv',
-                    min_risk_score: '70',
-                    start_time: isoStart,
-                    filename: 'audit_24h_high_risk.csv'
-                };
-                const qs = _buildAuditQueryParams(overrides);
-                _fetchAuditAndDownload(qs, 'csv');
-            }
-
-            function adminAuditDownloadApiEventsCSV() {
-                const overrides = {
-                    format: 'csv',
-                    category: 'API_CALL',
-                    filename: 'audit_api_events.csv'
-                };
-                const qs = _buildAuditQueryParams(overrides);
-                _fetchAuditAndDownload(qs, 'csv');
-            }
-
-            async function adminAuditPreviewJSON() {
-                try {
-                    // Force JSON preview irrespective of chosen format
-                    const overrides = { format: 'json' };
-                    const qs = _buildAuditQueryParams(overrides);
-                    const url = `${apiClient.baseUrl}/api/v1/audit/export?${qs}`;
-                    const headers = {};
-                    if (apiClient.token) {
-                        if (apiClient.authMode === 'single-user' || (apiClient.authMode === 'multi-user' && apiClient.preferApiKeyInMultiUser)) {
-                            headers['X-API-KEY'] = apiClient.token;
-                        } else if (apiClient.authMode === 'multi-user') {
-                            headers['Authorization'] = `Bearer ${apiClient.token}`;
-                        } else {
-                            headers['X-API-KEY'] = apiClient.token;
-                        }
-                    }
-                    const res = await fetch(url, { headers });
-                    const text = await res.text();
-                    if (!res.ok) {
-                        throw new Error(text || `HTTP ${res.status}`);
-                    }
-                    // Pretty-print if JSON
-                    let display = text;
-                    try {
-                        const parsed = JSON.parse(text);
-                        display = JSON.stringify(parsed.slice ? parsed.slice(0, 20) : parsed, null, 2);
-                    } catch (e) { /* keep raw */ }
-                    document.getElementById('adminAuditPreview').textContent = display;
-                } catch (e) {
-                    document.getElementById('adminAuditPreview').textContent = `Preview failed: ${e.message || e}`;
-                }
-            }
-        </script>
+        <!-- Inline script moved to js/admin-advanced.js -->
     </div>
 
     <div id="tabMonitoring" class="tab-content">
         <div class="btn-group" style="margin-bottom: 12px;">
-            <button class="api-button subtle danger" onclick="monitoringResetAllMonitoringUI()" title="Clear watchlist filters and notification drafts">Reset All UI</button>
+            <button class="api-button subtle danger" id="btnMonResetUI" title="Clear watchlist filters and notification drafts">Reset All UI</button>
         </div>
         <!-- Monitoring: Watchlists -->
         <div class="endpoint-section" id="monitoringWatchlists">
@@ -468,8 +312,8 @@
             <p>Create and manage topic watchlists. Global watchlists apply to all users; per-user watchlists apply to the specified user ID.</p>
 
             <div class="btn-group">
-                <button class="api-button" onclick="monitoringListWatchlists()">List</button>
-                <button class="api-button" onclick="monitoringReloadWatchlists()">Reload from file</button>
+                <button class="api-button" id="btnMonWlList">List</button>
+                <button class="api-button" id="btnMonWlReload">Reload from file</button>
             </div>
 
             <h3>Current Watchlists</h3>
@@ -557,8 +401,8 @@
                 <textarea id="monWl_rules" class="code-input" rows="8" placeholder='[{"pattern":"/\\bnsfw\\b/i","category":"adult","severity":"warning"}]'></textarea>
             </div>
             <div class="btn-group">
-                <button class="api-button" onclick="monitoringUpsertWatchlist()">Save Watchlist</button>
-                <button class="api-button danger" onclick="monitoringDeleteWatchlist()">Delete Watchlist</button>
+                <button class="api-button" id="btnMonWlSave">Save Watchlist</button>
+                <button class="api-button danger" id="btnMonWlDelete">Delete Watchlist</button>
             </div>
             <pre id="monitoringWatchlists_result">---</pre>
 
@@ -569,14 +413,14 @@
                         <label for="monQuick_team">Team ID:</label>
                         <input id="monQuick_team" type="text" placeholder="team id" />
                     </div>
-                    <button class="api-button" onclick="monitoringQuickApplyDefaults('team')">Apply to Team</button>
+                    <button class="api-button" id="btnMonQuickTeam">Apply to Team</button>
                 </div>
                 <div class="column">
                     <div class="form-group">
                         <label for="monQuick_org">Org ID:</label>
                         <input id="monQuick_org" type="text" placeholder="org id" />
                     </div>
-                    <button class="api-button" onclick="monitoringQuickApplyDefaults('org')">Apply to Org</button>
+                    <button class="api-button" id="btnMonQuickOrg">Apply to Org</button>
                 </div>
             </div>
 
@@ -596,7 +440,7 @@
                 </div>
                 <div class="column">
                     <div class="btn-group" style="margin-top:24px;">
-                        <button class="api-button" onclick="monitoringBulkApplyDefaults()">Apply Defaults to IDs</button>
+                        <button class="api-button" id="btnMonBulkApply">Apply Defaults to IDs</button>
                     </div>
                 </div>
             </div>
@@ -634,7 +478,7 @@
                 </div>
             </div>
             <div class="btn-group">
-                <button class="api-button" onclick="monitoringListAlerts()">List Alerts</button>
+                <button class="api-button" id="btnMonAlertsList">List Alerts</button>
             </div>
             <div id="monitoringAlerts_list"></div>
 
@@ -654,7 +498,7 @@
                 </div>
                 <div class="column">
                     <div class="btn-group" style="margin-top:24px;">
-                        <button class="api-button" onclick="monitoringLoadRecentAlerts()">Load</button>
+                        <button class="api-button" id="btnMonAlertsLoadRecent">Load</button>
                     </div>
                 </div>
                 <div class="column">
@@ -945,21 +789,24 @@
                     let html = '<table class="api-table"><thead><tr><th>ID</th><th>Time</th><th>User</th><th>Source</th><th>Category</th><th>Severity</th><th>Pattern</th><th>Snippet</th><th>Actions</th></tr></thead><tbody>';
                     for (const it of items) {
                         html += `<tr>
-                            <td>${it.id}</td>
-                            <td>${it.created_at}</td>
-                            <td>${it.user_id || ''}</td>
-                            <td>${it.source}</td>
-                            <td>${it.rule_category || ''}</td>
-                            <td>${it.rule_severity || ''}</td>
-                            <td>${(it.pattern || '').slice(0,80)}</td>
-                            <td>${(it.text_snippet || '').replace(/</g,'&lt;').slice(0,120)}</td>
+                            <td>${Utils.escapeHtml(String(it.id ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.created_at ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.user_id ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.source ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_category ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_severity ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String((it.pattern || '').slice(0,80)))}</td>
+                            <td>${Utils.escapeHtml(String((it.text_snippet || '').slice(0,120)))}</td>
                             <td>${it.is_read ? '' : `<button class="btn" onclick="monitoringMarkRead(${it.id})">Mark read</button>`}</td>
                         </tr>`;
                     }
                     html += '</tbody></table>';
                     document.getElementById('monitoringAlerts_list').innerHTML = html;
                 } catch (e) {
-                    document.getElementById('monitoringAlerts_list').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    const el = document.getElementById('monitoringAlerts_list');
+                    if (el) {
+                        el.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                    }
                     Toast.error('Failed to list alerts');
                 }
             }
@@ -987,10 +834,10 @@
                     for (const it of items) {
                         html += `<tr>
                             <td>${it.created_at || ''}</td>
-                            <td>${it.user_id || ''}</td>
+                            <td>${Utils.escapeHtml(String(it.user_id ?? ''))}</td>
                             <td>${it.source || ''}</td>
-                            <td>${it.rule_category || ''}</td>
-                            <td>${it.rule_severity || ''}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_category ?? ''))}</td>
+                            <td>${Utils.escapeHtml(String(it.rule_severity ?? ''))}</td>
                             <td>${(it.text_snippet || '').replace(/</g,'&lt;').slice(0,100)}</td>
                         </tr>`;
                     }
@@ -1007,7 +854,10 @@
                     } catch (e) {}
                     window._monAlertsTick = null;
                 } catch (e) {
-                    document.getElementById('monitoringAlerts_recent').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    const el = document.getElementById('monitoringAlerts_recent');
+                    if (el) {
+                        el.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                    }
                     Toast.error('Failed to load recent alerts');
                 }
             }
@@ -1101,10 +951,10 @@
                 </div>
             </div>
             <div class="btn-group">
-                <button class="api-button" onclick="monitoringLoadNotifSettings()">Load</button>
-                <button class="api-button" onclick="monitoringSaveNotifSettings()">Save</button>
-                <button class="api-button subtle" onclick="monitoringClearNotifDrafts()" title="Remove locally saved draft values">Clear Drafts</button>
-                <button class="api-button subtle" onclick="monitoringRestoreNotifDefaults()" title="Reload from server and overwrite drafts">Restore Defaults</button>
+                <button class="api-button" id="btnMonNotifLoad">Load</button>
+                <button class="api-button" id="btnMonNotifSave">Save</button>
+                <button class="api-button subtle" id="btnMonNotifClearDrafts" title="Remove locally saved draft values">Clear Drafts</button>
+                <button class="api-button subtle" id="btnMonNotifRestoreDefaults" title="Reload from server and overwrite drafts">Restore Defaults</button>
             </div>
             <h3>Test Notification</h3>
             <div class="columns">
@@ -1122,7 +972,7 @@
                 </div>
             </div>
             <div class="btn-group">
-                <button class="api-button" onclick="monitoringSendNotifTest()">Send Test</button>
+                <button class="api-button" id="btnMonNotifSendTest">Send Test</button>
             </div>
             <pre id="monitoringNotif_result">---</pre>
             <h3>Recent Notifications</h3>
@@ -1135,7 +985,7 @@
                 </div>
                 <div class="column">
                     <div class="btn-group" style="margin-top: 24px;">
-                        <button class="api-button" onclick="monitoringLoadRecentNotifications()">Load Recent</button>
+                        <button class="api-button" id="btnMonNotifLoadRecent">Load Recent</button>
                     </div>
                 </div>
                 <div class="column">
@@ -1335,13 +1185,19 @@
                     const items = (res && res.items) || [];
                     let html = '<table class="api-table"><thead><tr><th>Time</th><th>Source</th><th>User</th><th>Category</th><th>Severity</th><th>Snippet</th></tr></thead><tbody>';
                     for (const it of items) {
+                        const ts = Utils.escapeHtml(String(it.ts || ''));
+                        const src = Utils.escapeHtml(String(it.source || ''));
+                        const uid = Utils.escapeHtml(String(it.user_id ?? ''));
+                        const cat = Utils.escapeHtml(String(it.rule_category ?? ''));
+                        const sev = Utils.escapeHtml(String(it.rule_severity ?? ''));
+                        const snip = Utils.escapeHtml(String((it.snippet || '').slice(0,140)));
                         html += `<tr>
-                            <td>${it.ts || ''}</td>
-                            <td>${it.source || ''}</td>
-                            <td>${it.user_id || ''}</td>
-                            <td>${it.rule_category || ''}</td>
-                            <td>${it.rule_severity || ''}</td>
-                            <td>${(it.snippet || '').replace(/</g,'&lt;').slice(0,140)}</td>
+                            <td>${ts}</td>
+                            <td>${src}</td>
+                            <td>${uid}</td>
+                            <td>${cat}</td>
+                            <td>${sev}</td>
+                            <td>${snip}</td>
                         </tr>`;
                     }
                     html += '</tbody></table>';
@@ -1360,7 +1216,10 @@
                     } catch (e) {}
                     window._monNotifTick = null;
                 } catch (e) {
-                    document.getElementById('monitoringNotif_recent').innerHTML = '<pre>' + JSON.stringify(e.response || e, null, 2) + '</pre>';
+                    const el = document.getElementById('monitoringNotif_recent');
+                    if (el) {
+                        el.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+                    }
                     Toast.error('Failed to load recent notifications');
                 }
             }
@@ -1472,10 +1331,10 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="adminLoadLLMCharts()" data-requires-api="true">Load Charts</button>
-            <button class="btn btn-secondary btn-sm" onclick="_resetLegendVisibility('llmLegendTopSpenders','llmChartTopSpenders')" title="Reset Top Spenders visibility">Reset Top</button>
-            <button class="btn btn-secondary btn-sm" onclick="_resetLegendVisibility('llmLegendModelMix','llmChartModelMix')" title="Reset Model Mix visibility">Reset Model</button>
-            <button class="btn btn-secondary btn-sm" onclick="_resetLegendVisibility('llmLegendProviderMix','llmChartProviderMix')" title="Reset Provider Mix visibility">Reset Provider</button>
+            <button class="api-button" id="btnAdminLoadLLMCharts" data-requires-api="true">Load Charts</button>
+            <button class="btn btn-secondary btn-sm" id="btnResetLegendTop" title="Reset Top Spenders visibility">Reset Top</button>
+            <button class="btn btn-secondary btn-sm" id="btnResetLegendModel" title="Reset Model Mix visibility">Reset Model</button>
+            <button class="btn btn-secondary btn-sm" id="btnResetLegendProvider" title="Reset Provider Mix visibility">Reset Provider</button>
         </div>
 
         <div class="columns mt-3">
@@ -1497,353 +1356,9 @@
         </div>
     </div>
 
-    <script>
-        function _hashString(str) {
-            let h = 0;
-            for (let i = 0; i < str.length; i++) {
-                h = (h << 5) - h + str.charCodeAt(i);
-                h |= 0; // Convert to 32bit int
-            }
-            return Math.abs(h);
-        }
+    <!-- Charts logic moved to js/admin-advanced.js -->
 
-        function _colorFromLabel(label) {
-            const h = _hashString(label) % 360;
-            const base = `hsl(${h}, 65%, 52%)`;
-            const light = `hsl(${h}, 70%, 65%)`;
-            const dark = `hsl(${h}, 60%, 42%)`;
-            return { base, light, dark };
-        }
-        function _hexToHsl(hex) {
-            hex = hex.replace('#','');
-            if (hex.length === 3) hex = hex.split('').map(c=>c+c).join('');
-            const r = parseInt(hex.substring(0,2),16)/255;
-            const g = parseInt(hex.substring(2,4),16)/255;
-            const b = parseInt(hex.substring(4,6),16)/255;
-            const max = Math.max(r,g,b), min = Math.min(r,g,b);
-            let h,s,l=(max+min)/2;
-            if(max===min){h=s=0;} else {
-                const d = max-min;
-                s = l>0.5 ? d/(2-max-min) : d/(max+min);
-                switch(max){
-                    case r: h=(g-b)/d+(g<b?6:0); break;
-                    case g: h=(b-r)/d+2; break;
-                    case b: h=(r-g)/d+4; break;
-                }
-                h/=6;
-            }
-            return {h: Math.round(h*360), s: Math.round(s*100), l: Math.round(l*100)};
-        }
-        function _shadeFromHex(hex, lighten=10, darken=10) {
-            const hsl = _hexToHsl(hex);
-            const l1 = Math.min(100, Math.max(0, hsl.l + lighten));
-            const l2 = Math.min(100, Math.max(0, hsl.l - darken));
-            return {
-                light: `hsl(${hsl.h}, ${hsl.s}%, ${l1}%)`,
-                base: `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`,
-                dark: `hsl(${hsl.h}, ${hsl.s}%, ${l2}%)`
-            };
-        }
-        function _colorForProvider(provider) {
-            const p = String(provider || '').toLowerCase();
-            const map = {
-                'openai': '#10a37f',
-                'anthropic': '#8e44ad',
-                'groq': '#e67e22',
-                'mistral': '#2980b9',
-                'google': '#4285f4',
-                'cohere': '#f39c12',
-                'qwen': '#2ecc71',
-                'deepseek': '#16a085',
-                'openrouter': '#34495e',
-                'xai': '#2c3e50',
-                'huggingface': '#ffcc4d'
-            };
-            const hex = map[p];
-            return hex ? _shadeFromHex(hex, 10, 10) : null;
-        }
-        function _formatValue(val, unit) {
-            const n = Number(val || 0);
-            if (unit && unit.toLowerCase().includes('usd')) {
-                return `$${n.toFixed(2)}`;
-            }
-            return n.toLocaleString();
-        }
-
-        function _renderBarChart(containerId, dataPairs, valueLabel, getColor) {
-            const container = document.getElementById(containerId);
-            if (!container) return;
-            const maxVal = Math.max(...dataPairs.map(p => p.value), 1);
-            container.innerHTML = `
-                <div class="chart-placeholder">
-                    <div class="chart-bars">
-                        ${dataPairs.map(p => {
-                            const c = getColor ? getColor(p.label) : null;
-                            const style = c ? `background: linear-gradient(180deg, ${c.light} 0%, ${c.base} 100%); border-color: ${c.dark};` : '';
-                            const h = Math.max(5, (p.value / maxVal) * 100);
-                            return `
-                                <div class="chart-bar" data-label="${p.label}" data-value="${p.value}" style="height:${h}%; ${style}">
-                                    <span class="chart-bar-label" title="${p.label}">${p.label}</span>
-                                    <span class="chart-bar-value">${_formatValue(p.value, valueLabel)} ${valueLabel || ''}</span>
-                                </div>
-                            `;
-                        }).join('')}
-                    </div>
-                </div>
-            `;
-            // Store unit on the container for robust tooltip logic
-            try { container.dataset.unit = valueLabel || ''; } catch (_) {}
-            _attachTooltips(containerId);
-        }
-
-        function _renderLegend(containerId, dataPairs, getColor) {
-            const el = document.getElementById(containerId);
-            if (!el) return;
-            el.innerHTML = dataPairs.map(p => {
-                const c = getColor ? getColor(p.label) : null;
-                const style = c ? `background:${c.base}; border-color:${c.dark};` : '';
-                return `<span class="legend-item"><span class="legend-swatch" style="${style}"></span>${p.label}</span>`;
-            }).join('');
-        }
-
-        // Tooltip singleton
-        let _chartTooltip = null;
-        function _ensureTooltip() {
-            if (_chartTooltip) return _chartTooltip;
-            _chartTooltip = document.createElement('div');
-            _chartTooltip.className = 'chart-tooltip';
-            document.body.appendChild(_chartTooltip);
-            return _chartTooltip;
-        }
-
-        function _attachTooltips(containerId) {
-            const container = document.getElementById(containerId);
-            if (!container) return;
-            const tooltip = _ensureTooltip();
-            container.querySelectorAll('.chart-bar').forEach(bar => {
-                bar.addEventListener('mouseenter', (e) => {
-                    const label = bar.getAttribute('data-label') || '';
-                    const value = bar.getAttribute('data-value') || '';
-                    const unit = (container.dataset && container.dataset.unit) ? container.dataset.unit : 'USD';
-                    tooltip.innerHTML = `<strong>${label}</strong><br/>${_formatValue(value, unit)} ${unit}`;
-                    tooltip.style.display = 'block';
-                });
-                bar.addEventListener('mousemove', (e) => {
-                    tooltip.style.left = (e.clientX + 12) + 'px';
-                    tooltip.style.top = (e.clientY + 12) + 'px';
-                });
-                bar.addEventListener('mouseleave', () => {
-                    tooltip.style.display = 'none';
-                });
-            });
-        }
-
-        async function adminLoadLLMCharts() {
-            try {
-                const start = document.getElementById('adminLLMCharts_start').value.trim();
-                const end = document.getElementById('adminLLMCharts_end').value.trim();
-                const qs = new URLSearchParams();
-                if (start) qs.append('start', start);
-                if (end) qs.append('end', end);
-                const topN = Math.max(3, Math.min(50, parseInt((document.getElementById('llmCharts_topN') || {}).value || '10', 10)));
-
-                // Top spenders
-                const topUrl = '/api/v1/admin/llm-usage/top-spenders' + (qs.toString() ? ('?' + qs.toString()) : '');
-                const top = await apiClient.get(topUrl);
-                let topPairs = (top.items || []).slice(0, topN).map(r => ({ label: String(r.user_id), value: Number(r.total_cost_usd || 0) }));
-                if (!topPairs.length) {
-                    document.getElementById('llmChartTopSpenders').innerHTML = '<p>No data yet.</p>';
-                    document.getElementById('llmLegendTopSpenders').innerHTML = '';
-                } else {
-                    _renderBarChart('llmChartTopSpenders', topPairs, 'USD', _colorFromLabel);
-                    _renderLegend('llmLegendTopSpenders', topPairs, _colorFromLabel);
-                    _attachLegendToggle('llmLegendTopSpenders', 'llmChartTopSpenders');
-                }
-
-                // Model mix by model
-                const mixUrl = '/api/v1/admin/llm-usage/summary' + (qs.toString() ? ('?' + qs.toString() + '&') : '?') + 'group_by=model';
-                const mix = await apiClient.get(mixUrl);
-                const modelMetric = (document.getElementById('llmCharts_model_metric').value || 'tokens');
-                const valueKey = modelMetric === 'cost' ? 'total_cost_usd' : 'total_tokens';
-                const valueLabel = modelMetric === 'cost' ? 'USD' : 'tokens';
-                let mixPairs = (mix.items || []).map(r => ({ label: String(r.group_value), value: Number(r[valueKey] || 0) }));
-                mixPairs.sort((a,b) => b.value - a.value);
-                mixPairs = mixPairs.slice(0, topN);
-                const palette = (document.getElementById('llmCharts_model_palette').value || 'distinct');
-                let getColor = _colorFromLabel;
-                if (palette === 'provider') {
-                    const mapping = await _fetchProviderMappingForModels(start, end, modelMetric);
-                    getColor = (label) => _colorForProvider(mapping[label]) || _colorFromLabel(mapping[label] || label);
-                }
-                if (!mixPairs.length) {
-                    document.getElementById('llmChartModelMix').innerHTML = '<p>No data yet.</p>';
-                    document.getElementById('llmLegendModelMix').innerHTML = '';
-                } else {
-                    _renderBarChart('llmChartModelMix', mixPairs, valueLabel, getColor);
-                    _renderLegend('llmLegendModelMix', mixPairs, getColor);
-                    _attachLegendToggle('llmLegendModelMix', 'llmChartModelMix');
-                }
-
-                // Provider mix by total cost
-                const provUrl = '/api/v1/admin/llm-usage/summary' + (qs.toString() ? ('?' + qs.toString() + '&') : '?') + 'group_by=provider';
-                const prov = await apiClient.get(provUrl);
-                const provMetric = (document.getElementById('llmCharts_provider_metric').value || 'cost');
-                const provKey = provMetric === 'tokens' ? 'total_tokens' : 'total_cost_usd';
-                const provLabel = provMetric === 'tokens' ? 'tokens' : 'USD';
-                let provPairs = (prov.items || []).map(r => ({ label: String(r.group_value || 'unknown'), value: Number(r[provKey] || 0) }));
-                provPairs.sort((a,b) => b.value - a.value);
-                provPairs = provPairs.slice(0, topN);
-                if (!provPairs.length) {
-                    document.getElementById('llmChartProviderMix').innerHTML = '<p>No data yet.</p>';
-                    document.getElementById('llmLegendProviderMix').innerHTML = '';
-                } else {
-                    _renderBarChart('llmChartProviderMix', provPairs, provLabel, _colorForProvider);
-                    _renderLegend('llmLegendProviderMix', provPairs, _colorForProvider);
-                    _attachLegendToggle('llmLegendProviderMix', 'llmChartProviderMix');
-                }
-                Toast.success('LLM charts loaded');
-            } catch (e) {
-                console.error('Failed to load LLM charts', e);
-                Toast.error('Failed to load LLM charts');
-            }
-        }
-        
-        const _providerMappingCache = {};
-        async function _fetchProviderMappingForModels(start, end, metric) {
-            // Fetch sample of raw usage and map model -> most frequent provider by chosen metric
-            const cacheKey = `${start}|${end}|${metric}`;
-            if (_providerMappingCache[cacheKey]) return _providerMappingCache[cacheKey];
-            const qs = new URLSearchParams();
-            if (start) qs.append('start', start);
-            if (end) qs.append('end', end);
-            qs.append('limit', '1000');
-            const url = '/api/v1/admin/llm-usage' + (qs.toString() ? ('?' + qs.toString()) : '');
-            try {
-                const res = await apiClient.get(url);
-                const items = res.items || [];
-                const scoreKey = metric === 'cost' ? 'total_cost_usd' : 'total_tokens';
-                const acc = {};
-                for (const row of items) {
-                    const model = String(row.model || '');
-                    const prov = String(row.provider || '');
-                    const score = Number(row[scoreKey] || 0);
-                    if (!model) continue;
-                    const key = model.toLowerCase();
-                    acc[key] = acc[key] || {};
-                    acc[key][prov] = (acc[key][prov] || 0) + (score > 0 ? score : 1); // fallback weight
-                }
-                const mapping = {};
-                for (const m in acc) {
-                    let bestProv = null;
-                    let bestVal = -1;
-                    for (const p in acc[m]) {
-                        if (acc[m][p] > bestVal) {
-                            bestVal = acc[m][p];
-                            bestProv = p;
-                        }
-                    }
-                    mapping[m] = bestProv || '';
-                }
-                const prox = new Proxy(mapping, { get: (t, k) => t[String(k).toLowerCase()] });
-                _providerMappingCache[cacheKey] = prox;
-                return prox;
-            } catch (e) {
-                return {};
-            }
-        }
-    </script>
-
-    <script>
-        function _attachLegendToggle(legendId, chartId) {
-            const legend = document.getElementById(legendId);
-            const chart = document.getElementById(chartId);
-            if (!legend || !chart) return;
-            legend.querySelectorAll('.legend-item').forEach(item => {
-                item.style.cursor = 'pointer';
-                item.addEventListener('click', () => {
-                    const label = item.textContent.trim();
-                    const disabled = item.classList.toggle('disabled');
-                    chart.querySelectorAll(`.chart-bar[data-label="${label}"]`).forEach(bar => {
-                        if (disabled) bar.classList.add('hidden'); else bar.classList.remove('hidden');
-                    });
-                });
-            });
-        }
-
-        function _resetLegendVisibility(legendId, chartId) {
-            const legend = document.getElementById(legendId);
-            const chart = document.getElementById(chartId);
-            if (!legend || !chart) return;
-            legend.querySelectorAll('.legend-item').forEach(i => i.classList.remove('disabled'));
-            chart.querySelectorAll('.chart-bar.hidden').forEach(b => b.classList.remove('hidden'));
-        }
-        async function createRegCode() {
-            try {
-                const payload = {
-                    max_uses: parseInt(document.getElementById('regCode_maxUses').value || '1', 10),
-                    expires_in_days: parseInt(document.getElementById('regCode_expires').value || '30', 10),
-                    role_to_grant: document.getElementById('regCode_role').value || 'user',
-                    description: document.getElementById('regCode_desc').value || null
-                };
-                const res = await apiClient.post('/api/v1/admin/registration-codes', payload);
-                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(res, null, 2);
-                Toast.success('Registration code created');
-                await listRegCodes();
-            } catch (e) {
-                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(e.response || e, null, 2);
-                Toast.error('Failed to create code');
-            }
-        }
-
-        async function listRegCodes() {
-            try {
-                const res = await apiClient.get('/api/v1/admin/registration-codes');
-                const codes = Array.isArray(res.codes) ? res.codes : [];
-                renderRegCodes(codes);
-                document.getElementById('adminRegCodes_result').textContent = 'Loaded';
-            } catch (e) {
-                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(e.response || e, null, 2);
-                Toast.error('Failed to list codes');
-            }
-        }
-
-        async function deleteRegCode(id) {
-            try {
-                if (!confirm('Delete this registration code?')) return;
-                const res = await apiClient.delete(`/api/v1/admin/registration-codes/${id}`);
-                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(res, null, 2);
-                Toast.success('Registration code deleted');
-                await listRegCodes();
-            } catch (e) {
-                document.getElementById('adminRegCodes_result').textContent = JSON.stringify(e.response || e, null, 2);
-                Toast.error('Failed to delete code');
-            }
-        }
-
-        function renderRegCodes(items) {
-            const container = document.getElementById('adminRegCodes_list');
-            if (!items.length) {
-                container.innerHTML = '<p>No registration codes found.</p>';
-                return;
-            }
-            let html = '<table class="simple-table"><thead><tr>\
-<th>ID</th><th>Code</th><th>Role</th><th>Uses</th><th>Max</th><th>Expires</th><th>Actions</th>\
-</tr></thead><tbody>';
-            for (const c of items) {
-                html += `<tr>
-                    <td>${c.id}</td>
-                    <td><code>${c.code}</code></td>
-                    <td>${c.role_to_grant || ''}</td>
-                    <td>${c.times_used ?? 0}</td>
-                    <td>${c.max_uses ?? ''}</td>
-                    <td>${c.expires_at || ''}</td>
-                    <td><button class="btn btn-danger" onclick="deleteRegCode(${c.id})">Delete</button></td>
-                </tr>`;
-            }
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        }
-    </script>
+    <!-- Legend toggles and Registration Codes logic moved to js/admin-advanced.js -->
 
     <div id="tabModeration" class="tab-content">
     <!-- Moderation Management -->
@@ -1990,7 +1505,7 @@
                 const lintClass = lint ? (lint.ok ? 'ok' : 'invalid') : '';
                 const lintIcon = lint ? (lint.ok ? '✓' : '⚠') : '';
                 html += `<tr>
-                    <td>${it.id}</td>
+                    <td>${Utils.escapeHtml(String(it.id ?? ''))}</td>
                     <td><code>${Utils.escapeHtml(String(it.line))}</code></td>
                     <td><span class="lint-${lintClass}" title="${Utils.escapeHtml(lintText)}"><span class="lint-icon">${lintIcon}</span>${Utils.escapeHtml(lint ? (lint.pattern_type || '') : '')}</span></td>
                     <td><button class="btn btn-danger" onclick="moderationDeleteManaged(${it.id})">Delete</button></td>
@@ -2524,8 +2039,8 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="adminListUserApiKeys()">List Keys</button>
-            <button class="api-button" onclick="adminCreateUserApiKey()">Create Key</button>
+            <button class="api-button" id="btnAdmUserKeysList">List Keys</button>
+            <button class="api-button" id="btnAdmUserKeysCreate">Create Key</button>
         </div>
 
         <h3>Latest Result:</h3>
@@ -2554,12 +2069,12 @@
             </div>
         </div>
         <div class="btn-group">
-            <button class="api-button" onclick="adminUpdateKeyLimits()">Update Limits</button>
+            <button class="api-button" id="btnAdmUserKeyUpdateLimits">Update Limits</button>
         </div>
 
         <h3>Audit Log</h3>
         <div class="btn-group">
-            <button class="api-button" onclick="adminLoadKeyAudit()">Load Audit for Key</button>
+            <button class="api-button" id="btnAdmUserKeyLoadAudit">Load Audit for Key</button>
         </div>
         <div id="adminUserApiKeys_audit"></div>
     </div>
@@ -2642,25 +2157,35 @@
 
         function renderAdminUserKeys(items, userId) {
             const container = document.getElementById('adminUserApiKeys_list');
+            if (!container) return;
             if (!items || !items.length) {
                 container.innerHTML = '<p>No keys found.</p>';
                 return;
             }
-            let html = '<table class="simple-table"><thead><tr>\
-<th>ID</th><th>Name</th><th>Scope</th><th>Status</th><th>Created</th><th>Expires</th><th>Usage</th><th>Actions</th>\
-</tr></thead><tbody>';
+            let html = '<table class="simple-table"><thead><tr>' +
+                '<th>ID</th><th>Name</th><th>Scope</th><th>Status</th><th>Created</th><th>Expires</th><th>Usage</th><th>Actions</th>' +
+                '</tr></thead><tbody>';
             for (const k of items) {
-                html += `<tr>
-                    <td>${k.id}</td>
-                    <td>${k.name || ''}</td>
-                    <td>${k.scope || ''}</td>
-                    <td>${k.status || ''}</td>
-                    <td>${k.created_at || ''}</td>
-                    <td>${k.expires_at || ''}</td>
-                    <td>${k.usage_count || 0}</td>
+                const id = Utils.escapeHtml(String(k.id));
+                const nm = Utils.escapeHtml(String(k.name || ''));
+                const sc = Utils.escapeHtml(String(k.scope || ''));
+                const st = Utils.escapeHtml(String(k.status || ''));
+                const ca = Utils.escapeHtml(String(k.created_at || ''));
+                const ea = Utils.escapeHtml(String(k.expires_at || ''));
+                const uc = Utils.escapeHtml(String(k.usage_count || 0));
+                const uid = Utils.escapeHtml(String(userId));
+                html += `
+                <tr>
+                    <td>${id}</td>
+                    <td>${nm}</td>
+                    <td>${sc}</td>
+                    <td>${st}</td>
+                    <td>${ca}</td>
+                    <td>${ea}</td>
+                    <td>${uc}</td>
                     <td>
-                        <button class="btn" onclick="adminRotateUserApiKey(${k.id}, ${userId})">Rotate</button>
-                        <button class="btn btn-danger" onclick="adminRevokeUserApiKey(${k.id}, ${userId})">Revoke</button>
+                        <button class="btn adm-uk-rotate" data-uid="${uid}" data-kid="${id}">Rotate</button>
+                        <button class="btn btn-danger adm-uk-revoke" data-uid="${uid}" data-kid="${id}">Revoke</button>
                     </td>
                 </tr>`;
             }
@@ -2700,13 +2225,19 @@
                 if (!items.length) { el.innerHTML = '<p>No audit events.</p>'; return; }
                 let html = '<table class="simple-table"><thead><tr><th>Time</th><th>Action</th><th>User</th><th>IP</th><th>User Agent</th><th>Details</th></tr></thead><tbody>';
                 for (const a of items) {
+                    const ts = Utils.escapeHtml(String(a.created_at || ''));
+                    const action = Utils.escapeHtml(String(a.action || ''));
+                    const uid = Utils.escapeHtml(String(a.user_id ?? ''));
+                    const ip = Utils.escapeHtml(String(a.ip_address || ''));
+                    const ua = Utils.escapeHtml(String(a.user_agent || ''));
+                    const det = Utils.escapeHtml(String(typeof a.details === 'object' ? JSON.stringify(a.details) : (a.details || '')));
                     html += `<tr>
-                        <td>${a.created_at || ''}</td>
-                        <td>${a.action || ''}</td>
-                        <td>${a.user_id ?? ''}</td>
-                        <td>${a.ip_address || ''}</td>
-                        <td>${a.user_agent || ''}</td>
-                        <td><code>${typeof a.details === 'object' ? JSON.stringify(a.details) : (a.details || '')}</code></td>
+                        <td>${ts}</td>
+                        <td>${action}</td>
+                        <td>${uid}</td>
+                        <td>${ip}</td>
+                        <td>${ua}</td>
+                        <td><code>${det}</code></td>
                     </tr>`;
                 }
                 html += '</tbody></table>';
@@ -2778,6 +2309,54 @@
         <pre id="adminUserDelete_response">---</pre>
     </div>
 </div>
+
+<!-- ============ Admin: Tool Catalogs (MCP) ============ -->
+<div class="endpoint-section" id="adminToolCatalog">
+    <h2>
+        <span class="endpoint-method get">GET/POST/DELETE</span>
+        <span class="endpoint-path">/api/v1/admin/mcp/tool_catalogs - MCP Tool Catalogs</span>
+    </h2>
+    <p>Create/list/delete tool catalogs and add/remove entries.</p>
+    <div class="columns">
+        <div class="column">
+            <h3>Catalogs</h3>
+            <div class="form-group"><label for="tc_name">Name:</label><input id="tc_name" type="text" placeholder="default"/></div>
+            <div class="form-group"><label for="tc_desc">Description:</label><input id="tc_desc" type="text"/></div>
+            <div class="form-group"><label for="tc_org">Org ID (optional):</label><input id="tc_org" type="number"/></div>
+            <div class="form-group"><label for="tc_team">Team ID (optional):</label><input id="tc_team" type="number"/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnTCCreate">Create Catalog</button>
+                <button class="api-button" id="btnTCList">List Catalogs</button>
+            </div>
+            <div class="form-group"><label for="tc_catalog_id">Catalog ID:</label><input id="tc_catalog_id" type="number"/></div>
+            <div class="btn-group">
+                <button class="api-button danger" id="btnTCDelete">Delete Catalog</button>
+            </div>
+            <div id="adminToolCatalog_list" style="margin-top:8px;"></div>
+        </div>
+        <div class="column">
+            <h3>Entries</h3>
+            <div class="form-group"><label for="tc_tool_name">Tool name:</label><input id="tc_tool_name" type="text" placeholder="tools.execute:media.index"/></div>
+            <div class="form-group"><label for="tc_module_id">Module ID (optional):</label><input id="tc_module_id" type="text"/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnTCEntries">List Entries</button>
+                <button class="api-button" id="btnTCAddEntry">Add Entry</button>
+                <button class="api-button danger" id="btnTCDeleteEntry">Delete Entry</button>
+            </div>
+            <div id="adminToolCatalog_entries" style="margin-top:8px;"></div>
+        </div>
+    </div>
+    <h3>Result:</h3>
+    <pre id="adminToolCatalog_result">---</pre>
+    <!-- bindings via js/admin-advanced.js -->
+</div>
+
+    <!-- External module bindings for Admin advanced panels -->
+    <script type="module" src="js/admin-advanced.js"></script>
+    <!-- External module: Admin RBAC core logic -->
+    <script type="module" src="js/admin-rbac.js"></script>
+    <!-- External module: Admin RBAC + Monitoring bindings -->
+    <script type="module" src="js/admin-rbac-monitoring.js"></script>
 
 <!-- System Status Tab -->
 <div id="tabAdminSystem" class="tab-content">
@@ -3196,8 +2775,8 @@
                     <input type="text" id="rbacRoleDesc" placeholder="Role description" />
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="rbacCreateRole()">Create Role</button>
-                    <button class="api-button" onclick="rbacListRoles()">List Roles</button>
+                    <button class="api-button" id="btnRbacCreateRole">Create Role</button>
+                    <button class="api-button" id="btnRbacListRoles">List Roles</button>
                 </div>
                 <pre id="rbacRolesOut">---</pre>
             </div>
@@ -3212,8 +2791,8 @@
                     <input type="text" id="rbacPermCat" placeholder="media" />
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="rbacCreatePermission()">Create Permission</button>
-                    <button class="api-button" onclick="rbacListPermissions()">List Permissions</button>
+                    <button class="api-button" id="btnRbacCreatePermission">Create Permission</button>
+                    <button class="api-button" id="btnRbacListPermissions">List Permissions</button>
                 </div>
                 <pre id="rbacPermsOut">---</pre>
             </div>
@@ -3230,7 +2809,7 @@
                     <input type="number" id="rbacEffRoleId" placeholder="e.g., 2" />
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="rbacGetRoleEffective()">Get Role Effective Permissions</button>
+                    <button class="api-button" id="btnRbacGetRoleEffective">Get Role Effective Permissions</button>
                 </div>
                 <pre id="rbacRoleEffOut">---</pre>
 
@@ -3239,8 +2818,8 @@
                     <input type="number" id="rbacUserId" placeholder="123" />
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="rbacGetUserRoles()">Get Roles</button>
-                    <button class="api-button" onclick="rbacGetEffectivePerms()">Effective Permissions</button>
+                    <button class="api-button" id="btnRbacGetUserRoles">Get Roles</button>
+                    <button class="api-button" id="btnRbacGetEffectivePerms">Effective Permissions</button>
                 </div>
                 <pre id="rbacUserRolesOut">---</pre>
                 <pre id="rbacUserEffPermsOut">---</pre>
@@ -3251,8 +2830,8 @@
                     <input type="number" id="rbacAssignRoleId" placeholder="5" />
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="rbacAssignRole()">Assign Role</button>
-                    <button class="api-button" onclick="rbacRemoveRole()">Remove Role</button>
+                    <button class="api-button" id="btnRbacAssignRole">Assign Role</button>
+                    <button class="api-button" id="btnRbacRemoveRole">Remove Role</button>
                 </div>
 
                 <h4>Overrides</h4>
@@ -3268,14 +2847,16 @@
                     </select>
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="rbacUpsertOverride()">Upsert Override</button>
-                    <button class="api-button" onclick="rbacListOverrides()">List Overrides</button>
+                    <button class="api-button" id="btnRbacUpsertOverride">Upsert Override</button>
+                    <button class="api-button" id="btnRbacListOverrides">List Overrides</button>
                 </div>
                 <pre id="rbacOverridesOut">---</pre>
             </div>
         </div>
     </div>
 
+    <!-- RBAC inline logic removed; now handled by js/admin-rbac.js -->
+    <!--
     <script>
         async function rbacGetRoleEffective() {
             const roleIdRaw = document.getElementById('rbacEffRoleId').value.trim();
@@ -3373,6 +2954,7 @@
             document.getElementById('rbacUserEffPermsOut').textContent = JSON.stringify(res, null, 2);
         }
     </script>
+    -->
 
     <div class="endpoint-section" id="adminRbacMatrix">
         <h3>RBAC Matrix</h3>
@@ -3381,28 +2963,28 @@
         <div class="columns" style="margin-bottom:8px;">
             <div class="column">
                 <label for="rbacMatrixCategory">Category:</label>
-                <select id="rbacMatrixCategory" onchange="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean()} if(window.RBAC_CACHE && RBAC_CACHE.list){renderRbacMatrixList()}">
+                <select id="rbacMatrixCategory">
                     <option value="">All</option>
                 </select>
             </div>
             <div class="column">
                 <label for="rbacVisibleCats">Visible Categories (client-side):</label>
-                <select id="rbacVisibleCats" multiple size="4" style="min-width: 160px;" onchange="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean(); _saveRbacFilterState()}"></select>
+                <select id="rbacVisibleCats" multiple size="4" style="min-width: 160px;"></select>
             </div>
             <div class="column">
                 <label for="rbacMatrixSearch">Search:</label>
-                <input type="text" id="rbacMatrixSearch" placeholder="filter permissions by name (substring)" oninput="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean()} if(window.RBAC_CACHE && RBAC_CACHE.list){renderRbacMatrixList()}" />
+                <input type="text" id="rbacMatrixSearch" placeholder="filter permissions by name (substring)" />
             </div>
             <div class="column">
                 <label for="rbacMatrixPinned">Pin columns (prefix list):</label>
-                <input type="text" id="rbacMatrixPinned" placeholder="e.g. media., users.read" oninput="if(window.RBAC_CACHE && RBAC_CACHE.boolean){renderRbacMatrixBoolean()} if(window.RBAC_CACHE && RBAC_CACHE.list){renderRbacMatrixList()}" />
+                <input type="text" id="rbacMatrixPinned" placeholder="e.g. media., users.read" />
             </div>
             <div class="column">
                 <label for="rbacRoleNames">Role names (exact):</label>
                 <select id="rbacRoleNames" multiple size="4" style="min-width: 180px;"></select>
                 <div class="btn-group" style="margin-top:6px;">
-                    <button class="api-button" onclick="rbacSelectAllRoleNames()">Select All</button>
-                    <button class="api-button" onclick="rbacClearRoleNames()">Clear</button>
+                    <button class="api-button" id="btnRbacSelectAllRoles">Select All</button>
+                    <button class="api-button" id="btnRbacClearRoles">Clear</button>
                 </div>
             </div>
             <div class="column">
@@ -3420,8 +3002,8 @@
         </div>
 
         <div class="btn-group" style="margin-bottom:8px;">
-            <button class="api-button" onclick="loadRbacMatrixList()">Load Role→Permissions (list)</button>
-            <button class="api-button" onclick="loadRbacMatrixBoolean()">Load RBAC Matrix (boolean grid)</button>
+            <button class="api-button" id="btnRbacLoadList">Load Role→Permissions (list)</button>
+            <button class="api-button" id="btnRbacLoadBoolean">Load RBAC Matrix (boolean grid)</button>
         </div>
 
         <div class="columns" style="align-items:center; margin: 4px 0 12px 0;">
@@ -3431,13 +3013,13 @@
             </div>
             <div class="column">
                 <div class="btn-group" style="justify-content:flex-end;">
-                    <button class="api-button" id="rbacPrevBtn" onclick="rbacPrevPage()">Prev</button>
-                    <button class="api-button" id="rbacNextBtn" onclick="rbacNextPage()">Next</button>
-                    <button class="api-button" onclick="reloadRbacMatrices()">Reload</button>
-                    <button class="api-button" onclick="exportRbacMatrixCsv()">Export CSV</button>
-                    <button class="api-button" onclick="exportRbacListCsv()">Export List CSV</button>
-                    <button class="api-button" onclick="copyRbacSummary()">Copy Summary</button>
-                    <button class="api-button" onclick="clearRbacFilters()">Clear Filters</button>
+                    <button class="api-button" id="rbacPrevBtn">Prev</button>
+                    <button class="api-button" id="rbacNextBtn">Next</button>
+                    <button class="api-button" id="btnRbacReload">Reload</button>
+                    <button class="api-button" id="btnRbacExportMatrix">Export CSV</button>
+                    <button class="api-button" id="btnRbacExportList">Export List CSV</button>
+                    <button class="api-button" id="btnRbacCopySummary">Copy Summary</button>
+                    <button class="api-button" id="btnRbacClearFilters">Clear Filters</button>
                 </div>
             </div>
         </div>
@@ -3454,6 +3036,8 @@
         </div>
     </div>
 
+    <!-- RBAC inline rendering removed; now handled by js/admin-rbac.js -->
+    <!--
     <script>
         const RBAC_CACHE = { list: null, boolean: null, categoriesLoaded: false };
         const RBAC_META = { categories: [], permCategoryByName: {} };
@@ -4066,4 +3650,295 @@ async function _ensurePermissionCategories() {
             container.innerHTML = html;
         }
     </script>
+    -->
+</div>
+
+<!-- User Permissions Editor (Admin) -->
+<div id="tabAdminUserPermissions" class="tab-content">
+    <div class="endpoint-section" id="adminUserPerms">
+        <h2>User Permissions Editor</h2>
+        <p>Search for a user, manage their roles, and set per‑permission overrides. Admin access required.</p>
+
+        <div class="columns" style="margin-bottom: 8px;">
+            <div class="column">
+                <label for="userPermSearch">Find User (name/email):</label>
+                <input type="text" id="userPermSearch" placeholder="e.g., alice or alice@example.com" />
+                <div class="btn-group" style="margin-top:6px;">
+                    <button class="api-button" id="btnUserPermSearch">Search</button>
+                    <button class="api-button" id="btnUserPermReload" title="Reload current user">Reload</button>
+                </div>
+            </div>
+            <div class="column">
+                <div id="userPermSelected" style="margin-top: 26px; opacity: .85;">
+                    No user selected
+                </div>
+            </div>
+        </div>
+
+        <div id="userPermSearchResults" class="card" style="display:none; padding: 8px; margin-bottom: 10px;"></div>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Roles</h3>
+                <div id="userPermRolesList" class="scroll-y" style="max-height: 260px;"></div>
+            </div>
+            <div class="column">
+                <h3>Effective Permissions</h3>
+                <div class="btn-group" style="margin-bottom: 6px;">
+                    <button class="api-button" id="btnUserPermRefreshEffective">Refresh</button>
+                </div>
+                <pre id="userPermEffectiveOut" class="small-pre">---</pre>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 12px;">Overrides</h3>
+        <div class="columns" style="margin-bottom: 6px;">
+            <div class="column">
+                <label for="permFilterSearch">Filter:</label>
+                <input type="text" id="permFilterSearch" placeholder="search permissions (substring)" />
+            </div>
+            <div class="column">
+                <label for="permFilterCategory">Category:</label>
+                <select id="permFilterCategory"><option value="">All</option></select>
+            </div>
+        </div>
+
+        <div class="scroll-y" style="max-height: 420px;">
+            <h4>Tool Permissions</h4>
+            <div class="btn-group" style="margin-bottom:6px;">
+                <button class="api-button" id="btnPermBulkAllowTools" title="Allow all filtered tool permissions">Allow All (Tools)</button>
+                <button class="api-button" id="btnPermBulkDenyTools" title="Deny all filtered tool permissions">Deny All (Tools)</button>
+                <button class="api-button" id="btnPermBulkInheritTools" title="Inherit all filtered tool permissions">Inherit All (Tools)</button>
+            </div>
+            <table class="simple-table small-table">
+                <thead>
+                    <tr>
+                        <th style="min-width: 280px;">Permission</th>
+                        <th>Category</th>
+                        <th>Effective</th>
+                        <th style="min-width: 240px;">Override</th>
+                    </tr>
+                </thead>
+                <tbody id="userPermOverridesTableTools"></tbody>
+            </table>
+
+            <h4 style="margin-top: 14px;">Standard Permissions</h4>
+            <div class="btn-group" style="margin-bottom:6px;">
+                <button class="api-button" id="btnPermBulkAllowStd" title="Allow all filtered standard permissions">Allow All (Standard)</button>
+                <button class="api-button" id="btnPermBulkDenyStd" title="Deny all filtered standard permissions">Deny All (Standard)</button>
+                <button class="api-button" id="btnPermBulkInheritStd" title="Inherit all filtered standard permissions">Inherit All (Standard)</button>
+            </div>
+            <table class="simple-table small-table">
+                <thead>
+                    <tr>
+                        <th style="min-width: 280px;">Permission</th>
+                        <th>Category</th>
+                        <th>Effective</th>
+                        <th style="min-width: 240px;">Override</th>
+                    </tr>
+                </thead>
+                <tbody id="userPermOverridesTableStd"></tbody>
+            </table>
+        </div>
+
+        <div id="userPermToastArea"></div>
+    </div>
+
+    <script type="module" src="js/admin-user-permissions.js"></script>
+</div>
+
+<!-- ============ Admin: Virtual Keys (per user) ============ -->
+<div class="endpoint-section" id="adminVirtualKeys">
+    <h2>
+        <span class="endpoint-method get">GET/POST/DELETE</span>
+        <span class="endpoint-path">/api/v1/admin/users/{user_id}/virtual-keys - Manage User Virtual Keys</span>
+    </h2>
+    <p>List and create scoped virtual keys (JWT-like) for a user. Revoke using the standard API key revoke endpoint.</p>
+    <div class="columns">
+        <div class="column">
+            <div class="form-group">
+                <label for="admVK_userId">User ID <span class="required">*</span>:</label>
+                <input id="admVK_userId" type="number" placeholder="123" />
+            </div>
+            <div class="form-group">
+                <label for="admVK_name">Name:</label>
+                <input id="admVK_name" type="text" placeholder="CI Job Token" />
+            </div>
+            <div class="form-group">
+                <label for="admVK_desc">Description:</label>
+                <input id="admVK_desc" type="text" placeholder="automation token" />
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="admVK_expires">Expires (days):</label>
+                <input id="admVK_expires" type="number" value="30" min="1" />
+            </div>
+            <div class="form-group">
+                <label for="admVK_endpoints">Allowed Endpoints (CSV):</label>
+                <input id="admVK_endpoints" type="text" placeholder="chat.completions,embeddings" />
+            </div>
+            <div class="form-group">
+                <label for="admVK_methods">Allowed Methods (CSV):</label>
+                <input id="admVK_methods" type="text" placeholder="GET,POST" />
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="admVK_paths">Allowed Paths (CSV):</label>
+                <input id="admVK_paths" type="text" placeholder="/api/v1/chat/completions" />
+            </div>
+            <div class="form-group">
+                <label for="admVK_calls">Max Calls:</label>
+                <input id="admVK_calls" type="number" placeholder="e.g., 100" />
+            </div>
+            <div class="form-group">
+                <label for="admVK_runs">Max Runs:</label>
+                <input id="admVK_runs" type="number" placeholder="e.g., 1" />
+            </div>
+        </div>
+    </div>
+    <div class="btn-group">
+        <button class="api-button" id="btnAdmVKList">List Virtual Keys</button>
+        <button class="api-button" id="btnAdmVKCreate">Create Virtual Key</button>
+    </div>
+    <h3>Result:</h3>
+    <pre id="adminVirtualKeys_result">---</pre>
+    <div id="adminVirtualKeys_list"></div>
+    <!-- bindings via js/admin-advanced.js -->
+</div>
+
+<!-- ============ Admin: Organizations & Teams ============ -->
+<div class="endpoint-section" id="adminOrgsTeams">
+    <h2>
+        <span class="endpoint-method get">GET/POST</span>
+        <span class="endpoint-path">/api/v1/admin/orgs & /teams - Organizations and Teams</span>
+    </h2>
+    <p>Create and list organizations, teams, and manage memberships. Also update org watchlist settings.</p>
+    <div class="columns">
+        <div class="column">
+            <h3>Organizations</h3>
+            <div class="form-group"><label for="org_name">Name:</label><input id="org_name" type="text" placeholder="Acme"/></div>
+            <div class="form-group"><label for="org_slug">Slug:</label><input id="org_slug" type="text" placeholder="acme"/></div>
+            <div class="form-group"><label for="org_owner">Owner User ID (optional):</label><input id="org_owner" type="number"/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnAdmCreateOrg">Create Org</button>
+                <button class="api-button" id="btnAdmListOrgs">List Orgs</button>
+            </div>
+            <div id="adminOrgs_list" style="margin-top:8px;"></div>
+        </div>
+        <div class="column">
+            <h3>Teams</h3>
+            <div class="form-group"><label for="team_org">Org ID:</label><input id="team_org" type="number" placeholder="1"/></div>
+            <div class="form-group"><label for="team_name">Team Name:</label><input id="team_name" type="text" placeholder="research"/></div>
+            <div class="form-group"><label for="team_slug">Slug:</label><input id="team_slug" type="text" placeholder="research"/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnAdmCreateTeam">Create Team</button>
+                <button class="api-button" id="btnAdmListTeams">List Teams</button>
+            </div>
+            <div id="adminTeams_list" style="margin-top:8px;"></div>
+        </div>
+        <div class="column">
+            <h3>Memberships</h3>
+            <div class="form-group"><label for="m_org">Org ID:</label><input id="m_org" type="number"/></div>
+            <div class="form-group"><label for="m_team">Team ID:</label><input id="m_team" type="number"/></div>
+            <div class="form-group"><label for="m_user">User ID:</label><input id="m_user" type="number"/></div>
+            <div class="form-group"><label for="m_role">Role:</label><input id="m_role" type="text" placeholder="member"/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnAdmAddTeamMember">Add Team Member</button>
+                <button class="api-button" id="btnAdmListTeamMembers">List Team Members</button>
+                <button class="api-button danger" id="btnAdmRemoveTeamMember">Remove Team Member</button>
+            </div>
+            <div class="btn-group">
+                <button class="api-button" id="btnAdmAddOrgMember">Add Org Member</button>
+                <button class="api-button" id="btnAdmListOrgMembers">List Org Members</button>
+                <button class="api-button" id="btnAdmUpdateOrgMemberRole">Update Org Member Role</button>
+                <button class="api-button danger" id="btnAdmRemoveOrgMember">Remove Org Member</button>
+            </div>
+            <div class="form-group"><label for="org_wl_require">Org Watchlists require include default:</label>
+                <select id="org_wl_require"><option value="">(no change)</option><option value="true">true</option><option value="false">false</option></select>
+            </div>
+            <div class="btn-group">
+                <button class="api-button" id="btnAdmGetOrgWatchCfg">Get Org Watchlists Settings</button>
+                <button class="api-button" id="btnAdmSetOrgWatchCfg">Update Org Watchlists Settings</button>
+            </div>
+        </div>
+    </div>
+    <h3>Result:</h3>
+    <pre id="adminOrgsTeams_result">---</pre>
+    <!-- bindings via js/admin-advanced.js -->
+</div>
+
+<!-- ============ Admin: Tool Permissions ============ -->
+<div class="endpoint-section" id="adminToolPermissions">
+    <h2>
+        <span class="endpoint-method get">GET/POST/DELETE</span>
+        <span class="endpoint-path">/api/v1/admin/permissions/tools - Tool Execute Permissions</span>
+    </h2>
+    <p>Manage tool execution permissions and grants to roles.</p>
+    <div class="columns">
+        <div class="column">
+            <div class="form-group"><label for="tp_name">Tool Name:</label><input id="tp_name" type="text" placeholder="tools.execute:media.index"/></div>
+            <div class="form-group"><label for="tp_desc">Description:</label><input id="tp_desc" type="text"/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnTPCreate">Create Permission</button>
+                <button class="api-button" id="btnTPList">List Permissions</button>
+                <button class="api-button danger" id="btnTPDelete">Delete Permission</button>
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group"><label for="tp_role">Role ID:</label><input id="tp_role" type="number"/></div>
+            <div class="form-group"><label for="tp_tool">Tool (or *):</label><input id="tp_tool" type="text" placeholder="media.index or *"/></div>
+            <div class="form-group"><label for="tp_prefix">Prefix:</label><input id="tp_prefix" type="text" placeholder="tools.execute:media."/></div>
+            <div class="btn-group">
+                <button class="api-button" id="btnTPGrant">Grant to Role</button>
+                <button class="api-button danger" id="btnTPRevoke">Revoke from Role</button>
+                <button class="api-button" id="btnTPPrefixGrant">Grant by Prefix</button>
+                <button class="api-button danger" id="btnTPPrefixRevoke">Revoke by Prefix</button>
+                <button class="api-button" id="btnTPListRole">List Role Tool Perms</button>
+            </div>
+        </div>
+    </div>
+    <h3>Result:</h3>
+    <pre id="adminToolPermissions_result">---</pre>
+    <div id="adminToolPermissions_list" style="margin-top:8px;"></div>
+    <!-- bindings via js/admin-advanced.js -->
+</div>
+
+<!-- ============ Admin: Rate Limits ============ -->
+<div class="endpoint-section" id="adminRateLimits">
+    <h2>
+        <span class="endpoint-method post">POST</span>
+        <span class="endpoint-path">/api/v1/admin/rate-limits/* - Rate Limit Admin</span>
+    </h2>
+    <p>Upsert role/user rate limits and reset counters.</p>
+    <div class="columns">
+        <div class="column">
+            <h3>Role Rate Limit</h3>
+            <div class="form-group"><label for="rl_role">Role ID:</label><input id="rl_role" type="number"/></div>
+            <div class="form-group"><label for="rl_resource">Resource:</label><input id="rl_resource" type="text" placeholder="chat.completions"/></div>
+            <div class="form-group"><label for="rl_limit">Limit/min:</label><input id="rl_limit" type="number"/></div>
+            <div class="form-group"><label for="rl_burst">Burst:</label><input id="rl_burst" type="number"/></div>
+            <div class="btn-group"><button class="api-button" id="btnRLUpsertRole">Upsert Role Limit</button></div>
+        </div>
+        <div class="column">
+            <h3>User Rate Limit</h3>
+            <div class="form-group"><label for="rl_user">User ID:</label><input id="rl_user" type="number"/></div>
+            <div class="form-group"><label for="rl_u_resource">Resource:</label><input id="rl_u_resource" type="text" placeholder="chat.completions"/></div>
+            <div class="form-group"><label for="rl_u_limit">Limit/min:</label><input id="rl_u_limit" type="number"/></div>
+            <div class="form-group"><label for="rl_u_burst">Burst:</label><input id="rl_u_burst" type="number"/></div>
+            <div class="btn-group"><button class="api-button" id="btnRLUpsertUser">Upsert User Limit</button></div>
+        </div>
+        <div class="column">
+            <h3>Reset Counters</h3>
+            <div class="form-group"><label for="rl_kind">Kind:</label><select id="rl_kind"><option value="ip">ip</option><option value="user">user</option><option value="api">api</option><option value="raw">raw</option></select></div>
+            <div class="form-group"><label for="rl_identifier">Identifier/IP/hash:</label><input id="rl_identifier" type="text" placeholder="ip: 203.0.113.7"/></div>
+            <div class="form-group"><label for="rl_endpoint">Endpoint (optional):</label><input id="rl_endpoint" type="text" placeholder="/api/v1/media/process"/></div>
+            <div class="form-group"><label for="rl_dry">Dry run:</label><select id="rl_dry"><option value="false">false</option><option value="true">true</option></select></div>
+            <div class="btn-group"><button class="api-button" id="btnRLReset">Reset</button></div>
+        </div>
+    </div>
+    <h3>Result:</h3>
+    <pre id="adminRateLimits_result">---</pre>
+    <!-- bindings via js/admin-advanced.js -->
 </div>

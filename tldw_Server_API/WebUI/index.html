@@ -9,8 +9,7 @@
     <!-- External CSS -->
     <link rel="stylesheet" href="css/styles.css">
     <script defer src="js/setup-guard.js"></script>
-    <!-- Shim to convert inline event attributes to addEventListener handlers -->
-    <script src="js/inline-handler-shim.js"></script>
+    <!-- Inline handler shim removed after migrating handlers to modules -->
     
     <!-- Additional styles for JSON syntax highlighting -->
     <style>
@@ -443,7 +442,22 @@
         <div id="auth-subtabs" class="sub-tab-row" role="navigation" aria-label="Auth sub-navigation">
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabAuth" data-load-group="auth" role="tab">
-                    Authentication
+                    Basic
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthSecurity" data-load-group="auth" role="tab">
+                    Security
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthApiKeys" data-load-group="auth" role="tab">
+                    My API Keys
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthMfa" data-load-group="auth" role="tab">
+                    MFA
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthVirtualKey" data-load-group="auth" role="tab">
+                    Virtual Key
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAuthPermissionsMatrix" data-load-group="auth" role="tab">
+                    Permissions Matrix
                 </button>
             </div>
         </div>
@@ -559,6 +573,9 @@
                 </button>
                 <button class="sub-tab-button" data-content-id="tabWatchlistsOutputs" data-load-group="watchlists" role="tab">
                     Outputs
+                </button>
+                <button class="sub-tab-button" data-content-id="tabWatchlistsRuns" data-load-group="watchlists" role="tab">
+                    Runs
                 </button>
                 <button class="sub-tab-button" data-content-id="tabWatchlistsTemplates" data-load-group="watchlists" role="tab">
                     Templates
@@ -704,6 +721,9 @@
                 </button>
                 <button class="sub-tab-button" data-content-id="tabAccessControl" data-load-group="admin" role="tab">
                     Access Control
+                </button>
+                <button class="sub-tab-button" data-content-id="tabAdminUserPermissions" data-load-group="admin" role="tab">
+                    User Permissions
                 </button>
                 <button class="sub-tab-button" data-content-id="tabAdminSystem" data-load-group="admin" role="tab">
                     System Status
@@ -904,18 +924,27 @@
                                 <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
                             </div>
                         </div>
+                        <div class="column">
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="includeTokenInCurl" />
+                                    Include auth token in generated cURL commands
+                                </label>
+                                <small>When disabled (default), cURL masks tokens as [REDACTED].</small>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="form-group mt-3">
                         <h3>Quick Actions</h3>
                         <div class="btn-group">
-                            <button class="btn btn-primary" onclick="webUI.checkApiStatus()">
+                            <button class="btn btn-primary" id="btnTestConnection">
                                 Test Connection
                             </button>
-                            <button class="btn btn-secondary" onclick="webUI.showRequestHistory()">
+                            <button class="btn btn-secondary" id="btnViewHistory">
                                 View History
                             </button>
-                            <button class="btn btn-secondary" onclick="location.reload()">
+                            <button class="btn btn-secondary" id="btnRefreshPage">
                                 Refresh Page
                             </button>
                         </div>

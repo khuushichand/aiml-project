@@ -25,7 +25,7 @@
             <input type="checkbox" id="authLogin_remember">
         </div>
         
-        <button class="api-button" onclick="performLogin()">
+        <button class="api-button" id="btnAuthLogin">
             Login
         </button>
         
@@ -68,7 +68,7 @@
             <input type="text" id="authRegister_fullName" placeholder="John Doe">
         </div>
         
-        <button class="api-button" onclick="performRegistration()">
+        <button class="api-button" id="btnAuthRegister">
             Register
         </button>
         
@@ -86,9 +86,17 @@
         </h2>
         <p>Logout the current user and invalidate their session.</p>
         
-        <button class="api-button" onclick="performLogout()">
-            Logout
-        </button>
+        <div class="columns">
+            <div class="column">
+                <div class="form-group">
+                    <label for="authLogout_all">All devices:</label>
+                    <select id="authLogout_all"><option value="false">false</option><option value="true">true</option></select>
+                </div>
+            </div>
+            <div class="column">
+                <button class="api-button" id="btnAuthLogout">Logout</button>
+            </div>
+        </div>
         
         <h3>Response:</h3>
         <pre id="authLogout_response">---</pre>
@@ -106,7 +114,7 @@
             <textarea id="authRefresh_token" rows="3" placeholder="eyJhbGciOiJIUzI1NiIs..."></textarea>
         </div>
         
-        <button class="api-button" onclick="performTokenRefresh()">
+        <button class="api-button" id="btnAuthRefresh">
             Refresh Token
         </button>
         
@@ -121,7 +129,7 @@
         </h2>
         <p>Get information about the currently authenticated user.</p>
         
-        <button class="api-button" onclick="getCurrentUser()">
+        <button class="api-button" id="btnAuthCurrent">
             Get Current User
         </button>
         
@@ -130,174 +138,18 @@
     </div>
 </div>
 
-<script>
-// Authentication-specific functions
-async function performLogin() {
-    const username = document.getElementById('authLogin_username').value;
-    const password = document.getElementById('authLogin_password').value;
-    const remember = document.getElementById('authLogin_remember').checked;
+<!--
+  Auth basic handlers moved to js/auth-basic.js
+-->
     
-    if (!username || !password) {
-        Toast.error('Username and password are required');
-        return;
-    }
-    
-    try {
-        const response = await apiClient.post('/api/v1/auth/login', {
-            username: username,
-            password: password,
-            remember_me: remember
-        });
-        
-        document.getElementById('authLogin_response').textContent = JSON.stringify(response, null, 2);
-        
-        // Store the token if login successful
-        if (response.access_token) {
-            apiClient.setToken(response.access_token);
-            Toast.success('Login successful!');
-            
-            // Store refresh token if provided
-            if (response.refresh_token) {
-                Utils.saveToStorage('refresh_token', response.refresh_token);
-            }
-        }
-    } catch (error) {
-        document.getElementById('authLogin_response').textContent = 
-            JSON.stringify(error.response || error, null, 2);
-        Toast.error('Login failed: ' + (error.message || 'Unknown error'));
-    }
-}
 
-async function performRegistration() {
-    const username = document.getElementById('authRegister_username').value;
-    const email = document.getElementById('authRegister_email').value;
-    const password = document.getElementById('authRegister_password').value;
-    const confirmPassword = document.getElementById('authRegister_confirmPassword').value;
-    const fullName = document.getElementById('authRegister_fullName').value;
-    
-    if (!username || !email || !password) {
-        Toast.error('Username, email, and password are required');
-        return;
-    }
-    
-    if (password !== confirmPassword) {
-        Toast.error('Passwords do not match');
-        return;
-    }
-    
-    try {
-        const response = await apiClient.post('/api/v1/auth/register', {
-            username: username,
-            email: email,
-            password: password,
-            full_name: fullName
-        });
-        
-        // Show the API key if provided (SQLite multi-user setups)
-        const pre = document.getElementById('authRegister_response');
-        pre.textContent = JSON.stringify(response, null, 2);
-        if (response && response.api_key) {
-            Toast.success('Registration successful. API key created and shown below. Copy and store it securely.');
-        } else {
-            Toast.success('Registration successful! Please login.');
-        }
-    } catch (error) {
-        document.getElementById('authRegister_response').textContent = 
-            JSON.stringify(error.response || error, null, 2);
-        Toast.error('Registration failed: ' + (error.message || 'Unknown error'));
-    }
-}
+ 
 
-async function performLogout() {
-    try {
-        const response = await apiClient.post('/api/v1/auth/logout', {});
-        document.getElementById('authLogout_response').textContent = JSON.stringify(response, null, 2);
-        
-        // Clear stored tokens
-        apiClient.setToken('');
-        Utils.removeFromStorage('refresh_token');
-        
-        Toast.success('Logged out successfully');
-    } catch (error) {
-        document.getElementById('authLogout_response').textContent = 
-            JSON.stringify(error.response || error, null, 2);
-        Toast.error('Logout failed: ' + (error.message || 'Unknown error'));
-    }
-}
-
-async function performTokenRefresh() {
-    const refreshToken = document.getElementById('authRefresh_token').value;
-    
-    if (!refreshToken) {
-        Toast.error('Refresh token is required');
-        return;
-    }
-    
-    try {
-        const response = await apiClient.post('/api/v1/auth/refresh', {
-            refresh_token: refreshToken
-        });
-        
-        document.getElementById('authRefresh_response').textContent = JSON.stringify(response, null, 2);
-        
-        // Update stored tokens
-        if (response.access_token) {
-            apiClient.setToken(response.access_token);
-            Toast.success('Token refreshed successfully');
-        }
-        if (response.refresh_token) {
-            Utils.saveToStorage('refresh_token', response.refresh_token);
-        }
-    } catch (error) {
-        document.getElementById('authRefresh_response').textContent = 
-            JSON.stringify(error.response || error, null, 2);
-        Toast.error('Token refresh failed: ' + (error.message || 'Unknown error'));
-    }
-}
-
-async function getCurrentUser() {
-    try {
-        const response = await apiClient.get('/api/v1/auth/me');
-        document.getElementById('authCurrentUser_response').textContent = JSON.stringify(response, null, 2);
-    } catch (error) {
-        document.getElementById('authCurrentUser_response').textContent = 
-            JSON.stringify(error.response || error, null, 2);
-        Toast.error('Failed to get user info: ' + (error.message || 'Unknown error'));
-    }
-}
-
+ 
 // Initialize auth tab
-function initializeAuthTab() {
-    console.log('Auth tab initialized');
-    
-    // Check if we have a stored refresh token
-    const refreshToken = Utils.getFromStorage('refresh_token');
-    if (refreshToken) {
-        document.getElementById('authRefresh_token').value = refreshToken;
-    }
+<script type="module" src="js/auth-basic.js"></script>
 
-    // Show setup self-verify banner if setup is still active
-    try {
-        fetch('/api/v1/setup/status', { cache: 'no-store' })
-            .then(r => r.ok ? r.json() : null)
-            .then(data => {
-                if (data && data.needs_setup) {
-                    const el = document.getElementById('authSetupBanner');
-                    if (el) el.style.display = '';
-                }
-            })
-            .catch(() => {});
-    } catch (e) { /* ignore */ }
-}
-
-// Call initialization when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    if (document.querySelector('#tabAuth')) {
-        initializeAuthTab();
-    }
-});
-</script>
-
+<div id="tabAuthApiKeys" class="tab-content">
 <!-- API Key Management (current user) -->
 <div class="endpoint-section" id="authApiKeys">
     <h2>
@@ -307,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <p>Manage your personal API keys (X-API-KEY). Keys are returned only at creation or rotation time.</p>
 
     <div class="btn-group">
-        <button class="api-button" onclick="listMyApiKeys()">List My API Keys</button>
+        <button class="api-button" id="btnMyApiKeysList">List My API Keys</button>
     </div>
 
     <div class="columns">
@@ -335,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
     </div>
     <div class="btn-group">
-        <button class="api-button" onclick="createMyApiKey()">Create API Key</button>
+        <button class="api-button" id="btnMyApiKeyCreate">Create API Key</button>
     </div>
 
     <h3>Result:</h3>
@@ -343,88 +195,213 @@ document.addEventListener('DOMContentLoaded', () => {
 
     <h3>Keys:</h3>
     <div id="authApiKeys_list"></div>
+    </div>
 </div>
 
-<script>
-async function listMyApiKeys() {
-    try {
-        const items = await apiClient.get('/api/v1/users/api-keys');
-        renderKeys(items || []);
-        document.getElementById('authApiKeys_response').textContent = 'Loaded';
-    } catch (e) {
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
-        Toast.error('Failed to list API keys');
-    }
-}
+<!-- Enhanced Auth: Forgot/Reset Password, Email Verify/Resend -->
+<div id="tabAuthSecurity" class="tab-content">
+<div class="endpoint-section" id="authForgotPassword">
+    <h2>
+        <span class="endpoint-method post">POST</span>
+        <span class="endpoint-path">/api/v1/auth/forgot-password - Request Password Reset</span>
+    </h2>
+    <p>Send a password reset link to your email (always returns success to avoid leaking accounts).</p>
+    <div class="form-group">
+        <label for="authForgot_email">Email <span class="required">*</span>:</label>
+        <input type="email" id="authForgot_email" placeholder="user@example.com">
+    </div>
+    <button class="api-button" id="btnAuthForgot">Send Reset Link</button>
+    <h3>Response:</h3>
+    <pre id="authForgot_response">---</pre>
+    </div>
 
-async function createMyApiKey() {
-    try {
-        const payload = {
-            name: document.getElementById('apiKey_name').value || null,
-            scope: document.getElementById('apiKey_scope').value || 'write',
-            expires_in_days: parseInt(document.getElementById('apiKey_expiry').value || '365', 10)
-        };
-        const res = await apiClient.post('/api/v1/users/api-keys', payload);
-        // res.key contains the new key; show prominently
-        const out = { ...res };
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(out, null, 2);
-        Toast.success('API key created. Copy it now; it is shown only once.');
-        await listMyApiKeys();
-    } catch (e) {
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
-        Toast.error('Failed to create API key');
-    }
-}
+<div class="endpoint-section" id="authResetPassword">
+    <h2>
+        <span class="endpoint-method post">POST</span>
+        <span class="endpoint-path">/api/v1/auth/reset-password - Reset Password</span>
+    </h2>
+    <p>Use the token from your email to set a new password.</p>
+    <div class="form-group">
+        <label for="authReset_token">Reset Token <span class="required">*</span>:</label>
+        <textarea id="authReset_token" rows="2" placeholder="paste token"></textarea>
+    </div>
+    <div class="form-group">
+        <label for="authReset_new">New Password <span class="required">*</span>:</label>
+        <input type="password" id="authReset_new" placeholder="********">
+    </div>
+    <button class="api-button" id="btnAuthReset">Reset Password</button>
+    <h3>Response:</h3>
+    <pre id="authReset_response">---</pre>
+    </div>
 
-async function rotateMyApiKey(id) {
-    try {
-        const res = await apiClient.post(`/api/v1/users/api-keys/${id}/rotate`, { expires_in_days: 365 });
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(res, null, 2);
-        Toast.success('API key rotated. Copy the new key now.');
-        await listMyApiKeys();
-    } catch (e) {
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
-        Toast.error('Failed to rotate API key');
-    }
-}
+<div class="endpoint-section" id="authVerifyEmail">
+    <h2>
+        <span class="endpoint-method get">GET</span>
+        <span class="endpoint-path">/api/v1/auth/verify-email - Verify Email</span>
+    </h2>
+    <p>Verify your email using a token.</p>
+    <div class="form-group">
+        <label for="authVerify_token">Verification Token <span class="required">*</span>:</label>
+        <textarea id="authVerify_token" rows="2" placeholder="paste token"></textarea>
+    </div>
+    <button class="api-button" id="btnAuthVerifyEmail">Verify Email</button>
+    <h3>Response:</h3>
+    <pre id="authVerify_response">---</pre>
+    </div>
 
-async function revokeMyApiKey(id) {
-    try {
-        const res = await apiClient.delete(`/api/v1/users/api-keys/${id}`);
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(res, null, 2);
-        Toast.success('API key revoked');
-        await listMyApiKeys();
-    } catch (e) {
-        document.getElementById('authApiKeys_response').textContent = JSON.stringify(e.response || e, null, 2);
-        Toast.error('Failed to revoke API key');
-    }
-}
+<div class="endpoint-section" id="authResendVerification">
+    <h2>
+        <span class="endpoint-method post">POST</span>
+        <span class="endpoint-path">/api/v1/auth/resend-verification - Resend Verification</span>
+    </h2>
+    <p>Resend a verification email to your address.</p>
+    <div class="form-group">
+        <label for="authResend_email">Email <span class="required">*</span>:</label>
+        <input type="email" id="authResend_email" placeholder="user@example.com">
+    </div>
+    <button class="api-button" id="btnAuthResend">Resend</button>
+    <h3>Response:</h3>
+    <pre id="authResend_response">---</pre>
+</div>
 
-function renderKeys(items) {
-    const container = document.getElementById('authApiKeys_list');
-    if (!items.length) {
-        container.innerHTML = '<p>No API keys found.</p>';
-        return;
-    }
-    let html = '<table class="simple-table"><thead><tr>\
-<th>ID</th><th>Name</th><th>Scope</th><th>Status</th><th>Created</th><th>Expires</th><th>Usage</th><th>Actions</th>\
-</tr></thead><tbody>';
-    for (const k of items) {
-        html += `<tr>
-            <td>${k.id}</td>
-            <td>${k.name || ''}</td>
-            <td>${k.scope || ''}</td>
-            <td>${k.status || ''}</td>
-            <td>${k.created_at || ''}</td>
-            <td>${k.expires_at || ''}</td>
-            <td>${k.usage_count || 0}</td>
-            <td>
-                <button class="btn" onclick="rotateMyApiKey(${k.id})">Rotate</button>
-                <button class="btn btn-danger" onclick="revokeMyApiKey(${k.id})">Revoke</button>
-            </td>
-        </tr>`;
-    }
-    html += '</tbody></table>';
-    container.innerHTML = html;
-}
-</script>
+</div>
+
+<!-- MFA Setup/Verify/Disable (multi-user + Postgres) -->
+<div id="tabAuthMfa" class="tab-content">
+<div class="endpoint-section" id="authMfa">
+    <h2>
+        <span class="endpoint-method post">POST</span>
+        <span class="endpoint-path">/api/v1/auth/mfa/* - Multi‑Factor Authentication</span>
+    </h2>
+    <p>Enable TOTP MFA. Setup returns a secret and QR—verify with a 6‑digit token.</p>
+    <div class="btn-group">
+        <button class="api-button" id="btnMfaSetup">Setup</button>
+    </div>
+    <div id="authMfa_setup" style="margin-top:8px;"></div>
+    <div class="columns">
+        <div class="column">
+            <div class="form-group">
+                <label for="authMfa_token">MFA Token:</label>
+                <input id="authMfa_token" type="text" placeholder="123456" />
+            </div>
+            <button class="api-button" id="btnMfaVerify">Verify</button>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="authMfa_disable_password">Password (for disable):</label>
+                <input id="authMfa_disable_password" type="password" placeholder="********" />
+            </div>
+            <button class="api-button danger" id="btnMfaDisable">Disable MFA</button>
+        </div>
+    </div>
+    <h3>Response:</h3>
+    <pre id="authMfa_response">---</pre>
+    </div>
+</div>
+
+<!-- Self‑service Virtual Key (scoped JWT) -->
+<div id="tabAuthVirtualKey" class="tab-content">
+<div class="endpoint-section" id="authVirtualKey">
+    <h2>
+        <span class="endpoint-method post">POST</span>
+        <span class="endpoint-path">/api/v1/auth/virtual-key - Mint Scoped JWT</span>
+    </h2>
+    <p>Mint a short‑lived, scoped JWT for automation. Multi‑user mode only.</p>
+    <div class="columns">
+        <div class="column">
+            <div class="form-group">
+                <label for="vk_ttl">TTL (minutes):</label>
+                <input id="vk_ttl" type="number" value="60" min="1" max="1440" />
+            </div>
+            <div class="form-group">
+                <label for="vk_scope">Scope:</label>
+                <input id="vk_scope" type="text" value="workflows" />
+            </div>
+            <div class="form-group">
+                <label for="vk_schedule">Schedule ID (optional):</label>
+                <input id="vk_schedule" type="text" placeholder="sched-abc" />
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="vk_endpoints">Allowed Endpoints (CSV):</label>
+                <input id="vk_endpoints" type="text" placeholder="chat.completions,embeddings" />
+            </div>
+            <div class="form-group">
+                <label for="vk_methods">Allowed Methods (CSV):</label>
+                <input id="vk_methods" type="text" placeholder="GET,POST" />
+            </div>
+            <div class="form-group">
+                <label for="vk_paths">Allowed Paths (CSV):</label>
+                <input id="vk_paths" type="text" placeholder="/api/v1/chat/completions" />
+            </div>
+        </div>
+        <div class="column">
+            <div class="form-group">
+                <label for="vk_calls">Max Calls (optional):</label>
+                <input id="vk_calls" type="number" placeholder="e.g., 10" />
+            </div>
+            <div class="form-group">
+                <label for="vk_runs">Max Runs (optional):</label>
+                <input id="vk_runs" type="number" placeholder="e.g., 1" />
+            </div>
+            <div class="form-group">
+                <label for="vk_nbf">Not Before (ISO, optional):</label>
+                <input id="vk_nbf" type="text" placeholder="2025-01-01T00:00:00Z" />
+            </div>
+        </div>
+    </div>
+    <div class="btn-group">
+        <button class="api-button" id="btnMintVirtualKey">Mint Virtual Key</button>
+    </div>
+    <h3>Result:</h3>
+    <pre id="authVirtualKey_response">---</pre>
+    </div>
+</div>
+
+<!-- Permissions Matrix (Self) -->
+<div id="tabAuthPermissionsMatrix" class="tab-content">
+    <div class="endpoint-section" id="authPermissionsMatrix">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/privileges/self - My Permissions Matrix</span>
+        </h2>
+        <p>View your effective permissions across API endpoints. Data is scoped to your current user/session.</p>
+
+        <div class="columns" style="margin-bottom:8px;">
+            <div class="column">
+                <label for="authPermSearch">Search:</label>
+                <input type="text" id="authPermSearch" placeholder="filter by endpoint, method or scope" />
+            </div>
+            <div class="column">
+                <div class="btn-group" style="margin-top: 20px;">
+                    <button class="api-button" id="btnAuthPermRefresh">Refresh</button>
+                    <button class="api-button" id="btnAuthPermExport">Export CSV</button>
+                </div>
+            </div>
+            <div class="column">
+                <div id="authPermSummary" aria-live="polite" style="margin-top: 24px; opacity: 0.85;">
+                    <!-- Populated by JS: counts, updated time -->
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Matrix by Scope</h3>
+                <div id="authPermMatrixByScope" class="scroll-x" style="min-height: 48px;"></div>
+            </div>
+            <div class="column">
+                <h3>Detailed List</h3>
+                <div id="authPermList" class="scroll-y" style="max-height: 420px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="js/auth-permissions.js"></script>
+</div>
+
+<!-- External module bindings for advanced auth panels -->
+<script type="module" src="js/auth-advanced.js"></script>
+<!-- My API Keys module bindings -->
+<script type="module" src="js/auth-keys.js"></script>

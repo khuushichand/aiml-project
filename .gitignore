@@ -314,3 +314,4 @@ uv.lock
 Config_Files/session_encryption.key
 /.venv-ci
 :memory:
+/tldw_Server_API/WebUI/node_modules

@@ -2290,6 +2290,13 @@ def load_and_log_configs():
         web_crawl_max_pages = _as_int(
             _env_or_cfg('WEB_CRAWL_MAX_PAGES', 'Web-Scraper', 'web_crawl_max_pages', '100'), 100
         )
+        # Optional allow/block domain lists (CSV). Env overrides config.txt.
+        web_crawl_allowed_domains = _env_or_cfg('WEB_CRAWL_ALLOWED_DOMAINS', 'Web-Scraper', 'web_crawl_allowed_domains', '')
+        web_crawl_blocked_domains = _env_or_cfg('WEB_CRAWL_BLOCKED_DOMAINS', 'Web-Scraper', 'web_crawl_blocked_domains', '')
+        # Optional robots-respect flag (bool). Env overrides config.txt.
+        web_scraper_respect_robots = _as_bool(
+            _env_or_cfg('WEB_SCRAPER_RESPECT_ROBOTS', 'Web-Scraper', 'web_scraper_respect_robots', 'true'), True
+        )
         # Optional scorers configuration
         web_crawl_enable_keyword = _as_bool(
             _env_or_cfg('WEB_CRAWL_ENABLE_KEYWORD_SCORER', 'Web-Scraper', 'web_crawl_enable_keyword_scorer', 'false'), False
@@ -2837,18 +2844,21 @@ def load_and_log_configs():
                 'web_scraper_api_retries': web_scraper_api_retries,
                 'web_scraper_api_retry_delay': web_scraper_api_retry_delay,
                 'web_scraper_retry_count': web_scraper_retry_count,
-                'web_scraper_retry_timeout': web_scraper_retry_timeout,
-                'web_scraper_stealth_playwright': web_scraper_stealth_playwright,
-                # Crawl feature flags
-                'web_crawl_strategy': web_crawl_strategy,
-                'web_crawl_include_external': web_crawl_include_external,
-                'web_crawl_score_threshold': web_crawl_score_threshold,
-                'web_crawl_max_pages': web_crawl_max_pages,
-                # Scorers
-                'web_crawl_enable_keyword_scorer': web_crawl_enable_keyword,
-                'web_crawl_keywords': web_crawl_keywords,
-                'web_crawl_enable_domain_map': web_crawl_enable_domain_map,
-                'web_crawl_domain_map': web_crawl_domain_map,
+            'web_scraper_retry_timeout': web_scraper_retry_timeout,
+            'web_scraper_stealth_playwright': web_scraper_stealth_playwright,
+            # Crawl feature flags
+            'web_crawl_strategy': web_crawl_strategy,
+            'web_crawl_include_external': web_crawl_include_external,
+            'web_crawl_score_threshold': web_crawl_score_threshold,
+            'web_crawl_max_pages': web_crawl_max_pages,
+            'web_crawl_allowed_domains': web_crawl_allowed_domains,
+            'web_crawl_blocked_domains': web_crawl_blocked_domains,
+            'web_scraper_respect_robots': web_scraper_respect_robots,
+            # Scorers
+            'web_crawl_enable_keyword_scorer': web_crawl_enable_keyword,
+            'web_crawl_keywords': web_crawl_keywords,
+            'web_crawl_enable_domain_map': web_crawl_enable_domain_map,
+            'web_crawl_domain_map': web_crawl_domain_map,
             },
             'Redis': config_parser_object['Redis'] if 'Redis' in config_parser_object else {},
             'Web-Scraping': config_parser_object['Web-Scraping'] if 'Web-Scraping' in config_parser_object else {}
