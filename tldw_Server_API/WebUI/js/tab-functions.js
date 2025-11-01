@@ -4941,21 +4941,21 @@ function _watchlistsBuildSettingsPayloadFromForm() {
         const maxPages = watchlistsParseNumber(document.getElementById('watchlistsSource_histMaxPages')?.value);
         if (maxPages !== undefined) hist.max_pages = maxPages;
         const perPage = watchlistsParseNumber(document.getElementById('watchlistsSource_histPerPage')?.value);
-        if (perPage !== undefined) hist.per_page = perPage;
+        if (perPage !== undefined) hist.per_page_limit = perPage;
         if (document.getElementById('watchlistsSource_histOn304')?.checked) hist.on_304 = true;
         if (document.getElementById('watchlistsSource_histStopOnSeen')?.checked) hist.stop_on_seen = true;
         if (Object.keys(hist).length > 0) settings.history = hist;
 
         if (document.getElementById('watchlistsSource_rssUseFeed')?.checked) rssCfg.use_feed_content_if_available = true;
         const minChars = watchlistsParseNumber(document.getElementById('watchlistsSource_feedMinChars')?.value);
-        if (minChars !== undefined) rssCfg.feed_text_min_chars = minChars;
+        if (minChars !== undefined) rssCfg.feed_content_min_chars = minChars;
         if (Object.keys(rssCfg).length > 0) settings.rss = rssCfg;
     } else {
         const rules = {};
         const topN = watchlistsParseNumber(document.getElementById('watchlistsSource_topN')?.value);
-        if (topN !== undefined) rules.top_n = topN;
+        if (topN !== undefined) settings.top_n = topN;
         const discover = document.getElementById('watchlistsSource_discover')?.value?.trim();
-        if (discover && discover !== 'auto') rules.discovery = discover;
+        if (discover && discover !== 'auto') settings.discover_method = discover;
         const siteLimit = watchlistsParseNumber(document.getElementById('watchlistsSource_limit')?.value);
         if (siteLimit !== undefined) rules.limit = siteLimit;
         const listUrlRaw = document.getElementById('watchlistsSource_listUrl')?.value?.trim();
@@ -5050,20 +5050,20 @@ async function watchlistsLoadSourceIntoForm() {
         const rss = (settings.rss || {});
         if (document.getElementById('watchlistsSource_histStrategy')) document.getElementById('watchlistsSource_histStrategy').value = hist.strategy || 'auto';
         if (document.getElementById('watchlistsSource_histMaxPages')) document.getElementById('watchlistsSource_histMaxPages').value = (hist.max_pages ?? 1);
-        if (document.getElementById('watchlistsSource_histPerPage')) document.getElementById('watchlistsSource_histPerPage').value = (hist.per_page ?? '');
+        if (document.getElementById('watchlistsSource_histPerPage')) document.getElementById('watchlistsSource_histPerPage').value = (hist.per_page_limit ?? hist.per_page ?? '');
         if (document.getElementById('watchlistsSource_histOn304')) document.getElementById('watchlistsSource_histOn304').checked = !!hist.on_304;
         if (document.getElementById('watchlistsSource_histStopOnSeen')) document.getElementById('watchlistsSource_histStopOnSeen').checked = !!hist.stop_on_seen;
         if (document.getElementById('watchlistsSource_rssLimit')) document.getElementById('watchlistsSource_rssLimit').value = (settings.limit ?? rss.limit ?? '');
         if (document.getElementById('watchlistsSource_rssUseFeed')) document.getElementById('watchlistsSource_rssUseFeed').checked = !!rss.use_feed_content_if_available;
-        if (document.getElementById('watchlistsSource_feedMinChars')) document.getElementById('watchlistsSource_feedMinChars').value = (rss.feed_text_min_chars ?? 400);
+        if (document.getElementById('watchlistsSource_feedMinChars')) document.getElementById('watchlistsSource_feedMinChars').value = (rss.feed_content_min_chars ?? rss.feed_text_min_chars ?? 400);
         // Expand advanced when settings present
         const hasRssAdv = (Object.keys(hist).length > 0 || Object.keys(rss).length > 0);
         watchlistsToggleRssAdvanced(!!hasRssAdv);
 
         // Site scrape rules
         const rules = (settings.scrape_rules || {});
-        if (document.getElementById('watchlistsSource_topN')) document.getElementById('watchlistsSource_topN').value = (rules.top_n ?? '');
-        if (document.getElementById('watchlistsSource_discover')) document.getElementById('watchlistsSource_discover').value = (rules.discovery ?? 'auto');
+        if (document.getElementById('watchlistsSource_topN')) document.getElementById('watchlistsSource_topN').value = (settings.top_n ?? rules.top_n ?? '');
+        if (document.getElementById('watchlistsSource_discover')) document.getElementById('watchlistsSource_discover').value = (settings.discover_method ?? rules.discovery ?? 'auto');
         if (document.getElementById('watchlistsSource_limit')) document.getElementById('watchlistsSource_limit').value = (rules.limit ?? '');
         if (document.getElementById('watchlistsSource_listUrl')) document.getElementById('watchlistsSource_listUrl').value = (rules.list_url ?? '');
         if (document.getElementById('watchlistsSource_entrySelectors')) document.getElementById('watchlistsSource_entrySelectors').value = (Array.isArray(rules.entry_xpath) ? rules.entry_xpath.join('\n') : (rules.entry_xpath || ''));

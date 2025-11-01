@@ -318,7 +318,8 @@ class APIClient {
             headers = {},
             streaming = false,
             onProgress = null,
-            timeout = this.getTimeoutForEndpoint(path, options.timeout)  // Dynamic timeout based on endpoint
+            timeout = this.getTimeoutForEndpoint(path, options.timeout),  // Dynamic timeout based on endpoint
+            responseType = undefined
         } = options;
 
         // Build URL with query parameters
@@ -333,7 +334,7 @@ class APIClient {
         const fetchOptions = {
             method,
             headers: {
-                'Accept': streaming ? 'text/event-stream' : 'application/json',
+                'Accept': responseType === 'blob' ? '*/*' : (streaming ? 'text/event-stream' : 'application/json'),
                 ...headers
             }
         };
@@ -491,6 +492,17 @@ class APIClient {
             // Handle streaming responses
             if (streaming && response.body) {
                 return this.handleStreamingResponse(response, onProgress);
+            }
+
+            // Explicit response type handling for binary/text
+            if (responseType === 'blob') {
+                return await response.blob();
+            }
+            if (responseType === 'arraybuffer') {
+                return await response.arrayBuffer();
+            }
+            if (responseType === 'text') {
+                return await response.text();
             }
 
             // Handle regular JSON responses

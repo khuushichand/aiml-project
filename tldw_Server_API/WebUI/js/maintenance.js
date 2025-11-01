@@ -156,13 +156,26 @@ async function exportConfiguration() {
     format: document.getElementById('export_format')?.value || 'json',
   };
   try {
-    const response = await window.apiClient.post('/api/v1/maintenance/export-config', options);
+    const response = await window.apiClient.post('/api/v1/maintenance/export-config', options, { responseType: 'blob' });
     if (options.format === 'zip') {
-      const blob = new Blob([response], { type: 'application/zip' });
+      const blob = (typeof Blob !== 'undefined' && response instanceof Blob)
+        ? response
+        : new Blob([response], { type: 'application/zip' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `tldw_config_${Date.now()}.zip`; a.click(); URL.revokeObjectURL(url);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tldw_config_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      // Defer revocation to allow download to start
+      setTimeout(() => {
+        try { document.body.removeChild(a); } catch (_) {}
+        try { URL.revokeObjectURL(url); } catch (_) {}
+      }, 100);
       resultEl.textContent = 'Configuration exported successfully';
-    } else { resultEl.textContent = JSON.stringify(response, null, 2); }
+    } else {
+      resultEl.textContent = JSON.stringify(response, null, 2);
+    }
     if (window.Toast) Toast.success('Configuration exported');
   } catch (e) { resultEl.textContent = `Error: ${e.message}`; if (window.Toast) Toast.error(`Export failed: ${e.message}`); }
 }
@@ -264,4 +277,3 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else bindMaintenance();
 
 export default { bindMaintenance };
-

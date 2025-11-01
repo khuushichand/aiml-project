@@ -493,7 +493,7 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.sync import router as sync_router
     # Tools Endpoint (optional; guard import to avoid startup failure on optional module issues)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router  # noqa: F401
+        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
     except Exception as _tools_import_err:  # noqa: BLE001
         logger.warning(f"Tools endpoints unavailable at import time; deferring: {_tools_import_err}")
         tools_router = None  # type: ignore[assignment]
@@ -2664,12 +2664,9 @@ else:
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
     _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
-    # Tools (MCP-backed server tool execution)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+    # Tools (MCP-backed server tool execution) — include if initial guarded import succeeded
+    if 'tools_router' in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
-    except Exception as _tools_e:
-        logger.warning(f"Tools endpoints unavailable; skipping import: {_tools_e}")
     _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
