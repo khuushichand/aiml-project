@@ -56,7 +56,7 @@ export function useVlmBackends(): UseVlmBackendsResult {
     if (!rawBackends) return null;
     const out: Record<string, boolean> = {};
     for (const [k, v] of Object.entries(rawBackends)) {
-      out[k] = typeof v === 'object' && v !== null ? !!(v as any).available : !!v;
+      out[k] = typeof v === 'object' && v !== null ? !!v.available : !!v;
     }
     return out;
   }, [rawBackends]);
