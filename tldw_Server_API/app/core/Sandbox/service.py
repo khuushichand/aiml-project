@@ -69,6 +69,55 @@ class SandboxService:
             "node:20-alpine",
             # generic shell base left for future: e.g., "ubuntu:24.04"
         ]
+        # Defaults pulled from policy cfg (wired to env/config)
+        max_cpu = self.policy.cfg.max_cpu
+        max_mem_mb = self.policy.cfg.max_mem_mb
+        max_upload_mb = self.policy.cfg.max_upload_mb
+        max_log_bytes = self.policy.cfg.max_log_bytes
+        workspace_cap_mb = self.policy.cfg.workspace_cap_mb
+        artifact_ttl_hours = self.policy.cfg.artifact_ttl_hours
+        supported_spec_versions = list(self.policy.cfg.supported_spec_versions or ["1.0"])
+        # Queue/backpressure defaults from app settings
+        try:
+            queue_max_length = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+        except Exception:
+            queue_max_length = 100
+        try:
+            queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
+        except Exception:
+            queue_ttl_sec = 120
+        return [
+            {
+                "name": "docker",
+                "available": bool(docker_available()),
+                "default_images": images,
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "notes": None,
+            },
+            {
+                "name": "firecracker",
+                "available": bool(firecracker_available()),
+                "default_images": images,  # firecracker images will differ; placeholder for UX
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "notes": "Direct integration preferred; ignite is EOL",
+            },
+        ]
 
     def _audit_run_completion(self, *, user_id: str | int | None, run_id: str, status: RunStatus, spec_version: str, session_id: str | None) -> None:
         """Log a completion audit event in a fire-and-forget manner."""
@@ -144,55 +193,7 @@ class SandboxService:
                 loop.create_task(_alog())
         except Exception as e:
             logger.debug(f"audit(run.completion) failed: {e}")
-        # Defaults pulled from policy cfg (wired to env/config)
-        max_cpu = self.policy.cfg.max_cpu
-        max_mem_mb = self.policy.cfg.max_mem_mb
-        max_upload_mb = self.policy.cfg.max_upload_mb
-        max_log_bytes = self.policy.cfg.max_log_bytes
-        workspace_cap_mb = self.policy.cfg.workspace_cap_mb
-        artifact_ttl_hours = self.policy.cfg.artifact_ttl_hours
-        supported_spec_versions = list(self.policy.cfg.supported_spec_versions or ["1.0"])
-        # Queue/backpressure defaults from app settings
-        try:
-            queue_max_length = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
-        except Exception:
-            queue_max_length = 100
-        try:
-            queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
-        except Exception:
-            queue_ttl_sec = 120
-        return [
-            {
-                "name": "docker",
-                "available": bool(docker_available()),
-                "default_images": images,
-                "max_cpu": max_cpu,
-                "max_mem_mb": max_mem_mb,
-                "max_upload_mb": max_upload_mb,
-                "max_log_bytes": max_log_bytes,
-                "queue_max_length": queue_max_length,
-                "queue_ttl_sec": queue_ttl_sec,
-                "workspace_cap_mb": workspace_cap_mb,
-                "artifact_ttl_hours": artifact_ttl_hours,
-                "supported_spec_versions": supported_spec_versions,
-                "notes": None,
-            },
-            {
-                "name": "firecracker",
-                "available": bool(firecracker_available()),
-                "default_images": images,  # firecracker images will differ; placeholder for UX
-                "max_cpu": max_cpu,
-                "max_mem_mb": max_mem_mb,
-                "max_upload_mb": max_upload_mb,
-                "max_log_bytes": max_log_bytes,
-                "queue_max_length": queue_max_length,
-                "queue_ttl_sec": queue_ttl_sec,
-                "workspace_cap_mb": workspace_cap_mb,
-                "artifact_ttl_hours": artifact_ttl_hours,
-                "supported_spec_versions": supported_spec_versions,
-                "notes": "Direct integration preferred; ignite is EOL",
-            },
-        ]
+        # (rest of method continues)
 
     def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> Session:
         # Validate requested spec version

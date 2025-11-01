@@ -119,10 +119,9 @@ class SandboxOrchestrator:
             # If missing from sessions map (unlikely), synthesize from stored
             return Session(id=stored.get("id", ""), runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
 
-        # Create a new session and its workspace
+        # Create a new session (workspace optional in scaffold)
         sid = str(uuid.uuid4())
         sess = Session(id=sid, runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
-        ws_dir = self._ensure_workspace(user_id, sid)
         with self._lock:
             self._sessions[sid] = sess
             # Store idempotent response body

@@ -7852,7 +7852,7 @@ def get_mediawiki_form_data(
     if namespaces_str:
         try:
             namespaces = [int(ns.strip()) for ns in namespaces_str.split(',')]
-        except ValueError:
+        except ValueError as ve:
             raise HTTPException(
                 status_code=HTTP_422_UNPROCESSABLE,
                 detail="Invalid namespace format. Must be comma-separated integers."

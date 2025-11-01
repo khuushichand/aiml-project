@@ -729,25 +729,23 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 asyncio.create_task(_enqueue_end_later())
     except Exception:
         pass
-    # If the run already ended, proactively deliver 'end' before anything else
-    try:
-        if bool(run_id in getattr(hub, "_ended", set())):
-            try:
-                seq_end = hub._next_seq(run_id)  # type: ignore[attr-defined]
-            except Exception:
-                seq_end = 1
-            await websocket.send_json({"type": "event", "event": "end", "data": {}, "seq": seq_end})
-    except Exception:
-        pass
-
-    # After subscribing, send buffered frames first in original order to avoid
+    # After subscribing, wait briefly for late-published buffered frames (e.g., 'end')
+    # then send buffered frames first in original order to avoid
     # interleaving with fast test heartbeats and to guarantee deterministic
     # delivery across reconnects.
     try:
         last_seq_sent: int | None = None
         try:
-            bufs = getattr(hub, "_buffers", {})
-            snapshot = list(bufs.get(run_id) or [])
+            # Poll a few times to allow any just-published frames (e.g., end)
+            tries = 0
+            while tries < 5:
+                bufs = getattr(hub, "_buffers", {})
+                snapshot = list(bufs.get(run_id) or [])
+                if any(isinstance(f, dict) and f.get("type") == "event" and f.get("event") == "end" for f in snapshot):
+                    break
+                tries += 1
+                await asyncio.sleep(0.01)
+            # Send the final snapshot in order
             for frame0 in snapshot[-100:]:
                 await websocket.send_json(frame0)
                 try:
@@ -781,8 +779,12 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                     except Exception:
                         pass
                 except Exception:
-                    # If publish fails, fallback to direct send without seq
-                    await websocket.send_json({"type": "heartbeat"})
+                    # If publish fails, fallback to direct send with a hub seq
+                    try:
+                        seq_hb = hub._next_seq(run_id)  # type: ignore[attr-defined]
+                    except Exception:
+                        seq_hb = 1
+                    await websocket.send_json({"type": "heartbeat", "seq": int(seq_hb)})
         except Exception:
             return
 

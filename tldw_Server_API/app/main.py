@@ -2898,7 +2898,18 @@ else:
     _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
     if _HAS_JOBS_ADMIN:
-        _include_if_enabled("jobs", jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"], default_stable=False)
+        if _TEST_MODE:
+            # In tests, include Jobs admin endpoints unconditionally to avoid
+            # config-based gating interfering with unit tests that rely on them.
+            app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+        else:
+            _include_if_enabled(
+                "jobs",
+                jobs_admin_router,
+                prefix=f"{API_V1_PREFIX}",
+                tags=["jobs"],
+                default_stable=False,
+            )
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
     # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)

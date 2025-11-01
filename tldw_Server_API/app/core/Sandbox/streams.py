@@ -56,10 +56,12 @@ class RunStreamHub:
                 # Attach monotonically increasing sequence number per run
                 frame = dict(frame)
                 frame["seq"] = self._next_seq(run_id)
-            self._buffers.setdefault(run_id, []).append(frame)
+            # Do not buffer heartbeat frames to avoid pushing out important events
+            if not (isinstance(frame, dict) and frame.get("type") == "heartbeat"):
+                self._buffers.setdefault(run_id, []).append(frame)
             # Trim buffer to avoid unbounded mem (keep last 100 frames)
-            buf = self._buffers[run_id]
-            if len(buf) > 100:
+            buf = self._buffers.get(run_id)
+            if buf is not None and len(buf) > 100:
                 del buf[:-100]
             subs = self._queues.get(run_id)
             if subs and self._loop is not None:

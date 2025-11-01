@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
+from uuid import uuid4
 
 
 def _client() -> TestClient:
@@ -29,22 +30,16 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-def _create_run(client: TestClient) -> str:
-    body: Dict[str, Any] = {
-        "spec_version": "1.0",
-        "runtime": "docker",
-        "base_image": "python:3.11-slim",
-        "command": ["echo", "ok"],
-        "timeout_sec": 5,
-    }
-    r = client.post("/api/v1/sandbox/runs", json=body)
-    assert r.status_code == 200
-    return r.json()["id"]
+def _new_run_id() -> str:
+    # The WS stream endpoint does not require the run to be registered
+    # in the store; it subscribes to the hub by run_id. We can generate
+    # a fresh identifier and publish frames to that channel directly.
+    return f"run-{uuid4()}"
 
 
 def test_ws_burst_stdout_stderr_order_and_types() -> None:
     with _client() as client:
-        run_id = _create_run(client)
+        run_id = _new_run_id()
         hub = get_hub()
 
         # Publish a large burst of mixed stdout/stderr while a client is connected
@@ -79,4 +74,3 @@ def test_ws_burst_stdout_stderr_order_and_types() -> None:
             # Ensure seq is strictly increasing
             seqs = [fr.get("seq") for fr in frames if isinstance(fr.get("seq"), int)]
             assert seqs == sorted(seqs) and len(seqs) == len(set(seqs))
-

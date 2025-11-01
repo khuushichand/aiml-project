@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
+from uuid import uuid4
 
 
 def _client() -> TestClient:
@@ -26,22 +27,13 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-def _create_run(client: TestClient) -> str:
-    body: Dict[str, Any] = {
-        "spec_version": "1.0",
-        "runtime": "docker",
-        "base_image": "python:3.11-slim",
-        "command": ["echo", "ok"],
-        "timeout_sec": 5,
-    }
-    r = client.post("/api/v1/sandbox/runs", json=body)
-    assert r.status_code == 200
-    return r.json()["id"]
+def _new_run_id() -> str:
+    return f"run-{uuid4()}"
 
 
 def test_ws_multi_subscribers_burst_identical_ordering() -> None:
     with _client() as client:
-        run_id = _create_run(client)
+        run_id = _new_run_id()
         hub = get_hub()
 
         # Connect two subscribers
@@ -84,4 +76,3 @@ def test_ws_multi_subscribers_burst_identical_ordering() -> None:
             assert seqs1 == sorted(seqs1) and len(seqs1) == len(set(seqs1))
             assert seqs2 == sorted(seqs2) and len(seqs2) == len(set(seqs2))
             assert seqs1 == seqs2
-

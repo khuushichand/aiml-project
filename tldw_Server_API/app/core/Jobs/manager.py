@@ -872,16 +872,24 @@ class JobManager:
                             except Exception:
                                 pass
                             try:
-                                emit_job_event(
-                                    "job.created",
-                                    job=d,
-                                    attrs={
-                                        "idempotent": (not was_insert),
-                                        "owner_user_id": d.get("owner_user_id"),
-                                        "retry_count": int(d.get("retry_count") or 0),
-                                    },
+                                # Write to outbox within the same transaction to avoid SQLite write-lock issues
+                                attrs_json = json.dumps({
+                                    "idempotent": (not was_insert),
+                                    "owner_user_id": d.get("owner_user_id"),
+                                    "retry_count": int(d.get("retry_count") or 0),
+                                })
+                                conn.execute(
+                                    (
+                                        "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
+                                    ),
+                                    (
+                                        int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
+                                        "job.created", attrs_json, d.get("owner_user_id"), d.get("request_id"), d.get("trace_id"),
+                                    ),
                                 )
                             except Exception:
+                                # Best-effort; do not fail job create on outbox errors
                                 pass
                             return d
                         # Non-idempotent insert
@@ -940,14 +948,20 @@ class JobManager:
                         except Exception:
                             pass
                         try:
-                            emit_job_event(
-                                "job.created",
-                                job=d,
-                                attrs={
-                                    "idempotent": False,
-                                    "owner_user_id": d.get("owner_user_id"),
-                                    "retry_count": int(d.get("retry_count") or 0),
-                                },
+                            attrs_json = json.dumps({
+                                "idempotent": False,
+                                "owner_user_id": d.get("owner_user_id"),
+                                "retry_count": int(d.get("retry_count") or 0),
+                            })
+                            conn.execute(
+                                (
+                                    "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
+                                ),
+                                (
+                                    int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
+                                    "job.created", attrs_json, d.get("owner_user_id"), d.get("request_id"), d.get("trace_id"),
+                                ),
                             )
                         except Exception:
                             pass
@@ -1078,14 +1092,20 @@ class JobManager:
                     except Exception:
                         pass
                     try:
-                        emit_job_event(
-                            "job.created",
-                            job={**d, "request_id": request_id, "trace_id": trace_id},
-                            attrs={
-                                "idempotent": False,
-                                "owner_user_id": d.get("owner_user_id"),
-                                "retry_count": int(d.get("retry_count") or 0),
-                            },
+                        attrs_json = json.dumps({
+                            "idempotent": False,
+                            "owner_user_id": d.get("owner_user_id"),
+                            "retry_count": int(d.get("retry_count") or 0),
+                        })
+                        conn.execute(
+                            (
+                                "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'))"
+                            ),
+                            (
+                                int(d.get("id")), d.get("domain"), d.get("queue"), d.get("job_type"),
+                                "job.created", attrs_json, d.get("owner_user_id"), request_id, trace_id,
+                            ),
                         )
                     except Exception:
                         pass
@@ -1967,8 +1987,17 @@ class JobManager:
                             except Exception:
                                 pass
                             try:
-                                ev = {"id": int(job_id), "domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")}
-                                emit_job_event("job.completed", job=ev)
+                                # Insert completion event within the same transaction to avoid cross-connection locks
+                                conn.execute(
+                                    (
+                                        "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                        "VALUES (?, ?, ?, ?, 'job.completed', '{}', NULL, ?, ?, DATETIME('now'))"
+                                    ),
+                                    (
+                                        int(job_id), d.get("domain"), d.get("queue"), d.get("job_type"),
+                                        d.get("request_id"), d.get("trace_id"),
+                                    ),
+                                )
                             except Exception:
                                 pass
                     except Exception:
