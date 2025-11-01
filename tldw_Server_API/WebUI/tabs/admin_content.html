@@ -3653,6 +3653,100 @@ async function _ensurePermissionCategories() {
     -->
 </div>
 
+<!-- User Permissions Editor (Admin) -->
+<div id="tabAdminUserPermissions" class="tab-content">
+    <div class="endpoint-section" id="adminUserPerms">
+        <h2>User Permissions Editor</h2>
+        <p>Search for a user, manage their roles, and set per‑permission overrides. Admin access required.</p>
+
+        <div class="columns" style="margin-bottom: 8px;">
+            <div class="column">
+                <label for="userPermSearch">Find User (name/email):</label>
+                <input type="text" id="userPermSearch" placeholder="e.g., alice or alice@example.com" />
+                <div class="btn-group" style="margin-top:6px;">
+                    <button class="api-button" id="btnUserPermSearch">Search</button>
+                    <button class="api-button" id="btnUserPermReload" title="Reload current user">Reload</button>
+                </div>
+            </div>
+            <div class="column">
+                <div id="userPermSelected" style="margin-top: 26px; opacity: .85;">
+                    No user selected
+                </div>
+            </div>
+        </div>
+
+        <div id="userPermSearchResults" class="card" style="display:none; padding: 8px; margin-bottom: 10px;"></div>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Roles</h3>
+                <div id="userPermRolesList" class="scroll-y" style="max-height: 260px;"></div>
+            </div>
+            <div class="column">
+                <h3>Effective Permissions</h3>
+                <div class="btn-group" style="margin-bottom: 6px;">
+                    <button class="api-button" id="btnUserPermRefreshEffective">Refresh</button>
+                </div>
+                <pre id="userPermEffectiveOut" class="small-pre">---</pre>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 12px;">Overrides</h3>
+        <div class="columns" style="margin-bottom: 6px;">
+            <div class="column">
+                <label for="permFilterSearch">Filter:</label>
+                <input type="text" id="permFilterSearch" placeholder="search permissions (substring)" />
+            </div>
+            <div class="column">
+                <label for="permFilterCategory">Category:</label>
+                <select id="permFilterCategory"><option value="">All</option></select>
+            </div>
+        </div>
+
+        <div class="scroll-y" style="max-height: 420px;">
+            <h4>Tool Permissions</h4>
+            <div class="btn-group" style="margin-bottom:6px;">
+                <button class="api-button" id="btnPermBulkAllowTools" title="Allow all filtered tool permissions">Allow All (Tools)</button>
+                <button class="api-button" id="btnPermBulkDenyTools" title="Deny all filtered tool permissions">Deny All (Tools)</button>
+                <button class="api-button" id="btnPermBulkInheritTools" title="Inherit all filtered tool permissions">Inherit All (Tools)</button>
+            </div>
+            <table class="simple-table small-table">
+                <thead>
+                    <tr>
+                        <th style="min-width: 280px;">Permission</th>
+                        <th>Category</th>
+                        <th>Effective</th>
+                        <th style="min-width: 240px;">Override</th>
+                    </tr>
+                </thead>
+                <tbody id="userPermOverridesTableTools"></tbody>
+            </table>
+
+            <h4 style="margin-top: 14px;">Standard Permissions</h4>
+            <div class="btn-group" style="margin-bottom:6px;">
+                <button class="api-button" id="btnPermBulkAllowStd" title="Allow all filtered standard permissions">Allow All (Standard)</button>
+                <button class="api-button" id="btnPermBulkDenyStd" title="Deny all filtered standard permissions">Deny All (Standard)</button>
+                <button class="api-button" id="btnPermBulkInheritStd" title="Inherit all filtered standard permissions">Inherit All (Standard)</button>
+            </div>
+            <table class="simple-table small-table">
+                <thead>
+                    <tr>
+                        <th style="min-width: 280px;">Permission</th>
+                        <th>Category</th>
+                        <th>Effective</th>
+                        <th style="min-width: 240px;">Override</th>
+                    </tr>
+                </thead>
+                <tbody id="userPermOverridesTableStd"></tbody>
+            </table>
+        </div>
+
+        <div id="userPermToastArea"></div>
+    </div>
+
+    <script type="module" src="js/admin-user-permissions.js"></script>
+</div>
+
 <!-- ============ Admin: Virtual Keys (per user) ============ -->
 <div class="endpoint-section" id="adminVirtualKeys">
     <h2>

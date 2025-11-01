@@ -359,6 +359,48 @@
     </div>
 </div>
 
+<!-- Permissions Matrix (Self) -->
+<div id="tabAuthPermissionsMatrix" class="tab-content">
+    <div class="endpoint-section" id="authPermissionsMatrix">
+        <h2>
+            <span class="endpoint-method get">GET</span>
+            <span class="endpoint-path">/api/v1/privileges/self - My Permissions Matrix</span>
+        </h2>
+        <p>View your effective permissions across API endpoints. Data is scoped to your current user/session.</p>
+
+        <div class="columns" style="margin-bottom:8px;">
+            <div class="column">
+                <label for="authPermSearch">Search:</label>
+                <input type="text" id="authPermSearch" placeholder="filter by endpoint, method or scope" />
+            </div>
+            <div class="column">
+                <div class="btn-group" style="margin-top: 20px;">
+                    <button class="api-button" id="btnAuthPermRefresh">Refresh</button>
+                    <button class="api-button" id="btnAuthPermExport">Export CSV</button>
+                </div>
+            </div>
+            <div class="column">
+                <div id="authPermSummary" aria-live="polite" style="margin-top: 24px; opacity: 0.85;">
+                    <!-- Populated by JS: counts, updated time -->
+                </div>
+            </div>
+        </div>
+
+        <div class="columns">
+            <div class="column">
+                <h3>Matrix by Scope</h3>
+                <div id="authPermMatrixByScope" class="scroll-x" style="min-height: 48px;"></div>
+            </div>
+            <div class="column">
+                <h3>Detailed List</h3>
+                <div id="authPermList" class="scroll-y" style="max-height: 420px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="js/auth-permissions.js"></script>
+</div>
+
 <!-- External module bindings for advanced auth panels -->
 <script type="module" src="js/auth-advanced.js"></script>
 <!-- My API Keys module bindings -->
