@@ -27,8 +27,8 @@ class TestChromaDBManagerInit:
             user_embedding_config={"USER_DB_BASE_DIR": base_dir, "embedding_config": {}, "chroma_client_settings": {"backend": "stub"}},
             client=MagicMock(),
         )
-            assert manager.user_id == "valid_user_123"
-            assert manager.user_embedding_config.get("USER_DB_BASE_DIR") == base_dir
+        assert manager.user_id == "valid_user_123"
+        assert manager.user_embedding_config.get("USER_DB_BASE_DIR") == base_dir
     
     def test_init_with_invalid_user_id(self):
         """Test initialization rejects invalid user IDs."""
@@ -57,7 +57,7 @@ class TestChromaDBManagerInit:
             user_embedding_config={"USER_DB_BASE_DIR": base_dir, "chroma_client_settings": {"backend": "stub"}},
             client=MagicMock(),
         )
-            assert os.path.isdir(str(manager.user_chroma_path))
+        assert os.path.isdir(str(manager.user_chroma_path))
     
     def test_init_with_custom_base_path(self):
         """Test initialization with custom base path."""
@@ -68,10 +68,10 @@ class TestChromaDBManagerInit:
             user_embedding_config={"USER_DB_BASE_DIR": base_dir, "chroma_client_settings": {"backend": "stub"}},
             client=MagicMock(),
         )
-            # Normalize both to avoid /private path prefix differences on macOS
-            resolved_base = str(pathlib.Path(base_dir).resolve())
-            resolved_user_path = str(pathlib.Path(str(manager.user_chroma_path)).resolve())
-            assert resolved_user_path.startswith(resolved_base)
+        # Normalize both to avoid /private path prefix differences on macOS
+        resolved_base = str(pathlib.Path(base_dir).resolve())
+        resolved_user_path = str(pathlib.Path(str(manager.user_chroma_path)).resolve())
+        assert resolved_user_path.startswith(resolved_base)
 
 
 @pytest.mark.unit

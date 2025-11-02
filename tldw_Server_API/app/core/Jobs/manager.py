@@ -2076,6 +2076,13 @@ class JobManager:
                                 (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
                             )
                             ok = cur.rowcount > 0
+                            if not ok:
+                                # Admin-style finalize: allow completing queued without lease when enforcement disabled
+                                cur.execute(
+                                    "UPDATE jobs SET status = 'completed', result = %s::jsonb, completed_at = NOW(), completion_token = COALESCE(completion_token, %s) WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)",
+                                    (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
+                                )
+                                ok = cur.rowcount > 0
                             ok = cur.rowcount > 0
                         if _test_mode:
                             try:
@@ -2185,6 +2192,16 @@ class JobManager:
                             (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
                         )
                         ok = conn.total_changes > 0
+                        if not ok:
+                            # Admin-style finalize: allow completing queued without lease when enforcement disabled
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'completed', result = ?, completed_at = DATETIME('now'), completion_token = COALESCE(completion_token, ?) "
+                                    "WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
+                                ),
+                                (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
+                            )
+                            ok = conn.total_changes > 0
                     if _test_mode:
                         try:
                             _r = conn.execute("SELECT id, status FROM jobs WHERE id = ?", (int(job_id),)).fetchone()
