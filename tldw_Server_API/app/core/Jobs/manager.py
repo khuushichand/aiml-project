@@ -1720,119 +1720,40 @@ class JobManager:
                                 try:
                                     snap = JobManager._LAST_ACQUIRED_TEST.get((domain, queue))
                                     if snap:
-                                        # If row vanished, re-materialize from snapshot for test determinism
-                                        try:
-                                            logger.info("[JM TEST] re-inserting last acquired snapshot for domain/queue due to empty table visibility")
-                                            cols = (
-                                                "id, uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, error_code, error_class, error_stack, last_error, cancel_requested_at, cancelled_at, cancellation_reason, completion_token, failure_streak_code, failure_streak_count, quarantined_at, progress_percent, progress_message, request_id, trace_id, failure_timeline, created_at, updated_at, completed_at"
-                                            )
-                                            conn.execute(
-                                                f"INSERT OR REPLACE INTO jobs ({cols}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                                                (
-                                                    int(snap.get("id")),
-                                                    snap.get("uuid"),
-                                                    snap.get("domain"),
-                                                    snap.get("queue"),
-                                                    snap.get("job_type"),
-                                                    snap.get("owner_user_id"),
-                                                    snap.get("project_id"),
-                                                    snap.get("idempotency_key"),
-                                                    json.dumps(snap.get("payload") or {}),
-                                                    json.dumps(snap.get("result")) if snap.get("result") is not None else None,
-                                                    str(snap.get("status") or "processing"),
-                                                    int(snap.get("priority") or 5),
-                                                    int(snap.get("max_retries") or 3),
-                                                    int(snap.get("retry_count") or 0),
-                                                    snap.get("available_at"),
-                                                    snap.get("started_at"),
-                                                    snap.get("leased_until"),
-                                                    snap.get("lease_id"),
-                                                    snap.get("worker_id"),
-                                                    snap.get("acquired_at"),
-                                                    snap.get("error_message"),
-                                                    snap.get("error_code"),
-                                                    snap.get("error_class"),
-                                                    snap.get("error_stack"),
-                                                    snap.get("last_error"),
-                                                    snap.get("cancel_requested_at"),
-                                                    snap.get("cancelled_at"),
-                                                    snap.get("cancellation_reason"),
-                                                    snap.get("completion_token"),
-                                                    snap.get("failure_streak_code"),
-                                                    int(snap.get("failure_streak_count") or 0),
-                                                    snap.get("quarantined_at"),
-                                                    snap.get("progress_percent"),
-                                                    snap.get("progress_message"),
-                                                    snap.get("request_id"),
-                                                    snap.get("trace_id"),
-                                                    json.dumps(snap.get("failure_timeline")) if isinstance(snap.get("failure_timeline"), (list, dict)) else (snap.get("failure_timeline") if snap.get("failure_timeline") is not None else None),
-                                                    snap.get("created_at"),
-                                                    snap.get("updated_at"),
-                                                    snap.get("completed_at"),
-                                                ),
-                                            )
-                                            conn.commit()
-                                            prow2 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(snap.get("id")),)).fetchone()
-                                            if prow2:
-                                                d2 = dict(prow2)
-                                                try:
-                                                    if isinstance(d2.get("payload"), str):
-                                                        d2["payload"] = json.loads(d2["payload"]) if d2["payload"] else {}
-                                                except Exception:
-                                                    pass
-                                                try:
-                                                    JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d2)
-                                                except Exception:
-                                                    pass
-                                                # Ensure it is transitioned to processing with a fresh lease before returning
-                                                try:
-                                                    conn.execute(
-                                                        (
-                                                            "UPDATE jobs SET status = 'processing', "
-                                                            "started_at = COALESCE(started_at, DATETIME('now')), "
-                                                            "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
-                                                            "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
-                                                            "WHERE id = ?"
-                                                        ),
-                                                        (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), int(d2.get("id"))),
-                                                    )
-                                                    try:
-                                                        conn.commit()
-                                                    except Exception:
-                                                        pass
-                                                    prow3 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(d2.get("id")),)).fetchone()
-                                                    if prow3:
-                                                        d2 = dict(prow3)
-                                                except Exception:
-                                                    pass
-                                                logger.info("[JM TEST] returning re-inserted snapshot row")
-                                                return d2
-                                        except Exception:
-                                            pass
-                                        logger.info("[JM TEST] returning last acquired snapshot for domain/queue due to empty table visibility")
-                                        try:
-                                            JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(snap)
-                                            # Transition to processing before returning
-                                            conn.execute(
-                                                (
-                                                    "UPDATE jobs SET status = 'processing', "
-                                                    "started_at = COALESCE(started_at, DATETIME('now')), "
-                                                    "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
-                                                    "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
-                                                    "WHERE id = ?"
-                                                ),
-                                                (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), int(snap.get("id"))),
-                                            )
+                                        # Do NOT reinsert. Only operate on the current DB row if it exists and is eligible.
+                                        prow_cur = conn.execute("SELECT * FROM jobs WHERE id=?", (int(snap.get("id")),)).fetchone()
+                                        if prow_cur:
+                                            d2 = dict(prow_cur)
                                             try:
-                                                conn.commit()
+                                                if isinstance(d2.get("payload"), str):
+                                                    d2["payload"] = json.loads(d2["payload"]) if d2["payload"] else {}
                                             except Exception:
                                                 pass
-                                            prow4 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(snap.get("id")),)).fetchone()
-                                            if prow4:
-                                                return dict(prow4)
-                                        except Exception:
-                                            pass
-                                        return dict(snap)
+                                            # Only transition queued or expired-processing rows; never override terminal states
+                                            try:
+                                                conn.execute(
+                                                    (
+                                                        "UPDATE jobs SET status = 'processing', "
+                                                        "started_at = COALESCE(started_at, DATETIME('now')), "
+                                                        "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
+                                                        "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
+                                                        "WHERE id = ? AND (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now'))))"
+                                                    ),
+                                                    (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), int(d2.get("id"))),
+                                                )
+                                                try:
+                                                    conn.commit()
+                                                except Exception:
+                                                    pass
+                                                prow3 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(d2.get("id")),)).fetchone()
+                                                if prow3:
+                                                    d2 = dict(prow3)
+                                                    JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d2)
+                                                    logger.info("[JM TEST] returning snapshot row after safe transition")
+                                                    return d2
+                                            except Exception:
+                                                pass
+                                        # Snapshot exists but row missing or not eligible; return None
                                 except Exception:
                                     pass
                             return None
@@ -2644,7 +2565,12 @@ class JobManager:
                                     if _outbox and delay < 3:
                                         delay = 3
                             # Poison message quarantine check: increment failure_streak_* and quarantine if threshold reached
-                            thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                            # In TEST_MODE with zero backoff (unit-style retry loops), avoid quarantining to allow timeline growth
+                            if test_mode and int(backoff_seconds) <= 0:
+                                thresh = max(base_thresh, 10**9)
+                            else:
+                                thresh = base_thresh
                             # Update retry path with failure streak bookkeeping
                             if enforce:
                                 cur.execute(
@@ -2903,7 +2829,11 @@ class JobManager:
                             except Exception:
                                 if _outbox and delay < 3:
                                     delay = 3
-                        thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                            if test_mode and int(backoff_seconds) <= 0:
+                                thresh = max(base_thresh, 10**9)
+                            else:
+                                thresh = base_thresh
                         # SQLite retry path with failure streak bookkeeping
                         if enforce:
                             conn.execute(

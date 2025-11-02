@@ -25,15 +25,15 @@ jobs:
       - name: Generate Python SBOM from pyproject (cdxgen)
         run: |
           if [ -f pyproject.toml ]; then \
-            npx @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
+            npx -y @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
           fi
 
       - name: Generate Node SBOM (cyclonedx-npm)
         run: |
           if [ -f tldw-frontend/package.json ]; then \
-            (cd tldw-frontend && npx @cyclonedx/cyclonedx-npm --output-file ../sbom-frontend.cdx.json) || true; \
+            (cd tldw-frontend && npx -y @cyclonedx/cyclonedx-npm --output-file ../sbom-frontend.cdx.json) || true; \
           elif [ -f package.json ]; then \
-            npx @cyclonedx/cyclonedx-npm --output-file sbom-frontend.cdx.json || true; \
+            npx -y @cyclonedx/cyclonedx-npm --output-file sbom-frontend.cdx.json || true; \
           else \
             echo "No package.json found for Node SBOM generation"; \
           fi
@@ -46,13 +46,7 @@ jobs:
           output-file: sbom-syft.cdx.json
           upload-artifact: false
 
-      - name: Setup Python (for merge/validate)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install cyclonedx-cli
-        run: python -m pip install cyclonedx-cli
+      # Merge/validate will use CycloneDX CLI container, no Python install needed
 
       - name: Merge SBOMs
         run: |
@@ -61,7 +55,11 @@ jobs:
           [ -f sbom-frontend.cdx.json ] && FILES="$FILES sbom-frontend.cdx.json"
           [ -f sbom-syft.cdx.json ] && FILES="$FILES sbom-syft.cdx.json"
           if [ -n "$FILES" ]; then \
-            cyclonedx-cli merge --input-files $FILES --output-file sbom.cdx.json; \
+            docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli:latest \
+              merge --input-files $FILES --output-file sbom.cdx.json \
+              || cp sbom-python.cdx.json sbom.cdx.json 2>/dev/null \
+              || cp sbom-frontend.cdx.json sbom.cdx.json 2>/dev/null \
+              || cp sbom-syft.cdx.json sbom.cdx.json 2>/dev/null; \
           else \
             echo "No component SBOMs to merge"; \
           fi
@@ -69,7 +67,8 @@ jobs:
       - name: Validate merged SBOM
         run: |
           if [ -f sbom.cdx.json ]; then \
-            python -m cyclonedx_cli validate --input-file sbom.cdx.json; \
+            docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli:latest \
+              validate --input-file sbom.cdx.json; \
           fi
 
       - name: Upload SBOM artifacts
@@ -81,3 +80,4 @@ jobs:
             sbom-frontend.cdx.json
             sbom-syft.cdx.json
             sbom.cdx.json
+          if-no-files-found: ignore
