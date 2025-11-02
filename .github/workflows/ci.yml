@@ -1,19 +1,24 @@
 name: CI
 
 on:
+  # Run on direct pushes to protected branches only
   push:
     branches:
       - main
-      - dev
+  # Run CI for PRs targeting these branches
   pull_request:
+    branches:
+      - main
+      - dev
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Ensure push and PR for the same commit share one slot
+  group: ci-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   lint:

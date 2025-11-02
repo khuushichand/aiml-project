@@ -272,7 +272,12 @@ class JobManager:
             key_global = "JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS"
             raw = os.getenv(key_backend) or os.getenv(key_global) or ""
             listed = {d.strip().lower() for d in raw.split(",") if d.strip()}
-            return "DESC" if dom.lower() in listed else "ASC"
+            if dom.lower() in listed:
+                return "DESC"
+            # Sensible default: chatbooks uses higher numeric priority first
+            if dom.lower() == "chatbooks":
+                return "DESC"
+            return "ASC"
         except Exception:
             return "ASC"
 

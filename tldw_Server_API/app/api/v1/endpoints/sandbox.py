@@ -1289,6 +1289,7 @@ async def admin_get_run_details(
         user_id=(owner if owner is not None else None),
         spec_version=st.spec_version,
         runtime=(st.runtime.value if st.runtime else None),
+        runtime_version=st.runtime_version,
         base_image=st.base_image,
         image_digest=st.image_digest,
         policy_hash=st.policy_hash,

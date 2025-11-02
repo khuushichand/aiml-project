@@ -631,21 +631,21 @@ class SQLiteStore(SandboxStore):
                     ru = json.loads(row["resource_usage"]) if row["resource_usage"] else None
                 except Exception:
                     ru = None
-            st = RunStatus(
-                id=row["id"],
-                phase=RunPhase(row["phase"]),
-                spec_version=row["spec_version"],
-                runtime=(RuntimeType(row["runtime"]) if row["runtime"] else None),
-                runtime_version=(row["runtime_version"] if "runtime_version" in row.keys() else None),
-                base_image=row["base_image"],
-                image_digest=row["image_digest"],
-                policy_hash=row["policy_hash"],
-                exit_code=row["exit_code"],
-                started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
-                finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
-                message=row["message"],
-                resource_usage=ru,
-            )
+                st = RunStatus(
+                    id=row["id"],
+                    phase=RunPhase(row["phase"]),
+                    spec_version=row["spec_version"],
+                    runtime=(RuntimeType(row["runtime"]) if row["runtime"] else None),
+                    runtime_version=(row["runtime_version"] if "runtime_version" in row.keys() else None),
+                    base_image=row["base_image"],
+                    image_digest=row["image_digest"],
+                    policy_hash=row["policy_hash"],
+                    exit_code=row["exit_code"],
+                    started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
+                    finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
+                    message=row["message"],
+                    resource_usage=ru,
+                )
                 return st
             except Exception:
                 return None
