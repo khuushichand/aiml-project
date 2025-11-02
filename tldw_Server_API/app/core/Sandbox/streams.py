@@ -48,6 +48,10 @@ class RunStreamHub:
     def _next_seq(self, run_id: str) -> int:
         cur = self._seq.get(run_id, 0) + 1
         self._seq[run_id] = cur
+        try:
+            logger.debug(f"hub seq[{run_id}] -> {cur}")
+        except Exception:
+            pass
         return cur
 
     def _publish(self, run_id: str, frame: dict) -> None:

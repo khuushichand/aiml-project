@@ -782,43 +782,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         logger.debug(f"WS stream[{run_id}]: after drain_buffer qsize={getattr(q, 'qsize', lambda: -1)()} ")
     except Exception:
         pass
-    # In test environments (when explicitly enabled), proactively enqueue
-    # minimal frames directly into this subscriber's queue if it's empty so
-    # the client immediately receives non-heartbeat messages.
-    try:
-        _synth_env = os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
-        synth_enabled = str(_synth_env).strip().lower() in {"1", "true", "yes", "on", "y"}
-        if synth_enabled:
-            st = _service.get_run(run_id)
-            try:
-                q_empty = q.empty()
-            except Exception:
-                q_empty = False
-            logger.debug(f"WS stream[{run_id}]: synth_enabled, run_found={bool(st)}, q_empty={q_empty}")
-            if st is not None and q_empty:
-                # Inject start for this subscriber only with proper seq
-                try:
-                    seq1 = hub._next_seq(run_id)  # type: ignore[attr-defined]
-                except Exception:
-                    seq1 = 1
-                try:
-                    q.put_nowait({"type": "event", "event": "start", "data": {"source": "ws_synthetic"}, "seq": seq1})
-                except Exception:
-                    pass
-                async def _enqueue_end_later():
-                    try:
-                        await asyncio.sleep(0.05)
-                        try:
-                            seq2 = hub._next_seq(run_id)  # type: ignore[attr-defined]
-                        except Exception:
-                            seq2 = (seq1 + 1)
-                        q.put_nowait({"type": "event", "event": "end", "data": {"source": "ws_synthetic"}, "seq": seq2})
-                    except Exception:
-                        return
-                # Store task to avoid premature GC and enable cleanup
-                synth_task = asyncio.create_task(_enqueue_end_later())
-    except Exception:
-        pass
+    # Do not inject synthetic frames here; rely solely on hub-published frames
     # After subscribing, wait briefly for late-published buffered frames (e.g., 'end')
     # then send buffered frames first in original order to avoid
     # interleaving with fast test heartbeats and to guarantee deterministic
