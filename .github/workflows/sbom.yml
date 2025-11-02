@@ -71,12 +71,20 @@ jobs:
           echo "SBOM_COUNT=$COUNT" >> "$GITHUB_ENV"
           echo "Found $COUNT SBOM file(s): $FILES"
 
-      - name: Merge SBOMs (CycloneDX CLI via npx)
+      - name: Merge SBOMs (CycloneDX CLI via GHCR)
+        id: merge_ghcr
         if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' }}
-        shell: bash
-        run: |
-          npx -y @cyclonedx/cyclonedx-cli \
-            merge --input-files $SBOM_FILES --output-file sbom.cdx.json
+        uses: docker://ghcr.io/cyclonedx/cyclonedx-cli:v0.30.0
+        with:
+          args: >-
+            merge --input-files ${{ env.SBOM_FILES }} --output-file sbom.cdx.json
+
+      - name: Merge SBOMs (CycloneDX CLI via Docker Hub fallback)
+        if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' && steps.merge_ghcr.outcome == 'failure' }}
+        uses: docker://cyclonedx/cyclonedx-cli:latest
+        with:
+          args: >-
+            merge --input-files ${{ env.SBOM_FILES }} --output-file sbom.cdx.json
 
       - name: Copy single SBOM to sbom.cdx.json
         if: ${{ env.SBOM_COUNT == '1' }}
@@ -85,11 +93,19 @@ jobs:
           # env.SBOM_FILES contains exactly one entry
           cp $SBOM_FILES sbom.cdx.json
 
-      - name: Validate merged SBOM (CycloneDX CLI via npx)
+      - name: Validate merged SBOM (CycloneDX CLI via GHCR)
+        id: validate_ghcr
         if: ${{ hashFiles('sbom.cdx.json') != '' }}
-        shell: bash
-        run: |
-          npx -y @cyclonedx/cyclonedx-cli \
+        uses: docker://ghcr.io/cyclonedx/cyclonedx-cli:v0.30.0
+        with:
+          args: >-
+            validate --input-file sbom.cdx.json
+
+      - name: Validate merged SBOM (CycloneDX CLI via Docker Hub fallback)
+        if: ${{ hashFiles('sbom.cdx.json') != '' && steps.validate_ghcr.outcome == 'failure' }}
+        uses: docker://cyclonedx/cyclonedx-cli:latest
+        with:
+          args: >-
             validate --input-file sbom.cdx.json
 
       - name: Upload SBOM artifacts

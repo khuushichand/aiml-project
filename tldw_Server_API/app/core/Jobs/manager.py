@@ -1503,7 +1503,7 @@ class JobManager:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
                             # Stable ordering: priority ASC (lower numeric first), then available/created asc, then id asc
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1601,9 +1601,9 @@ class JobManager:
                             params_sub.append(owner_user_id)
                         # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            sub += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1670,9 +1670,9 @@ class JobManager:
                             params.append(owner_user_id)
                         # Ordering: always honor priority ASC, then available_at, then created_at
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         if _test_mode:
                             try:
                                 logger.info(f"[JM TEST] acquire SELECT sql={base} params={params}")
