@@ -71,12 +71,12 @@ jobs:
           echo "SBOM_COUNT=$COUNT" >> "$GITHUB_ENV"
           echo "Found $COUNT SBOM file(s): $FILES"
 
-      - name: Merge SBOMs (CycloneDX CLI Action)
+      - name: Merge SBOMs (CycloneDX CLI via npx)
         if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' }}
-        uses: CycloneDX/cyclonedx-cli-action@v0
-        with:
-          args: >-
-            merge --input-files ${{ env.SBOM_FILES }} --output-file sbom.cdx.json
+        shell: bash
+        run: |
+          npx -y @cyclonedx/cyclonedx-cli \
+            merge --input-files $SBOM_FILES --output-file sbom.cdx.json
 
       - name: Copy single SBOM to sbom.cdx.json
         if: ${{ env.SBOM_COUNT == '1' }}
@@ -85,11 +85,11 @@ jobs:
           # env.SBOM_FILES contains exactly one entry
           cp $SBOM_FILES sbom.cdx.json
 
-      - name: Validate merged SBOM (CycloneDX CLI Action)
+      - name: Validate merged SBOM (CycloneDX CLI via npx)
         if: ${{ hashFiles('sbom.cdx.json') != '' }}
-        uses: CycloneDX/cyclonedx-cli-action@v0
-        with:
-          args: >-
+        shell: bash
+        run: |
+          npx -y @cyclonedx/cyclonedx-cli \
             validate --input-file sbom.cdx.json
 
       - name: Upload SBOM artifacts
