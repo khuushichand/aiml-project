@@ -22,11 +22,11 @@ class TestChromaDBManagerInit:
         """Test initialization with valid user ID."""
         import tempfile
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient'):
-            manager = ChromaDBManager(
-                user_id="valid_user_123",
-                user_embedding_config={"USER_DB_BASE_DIR": base_dir, "embedding_config": {}}
-            )
+        manager = ChromaDBManager(
+            user_id="valid_user_123",
+            user_embedding_config={"USER_DB_BASE_DIR": base_dir, "embedding_config": {}, "chroma_client_settings": {"backend": "stub"}},
+            client=MagicMock(),
+        )
             assert manager.user_id == "valid_user_123"
             assert manager.user_embedding_config.get("USER_DB_BASE_DIR") == base_dir
     
@@ -34,41 +34,40 @@ class TestChromaDBManagerInit:
         """Test initialization rejects invalid user IDs."""
         import tempfile
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient'):
-            # Test path traversal attempt
-            with pytest.raises(ValueError, match="Invalid user_id"):
-                ChromaDBManager(
-                    user_id="../malicious",
-                    user_embedding_config={"USER_DB_BASE_DIR": base_dir}
-                )
-            
-            # Test special characters
-            with pytest.raises(ValueError, match="Invalid user_id"):
-                ChromaDBManager(
-                    user_id="user$#@!",
-                    user_embedding_config={"USER_DB_BASE_DIR": base_dir}
-                )
+        # Test path traversal attempt
+        with pytest.raises(ValueError, match="Invalid user_id"):
+            ChromaDBManager(
+                user_id="../malicious",
+                user_embedding_config={"USER_DB_BASE_DIR": base_dir}
+            )
+        
+        # Test special characters
+        with pytest.raises(ValueError, match="Invalid user_id"):
+            ChromaDBManager(
+                user_id="user$#@!",
+                user_embedding_config={"USER_DB_BASE_DIR": base_dir}
+            )
     
     def test_init_creates_user_directory(self):
         """Test initialization creates user-specific directory."""
         import tempfile, os
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient'):
-            manager = ChromaDBManager(
-                user_id="test_user",
-                user_embedding_config={"USER_DB_BASE_DIR": base_dir}
-            )
+        manager = ChromaDBManager(
+            user_id="test_user",
+            user_embedding_config={"USER_DB_BASE_DIR": base_dir, "chroma_client_settings": {"backend": "stub"}},
+            client=MagicMock(),
+        )
             assert os.path.isdir(str(manager.user_chroma_path))
     
     def test_init_with_custom_base_path(self):
         """Test initialization with custom base path."""
         import tempfile, os, pathlib
         base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-        with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient'):
-            manager = ChromaDBManager(
-                user_id="test_user",
-                user_embedding_config={"USER_DB_BASE_DIR": base_dir}
-            )
+        manager = ChromaDBManager(
+            user_id="test_user",
+            user_embedding_config={"USER_DB_BASE_DIR": base_dir, "chroma_client_settings": {"backend": "stub"}},
+            client=MagicMock(),
+        )
             # Normalize both to avoid /private path prefix differences on macOS
             resolved_base = str(pathlib.Path(base_dir).resolve())
             resolved_user_path = str(pathlib.Path(str(manager.user_chroma_path)).resolve())

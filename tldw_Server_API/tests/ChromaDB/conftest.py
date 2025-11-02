@@ -228,30 +228,28 @@ def mock_chroma_client():
 
 @pytest.fixture
 def chromadb_manager(mock_chroma_client, temp_media_db):
-    """Create a ChromaDBManager instance with mocked dependencies."""
-    # Patch both Client (current) and PersistentClient (legacy) so manager.client uses the mock
-    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.Client') as _mock_client_cls, \
-         patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as _mock_pclient_cls:
-        _mock_client_cls.return_value = mock_chroma_client
-        _mock_pclient_cls.return_value = mock_chroma_client
-        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-        manager = ChromaDBManager(
-            user_id="test_user",
-            user_embedding_config={
-                "USER_DB_BASE_DIR": base_dir,
-                "embedding_config": {
-                    "default_model_id": "text-embedding-ada-002",
-                    "models": {
-                        "text-embedding-ada-002": {
-                            "provider": "openai",
-                            "model_name_or_path": "text-embedding-ada-002"
-                        }
+    """Create a ChromaDBManager instance with mocked dependencies (constructor injection)."""
+    base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+    manager = ChromaDBManager(
+        user_id="test_user",
+        user_embedding_config={
+            "USER_DB_BASE_DIR": base_dir,
+            "embedding_config": {
+                "default_model_id": "text-embedding-ada-002",
+                "models": {
+                    "text-embedding-ada-002": {
+                        "provider": "openai",
+                        "model_name_or_path": "text-embedding-ada-002"
                     }
                 }
-            }
-        )
-        manager.db_path = temp_media_db
-        yield manager
+            },
+            # Ensure no accidental persistent client usage in this unit fixture
+            "chroma_client_settings": {"backend": "stub"},
+        },
+        client=mock_chroma_client,
+    )
+    manager.db_path = temp_media_db
+    yield manager
 
 @pytest.fixture
 def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):

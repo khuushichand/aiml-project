@@ -31,33 +31,31 @@ def test_optional_claim_embeddings_with_chroma(monkeypatch):
             mock_client = MagicMock()
             mock_client.get_or_create_collection.return_value = mock_coll
 
-            # Create manager with mocked client
+            # Create manager with mocked client via constructor injection
             base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-            with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.Client') as cclient, \
-                 patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as pclient:
-                cclient.return_value = mock_client
-                pclient.return_value = mock_client
-                manager = ChromaDBManager(
-                    user_id="test_user",
-                    user_embedding_config={
-                        "USER_DB_BASE_DIR": base_dir,
-                        "embedding_config": {"default_model_id": "unused", "models": {}},
-                        "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
-                    },
-                )
-                manager.db_path = db_path
+            manager = ChromaDBManager(
+                user_id="test_user",
+                user_embedding_config={
+                    "USER_DB_BASE_DIR": base_dir,
+                    "embedding_config": {"default_model_id": "unused", "models": {}},
+                    # Avoid persistent client in this unit test
+                    "chroma_client_settings": {"backend": "stub"},
+                },
+                client=mock_client,
+            )
+            manager.db_path = db_path
 
-                # Run with embeddings off to skip doc embedding, but claim embedding on via flag
-                manager.process_and_store_content(
-                    content=content,
-                    media_id=media_id,
-                    file_name="py.txt",
-                    create_embeddings=False,
-                )
+            # Run with embeddings off to skip doc embedding, but claim embedding on via flag
+            manager.process_and_store_content(
+                content=content,
+                media_id=media_id,
+                file_name="py.txt",
+                create_embeddings=False,
+            )
 
-                # Assert claim embeddings upserted into collection
-                assert mock_client.get_or_create_collection.called
-                assert mock_coll.upsert.called
+            # Assert claim embeddings upserted into collection
+            assert mock_client.get_or_create_collection.called
+            assert mock_coll.upsert.called
     finally:
         # Restore flags
         if orig_enable is not None:

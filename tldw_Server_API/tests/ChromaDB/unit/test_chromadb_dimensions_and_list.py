@@ -12,11 +12,8 @@ def _make_manager_with_mock(mock_client, tmp_path):
         "embedding_config": {"default_model_id": "text-embedding-3-large", "models": {}},
         "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
     }
-    # Ensure PersistentClient is not created during manager init
-    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as pclient:
-        pclient.return_value = mock_client
-        mgr = ChromaDBManager(user_id="test_user", user_embedding_config=user_cfg)
-        mgr.client = mock_client
+    # Use constructor injection to provide the mock client
+    mgr = ChromaDBManager(user_id="test_user", user_embedding_config=user_cfg, client=mock_client)
     return mgr
 
 
