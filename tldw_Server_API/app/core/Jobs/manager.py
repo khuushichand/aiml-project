@@ -1387,7 +1387,7 @@ class JobManager:
         """Atomically acquire the next eligible job and start a lease.
 
         Selection order (both SQLite and Postgres): priority ASC (lower numeric is higher priority),
-        then newest first by COALESCE(available_at, created_at), then id DESC.
+        then oldest first by COALESCE(available_at, created_at), then id ASC.
 
         Reclaims expired processing jobs by allowing acquisition when
         `leased_until` is NULL or in the past.
@@ -1601,8 +1601,8 @@ class JobManager:
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
-                        # Ordering: priority ASC (lower number first), then available/created, then id
-                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        # Ordering: priority ASC (lower number first), then available/created oldest first, then id ASC
+                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sub += order_sql
                         sql = (
                             "UPDATE jobs SET status='processing', "
@@ -1668,8 +1668,8 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Ordering: always honor priority ASC (lower number first), then available_at, then created_at
-                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        # Ordering: always honor priority ASC (lower number first), then available_at/created_at oldest first
+                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         base += order_sql
                         if _test_mode:
                             try:

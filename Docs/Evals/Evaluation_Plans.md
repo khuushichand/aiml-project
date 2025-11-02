@@ -16,6 +16,7 @@
 
 
 
+https://arxiv.org/abs/2510.05152
 https://review.firstround.com/figma-ai-eval-process/
 https://arxiv.org/pdf/2502.17601
 https://github.com/SalesforceAIResearch/UniDoc-Bench

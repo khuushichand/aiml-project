@@ -2142,7 +2142,7 @@ class ChatbookService:
             normalized = self._normalize_evaluation_record(record)
             runs_payload: List[Dict[str, Any]] = []
             try:
-                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=200)
+                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=200, return_has_more=True)
                 runs_payload = [self._normalize_evaluation_run(run) for run in runs]
                 if has_more:
                     self._note_todo("Evaluation export limited to first 200 runs; add pagination support.")

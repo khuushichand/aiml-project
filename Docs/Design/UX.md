@@ -64,7 +64,7 @@ https://designdetails.fm/episodes
 https://blikket.co/ux-vs-cro-how-harmonizing-design-and-strategy-can-skyrocket-your-ecommerce-revenue/
 https://copycoder.ai/
 https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-951b1c98d4ec
-
+https://www.grug.design/know
 https://uxdesign.cc/building-better-logins-a-ux-and-accessibility-guide-for-developers-9bb356f0a132
 
 https://ieeexplore.ieee.org/document/5387632

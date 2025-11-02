@@ -1225,9 +1225,14 @@ class EvaluationsDatabase:
         eval_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 20,
-        after: Optional[str] = None
-    ) -> Tuple[List[Dict[str, Any]], bool]:
-        """List runs with optional filtering"""
+        after: Optional[str] = None,
+        return_has_more: bool = False,
+    ) -> Any:
+        """List runs with optional filtering.
+
+        By default returns a list of run dicts for ergonomic use in tests and simple call sites.
+        When return_has_more=True, returns a tuple of (runs, has_more) for pagination-aware callers.
+        """
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -1254,8 +1259,9 @@ class EvaluationsDatabase:
             
             has_more = len(rows) > limit
             runs = [self._row_to_run_dict(row) for row in rows[:limit]]
-            
-            return runs, has_more
+            if return_has_more:
+                return runs, has_more
+            return runs
     
     def update_run_status(
         self,

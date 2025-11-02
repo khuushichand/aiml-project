@@ -536,12 +536,14 @@ class UnifiedEvaluationService:
     ) -> Tuple[List[Dict], bool]:
         """List runs with filtering"""
         try:
-            return self.db.list_runs(
+            runs, has_more = self.db.list_runs(
                 eval_id=eval_id,
                 status=status,
                 limit=limit,
-                after=after
+                after=after,
+                return_has_more=True,
             )
+            return runs, has_more
         except Exception as e:
             logger.error(f"Failed to list runs: {e}")
             raise
