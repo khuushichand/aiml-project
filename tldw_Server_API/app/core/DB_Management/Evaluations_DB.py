@@ -1180,10 +1180,17 @@ class EvaluationsDatabase:
         eval_id: str,
         target_model: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-        webhook_url: Optional[str] = None
+        webhook_url: Optional[str] = None,
+        *,
+        run_id: Optional[str] = None,
     ) -> str:
-        """Create a new evaluation run"""
-        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        """Create a new evaluation run.
+
+        Accepts an optional run_id for callers that pre-generate IDs (e.g.,
+        tests or idempotent schedulers). Falls back to an auto-generated ID
+        when not provided.
+        """
+        run_id = run_id or f"run_{uuid.uuid4().hex[:12]}"
         
         with self.get_connection() as conn:
             cursor = conn.cursor()

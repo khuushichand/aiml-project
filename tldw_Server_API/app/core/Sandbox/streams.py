@@ -23,6 +23,9 @@ class RunStreamHub:
         self._max_queue = 1000
         self._max_log_bytes_default = 10 * 1024 * 1024
         self._seq: dict[str, int] = {}
+        # Per-run serialized dispatcher
+        self._dispatch: dict[str, list[dict]] = {}
+        self._dispatching: set[str] = set()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -51,40 +54,70 @@ class RunStreamHub:
         return self._get_queue(run_id)
 
     def _next_seq(self, run_id: str) -> int:
-        cur = self._seq.get(run_id, 0) + 1
-        self._seq[run_id] = cur
-        try:
-            logger.debug(f"hub seq[{run_id}] -> {cur}")
-        except Exception:
-            pass
-        return cur
+        with self._lock:
+            cur = self._seq.get(run_id, 0) + 1
+            self._seq[run_id] = cur
+            try:
+                logger.debug(f"hub seq[{run_id}] -> {cur}")
+            except Exception:
+                pass
+            return cur
 
     def _publish(self, run_id: str, frame: dict) -> None:
         with self._lock:
             if "seq" not in frame:
-                # Attach monotonically increasing sequence number per run
                 frame = dict(frame)
                 frame["seq"] = self._next_seq(run_id)
-            try:
-                logger.debug(f"hub publish run={run_id} type={frame.get('type')} event={frame.get('event')} seq={frame.get('seq')}")
-            except Exception:
-                pass
-            # Do not buffer heartbeat frames to avoid pushing out important events
+            # Buffer non-heartbeat frames for reconnects
             if not (isinstance(frame, dict) and frame.get("type") == "heartbeat"):
                 self._buffers.setdefault(run_id, []).append(frame)
-            # Trim buffer to avoid unbounded mem (keep last 100 frames)
-            buf = self._buffers.get(run_id)
-            if buf is not None and len(buf) > 100:
-                del buf[:-100]
-            subs = self._queues.get(run_id)
-            if subs:
-                for (lp, q) in list(subs):
+                buf = self._buffers.get(run_id)
+                if buf is not None and len(buf) > 100:
+                    del buf[:-100]
+            # Enqueue for serialized dispatch
+            self._dispatch.setdefault(run_id, []).append(frame)
+            if run_id not in self._dispatching:
+                self._dispatching.add(run_id)
+                self._schedule_dispatch(run_id)
+
+    def _schedule_dispatch(self, run_id: str) -> None:
+        # Choose a loop to trigger the dispatcher; prefer last known loop or any subscriber loop
+        with self._lock:
+            loop = self._loop
+            if not loop:
+                subs = self._queues.get(run_id) or []
+                loop = subs[0][0] if subs else None
+        if loop is None:
+            # No loop available yet; retry shortly from a timer thread
+            try:
+                threading.Timer(0.005, lambda: self._schedule_dispatch(run_id)).start()
+            except Exception:
+                pass
+            return
+        try:
+            loop.call_soon_threadsafe(self._do_dispatch, run_id)
+        except Exception as e:
+            logger.debug(f"dispatch schedule failed: {e}")
+
+    def _do_dispatch(self, run_id: str) -> None:
+        # Drain queued frames and fan-out to all subscribers in arrival order
+        while True:
+            with self._lock:
+                queue = self._dispatch.get(run_id) or []
+                if not queue:
+                    self._dispatching.discard(run_id)
+                    return
+                frame = queue.pop(0)
+                subs = list(self._queues.get(run_id) or [])
+            for (lp, q) in subs:
+                try:
+                    import copy as _copy
+                    lp.call_soon_threadsafe(self._queue_put_nowait, q, _copy.deepcopy(frame))
+                except Exception as e:
                     try:
-                        # Send an isolated copy to each subscriber to avoid shared-mutation surprises
-                        import copy as _copy
-                        lp.call_soon_threadsafe(self._queue_put_nowait, q, _copy.deepcopy(frame))
-                    except Exception as e:
                         logger.debug(f"queue publish failed: {e}")
+                    except Exception:
+                        pass
 
     @staticmethod
     def _queue_put_nowait(q: asyncio.Queue, item: dict) -> None:

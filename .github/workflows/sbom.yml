@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   build-sbom:
@@ -25,7 +24,7 @@ jobs:
       # No registry login required for public Docker Hub images used below
 
       - name: Generate SBOM (CycloneDX JSON)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@8e94d75ddd33f69f691467e42275782e4bfefe84 # v0.20.9
         with:
           path: .
           format: cyclonedx-json
@@ -42,9 +41,9 @@ jobs:
           args: >-
             validate --input-file sbom.cdx.json
 
-      - name: Validate SBOM (CycloneDX CLI - latest fallback)
+      - name: Validate SBOM (CycloneDX CLI - pinned fallback)
         if: ${{ hashFiles('sbom.cdx.json') != '' && steps.validate_cli_pinned.outcome == 'failure' }}
-        uses: docker://cyclonedx/cyclonedx-cli:latest
+        uses: docker://cyclonedx/cyclonedx-cli:0.29.1
         with:
           args: >-
             validate --input-file sbom.cdx.json

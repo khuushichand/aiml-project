@@ -1386,10 +1386,8 @@ class JobManager:
     ) -> Optional[Dict[str, Any]]:
         """Atomically acquire the next eligible job and start a lease.
 
-        Selection order (SQLite default): priority ASC (lower numeric is higher priority),
-        then newest first by COALESCE(available_at, created_at), then id DESC. The
-        Postgres backend selects by priority DESC by design. Some domains may tune
-        ordering in tests to satisfy domain-specific semantics.
+        Selection order (both SQLite and Postgres): priority ASC (lower numeric is higher priority),
+        then newest first by COALESCE(available_at, created_at), then id DESC.
 
         Reclaims expired processing jobs by allowing acquisition when
         `leased_until` is NULL or in the past.
@@ -1506,8 +1504,8 @@ class JobManager:
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
-                            # Stable ordering: priority ASC (lower numeric first), then available/created asc, then id asc
-                            base += " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            # Stable ordering: priority ASC (lower numeric first), then available/created, then id
+                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1603,19 +1601,9 @@ class JobManager:
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
-                        # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
-                        # Domain-specific ordering to align with tests:
-                        # - SQLite: default priority ASC (lower number first)
-                        # - Special-case 'chatbooks' domain prefers higher numeric (DESC)
-                        order_sql = (
-                            " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                            if str(domain) == "chatbooks"
-                            else " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                        )
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            sub += order_sql
-                        else:
-                            sub += order_sql
+                        # Ordering: priority ASC (lower number first), then available/created, then id
+                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        sub += order_sql
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1680,21 +1668,9 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Ordering: always honor priority ASC, then available_at, then created_at
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            order_sql = (
-                                " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                                if str(domain) == "chatbooks"
-                                else " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                            )
-                            base += order_sql
-                        else:
-                            order_sql = (
-                                " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                                if str(domain) == "chatbooks"
-                                else " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                            )
-                            base += order_sql
+                        # Ordering: always honor priority ASC (lower number first), then available_at, then created_at
+                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        base += order_sql
                         if _test_mode:
                             try:
                                 logger.info(f"[JM TEST] acquire SELECT sql={base} params={params}")
@@ -1725,17 +1701,20 @@ class JobManager:
                                     ).fetchone()
                                     if prow:
                                         d = dict(prow)
-                                        try:
-                                            if isinstance(d.get("payload"), str):
-                                                d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
-                                        except Exception:
-                                            pass
-                                        try:
-                                            JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d)
-                                        except Exception:
-                                            pass
-                                        logger.info("[JM TEST] returning current processing job due to immediate re-acquire")
-                                        return d
+                                        # Only return the current processing job for immediate re-acquire
+                                        # when the requesting worker matches the existing worker.
+                                        if str(d.get("worker_id") or "") == str(worker_id or ""):
+                                            try:
+                                                if isinstance(d.get("payload"), str):
+                                                    d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
+                                            except Exception:
+                                                pass
+                                            try:
+                                                JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d)
+                                            except Exception:
+                                                pass
+                                            logger.info("[JM TEST] returning current processing job due to immediate re-acquire by same worker")
+                                            return d
                                 except Exception:
                                     pass
                                 # Fallback to last known acquired snapshot for this (domain,queue)
@@ -1746,6 +1725,10 @@ class JobManager:
                                         prow_cur = conn.execute("SELECT * FROM jobs WHERE id=?", (int(snap.get("id")),)).fetchone()
                                         if prow_cur:
                                             d2 = dict(prow_cur)
+                                            # Only attempt safe transition if the requesting worker matches the snapshot's worker
+                                            if str(d2.get("worker_id") or "") != str(worker_id or ""):
+                                                # Different worker; do not return stale/snapshot to a different worker
+                                                return None
                                             try:
                                                 if isinstance(d2.get("payload"), str):
                                                     d2["payload"] = json.loads(d2["payload"]) if d2["payload"] else {}
@@ -1753,7 +1736,7 @@ class JobManager:
                                                 pass
                                             # Only transition queued or expired-processing rows; never override terminal states
                                             try:
-                                                conn.execute(
+                                                cur_upd = conn.execute(
                                                     (
                                                         "UPDATE jobs SET status = 'processing', "
                                                         "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1767,6 +1750,9 @@ class JobManager:
                                                     conn.commit()
                                                 except Exception:
                                                     pass
+                                                # Only return if the transition actually updated a row (eligible for re-acquire)
+                                                if int(getattr(cur_upd, "rowcount", 0) or 0) <= 0:
+                                                    return None
                                                 prow3 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(d2.get("id")),)).fetchone()
                                                 if prow3:
                                                     d2 = dict(prow3)

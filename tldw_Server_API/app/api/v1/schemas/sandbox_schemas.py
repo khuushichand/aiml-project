@@ -22,6 +22,9 @@ class SandboxRuntimeInfo(BaseModel):
     workspace_cap_mb: Optional[int] = Field(default=None, description="Default workspace size cap (MB)")
     artifact_ttl_hours: Optional[int] = Field(default=None, description="Default artifact retention (hours)")
     supported_spec_versions: List[str] = Field(default_factory=lambda: ["1.0"])
+    interactive_supported: Optional[bool] = Field(default=None, description="Whether stdin-over-WS interactive runs are supported")
+    egress_allowlist_supported: Optional[bool] = Field(default=None, description="Whether egress allowlisting is supported by the runtime")
+    store_mode: Optional[str] = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
     notes: Optional[str] = None
 
 

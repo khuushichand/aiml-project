@@ -17,7 +17,8 @@ from .models import (
     Session,
     SessionSpec,
 )
-from .policy import SandboxPolicy, SandboxPolicyConfig
+from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
+from .store import get_store_mode
 from .orchestrator import SandboxOrchestrator, IdempotencyConflict
 from .runners.docker_runner import docker_available
 from .runners.firecracker_runner import firecracker_available
@@ -86,6 +87,11 @@ class SandboxService:
             queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
         except Exception:
             queue_ttl_sec = 120
+        # Store mode advertised to clients (e.g., memory|sqlite|cluster)
+        try:
+            store_mode = str(get_store_mode())
+        except Exception:
+            store_mode = "unknown"
         return [
             {
                 "name": "docker",
@@ -100,6 +106,9 @@ class SandboxService:
                 "workspace_cap_mb": workspace_cap_mb,
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
                 "notes": None,
             },
             {
@@ -115,6 +124,9 @@ class SandboxService:
                 "workspace_cap_mb": workspace_cap_mb,
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
                 "notes": "Direct integration preferred; ignite is EOL",
             },
         ]
@@ -312,8 +324,7 @@ class SandboxService:
                                 pass
                             # Ensure policy hash is present (compute if missing)
                             if not status.policy_hash:
-                                policy_material = f"{self.policy.cfg.default_runtime}|{self.policy.cfg.network_default}|{self.policy.cfg.artifact_ttl_hours}|{self.policy.cfg.max_upload_mb}"
-                                status.policy_hash = hashlib.sha256(policy_material.encode()).hexdigest()[:16]
+                                status.policy_hash = compute_policy_hash(self.policy.cfg)
                             # Audit completion
                             self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except Exception as e:
@@ -361,10 +372,11 @@ class SandboxService:
                 artifacts[pattern] = b""
             if artifacts:
                 self._orch.store_artifacts(status.id, artifacts)
-        # Attach a pseudo policy hash for metadata consistency
-        policy_material = f"{self.policy.cfg.default_runtime}|{self.policy.cfg.network_default}|{self.policy.cfg.artifact_ttl_hours}|{self.policy.cfg.max_upload_mb}"
-        ph = hashlib.sha256(policy_material.encode()).hexdigest()[:16]
-        status.policy_hash = ph
+        # Attach canonical policy hash for metadata consistency
+        try:
+            status.policy_hash = compute_policy_hash(self.policy.cfg)
+        except Exception:
+            status.policy_hash = None  # type: ignore[assignment]
         # Timestamps in scaffold
         now = datetime.utcnow()
         if not status.started_at:

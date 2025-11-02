@@ -142,7 +142,7 @@ async def create_session(
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
-                    "details": {"original_id": e.original_id}
+                    "details": {"prior_id": e.original_id}
                 }
             })
         if isinstance(e, QueueFull):
@@ -202,12 +202,11 @@ async def create_session(
     except Exception as e:
         logger.debug(f"sandbox audit(session.create) failed: {e}")
 
-    # Compute policy hash for reproducibility
+    # Compute canonical policy hash for reproducibility
     try:
-        import hashlib
+        from tldw_Server_API.app.core.Sandbox.policy import compute_policy_hash
         cfg = _service.policy.cfg  # type: ignore[attr-defined]
-        material = f"{cfg.default_runtime}|{cfg.network_default}|{cfg.artifact_ttl_hours}|{cfg.max_upload_mb}"
-        ph = hashlib.sha256(material.encode()).hexdigest()[:16]
+        ph = compute_policy_hash(cfg)
     except Exception:
         ph = None
     return SandboxSession(
@@ -435,7 +434,7 @@ async def start_run(
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
-                    "details": {"original_id": e.original_id}
+                    "details": {"prior_id": e.original_id}
                 }
             })
         if isinstance(e, QueueFull):
@@ -665,6 +664,14 @@ async def download_artifact(
     range_header: Optional[str] = Header(None, alias="Range"),
     request: Request = None,
 ):
+    # Debug instrumentation to confirm how paths arrive at the handler in tests
+    try:
+        _scope_path = str(request.scope.get("path", "")) if request else ""
+        _raw_path0 = request.scope.get("raw_path") if request else None
+        _raw_path_dbg = _raw_path0.decode("utf-8", "ignore") if isinstance(_raw_path0, (bytes, bytearray)) else ""
+        logger.debug(f"artifact-handler: param={path!r} scope.path={_scope_path!r} scope.raw_path={_raw_path_dbg!r}")
+    except Exception:
+        pass
     # Basic path normalization checks (orchestrator also normalizes on FS)
     # Reject absolute or traversal attempts early (defense in depth)
     raw = str(path)
@@ -772,6 +779,46 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         websocket (WebSocket): The active WebSocket connection to send frames to.
         run_id (str): Identifier of the sandbox run whose events should be streamed.
     """
+    # Enforce signed WS URL validation when enabled
+    try:
+        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)):
+            secret = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
+            if not secret:
+                # Signing is enabled but no secret configured: refuse connection
+                try:
+                    await websocket.close(code=1008)
+                finally:
+                    return
+            qp = websocket.query_params  # type: ignore[attr-defined]
+            token = qp.get("token") if qp else None  # type: ignore[assignment]
+            exp = qp.get("exp") if qp else None  # type: ignore[assignment]
+            try:
+                exp_i = int(str(exp)) if exp is not None else 0
+            except Exception:
+                exp_i = 0
+            now_i = int(time.time())
+            if not token or exp_i <= now_i:
+                try:
+                    await websocket.close(code=1008)
+                finally:
+                    return
+            try:
+                msg = f"{run_id}:{exp_i}".encode("utf-8")
+                expected = hmac.new(str(secret).encode("utf-8"), msg, hashlib.sha256).hexdigest()
+            except Exception:
+                expected = ""
+            if not hmac.compare_digest(str(token), expected):
+                try:
+                    await websocket.close(code=1008)
+                finally:
+                    return
+    except Exception:
+        # On any unexpected error during validation, fail closed
+        try:
+            await websocket.close(code=1008)
+        finally:
+            return
+
     await websocket.accept()
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
@@ -890,11 +937,24 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             poll_timeout = float(_pt_env) if _pt_env is not None else float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
         except Exception:
             poll_timeout = 30.0
+        last_seq_sent = 0
         while True:
             try:
                 frame = await asyncio.wait_for(q.get(), timeout=poll_timeout)
             except asyncio.TimeoutError:
                 continue
+            # Enforce per-connection monotonic seq in case any out-of-band frames slipped in
+            try:
+                s = frame.get("seq") if isinstance(frame, dict) else None
+                logger.debug(f"WS[{run_id}] pre-adjust type={frame.get('type')} seq={s} last={last_seq_sent}")
+                if isinstance(s, int) and s <= last_seq_sent:
+                    frame = dict(frame)
+                    frame["seq"] = last_seq_sent + 1
+                if isinstance(frame.get("seq"), int):
+                    last_seq_sent = int(frame["seq"])  # type: ignore[index]
+                logger.debug(f"WS[{run_id}] post-adjust type={frame.get('type')} seq={frame.get('seq')} last={last_seq_sent}")
+            except Exception as _e:
+                logger.debug(f"WS[{run_id}] adjust error: {_e}")
             await websocket.send_json(frame)
             # Do not forcibly close on 'end'; allow clients/tests to disconnect.
             # This avoids race conditions with the Starlette TestClient where the

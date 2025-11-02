@@ -583,9 +583,9 @@ class SQLiteStore(SandboxStore):
 def get_store() -> SandboxStore:
     backend = None
     try:
-        backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "sqlite")).strip().lower()
+        backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
     except Exception:
-        backend = "sqlite"
+        backend = "memory"
     if backend == "memory":
         ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
         return InMemoryStore(idem_ttl_sec=ttl)
@@ -596,3 +596,17 @@ def get_store() -> SandboxStore:
     except Exception:
         db_path = None
     return SQLiteStore(db_path=db_path, idem_ttl_sec=ttl)
+
+
+def get_store_mode() -> str:
+    """Return the configured store mode string for feature discovery.
+
+    Values: memory | sqlite | cluster (future) | unknown
+    """
+    try:
+        backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
+    except Exception:
+        backend = "memory"
+    if backend in {"memory", "sqlite", "cluster"}:
+        return backend
+    return "unknown"
