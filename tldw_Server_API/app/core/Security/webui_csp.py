@@ -91,8 +91,11 @@ class WebUICSPMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         try:
-            # Allow inline scripts only for /setup pages; drop for /webui.
-            allow_inline_scripts = path.startswith("/setup")
+            # Legacy WebUI relies on inline scripts and event handlers.
+            # Allow inline scripts for both /webui and /setup to avoid CSP blocks.
+            # Once the WebUI is refactored to avoid inline handlers, this can
+            # be tightened back to only /setup or removed entirely.
+            allow_inline_scripts = path.startswith("/setup") or path.startswith("/webui")
             # Eval allowed unless TLDW_WEBUI_NO_EVAL=1
             allow_eval = os.getenv("TLDW_WEBUI_NO_EVAL", "0") not in ("1", "true", "TRUE")
             response.headers.setdefault(

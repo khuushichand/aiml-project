@@ -181,6 +181,8 @@ performance:
   cache_enabled: false  # Future: Enable response caching
   cache_ttl_seconds: 3600
   stream_chunk_size: 1024
+  # Retry adapter initialization after N seconds when it previously failed
+  adapter_failure_retry_seconds: 300
 
 # Fallback settings
 fallback:

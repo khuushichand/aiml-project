@@ -72,6 +72,9 @@ class PerformanceConfig(BaseModel):
     memory_critical_threshold: int = 90
     max_connections_per_provider: int = 5
     connection_timeout: float = 30.0
+    # If set, failed provider initializations will be retried after this many seconds.
+    # When unset/None, retries are disabled and providers are skipped for the process lifetime.
+    adapter_failure_retry_seconds: Optional[float] = None
 
 
 class FallbackConfig(BaseModel):

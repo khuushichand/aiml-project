@@ -104,6 +104,7 @@ jobs:
       POSTGRES_TEST_DB: tldw_content
       POSTGRES_TEST_USER: tldw
       POSTGRES_TEST_PASSWORD: tldw
+      TEST_DB_NAME: tldw_authnz
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
@@ -130,6 +131,14 @@ jobs:
         run: |
           echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
           echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+
+      - name: Ensure base DB exists
+        env:
+          PGPASSWORD: tldw
+        run: |
+          PORT="${{ job.services.postgres.ports[5432] }}"
+          psql -h 127.0.0.1 -p "$PORT" -U tldw -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='tldw_content'" | grep -q 1 || \
+            psql -h 127.0.0.1 -p "$PORT" -U tldw -d postgres -c "CREATE DATABASE tldw_content"
 
       - name: Install pytest and psycopg
         run: |
