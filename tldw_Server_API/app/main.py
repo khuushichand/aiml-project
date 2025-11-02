@@ -2043,7 +2043,7 @@ OPENAPI_TAGS = [
     {"name": "tools", "description": "Tooling endpoints (utilities)."},
     {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) - experimental surface in 0.1.",
      "externalDocs": {"description": "MCP Unified Developer Guide", "url": _ext_url("/docs-static/MCP/Unified/Developer_Guide.md")}},
-    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes) - experimental in 0.1."},
+    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes)"},
     {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore).",
      "externalDocs": {"description": "Chatbooks API", "url": _ext_url("/docs-static/API-related/Chatbook_Features_API_Documentation.md")}},
     {"name": "llm", "description": "LLM provider configuration and discovery.",
@@ -2170,6 +2170,10 @@ async def _guard_sandbox_artifact_path(request: Request, call_next):
         # Inspect raw ASGI path first to avoid client/Starlette normalization
         raw_path = request.scope.get("raw_path")
         path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path or "")
+        try:
+            logger.debug(f"artifact-guard raw_path={path_raw}")
+        except Exception:
+            pass
         # Quick filter: only check sandbox artifact endpoints
         # Example: /api/v1/sandbox/runs/{run_id}/artifacts/{path}
         if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
@@ -2952,7 +2956,8 @@ else:
     # Sandbox (scaffold)
     if _HAS_SANDBOX:
         _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
-    _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=False)
+    # Flashcards are now considered stable; include by default unless disabled
+    _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=True)
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)
     _include_if_enabled("personalization", personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"], default_stable=False)

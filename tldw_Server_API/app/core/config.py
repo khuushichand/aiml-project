@@ -1555,7 +1555,6 @@ def _route_toggle_policy() -> dict:
         "connectors",
         "workflows",
         "scheduler",
-        "flashcards",
         "personalization",
         "persona",
         "jobs",  # jobs admin

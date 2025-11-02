@@ -1399,18 +1399,75 @@ class EvaluationsDatabase:
     
     # ============= Helper Methods =============
     
+    def _ensure_unix_timestamp(self, value: Any, *, fallback_now: bool = False) -> Optional[int]:
+        """Convert various timestamp representations to a Unix epoch int.
+
+        Supports:
+        - datetime instances (including tz-aware)
+        - numeric (int/float) epoch values
+        - strings in ISO8601 (with optional 'Z') or '%Y-%m-%d %H:%M:%S'
+        Returns None when unparsable unless fallback_now=True, in which case 'now'.
+        """
+        if value is None:
+            return int(datetime.now().timestamp()) if fallback_now else None
+        # Already numeric
+        if isinstance(value, (int, float)):
+            try:
+                return int(value)
+            except Exception:
+                return int(datetime.now().timestamp()) if fallback_now else None
+        # datetime instance
+        if isinstance(value, datetime):
+            try:
+                return int(value.timestamp())
+            except Exception:
+                return int(datetime.now().timestamp()) if fallback_now else None
+        # string inputs
+        if isinstance(value, str):
+            s = value.strip()
+            try:
+                # Fast path: numeric string
+                if s.isdigit():
+                    return int(s)
+                # Try ISO8601, tolerate trailing 'Z'
+                try:
+                    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except ValueError:
+                    # Try legacy SQLite format
+                    dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+                return int(dt.timestamp())
+            except Exception as e:
+                logger.debug(f"Failed to parse timestamp value: value={value!r}, error={e}")
+                return int(datetime.now().timestamp()) if fallback_now else None
+        # Unknown type
+        logger.debug(f"Unsupported timestamp type: {type(value)} value={value!r}")
+        return int(datetime.now().timestamp()) if fallback_now else None
+
+    def _json_maybe(self, value: Any, *, default: Any = None) -> Any:
+        """Return JSON-decoded value.
+
+        - If value is None/falsey: return default.
+        - If value is str: json.loads(value).
+        - If value is already a JSON-compatible object (dict/list/number/bool): return as-is.
+        - Otherwise: return default.
+        """
+        if value is None or value is False or value == "":
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception as e:
+                logger.debug(f"Failed to json.loads value: {value!r}, error={e}")
+                return default
+        # Accept already-parsed JSON-like structures from JSONB (e.g., PostgreSQL)
+        if isinstance(value, (dict, list, int, float, bool)):
+            return value
+        logger.debug(f"Unsupported JSON field type: {type(value)} value={value!r}")
+        return default
+
     def _row_to_eval_dict(self, row) -> Dict[str, Any]:
         """Convert database row to evaluation dictionary"""
-        # Parse created_at timestamp
-        if row["created_at"]:
-            if "T" in row["created_at"]:
-                # ISO format
-                created_timestamp = int(datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp())
-            else:
-                # SQLite timestamp format
-                created_timestamp = int(datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").timestamp())
-        else:
-            created_timestamp = int(datetime.now().timestamp())
+        created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
         
         return {
             "id": row["id"],
@@ -1420,41 +1477,19 @@ class EvaluationsDatabase:
             "name": row["name"],
             "description": row["description"],
             "eval_type": row["eval_type"],
-            "eval_spec": json.loads(row["eval_spec"]) if row["eval_spec"] else {},
+            "eval_spec": self._json_maybe(row["eval_spec"], default={}),
             "dataset_id": row["dataset_id"],
             "created_by": row["created_by"] or "unknown",
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
+            "metadata": self._json_maybe(row["metadata"], default={}),
         }
     
     def _row_to_run_dict(self, row) -> Dict[str, Any]:
         """Convert database row to run dictionary"""
-        # Parse created_at timestamp
-        if row["created_at"]:
-            if "T" in row["created_at"]:
-                # ISO format
-                created_timestamp = int(datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp())
-            else:
-                # SQLite timestamp format
-                created_timestamp = int(datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").timestamp())
-        else:
-            created_timestamp = int(datetime.now().timestamp())
+        created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
             
         # Parse optional timestamps
-        started_at = None
-        if row["started_at"]:
-            try:
-                started_at = int(datetime.fromisoformat(row["started_at"].replace("Z", "+00:00")).timestamp())
-            except Exception as e:
-                logger.debug(f"Failed to parse started_at: value={row['started_at']}, error={e}")
-                started_at = None
-                
-        completed_at = None
-        if row["completed_at"]:
-            try:
-                completed_at = int(datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00")).timestamp())
-            except Exception as e:
-                logger.debug(f"Failed to parse completed_at: value={row['completed_at']}, error={e}")
-                completed_at = None
+        started_at = self._ensure_unix_timestamp(row["started_at"], fallback_now=False)
+        completed_at = self._ensure_unix_timestamp(row["completed_at"], fallback_now=False)
         
         return {
             "id": row["id"],
@@ -1464,27 +1499,18 @@ class EvaluationsDatabase:
             "eval_id": row["eval_id"],
             "status": row["status"],
             "target_model": row["target_model"] or "",
-            "config": json.loads(row["config"]) if row["config"] else {},
-            "progress": json.loads(row["progress"]) if row["progress"] else None,
-            "results": json.loads(row["results"]) if row["results"] else None,
+            "config": self._json_maybe(row["config"], default={}),
+            "progress": self._json_maybe(row["progress"], default=None),
+            "results": self._json_maybe(row["results"], default=None),
             "error_message": row["error_message"],
             "started_at": started_at,
             "completed_at": completed_at,
-            "usage": json.loads(row["usage"]) if row["usage"] else None
+            "usage": self._json_maybe(row["usage"], default=None),
         }
     
     def _row_to_dataset_dict(self, row, include_samples: bool = True) -> Dict[str, Any]:
         """Convert database row to dataset dictionary"""
-        # Parse created_at timestamp
-        if row["created_at"]:
-            if "T" in row["created_at"]:
-                # ISO format
-                created_timestamp = int(datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp())
-            else:
-                # SQLite timestamp format
-                created_timestamp = int(datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").timestamp())
-        else:
-            created_timestamp = int(datetime.now().timestamp())
+        created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
             
         result = {
             "id": row["id"],
@@ -1495,11 +1521,11 @@ class EvaluationsDatabase:
             "description": row["description"],
             "sample_count": row["sample_count"] or 0,
             "created_by": row["created_by"] or "unknown",
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
+            "metadata": self._json_maybe(row["metadata"], default={}),
         }
         
         if include_samples:
-            result["samples"] = json.loads(row["samples"]) if row["samples"] else []
+            result["samples"] = self._json_maybe(row["samples"], default=[])
         
         return result
     
@@ -1708,7 +1734,7 @@ class EvaluationsDatabase:
                 return None
             return {
                 "name": row["name"],
-                "config": json.loads(row["config"]) if row["config"] else {},
+                "config": self._json_maybe(row["config"], default={}),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "user_id": row["user_id"],
@@ -1731,7 +1757,7 @@ class EvaluationsDatabase:
             items = [
                 {
                     "name": r["name"],
-                    "config": json.loads(r["config"]) if r["config"] else {},
+                    "config": self._json_maybe(r["config"], default={}),
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"],
                     "user_id": r["user_id"],

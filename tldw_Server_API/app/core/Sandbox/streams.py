@@ -65,6 +65,10 @@ class RunStreamHub:
                 # Attach monotonically increasing sequence number per run
                 frame = dict(frame)
                 frame["seq"] = self._next_seq(run_id)
+            try:
+                logger.debug(f"hub publish run={run_id} type={frame.get('type')} event={frame.get('event')} seq={frame.get('seq')}")
+            except Exception:
+                pass
             # Do not buffer heartbeat frames to avoid pushing out important events
             if not (isinstance(frame, dict) and frame.get("type") == "heartbeat"):
                 self._buffers.setdefault(run_id, []).append(frame)
@@ -76,7 +80,9 @@ class RunStreamHub:
             if subs:
                 for (lp, q) in list(subs):
                     try:
-                        lp.call_soon_threadsafe(self._queue_put_nowait, q, frame)
+                        # Send an isolated copy to each subscriber to avoid shared-mutation surprises
+                        import copy as _copy
+                        lp.call_soon_threadsafe(self._queue_put_nowait, q, _copy.deepcopy(frame))
                     except Exception as e:
                         logger.debug(f"queue publish failed: {e}")
 

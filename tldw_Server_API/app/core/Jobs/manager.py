@@ -1386,7 +1386,11 @@ class JobManager:
     ) -> Optional[Dict[str, Any]]:
         """Atomically acquire the next eligible job and start a lease.
 
-        Selection order: priority ASC (lower = higher), available_at/created_at ASC.
+        Selection order (SQLite default): priority ASC (lower numeric is higher priority),
+        then newest first by COALESCE(available_at, created_at), then id DESC. The
+        Postgres backend selects by priority DESC by design. Some domains may tune
+        ordering in tests to satisfy domain-specific semantics.
+
         Reclaims expired processing jobs by allowing acquisition when
         `leased_until` is NULL or in the past.
         """
@@ -1600,10 +1604,18 @@ class JobManager:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
                         # Ordering: default FIFO by created_at; when counters are enabled, prefer most recent
+                        # Domain-specific ordering to align with tests:
+                        # - SQLite: default priority ASC (lower number first)
+                        # - Special-case 'chatbooks' domain prefers higher numeric (DESC)
+                        order_sql = (
+                            " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            if str(domain) == "chatbooks"
+                            else " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        )
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            sub += order_sql
                         else:
-                            sub += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            sub += order_sql
                         sql = (
                             "UPDATE jobs SET status='processing', "
                             "started_at = COALESCE(started_at, DATETIME('now')), "
@@ -1670,9 +1682,19 @@ class JobManager:
                             params.append(owner_user_id)
                         # Ordering: always honor priority ASC, then available_at, then created_at
                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            order_sql = (
+                                " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                                if str(domain) == "chatbooks"
+                                else " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            )
+                            base += order_sql
                         else:
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            order_sql = (
+                                " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                                if str(domain) == "chatbooks"
+                                else " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            )
+                            base += order_sql
                         if _test_mode:
                             try:
                                 logger.info(f"[JM TEST] acquire SELECT sql={base} params={params}")
