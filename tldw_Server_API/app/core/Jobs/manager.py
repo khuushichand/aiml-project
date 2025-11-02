@@ -3330,6 +3330,7 @@ class JobManager:
         if not statuses:
             return 0
         conn = self._connect()
+        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
                 with conn:

@@ -128,6 +128,12 @@ _BOOLEAN_EQ_TRUE_PATTERN = re.compile(
 )
 _RETURNING_PATTERN = re.compile(r"\bRETURNING\b", re.IGNORECASE)
 
+# Heuristic for columns that are booleans in Postgres schema
+_LIKELY_BOOLEAN_COLUMN = re.compile(
+    r"^(?:is_[A-Za-z0-9_]+|has_[A-Za-z0-9_]+|deleted|enabled)$",
+    re.IGNORECASE,
+)
+
 
 def _replace_randomblob_calls(query: str) -> str:
     """Translate SQLite randomblob-based UUID helpers to PostgreSQL."""
@@ -193,6 +199,172 @@ def _ensure_returning_id(query: str) -> str:
         return f"{stripped} RETURNING *{trailing_semicolon}"
     return f"{stripped} RETURNING id{trailing_semicolon}"
 
+def _split_csv_ignoring_quotes_and_parens(text: str) -> List[str]:
+    """Split a comma-separated list, ignoring commas in quotes/parentheses."""
+    parts: List[str] = []
+    buf: List[str] = []
+    depth = 0
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "'" and not in_double:
+            if in_single:
+                # doubled single quote inside string
+                if i + 1 < n and text[i + 1] == "'":
+                    buf.append("''")
+                    i += 2
+                    continue
+                in_single = False
+                buf.append(ch)
+                i += 1
+                continue
+            in_single = True
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            if in_double:
+                if i + 1 < n and text[i + 1] == '"':
+                    buf.append('""')
+                    i += 2
+                    continue
+                in_double = False
+                buf.append(ch)
+                i += 1
+                continue
+            in_double = True
+            buf.append(ch)
+            i += 1
+            continue
+        if not in_single and not in_double:
+            if ch == '(':
+                depth += 1
+                buf.append(ch)
+                i += 1
+                continue
+            if ch == ')':
+                if depth > 0:
+                    depth -= 1
+                buf.append(ch)
+                i += 1
+                continue
+            if ch == ',' and depth == 0:
+                parts.append(''.join(buf).strip())
+                buf = []
+                i += 1
+                continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        parts.append(''.join(buf).strip())
+    return parts
+
+def _convert_insert_boolean_literals(query: str) -> str:
+    """Convert 0/1 literals to FALSE/TRUE for boolean-like columns in INSERTs.
+
+    Only applies when an explicit column list and VALUES(...) are present, and
+    rewrites values where the corresponding column name matches the heuristic
+    boolean column pattern.
+    """
+    upper = query.upper()
+    if 'INSERT' not in upper or 'VALUES' not in upper:
+        return query
+    try:
+        # Find start of column list: after "INSERT INTO ... ("
+        m = re.search(r"\bINSERT\s+INTO\b[^()]*\(", query, flags=re.IGNORECASE)
+        if not m:
+            return query
+        cols_open = m.end() - 1  # position of '('
+        # Find matching ')' for columns
+        depth = 1
+        i = cols_open + 1
+        while i < len(query) and depth > 0:
+            ch = query[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            elif ch in ("'", '"'):
+                quote = ch
+                i += 1
+                while i < len(query):
+                    c = query[i]
+                    if c == quote:
+                        if i + 1 < len(query) and query[i + 1] == quote:
+                            i += 2
+                            continue
+                        break
+                    i += 1
+            i += 1
+        if depth != 0:
+            return query
+        cols_close = i
+        columns_block = query[cols_open + 1:cols_close]
+
+        # Find VALUES(...)
+        tail = query[cols_close + 1:]
+        m2 = re.search(r"\bVALUES\b\s*\(", tail, flags=re.IGNORECASE)
+        if not m2:
+            return query
+        vals_open = cols_close + 1 + m2.end() - 1
+        depth = 1
+        i = vals_open + 1
+        while i < len(query) and depth > 0:
+            ch = query[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            elif ch in ("'", '"'):
+                quote = ch
+                i += 1
+                while i < len(query):
+                    c = query[i]
+                    if c == quote:
+                        if i + 1 < len(query) and query[i + 1] == quote:
+                            i += 2
+                            continue
+                        break
+                    i += 1
+            i += 1
+        if depth != 0:
+            return query
+        vals_close = i
+        values_block = query[vals_open + 1:vals_close]
+
+        column_names = [c.strip().strip('"') for c in _split_csv_ignoring_quotes_and_parens(columns_block)]
+        values = _split_csv_ignoring_quotes_and_parens(values_block)
+        if len(column_names) != len(values):
+            return query
+
+        changed = False
+        for idx, (col, val) in enumerate(zip(column_names, values)):
+            if not _LIKELY_BOOLEAN_COLUMN.match(col):
+                continue
+            v = val.strip()
+            if re.fullmatch(r"0", v):
+                values[idx] = "FALSE"
+                changed = True
+            elif re.fullmatch(r"1", v):
+                values[idx] = "TRUE"
+                changed = True
+
+        if not changed:
+            return query
+
+        new_values_block = ", ".join(values)
+        return query[:vals_open + 1] + new_values_block + query[vals_close:]
+    except Exception:
+        # On any parsing error, return original query unchanged
+        return query
+
 
 def _replace_boolean_comparisons(query: str) -> str:
     """Convert common boolean equality checks to TRUE/FALSE literals."""
@@ -225,6 +397,7 @@ def transform_sqlite_query_for_postgres(
     transformed = _replace_randomblob_calls(transformed)
     transformed = _replace_json_extract_calls(transformed)
     transformed = _replace_boolean_comparisons(transformed)
+    transformed = _convert_insert_boolean_literals(transformed)
     if ensure_returning:
         transformed = _ensure_returning_id(transformed)
     return transformed
