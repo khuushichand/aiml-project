@@ -15,17 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CDX_CLI_IMAGE: ghcr.io/cyclonedx/cyclonedx-cli:0.28.1
+      # Populated in "Gather SBOM files" step
+      SBOM_FILES: ""
+      SBOM_COUNT: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # No container login or pulls needed when using the official GitHub Action for CLI
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -58,28 +55,42 @@ jobs:
 
       # Merge/validate will use CycloneDX CLI container, no Python install needed
 
-      - name: Merge SBOMs
+      - name: Gather SBOM files
+        id: gather
+        shell: bash
         run: |
           FILES=""
-          [ -f sbom-python.cdx.json ] && FILES="$FILES sbom-python.cdx.json"
-          [ -f sbom-frontend.cdx.json ] && FILES="$FILES sbom-frontend.cdx.json"
-          [ -f sbom-syft.cdx.json ] && FILES="$FILES sbom-syft.cdx.json"
-          if [ -n "$FILES" ]; then \
-            docker run --rm -v "$PWD":/work -w /work "$CDX_CLI_IMAGE" \
-              merge --input-files $FILES --output-file sbom.cdx.json \
-              || cp sbom-python.cdx.json sbom.cdx.json 2>/dev/null \
-              || cp sbom-frontend.cdx.json sbom.cdx.json 2>/dev/null \
-              || cp sbom-syft.cdx.json sbom.cdx.json 2>/dev/null; \
-          else \
-            echo "No component SBOMs to merge"; \
-          fi
+          COUNT=0
+          for f in sbom-python.cdx.json sbom-frontend.cdx.json sbom-syft.cdx.json; do
+            if [ -f "$f" ]; then
+              FILES="$FILES $f"
+              COUNT=$((COUNT+1))
+            fi
+          done
+          echo "SBOM_FILES=$FILES" >> "$GITHUB_ENV"
+          echo "SBOM_COUNT=$COUNT" >> "$GITHUB_ENV"
+          echo "Found $COUNT SBOM file(s): $FILES"
 
-      - name: Validate merged SBOM
+      - name: Merge SBOMs (CycloneDX CLI Action)
+        if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' }}
+        uses: CycloneDX/cyclonedx-cli-action@v0
+        with:
+          args: >-
+            merge --input-files ${{ env.SBOM_FILES }} --output-file sbom.cdx.json
+
+      - name: Copy single SBOM to sbom.cdx.json
+        if: ${{ env.SBOM_COUNT == '1' }}
+        shell: bash
         run: |
-          if [ -f sbom.cdx.json ]; then \
-            docker run --rm -v "$PWD":/work -w /work "$CDX_CLI_IMAGE" \
-              validate --input-file sbom.cdx.json; \
-          fi
+          # env.SBOM_FILES contains exactly one entry
+          cp $SBOM_FILES sbom.cdx.json
+
+      - name: Validate merged SBOM (CycloneDX CLI Action)
+        if: ${{ hashFiles('sbom.cdx.json') != '' }}
+        uses: CycloneDX/cyclonedx-cli-action@v0
+        with:
+          args: >-
+            validate --input-file sbom.cdx.json
 
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4

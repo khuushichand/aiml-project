@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 from typing import List, Dict, Any
+import importlib
+import importlib.resources as ires
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -20,38 +22,144 @@ def load_builtin_templates() -> List[Dict[str, Any]]:
     Returns:
         List of template dictionaries
     """
-    templates = []
-    template_dir = Path(__file__).parent / "template_library"
-    
-    if not template_dir.exists():
-        logger.warning(f"Template library directory not found: {template_dir}")
-        return templates
-    
-    # Load all JSON files from template_library
-    for template_file in template_dir.glob("*.json"):
-        try:
-            with open(template_file, 'r') as f:
-                template_data = json.load(f)
-                
-                # Ensure required fields
-                if 'name' not in template_data:
-                    logger.error(f"Template file {template_file} missing 'name' field")
-                    continue
-                
-                templates.append({
-                    'name': template_data['name'],
-                    'description': template_data.get('description', ''),
-                    'tags': template_data.get('tags', []),
-                    'template': template_data  # Store the entire template config
-                })
-                
-                logger.info(f"Loaded template: {template_data['name']} from {template_file}")
-                
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in template file {template_file}: {e}")
-        except Exception as e:
-            logger.error(f"Error loading template file {template_file}: {e}")
-    
+    templates: List[Dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    def _append_template(td: Dict[str, Any], src: str) -> None:
+        name = td.get('name')
+        if not name:
+            logger.error(f"Template missing 'name' field (source={src})")
+            return
+        if name in seen_names:
+            return
+        templates.append({
+            'name': name,
+            'description': td.get('description', ''),
+            'tags': td.get('tags', []),
+            'template': td,
+        })
+        seen_names.add(name)
+        logger.info(f"Loaded template: {name} from {src}")
+
+    # Strategy 1: importlib.resources (works with wheels/zip and packages)
+    try:
+        pkg = 'tldw_Server_API.app.core.Chunking'
+        base = ires.files(pkg).joinpath('template_library')
+        if getattr(base, 'is_dir', lambda: False)():
+            for entry in base.iterdir():
+                try:
+                    if not entry.name.endswith('.json'):
+                        continue
+                    with entry.open('r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    _append_template(data, f"pkg:{entry.name}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in template resource {entry}: {e}")
+                except Exception as e:
+                    logger.error(f"Error loading template resource {entry}: {e}")
+    except Exception as e:
+        logger.debug(f"importlib.resources scan failed for chunking templates: {e}")
+
+    # Strategy 2: filesystem path relative to this file
+    try:
+        template_dir = Path(__file__).parent / "template_library"
+        if template_dir.exists():
+            for template_file in template_dir.glob("*.json"):
+                try:
+                    with open(template_file, 'r', encoding='utf-8') as f:
+                        template_data = json.load(f)
+                    _append_template(template_data, f"fs:{template_file.name}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in template file {template_file}: {e}")
+                except Exception as e:
+                    logger.error(f"Error loading template file {template_file}: {e}")
+        else:
+            logger.warning(f"Template library directory not found: {template_dir}")
+    except Exception as e:
+        logger.debug(f"Filesystem scan failed for chunking templates: {e}")
+
+    # Strategy 3: minimal, safe built-ins as last resort
+    if not templates:
+        logger.warning("No built-in chunking templates found via resources or filesystem; using minimal fallbacks")
+        minimal: List[Dict[str, Any]] = [
+            {
+                'name': 'academic_paper',
+                'description': 'Template for processing academic papers',
+                'tags': ['academic', 'research', 'papers'],
+                'template': {
+                    'name': 'academic_paper',
+                    'preprocessing': [
+                        {'operation': 'normalize_whitespace', 'config': {'max_line_breaks': 2}},
+                        {'operation': 'extract_sections', 'config': {'pattern': r'^#+\s+(.+)$'}},
+                    ],
+                    'chunking': {'method': 'sentences', 'config': {'max_size': 5, 'overlap': 1}},
+                    'postprocessing': [
+                        {'operation': 'filter_empty', 'config': {'min_length': 20}},
+                        {'operation': 'merge_small', 'config': {'min_size': 200}},
+                    ],
+                },
+            },
+            {
+                'name': 'code_documentation',
+                'description': 'Template for processing code documentation',
+                'tags': ['code', 'docs'],
+                'template': {
+                    'name': 'code_documentation',
+                    'preprocessing': [{'operation': 'clean_markdown', 'config': {'remove_images': True}}],
+                    'chunking': {
+                        'method': 'structure_aware',
+                        'config': {'max_size': 500, 'overlap': 50, 'preserve_code_blocks': True, 'preserve_headers': True},
+                    },
+                    'postprocessing': [{'operation': 'filter_empty', 'config': {'min_length': 50}}],
+                },
+            },
+            {
+                'name': 'chat_conversation',
+                'description': 'Template for processing chat conversations',
+                'tags': ['chat', 'conversation'],
+                'template': {
+                    'name': 'chat_conversation',
+                    'preprocessing': [{'operation': 'normalize_whitespace', 'config': {'max_line_breaks': 1}}],
+                    'chunking': {'method': 'sentences', 'config': {'max_size': 10, 'overlap': 2}},
+                    'postprocessing': [{'operation': 'add_overlap', 'config': {'size': 100, 'marker': '---'}}],
+                },
+            },
+            {
+                'name': 'book_chapters',
+                'description': 'Template for processing book chapters',
+                'tags': ['books', 'chapters'],
+                'template': {
+                    'name': 'book_chapters',
+                    'preprocessing': [{'operation': 'normalize_whitespace', 'config': {'max_line_breaks': 2}}],
+                    'chunking': {'method': 'ebook_chapters', 'config': {'max_size': 1200, 'overlap': 100}},
+                    'postprocessing': [{'operation': 'filter_empty', 'config': {'min_length': 50}}],
+                },
+            },
+            {
+                'name': 'transcript_dialogue',
+                'description': 'Template for processing transcripts and dialogue',
+                'tags': ['transcript', 'dialogue', 'audio'],
+                'template': {
+                    'name': 'transcript_dialogue',
+                    'preprocessing': [{'operation': 'normalize_whitespace', 'config': {'max_line_breaks': 1}}],
+                    'chunking': {'method': 'sentences', 'config': {'max_size': 8, 'overlap': 2}},
+                    'postprocessing': [{'operation': 'merge_small', 'config': {'min_size': 80}}],
+                },
+            },
+            {
+                'name': 'legal_document',
+                'description': 'Template for processing legal documents',
+                'tags': ['legal', 'contracts'],
+                'template': {
+                    'name': 'legal_document',
+                    'preprocessing': [{'operation': 'normalize_whitespace', 'config': {'max_line_breaks': 2}}],
+                    'chunking': {'method': 'paragraphs', 'config': {'max_size': 1, 'overlap': 0}},
+                    'postprocessing': [{'operation': 'filter_empty', 'config': {'min_length': 50}}],
+                },
+            },
+        ]
+        templates.extend(minimal)
+
     return templates
 
 
