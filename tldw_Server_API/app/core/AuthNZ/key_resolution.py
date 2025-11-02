@@ -8,8 +8,6 @@ from loguru import logger
 import hmac
 import hashlib
 
-PBKDF2_ITERATIONS = 100_000  # Adjustable, recommended >=100k for credentials
-
 #
 # Local Imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -53,12 +51,7 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
     # Important: mirror APIKeyManager.hash_candidates (HMAC-SHA256 with secret key)
     for key in key_materials:
         try:
-            d = hashlib.pbkdf2_hmac(
-                "sha256",
-                api_key.encode("utf-8"),
-                key,
-                PBKDF2_ITERATIONS,
-            ).hex()
+            d = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
             if d not in digests:
                 digests.append(d)
         except Exception as _e:
