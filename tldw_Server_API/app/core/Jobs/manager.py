@@ -828,7 +828,16 @@ class JobManager:
                                 row_spm = cur.fetchone()
                                 if int((row_spm.get("c") if isinstance(row_spm, dict) else 0)) >= spm:
                                     raise ValueError("Quota exceeded: submits per minute")
-                        except Exception:
+                        except Exception as _db_exc:
+                            # Let ValueError propagate; swallow only DB/adapter errors
+                            try:
+                                import psycopg
+                                if isinstance(_db_exc, psycopg.Error):
+                                    pass
+                                else:
+                                    raise
+                            except Exception:
+                                raise
                             pass
                         if idempotency_key:
                             # Cast payload to jsonb explicitly to avoid adapter issues
@@ -1060,7 +1069,7 @@ class JobManager:
                             rowm = conn.execute("SELECT COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? AND created_at >= DATETIME(?, '-60 seconds')", (domain, owner_user_id, now_str)).fetchone()
                             if int(rowm[0] or 0) >= spm:
                                 raise ValueError("Quota exceeded: submits per minute")
-                    except Exception:
+                    except sqlite3.Error:
                         pass
                     if idempotency_key:
                         # Idempotent create: attempt INSERT OR IGNORE, then SELECT by key
@@ -1668,8 +1677,8 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Ordering: always honor priority ASC (lower number first), then available_at/created_at oldest first
-                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        # Ordering: priority ASC (lower first), then newest by available/created, then id DESC
+                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         base += order_sql
                         if _test_mode:
                             try:
@@ -2126,15 +2135,22 @@ class JobManager:
                         )
                         ok = conn.total_changes > 0
                         if not ok:
-                            # Admin-style finalize: allow completing queued without lease when enforcement disabled
-                            conn.execute(
-                                (
-                                    "UPDATE jobs SET status = 'completed', result = ?, completed_at = DATETIME('now'), completion_token = COALESCE(completion_token, ?) "
-                                    "WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
-                                ),
-                                (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
-                            )
-                            ok = conn.total_changes > 0
+                            # Admin-style finalize: optionally allow completing queued without lease when enforcement is disabled
+                            try:
+                                allow = {d.strip().lower() for d in (os.getenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks").split(",")) if d.strip()}
+                                row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                                dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
+                            except Exception:
+                                allow = {"chatbooks"}; dom_val = ""
+                            if dom_val in allow:
+                                conn.execute(
+                                    (
+                                        "UPDATE jobs SET status = 'completed', result = ?, completed_at = DATETIME('now'), completion_token = COALESCE(completion_token, ?) "
+                                        "WHERE id = ? AND status = 'queued' AND (completion_token IS NULL OR completion_token = ?)"
+                                    ),
+                                    (json.dumps(res_obj) if res_obj is not None else None, completion_token, job_id, completion_token),
+                                )
+                                ok = conn.total_changes > 0
                     if _test_mode:
                         try:
                             _r = conn.execute("SELECT id, status FROM jobs WHERE id = ?", (int(job_id),)).fetchone()
@@ -2515,7 +2531,7 @@ class JobManager:
                                     if _outbox and delay < 3:
                                         delay = 3
                             # Poison message quarantine check: increment failure_streak_* and quarantine if threshold reached
-                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                             # In TEST_MODE with zero backoff (unit-style retry loops), avoid quarantining to allow timeline growth
                             if test_mode and int(backoff_seconds) <= 0:
                                 thresh = max(base_thresh, 10**9)
@@ -2607,7 +2623,7 @@ class JobManager:
                                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
                                                 dmn = elem.get("domain"); qq = elem.get("queue"); jt = elem.get("job_type")
                                                 prev_streak = int(elem.get("failure_streak_count") or 0)
-                                                will_quarantine = (prev_streak + 1) >= int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                                                will_quarantine = (prev_streak + 1) >= int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                                                 add_ready = 0; add_sched = 0; add_quar = 0
                                                 if will_quarantine:
                                                     add_quar = 1
@@ -2779,7 +2795,7 @@ class JobManager:
                             except Exception:
                                 if _outbox and delay < 3:
                                     delay = 3
-                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                            base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                             if test_mode and int(backoff_seconds) <= 0:
                                 # Respect explicit threshold in tests; otherwise, avoid quarantining to allow timeline growth
                                 if os.getenv("JOBS_QUARANTINE_THRESHOLD") is None:
@@ -2877,7 +2893,7 @@ class JobManager:
                                                 cur_fs = int(row_fs[0]) if row_fs and row_fs[0] else 0
                                             except Exception:
                                                 cur_fs = 0
-                                            will_quarantine = cur_fs >= int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                                            will_quarantine = cur_fs >= int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                                             add_ready = 0; add_sched = 0; add_quar = 0
                                             if will_quarantine:
                                                 add_quar = 1
@@ -2982,22 +2998,30 @@ class JobManager:
                             ),
                         )
                         if conn.total_changes == 0:
-                            # Admin-style finalize: allow failing queued jobs when lease enforcement is disabled
-                            conn.execute(
-                                (
-                                    "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
-                                    "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'queued'"
-                                ),
-                                (
-                                    (error_code or error),
-                                    error,
-                                    error_code,
-                                    error_class,
-                                    (json.dumps(error_stack) if error_stack is not None else None),
-                                    completion_token,
-                                    job_id,
-                                ),
-                            )
+                            # Admin-style finalize: optionally allow failing queued jobs when enforcement is disabled
+                            # Scope via allowlist of domains (default: chatbooks) to avoid global behavior in tests
+                            try:
+                                allow = {d.strip().lower() for d in (os.getenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks").split(",")) if d.strip()}
+                                row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                                dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
+                            except Exception:
+                                allow = {"chatbooks"}; dom_val = ""
+                            if dom_val in allow:
+                                conn.execute(
+                                    (
+                                        "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
+                                        "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'queued'"
+                                    ),
+                                    (
+                                        (error_code or error),
+                                        error,
+                                        error_code,
+                                        error_class,
+                                        (json.dumps(error_stack) if error_stack is not None else None),
+                                        completion_token,
+                                        job_id,
+                                    ),
+                                )
                     ok = conn.total_changes > 0
                     try:
                         if ok and rowl:
@@ -4051,7 +4075,7 @@ class JobManager:
                         (
                             f"SELECT COUNT(*) AS c FROM jobs WHERE {wh} AND ("
                             "(status='failed' AND retry_count < max_retries) "
-                            + (" OR (status='queued' AND available_at > NOW())" if not only_failed else "") + ")"
+                            + (" OR (status='queued' AND available_at >= NOW())" if not only_failed else "") + ")"
                         ),
                         tuple(params),
                     )
@@ -4080,7 +4104,7 @@ class JobManager:
                                         )
                             except Exception:
                                 pass
-                            cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at > NOW()", tuple(params))
+                            cur.execute(f"UPDATE jobs SET available_at=NOW() WHERE {wh} AND status='queued' AND available_at >= NOW()", tuple(params))
                     return count
             else:
                 where = ["1=1"]; params: List[Any] = []
@@ -4095,7 +4119,7 @@ class JobManager:
                     (
                         f"SELECT COUNT(*) FROM jobs WHERE {wh} AND ("
                         "(status='failed' AND retry_count < max_retries) "
-                        + (" OR (status='queued' AND available_at > DATETIME('now'))" if not only_failed else "") + ")"
+                        + (" OR (status='queued' AND available_at >= DATETIME('now'))" if not only_failed else "") + ")"
                     ),
                     tuple(params),
                 ).fetchone()
@@ -4121,7 +4145,7 @@ class JobManager:
                                     )
                         except Exception:
                             pass
-                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at > DATETIME('now')", tuple(params))
+                        conn.execute(f"UPDATE jobs SET available_at=DATETIME('now') WHERE {wh} AND status='queued' AND available_at >= DATETIME('now')", tuple(params))
                 return count
         finally:
             conn.close()

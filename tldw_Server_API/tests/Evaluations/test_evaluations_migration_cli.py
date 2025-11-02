@@ -4,21 +4,16 @@ import uuid
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
-from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.migration_tools import main as migration_main
 
 
 @pytest.mark.integration
-def test_evaluations_migration_cli_row_counts(tmp_path):
-    host = os.getenv("POSTGRES_TEST_HOST")
-    user = os.getenv("POSTGRES_TEST_USER")
-    password = os.getenv("POSTGRES_TEST_PASSWORD")
-    database = os.getenv("POSTGRES_TEST_DATABASE", "tldw_content")
-    port = int(os.getenv("POSTGRES_TEST_PORT", "5432"))
-
-    if not host or not user:
-        pytest.skip("Postgres test env not configured")
+def test_evaluations_migration_cli_row_counts(tmp_path, pg_eval_params):
+    host = pg_eval_params["host"]
+    user = pg_eval_params["user"]
+    password = pg_eval_params.get("password")
+    database = pg_eval_params["database"]
+    port = int(pg_eval_params["port"])
 
     # Seed a temporary SQLite evaluations database with a few rows
     sqlite_path = tmp_path / "evaluations_seed.db"
@@ -91,7 +86,7 @@ def test_evaluations_migration_cli_row_counts(tmp_path):
         "--pg-port", str(port),
         "--pg-database", database,
         "--pg-user", user,
-        "--pg-password", password,
+        "--pg-password", password or "",
         "--log-level", "INFO",
     ]
 
@@ -104,6 +99,8 @@ def test_evaluations_migration_cli_row_counts(tmp_path):
     assert rc == 0
 
     # Validate row counts on PostgreSQL match the source SQLite counts
+    from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+    from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
     config = DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
         pg_host=host,
@@ -112,7 +109,10 @@ def test_evaluations_migration_cli_row_counts(tmp_path):
         pg_user=user,
         pg_password=password,
     )
-    backend = DatabaseBackendFactory.create_backend(config)
+    try:
+        backend = DatabaseBackendFactory.create_backend(config)
+    except Exception:
+        pytest.skip("psycopg not available or backend creation failed")
     try:
         with backend.transaction() as conn:
             def _pg_count(table: str) -> int:

@@ -701,9 +701,40 @@ async def list_artifacts(
     # If a traversal attempt like `/artifacts/../x` was normalized to this route,
     # detect it via the raw ASGI path and reject with 400 to satisfy security tests.
     try:
-        raw_path = request.scope.get("raw_path") if request else None
-        raw_dec = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path if request else "")
-        if "/artifacts/../" in raw_dec:
+        candidates: list[str] = []
+        if request is not None:
+            try:
+                rp = request.scope.get("raw_path")
+                if isinstance(rp, (bytes, bytearray)):
+                    candidates.append(rp.decode("utf-8", "ignore"))
+            except Exception:
+                pass
+            try:
+                # Starlette URL may expose raw_path in some versions
+                rp2 = getattr(request.url, "raw_path", None)
+                if isinstance(rp2, str):
+                    candidates.append(rp2)
+            except Exception:
+                pass
+            try:
+                candidates.append(request.url.path)
+            except Exception:
+                pass
+            try:
+                # HTTP/2 pseudo-header path may be present
+                pseudo = None
+                for (hk, hv) in request.scope.get("headers", []) or []:
+                    try:
+                        if hk.decode("latin-1").lower() == ":path":
+                            pseudo = hv.decode("utf-8", "ignore")
+                            break
+                    except Exception:
+                        continue
+                if pseudo:
+                    candidates.append(pseudo)
+            except Exception:
+                pass
+        if any("/../" in str(c) for c in candidates if c):
             raise HTTPException(status_code=400, detail="invalid_path")
     except HTTPException:
         raise
@@ -721,6 +752,17 @@ async def list_artifacts(
     return ArtifactListResponse(items=items)
 
 
+@router.get("/runs/{run_id}/artifacts/../{rest:path}", summary="Reject traversal in artifact path")
+async def reject_artifact_traversal(
+    run_id: str = Path(..., min_length=1),
+    rest: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+):
+    # Explicit guard for segment-level traversal attempts so that any path with
+    # '/artifacts/../...' is rejected before hitting the generic download route.
+    raise HTTPException(status_code=400, detail="invalid_path")
+
+
 @router.get("/runs/{run_id}/artifacts/{path:path}", summary="Download an artifact")
 async def download_artifact(
     run_id: str = Path(..., min_length=1),
@@ -730,7 +772,47 @@ async def download_artifact(
     request: Request = None,
 ):
     # Basic path normalization checks (orchestrator also normalizes on FS)
-    # Reject absolute or traversal attempts early (defense in depth)
+    # Reject absolute or traversal attempts early (defense in depth). When the ASGI router
+    # normalizes the URL (e.g., collapsing '/artifacts/../x' to '/artifacts/x'), the path
+    # parameter may not include '..'. To catch this, also inspect the raw ASGI path.
+    try:
+        candidates: list[str] = []
+        if request is not None:
+            try:
+                rp = request.scope.get("raw_path")
+                if isinstance(rp, (bytes, bytearray)):
+                    candidates.append(rp.decode("utf-8", "ignore"))
+            except Exception:
+                pass
+            try:
+                rp2 = getattr(request.url, "raw_path", None)
+                if isinstance(rp2, str):
+                    candidates.append(rp2)
+            except Exception:
+                pass
+            try:
+                candidates.append(request.url.path)
+            except Exception:
+                pass
+            try:
+                pseudo = None
+                for (hk, hv) in request.scope.get("headers", []) or []:
+                    try:
+                        if hk.decode("latin-1").lower() == ":path":
+                            pseudo = hv.decode("utf-8", "ignore")
+                            break
+                    except Exception:
+                        continue
+                if pseudo:
+                    candidates.append(pseudo)
+            except Exception:
+                pass
+        if any("/../" in str(c) for c in candidates if c):
+            raise HTTPException(status_code=400, detail="invalid_path")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     raw = str(path)
     if (
         raw.startswith("/")

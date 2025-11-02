@@ -26,14 +26,14 @@ except Exception:  # pragma: no cover - optional dependency
 pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not installed")
 
 
-def _postgres_config() -> DatabaseConfig:
+def _postgres_config_from_params(params: dict) -> DatabaseConfig:
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
-        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+        pg_host=params["host"],
+        pg_port=int(params["port"]),
+        pg_database=params["database"],
+        pg_user=params["user"],
+        pg_password=params.get("password"),
     )
 
 
@@ -73,8 +73,8 @@ def _index_def(backend, conn, table: str, name: str) -> str:
 
 
 @pytest.mark.integration
-def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes() -> None:
-    config = _postgres_config()
+def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes(pg_eval_params) -> None:
+    config = _postgres_config_from_params(pg_eval_params)
     _reset_postgres_database(config)
     backend = DatabaseBackendFactory.create_backend(config)
 
@@ -126,7 +126,7 @@ def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes() -> None:
 
 
 @pytest.mark.integration
-def test_workflows_postgres_migration_preserves_indexes_from_legacy() -> None:
+def test_workflows_postgres_migration_preserves_indexes_from_legacy(pg_eval_params) -> None:
     # Start with a legacy schema then instantiate WorkflowsDatabase to migrate
     LEGACY_STMTS = (
         """
@@ -207,7 +207,7 @@ def test_workflows_postgres_migration_preserves_indexes_from_legacy() -> None:
         """,
     )
 
-    config = _postgres_config()
+    config = _postgres_config_from_params(pg_eval_params)
     _reset_postgres_database(config)
     backend = DatabaseBackendFactory.create_backend(config)
 

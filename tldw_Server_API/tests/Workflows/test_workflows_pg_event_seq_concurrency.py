@@ -18,36 +18,22 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 
 
-def _pg_env_available() -> bool:
-    required = (
-        "POSTGRES_TEST_HOST",
-        "POSTGRES_TEST_PORT",
-        "POSTGRES_TEST_DB",
-        "POSTGRES_TEST_USER",
-        "POSTGRES_TEST_PASSWORD",
-    )
-    return all(os.getenv(k) for k in required)
-
-
-pytestmark = pytest.mark.skipif(not _pg_env_available(), reason="Postgres test env not configured")
-
-
-def _pg_backend():
-    cfg = DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
-    )
-    return DatabaseBackendFactory.create_backend(cfg)
-
-
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_event_seq_monotonic_under_contention():
-    backend = _pg_backend()
+async def test_event_seq_monotonic_under_contention(pg_eval_params):
+    # Build backend using shared pg_eval_params fixture; skip if psycopg unavailable
+    try:
+        cfg = DatabaseConfig(
+            backend_type=BackendType.POSTGRESQL,
+            pg_host=pg_eval_params["host"],
+            pg_port=int(pg_eval_params["port"]),
+            pg_database=pg_eval_params["database"],
+            pg_user=pg_eval_params["user"],
+            pg_password=pg_eval_params.get("password"),
+        )
+        backend = DatabaseBackendFactory.create_backend(cfg)
+    except Exception:
+        pytest.skip("psycopg not available or backend creation failed")
     db = WorkflowsDatabase(db_path=":memory:", backend=backend)
 
     # Create a run

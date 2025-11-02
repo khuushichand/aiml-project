@@ -8,32 +8,19 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, Da
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 
-def _pg_backend_from_env():
-    host = os.getenv("POSTGRES_TEST_HOST")
-    user = os.getenv("POSTGRES_TEST_USER")
-    password = os.getenv("POSTGRES_TEST_PASSWORD")
-    database = os.getenv("POSTGRES_TEST_DATABASE", "tldw_content")
-    port = int(os.getenv("POSTGRES_TEST_PORT", "5432"))
-    if not host or not user:
-        return None
-    cfg = DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=host,
-        pg_port=port,
-        pg_database=database,
-        pg_user=user,
-        pg_password=password,
-    )
-    try:
-        return DatabaseBackendFactory.create_backend(cfg)
-    except Exception:
-        return None
-
-
 @pytest.mark.integration
-def test_postgres_evaluations_crud_unified_if_available(tmp_path):
-    backend = _pg_backend_from_env()
-    if backend is None:
+def test_postgres_evaluations_crud_unified_if_available(tmp_path, pg_eval_params):
+    try:
+        cfg = DatabaseConfig(
+            backend_type=BackendType.POSTGRESQL,
+            pg_host=pg_eval_params["host"],
+            pg_port=int(pg_eval_params["port"]),
+            pg_database=pg_eval_params["database"],
+            pg_user=pg_eval_params["user"],
+            pg_password=pg_eval_params.get("password"),
+        )
+        backend = DatabaseBackendFactory.create_backend(cfg)
+    except Exception:
         pytest.skip("Postgres test env not configured or backend unavailable")
 
     db = EvaluationsDatabase(":memory:", backend=backend)
@@ -61,7 +48,7 @@ def test_postgres_evaluations_crud_unified_if_available(tmp_path):
     )
     db.update_run_status(run_id, "running")
     db.update_run_progress(run_id, {"total": 2, "done": 1})
-    runs = db.list_runs(eval_id, limit=10)
+    runs, _ = db.list_runs(eval_id, limit=10, return_has_more=True)
     assert any(r["id"] == run_id for r in runs)
 
     # Unified upsert path (evaluations_unified exists on PG by default)
