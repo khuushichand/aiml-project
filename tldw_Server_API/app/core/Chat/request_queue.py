@@ -78,6 +78,8 @@ class RequestQueue:
         self._running = False
         # Rolling recent activity (last N jobs)
         self._recent_activity = deque(maxlen=200)
+        # Event to wake workers when new items arrive (avoids polling delay)
+        self._has_items = asyncio.Event()
     
     async def start(self, num_workers: int = 4):
         """
@@ -90,10 +92,19 @@ class RequestQueue:
             return
         
         self._running = True
+        # Ensure event starts cleared
+        self._has_items.clear()
         for i in range(num_workers):
             worker = asyncio.create_task(self._worker(f"worker-{i}"))
             self._workers.append(worker)
-        
+
+        # Pre-warm the default thread pool to reduce first-run latency for processors
+        try:
+            warm_n = max(1, min(self.max_concurrent, num_workers))
+            await asyncio.gather(*[asyncio.to_thread(lambda: None) for _ in range(warm_n)])
+        except Exception:
+            pass
+
         logger.info(f"Started {num_workers} queue workers")
     
     async def stop(self):
@@ -141,8 +152,9 @@ class RequestQueue:
                 # Get next request from queue
                 request = await self._get_next_request()
                 if not request:
-                    # No requests, wait a bit
-                    await asyncio.sleep(0.1)
+                    # No requests; wait until enqueued instead of polling
+                    await self._has_items.wait()
+                    # Loop will attempt to fetch again
                     continue
                 
                 # Check if request has timed out
@@ -180,7 +192,11 @@ class RequestQueue:
         """Get the next request from the priority queue."""
         async with self._lock:
             if self.queue:
-                return heappop(self.queue)
+                item = heappop(self.queue)
+                # If queue becomes empty after pop, clear the wake event
+                if not self.queue:
+                    self._has_items.clear()
+                return item
         return None
     
     async def _process_request(self, request: QueuedRequest) -> Any:
@@ -407,6 +423,8 @@ class RequestQueue:
             
             # Add to priority queue
             heappush(self.queue, request)
+            # Signal workers that items are available
+            self._has_items.set()
             
             logger.debug(f"Enqueued request {request_id} with priority {priority.name}")
             
