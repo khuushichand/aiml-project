@@ -42,6 +42,15 @@ def test_artifact_content_type_and_invalid_path() -> None:
         # Invalid path: traversal (encoded to avoid client-side normalization)
         r3 = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/%2E%2E/secret.txt")
         assert r3.status_code == 400
+
+        # Invalid path: double-encoded traversal
+        r3_double = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/%252E%252E/secret.txt")
+        assert r3_double.status_code == 400
+
+        # Invalid path: traversal with encoded backslash
+        r3_backslash = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/..%5csecret.txt")
+        assert r3_backslash.status_code == 400
+
         # Invalid path: absolute
         r4 = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts//etc/passwd")
         assert r4.status_code == 400
