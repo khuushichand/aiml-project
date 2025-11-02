@@ -45,7 +45,14 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
                     return
             except Exception:
                 pass
-        uid = str(user.get("id") or "")
+        # Be robust to user being a Pydantic model or dict
+        try:
+            uid_val = getattr(user, "id", None)
+        except Exception:
+            uid_val = None
+        if uid_val is None and isinstance(user, dict):
+            uid_val = user.get("id")
+        uid = str(uid_val or "")
         if _is_truthy(os.getenv("JOBS_REQUIRE_DOMAIN_FILTER")) and not (domain and domain.strip()):
             raise HTTPException(status_code=403, detail="Domain filter is required for this operation")
         allow = os.getenv(f"JOBS_DOMAIN_ALLOWLIST_{uid}", "").strip()
@@ -59,8 +66,10 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
                 raise HTTPException(status_code=403, detail="Domain filter required for allowlisted admin")
     except HTTPException:
         raise
-    except Exception:
-        # Fail-open on unexpected RBAC errors to avoid locking out real admins
+    except Exception as _rbac_exc:
+        # Fail-closed in forced mode (tests), otherwise fail-open to avoid lockout
+        if _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
+            raise HTTPException(status_code=403, detail="RBAC enforcement error")
         return
 
 
@@ -1066,6 +1075,8 @@ async def list_jobs_endpoint(
                 )
             )
         return items
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"List failed: {e}")
 
@@ -1127,6 +1138,8 @@ async def stale_processing_endpoint(
             except Exception:
                 pass
         return out
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
 

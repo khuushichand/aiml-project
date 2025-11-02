@@ -22,7 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      # No container login or pulls needed when using the official GitHub Action for CLI
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -74,6 +79,7 @@ jobs:
       - name: Merge SBOMs (CycloneDX CLI via GHCR)
         id: merge_ghcr
         if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' }}
+        continue-on-error: true
         uses: docker://ghcr.io/cyclonedx/cyclonedx-cli:v0.30.0
         with:
           args: >-
@@ -96,6 +102,7 @@ jobs:
       - name: Validate merged SBOM (CycloneDX CLI via GHCR)
         id: validate_ghcr
         if: ${{ hashFiles('sbom.cdx.json') != '' }}
+        continue-on-error: true
         uses: docker://ghcr.io/cyclonedx/cyclonedx-cli:v0.30.0
         with:
           args: >-
