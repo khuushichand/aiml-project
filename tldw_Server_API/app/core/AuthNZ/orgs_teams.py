@@ -5,6 +5,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError
 
 
 DEFAULT_BASE_TEAM_NAME = "Default-Base"
@@ -110,14 +111,31 @@ async def create_organization(
     import json
     async with pool.transaction() as conn:
         if hasattr(conn, 'fetchrow'):
-            row = await conn.fetchrow(
-                """
-                INSERT INTO organizations (name, slug, owner_user_id, metadata)
-                VALUES ($1, $2, $3, $4)
-                RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
-                """,
-                name, slug, owner_user_id, (metadata if metadata is not None else None),
+            # PostgreSQL path
+            # Pre-check for case-insensitive duplicates on name and slug
+            if slug is not None and slug != "":
+                exists_slug = await conn.fetchrow(
+                    "SELECT 1 FROM organizations WHERE LOWER(slug) = LOWER($1)", slug
+                )
+                if exists_slug:
+                    raise DuplicateOrganizationError("slug", str(slug))
+            exists_name = await conn.fetchrow(
+                "SELECT 1 FROM organizations WHERE LOWER(name) = LOWER($1)", name
             )
+            if exists_name:
+                raise DuplicateOrganizationError("name", str(name))
+            try:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO organizations (name, slug, owner_user_id, metadata)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
+                    """,
+                    name, slug, owner_user_id, (metadata if metadata is not None else None),
+                )
+            except Exception:
+                # Unknown error path: re-raise original
+                raise
             d = dict(row)
             try:
                 from datetime import datetime
@@ -129,6 +147,21 @@ async def create_organization(
                 pass
             return d
         else:
+            # SQLite / aiosqlite path
+            # Pre-check for case-insensitive duplicates
+            if slug is not None and slug != "":
+                cur_chk = await conn.execute(
+                    "SELECT 1 FROM organizations WHERE LOWER(slug) = LOWER(?)",
+                    (slug,),
+                )
+                if await cur_chk.fetchone():
+                    raise DuplicateOrganizationError("slug", str(slug))
+            cur_chk2 = await conn.execute(
+                "SELECT 1 FROM organizations WHERE LOWER(name) = LOWER(?)",
+                (name,),
+            )
+            if await cur_chk2.fetchone():
+                raise DuplicateOrganizationError("name", str(name))
             cur = await conn.execute(
                 "INSERT INTO organizations (name, slug, owner_user_id, metadata) VALUES (?, ?, ?, ?)",
                 (name, slug, owner_user_id, json.dumps(metadata) if metadata else None),
@@ -255,6 +288,13 @@ async def create_team(
     import json
     async with pool.transaction() as conn:
         if hasattr(conn, 'fetchrow'):
+            # Pre-check duplicate by (org_id, LOWER(name))
+            exists = await conn.fetchrow(
+                "SELECT 1 FROM teams WHERE org_id = $1 AND LOWER(name) = LOWER($2)",
+                org_id, name,
+            )
+            if exists:
+                raise DuplicateTeamError(org_id, "name", str(name))
             row = await conn.fetchrow(
                 """
                 INSERT INTO teams (org_id, name, slug, description, metadata)
@@ -274,6 +314,13 @@ async def create_team(
                 pass
             return d
         else:
+            # SQLite path: pre-check case-insensitive per-org name
+            curx = await conn.execute(
+                "SELECT 1 FROM teams WHERE org_id = ? AND LOWER(name) = LOWER(?)",
+                (org_id, name),
+            )
+            if await curx.fetchone():
+                raise DuplicateTeamError(org_id, "name", str(name))
             cur = await conn.execute(
                 "INSERT INTO teams (org_id, name, slug, description, metadata) VALUES (?, ?, ?, ?, ?)",
                 (org_id, name, slug, description, json.dumps(metadata) if metadata else None),

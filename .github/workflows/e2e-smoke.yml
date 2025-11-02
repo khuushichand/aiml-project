@@ -99,13 +99,13 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
-      - name: Run E2E tests (single-user) - exclude Jobs for now
+      - name: Run E2E tests (single-user) - exclude Jobs
         env:
           AUTH_MODE: single_user
           SINGLE_USER_API_KEY: "test-api-key-12345"
         shell: bash
         run: |
-          pytest -v -n 1 -m "critical and not multi_user" --timeout=600 \
+          pytest -v -n 1 -m "critical and not multi_user and not jobs" --timeout=600 \
             tldw_Server_API/tests/e2e/test_tts_stream_http.py \
             tldw_Server_API/tests/e2e/test_prompt_studio_e2e.py \
             tldw_Server_API/tests/e2e/test_rag_deep_checks.py \
@@ -170,12 +170,12 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
 
-      - name: Run E2E tests (multi-user)
+      - name: Run E2E tests (multi-user) - exclude Jobs
         env:
           AUTH_MODE: multi_user
         shell: bash
         run: |
-          pytest -v -n 1 -m "multi_user" --timeout=600 \
+          pytest -v -n 1 -m "multi_user and not jobs" --timeout=600 \
             tldw_Server_API/tests/e2e/test_multi_user_onboarding.py
 
       - name: Stop server (multi-user)

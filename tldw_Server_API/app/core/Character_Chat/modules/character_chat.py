@@ -400,11 +400,33 @@ def process_db_messages_to_rich_ui_history(
         elif in_user_identifiers and not in_char_identifiers:
             sender_role = "user"
         elif in_char_identifiers and in_user_identifiers:
-            # Special case: if user placeholder name equals character name, treat identical sender as character
+            # Ambiguous: sender matches both user and character aliases.
+            # Prefer classifying as a user message unless we have an explicit
+            # character sender id and the alias truly belongs to the character.
+            # This avoids misclassifying real user messages when the character
+            # name collides with user aliases (e.g. char_name == "user").
             _placeholder_alias = str(user_name_for_placeholders).strip().lower() if isinstance(user_name_for_placeholders, str) else ""
             _char_sender_norm = str(char_sender_identifier or "").strip().lower()
-            if _placeholder_alias and _char_sender_norm and _placeholder_alias == _char_sender_norm and sender_lower == _char_sender_norm:
+            if (
+                actual_char_sender_id_in_db  # explicit character sender id provided
+                and _placeholder_alias
+                and _char_sender_norm
+                and _placeholder_alias == _char_sender_norm
+                and sender_lower == _char_sender_norm
+            ):
                 sender_role = "character"
+            elif (
+                char_first_message_normalized
+                and isinstance(processed_content, str)
+                and processed_content.strip() == char_first_message_normalized
+                and character_messages_seen == 0
+            ):
+                # Honor explicit first-message hint: treat as character's greeting
+                sender_role = "character"
+            elif sender_lower in user_identifiers and not actual_char_sender_id_in_db:
+                # Default to user when ambiguous only if there is no explicit
+                # character sender id provided by the caller.
+                sender_role = "user"
             else:
                 # Resolve tie using context (parity/neighbor hints)
                 sender_role = _resolve_ambiguous_sender(

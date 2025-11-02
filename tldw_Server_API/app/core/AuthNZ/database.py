@@ -27,7 +27,11 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateUserError,
     WeakPasswordError,
     InvalidRegistrationCodeError,
-    RegistrationError
+    RegistrationError,
+    DuplicateOrganizationError,
+    DuplicateTeamError,
+    DuplicateRoleError,
+    DuplicatePermissionError,
 )
 
 #######################################################################################################################
@@ -251,7 +255,7 @@ class DatabasePool:
             except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
-            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError):
+            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError):
                 # Re-raise registration exceptions unchanged
                 raise
             except Exception as e:
@@ -296,7 +300,7 @@ class DatabasePool:
             except HTTPException as e:
                 # Re-raise HTTP exceptions unchanged
                 raise
-            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError) as e:
+            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError) as e:
                 # Re-raise registration exceptions unchanged
                 raise
             except Exception as e:

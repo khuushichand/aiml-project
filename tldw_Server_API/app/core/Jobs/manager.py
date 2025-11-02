@@ -1676,122 +1676,47 @@ class JobManager:
                                 logger.info(f"[JM TEST] acquire SELECT sql={base} params={params}")
                             except Exception:
                                 pass
-                        row = conn.execute(base, params).fetchone()
-                        if not row:
-                            # In TEST_MODE, fall back to returning the most-recent processing job for this worker.
-                            # This stabilizes tests when a duplicate acquire is invoked immediately.
+                        # Spin a few times if a race causes the UPDATE to affect zero rows
+                        _max_spin = 20 if _test_mode else 3
+                        job_id = None
+                        for _spin in range(_max_spin):
+                            row = conn.execute(base, params).fetchone()
+                            if not row:
+                                if _spin == 0:
+                                    # No eligible rows at the moment
+                                    return None
+                                break
+                            job_id = int(row[0])
                             if _test_mode:
                                 try:
-                                    # Quick diagnostics: count queued/processing
-                                    c_q = conn.execute(
-                                        "SELECT COUNT(*) FROM jobs WHERE domain=? AND queue=? AND status='queued'",
-                                        (domain, queue),
-                                    ).fetchone()[0]
-                                    c_p = conn.execute(
-                                        "SELECT COUNT(*) FROM jobs WHERE domain=? AND queue=? AND status='processing'",
-                                        (domain, queue),
-                                    ).fetchone()[0]
-                                    logger.info(f"[JM TEST] acquire none: queued={c_q} processing={c_p} now={datetime.utcnow().isoformat()}")
+                                    logger.info(f"[JM TEST] selected job_id={job_id} spin={_spin}")
                                 except Exception:
                                     pass
-                                try:
-                                    prow = conn.execute(
-                                        "SELECT * FROM jobs WHERE domain=? AND queue=? AND status='processing' ORDER BY acquired_at DESC LIMIT 1",
-                                        (domain, queue),
-                                    ).fetchone()
-                                    if prow:
-                                        d = dict(prow)
-                                        # Only return the current processing job for immediate re-acquire
-                                        # when the requesting worker matches the existing worker.
-                                        if str(d.get("worker_id") or "") == str(worker_id or ""):
-                                            try:
-                                                if isinstance(d.get("payload"), str):
-                                                    d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
-                                            except Exception:
-                                                pass
-                                            try:
-                                                JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d)
-                                            except Exception:
-                                                pass
-                                            logger.info("[JM TEST] returning current processing job due to immediate re-acquire by same worker")
-                                            return d
-                                except Exception:
-                                    pass
-                                # Fallback to last known acquired snapshot for this (domain,queue)
-                                try:
-                                    snap = JobManager._LAST_ACQUIRED_TEST.get((domain, queue))
-                                    if snap:
-                                        # Do NOT reinsert. Only operate on the current DB row if it exists and is eligible.
-                                        prow_cur = conn.execute("SELECT * FROM jobs WHERE id=?", (int(snap.get("id")),)).fetchone()
-                                        if prow_cur:
-                                            d2 = dict(prow_cur)
-                                            # Only attempt safe transition if the requesting worker matches the snapshot's worker
-                                            if str(d2.get("worker_id") or "") != str(worker_id or ""):
-                                                # Different worker; do not return stale/snapshot to a different worker
-                                                return None
-                                            try:
-                                                if isinstance(d2.get("payload"), str):
-                                                    d2["payload"] = json.loads(d2["payload"]) if d2["payload"] else {}
-                                            except Exception:
-                                                pass
-                                            # Only transition queued or expired-processing rows; never override terminal states
-                                            try:
-                                                cur_upd = conn.execute(
-                                                    (
-                                                        "UPDATE jobs SET status = 'processing', "
-                                                        "started_at = COALESCE(started_at, DATETIME('now')), "
-                                                        "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
-                                                        "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
-                                                        "WHERE id = ? AND (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now'))))"
-                                                    ),
-                                                    (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), int(d2.get("id"))),
-                                                )
-                                                try:
-                                                    conn.commit()
-                                                except Exception:
-                                                    pass
-                                                # Only return if the transition actually updated a row (eligible for re-acquire)
-                                                if int(getattr(cur_upd, "rowcount", 0) or 0) <= 0:
-                                                    return None
-                                                prow3 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(d2.get("id")),)).fetchone()
-                                                if prow3:
-                                                    d2 = dict(prow3)
-                                                    JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d2)
-                                                    logger.info("[JM TEST] returning snapshot row after safe transition")
-                                                    return d2
-                                            except Exception:
-                                                pass
-                                        # Snapshot exists but row missing or not eligible; return None
-                                except Exception:
-                                    pass
-                            return None
-                        job_id = row[0]
-                        if _test_mode:
+                            # Transition to processing with lease; allow both queued and expired processing
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'processing', "
+                                    "started_at = COALESCE(started_at, DATETIME('now')), "
+                                    "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
+                                    "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
+                                    "WHERE id = ? AND (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now'))))"
+                                ),
+                                (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), job_id),
+                            )
                             try:
-                                logger.info(f"[JM TEST] selected job_id={job_id}")
+                                conn.commit()
                             except Exception:
                                 pass
-                        # Transition to processing with lease; allow both queued and expired processing
-                        conn.execute(
-                            (
-                                "UPDATE jobs SET status = 'processing', "
-                                "started_at = COALESCE(started_at, DATETIME('now')), "
-                                "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
-                                "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
-                                "WHERE id = ? AND (status = 'queued' OR (status = 'processing' AND (leased_until IS NULL OR leased_until <= DATETIME('now'))))"
-                            ),
-                            (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), job_id),
-                        )
-                        try:
-                            conn.commit()
-                        except Exception:
-                            pass
-                        if conn.total_changes == 0:
-                            if _test_mode:
-                                try:
-                                    logger.info(f"[JM TEST] update changed=0 for job_id={job_id}; returning None")
-                                except Exception:
-                                    pass
+                            if conn.total_changes == 0:
+                                if _test_mode:
+                                    try:
+                                        logger.info(f"[JM TEST] update changed=0 for job_id={job_id}; retrying")
+                                    except Exception:
+                                        pass
+                                continue
+                            # Success
+                            break
+                        if job_id is None or conn.total_changes == 0:
                             return None
                         row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
                         if not row:
@@ -2855,7 +2780,7 @@ class JobManager:
                                 if _outbox and delay < 3:
                                     delay = 3
                             base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
-                            if test_mode and int(backoff_seconds) <= 0:
+                            if test_mode and int(backoff_seconds) <= 0 and str(os.getenv("JOBS_DISABLE_QUARANTINE_DURING_TESTS", "")).lower() in {"1","true","yes","y","on"}:
                                 thresh = max(base_thresh, 10**9)
                             else:
                                 thresh = base_thresh
@@ -2865,8 +2790,8 @@ class JobManager:
                                 (
                                     "UPDATE jobs SET status = CASE WHEN (COALESCE(failure_streak_count,0) + 1) >= ? THEN 'quarantined' ELSE 'queued' END, "
                                     "retry_count = retry_count + 1, last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, "
-                                    "failure_streak_code = CASE WHEN error_code = ? THEN error_code ELSE ? END, "
-                                    "failure_streak_count = CASE WHEN error_code = ? THEN COALESCE(failure_streak_count,0) + 1 ELSE 1 END, "
+                                    "failure_streak_count = CASE WHEN COALESCE(failure_streak_code, '') = ? THEN COALESCE(failure_streak_count,0) + 1 ELSE 1 END, "
+                                    "failure_streak_code = ?, "
                                     "available_at = CASE WHEN (COALESCE(failure_streak_count,0) + 1) >= ? THEN available_at ELSE DATETIME('now', ?) END, "
                                     "quarantined_at = CASE WHEN (COALESCE(failure_streak_count,0) + 1) >= ? THEN DATETIME('now') ELSE quarantined_at END, "
                                     "leased_until = NULL, worker_id = NULL, lease_id = NULL "
@@ -2879,7 +2804,6 @@ class JobManager:
                                     error_code,
                                     error_class,
                                     (json.dumps(error_stack) if error_stack is not None else None),
-                                    error_code,
                                     error_code,
                                     error_code,
                                     int(thresh),
@@ -2895,8 +2819,8 @@ class JobManager:
                                 (
                                     "UPDATE jobs SET status = CASE WHEN (COALESCE(failure_streak_count,0) + 1) >= ? THEN 'quarantined' ELSE 'queued' END, "
                                     "retry_count = retry_count + 1, last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, "
-                                    "failure_streak_code = CASE WHEN error_code = ? THEN error_code ELSE ? END, "
-                                    "failure_streak_count = CASE WHEN error_code = ? THEN COALESCE(failure_streak_count,0) + 1 ELSE 1 END, "
+                                    "failure_streak_count = CASE WHEN COALESCE(failure_streak_code, '') = ? THEN COALESCE(failure_streak_count,0) + 1 ELSE 1 END, "
+                                    "failure_streak_code = ?, "
                                     "available_at = CASE WHEN (COALESCE(failure_streak_count,0) + 1) >= ? THEN available_at ELSE DATETIME('now', ?) END, "
                                     "quarantined_at = CASE WHEN (COALESCE(failure_streak_count,0) + 1) >= ? THEN DATETIME('now') ELSE quarantined_at END, "
                                     "leased_until = NULL, worker_id = NULL, lease_id = NULL "
@@ -2909,7 +2833,6 @@ class JobManager:
                                     error_code,
                                     error_class,
                                     (json.dumps(error_stack) if error_stack is not None else None),
-                                    error_code,
                                     error_code,
                                     error_code,
                                     int(thresh),
@@ -2944,13 +2867,13 @@ class JobManager:
                                     # Counters: processing -> queued (ready/scheduled) or quarantined
                                     try:
                                         if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                            # Estimate previous streak based on current row value after increment
+                                            # Use current streak value after increment to decide counters update
                                             try:
                                                 row_fs = conn.execute("SELECT failure_streak_count FROM jobs WHERE id = ?", (job_id,)).fetchone()
-                                                prev = int(row_fs[0]) - 1 if row_fs and row_fs[0] else 0
+                                                cur_fs = int(row_fs[0]) if row_fs and row_fs[0] else 0
                                             except Exception:
-                                                prev = 0
-                                            will_quarantine = (prev + 1) >= int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
+                                                cur_fs = 0
+                                            will_quarantine = cur_fs >= int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
                                             add_ready = 0; add_sched = 0; add_quar = 0
                                             if will_quarantine:
                                                 add_quar = 1
@@ -3036,6 +2959,8 @@ class JobManager:
                             ),
                         )
                     else:
+                        # Enforcement disabled: allow failing processing without matching worker/lease,
+                        # and fall back to failing queued jobs (admin-style terminalization) when appropriate.
                         conn.execute(
                             (
                                 "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
@@ -3052,7 +2977,23 @@ class JobManager:
                                 completion_token,
                             ),
                         )
-                        # No fallback to fail queued when enforcement disabled
+                        if conn.total_changes == 0:
+                            # Admin-style finalize: allow failing queued jobs when lease enforcement is disabled
+                            conn.execute(
+                                (
+                                    "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
+                                    "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'queued'"
+                                ),
+                                (
+                                    (error_code or error),
+                                    error,
+                                    error_code,
+                                    error_class,
+                                    (json.dumps(error_stack) if error_stack is not None else None),
+                                    completion_token,
+                                    job_id,
+                                ),
+                            )
                     ok = conn.total_changes > 0
                     try:
                         if ok and rowl:

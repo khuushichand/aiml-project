@@ -109,6 +109,8 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     update_org_member_role,
     list_org_memberships_for_user,
 )
+from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
+from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
     OrganizationResponse,
@@ -456,6 +458,9 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
     try:
         row = await create_organization(name=payload.name, owner_user_id=payload.owner_user_id, slug=payload.slug)
         return OrganizationResponse(**row)
+    except DuplicateOrganizationError as dup:
+        # Conflict: name or slug already exists
+        raise HTTPException(status_code=409, detail=f"Organization with {dup.field} '{dup.value}' already exists")
     except Exception as e:
         logger.error(f"Failed to create organization: {e}")
         raise HTTPException(status_code=500, detail="Failed to create organization")
@@ -510,6 +515,8 @@ async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResp
     try:
         row = await create_team(org_id=org_id, name=payload.name, slug=payload.slug, description=payload.description)
         return TeamResponse(**row)
+    except DuplicateTeamError as dup:
+        raise HTTPException(status_code=409, detail=f"Team with {dup.field} '{dup.value}' already exists in org {org_id}")
     except Exception as e:
         logger.error(f"Failed to create team: {e}")
         raise HTTPException(status_code=500, detail="Failed to create team")
@@ -1216,6 +1223,8 @@ async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)
     try:
         row = await svc_create_role(db, payload.name, payload.description, False)
         return RoleResponse(**row)
+    except DuplicateRoleError as dup:
+        raise HTTPException(status_code=409, detail=f"Role '{dup.name}' already exists")
     except Exception as e:
         logger.error(f"Failed to create role: {e}")
         raise HTTPException(status_code=500, detail="Failed to create role")
@@ -1824,15 +1833,25 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
     try:
         is_pg = await is_postgres_backend()
         if is_pg:
+            # Pre-check (case-insensitive)
+            exists = await db.fetchrow("SELECT 1 FROM permissions WHERE LOWER(name) = LOWER($1)", payload.name)
+            if exists:
+                raise HTTPException(status_code=409, detail=f"Permission '{payload.name}' already exists")
             row = await db.fetchrow(
                 "INSERT INTO permissions (name, description, category) VALUES ($1, $2, $3) RETURNING id, name, description, category",
                 payload.name, payload.description, payload.category,
             )
             return PermissionResponse(**dict(row))
         else:
-            # SQLite: tolerate duplicates via INSERT OR IGNORE, then return the row by name
+            # SQLite: explicit pre-check, return 409 if exists (case-insensitive)
+            curx = await db.execute(
+                "SELECT 1 FROM permissions WHERE LOWER(name) = LOWER(?)",
+                (payload.name,),
+            )
+            if await curx.fetchone():
+                raise HTTPException(status_code=409, detail=f"Permission '{payload.name}' already exists")
             await db.execute(
-                "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)",
+                "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)",
                 (payload.name, payload.description, payload.category),
             )
             # Fetch the row via adapter
@@ -1841,13 +1860,15 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
                 (payload.name,),
             )
             row = await cur.fetchone()
-            # Row may be a tuple-like (aiosqlite.Row) or dict-like via adapter; handle both
             try:
                 if isinstance(row, dict):
                     return PermissionResponse(**row)
             except Exception:
                 pass
             return PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3])
+    except HTTPException:
+        # Preserve explicit status codes like 409 Conflict
+        raise
     except Exception as e:
         logger.error(f"Failed to create permission: {e}")
         # In tests, include error details for quicker diagnosis
@@ -3510,11 +3531,17 @@ async def create_tool_catalog(payload: ToolCatalogCreateRequest, db=Depends(get_
         team_id = payload.team_id
         is_active = bool(payload.is_active if payload.is_active is not None else True)
         if is_pg:
+            # Case-insensitive existence check within scope
+            exists = await db.fetchrow(
+                "SELECT 1 FROM tool_catalogs WHERE LOWER(name) = LOWER($1) AND ((org_id IS NOT DISTINCT FROM $2) AND (team_id IS NOT DISTINCT FROM $3))",
+                name, org_id, team_id,
+            )
+            if exists:
+                raise HTTPException(status_code=409, detail="Catalog already exists")
             await db.execute(
                 """
                 INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active)
                 VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (name, org_id, team_id) DO NOTHING
                 """,
                 name, desc, org_id, team_id, is_active,
             )
@@ -3522,13 +3549,11 @@ async def create_tool_catalog(payload: ToolCatalogCreateRequest, db=Depends(get_
                 "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE name = $1 AND ((org_id IS NOT DISTINCT FROM $2) AND (team_id IS NOT DISTINCT FROM $3))",
                 name, org_id, team_id,
             )
-            if not row:
-                raise HTTPException(status_code=409, detail="Catalog already exists")
             return ToolCatalogResponse(**dict(row))
         else:
-            # SQLite uniqueness is via UNIQUE(name, org_id, team_id)
+            # SQLite pre-check case-insensitive
             cur = await db.execute(
-                "SELECT id FROM tool_catalogs WHERE name = ? AND ( (org_id IS ? OR org_id = ?) AND (team_id IS ? OR team_id = ?) )",
+                "SELECT id FROM tool_catalogs WHERE LOWER(name) = LOWER(?) AND ( (org_id IS ? OR org_id = ?) AND (team_id IS ? OR team_id = ?) )",
                 (name, None, org_id, None, team_id),
             )
             exists = await cur.fetchone()

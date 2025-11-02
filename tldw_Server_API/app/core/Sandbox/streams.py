@@ -53,28 +53,51 @@ class RunStreamHub:
     def subscribe(self, run_id: str) -> asyncio.Queue:
         return self._get_queue(run_id)
 
+    def subscribe_with_buffer(self, run_id: str) -> asyncio.Queue:
+        """Subscribe a new consumer and pre-fill its queue with buffered frames.
+
+        Ensures buffered frames have sequence numbers assigned before enqueueing
+        them for this subscriber, avoiding races where live dispatch could stamp
+        seq later and interleave frames. The subscriber is only registered after
+        the buffered frames are enqueued, so it will start receiving new frames
+        from the dispatcher afterwards while still seeing the historical frames
+        first on its own queue.
+        """
+        with self._lock:
+            q = asyncio.Queue(self._max_queue)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = self._loop or asyncio.get_event_loop()
+            # Stamp seq on buffered frames if missing, then copy into this queue
+            buf = self._buffers.get(run_id) or []
+            import copy as _copy
+            for frame in buf[-100:]:
+                if isinstance(frame, dict) and "seq" not in frame:
+                    frame["seq"] = self._next_seq(run_id)
+                try:
+                    q.put_nowait(_copy.deepcopy(frame))
+                except Exception:
+                    break
+            # Finally register this subscriber for future live frames
+            self._queues.setdefault(run_id, []).append((loop, q))
+            return q
+
     def _next_seq(self, run_id: str) -> int:
         with self._lock:
             cur = self._seq.get(run_id, 0) + 1
             self._seq[run_id] = cur
-            try:
-                logger.debug(f"hub seq[{run_id}] -> {cur}")
-            except Exception:
-                pass
             return cur
 
     def _publish(self, run_id: str, frame: dict) -> None:
         with self._lock:
-            if "seq" not in frame:
-                frame = dict(frame)
-                frame["seq"] = self._next_seq(run_id)
-            # Buffer non-heartbeat frames for reconnects
+            # Buffer non-heartbeat frames for reconnects (seq is assigned at dispatch time)
             if not (isinstance(frame, dict) and frame.get("type") == "heartbeat"):
                 self._buffers.setdefault(run_id, []).append(frame)
                 buf = self._buffers.get(run_id)
                 if buf is not None and len(buf) > 100:
                     del buf[:-100]
-            # Enqueue for serialized dispatch
+            # Enqueue for serialized dispatch (seq will be stamped in dispatcher)
             self._dispatch.setdefault(run_id, []).append(frame)
             if run_id not in self._dispatching:
                 self._dispatching.add(run_id)
@@ -108,16 +131,18 @@ class RunStreamHub:
                     self._dispatching.discard(run_id)
                     return
                 frame = queue.pop(0)
+                # Stamp sequence centrally here to ensure strict ordering for all subscribers.
+                # Update in-place so the buffered frame also carries the seq for future drains.
+                if isinstance(frame, dict) and "seq" not in frame:
+                    frame["seq"] = self._next_seq(run_id)
                 subs = list(self._queues.get(run_id) or [])
             for (lp, q) in subs:
                 try:
                     import copy as _copy
                     lp.call_soon_threadsafe(self._queue_put_nowait, q, _copy.deepcopy(frame))
-                except Exception as e:
-                    try:
-                        logger.debug(f"queue publish failed: {e}")
-                    except Exception:
-                        pass
+                except Exception:
+                    # Swallow delivery errors to individual subscribers
+                    pass
 
     @staticmethod
     def _queue_put_nowait(q: asyncio.Queue, item: dict) -> None:
@@ -199,11 +224,27 @@ class RunStreamHub:
             buf = self._buffers.get(run_id) or []
             if not buf:
                 return
+            # Emit up to the last 100 buffered frames with seq stamped
             for frame in buf[-100:]:
                 try:
-                    q.put_nowait(frame)
+                    if isinstance(frame, dict) and "seq" not in frame:
+                        frame["seq"] = self._next_seq(run_id)
+                    import copy as _copy
+                    q.put_nowait(_copy.deepcopy(frame))
                 except Exception:
                     break
+
+    def get_buffer_snapshot(self, run_id: str) -> list[dict]:
+        """Return a deep-copied snapshot of the buffered frames for a run.
+
+        The snapshot contains at most the last 100 frames and preserves any
+        assigned sequence numbers. Heartbeats are not buffered and therefore
+        are not included in this snapshot.
+        """
+        with self._lock:
+            import copy as _copy
+            buf = self._buffers.get(run_id) or []
+            return [_copy.deepcopy(f) for f in buf[-100:]]
 
     def close(self, run_id: str) -> None:
         # Use publish_event so end-event deduplication applies

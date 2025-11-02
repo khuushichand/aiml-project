@@ -44,20 +44,25 @@ async def create_tool_catalog(db, *, name: str, description: Optional[str], org_
     pg = await is_postgres_backend()
     try:
         if pg:
+            # Pre-check case-insensitive existence within scope
+            exists = await db.fetchrow(
+                "SELECT 1 FROM tool_catalogs WHERE LOWER(name) = LOWER($1) AND ((org_id IS NOT DISTINCT FROM $2) AND (team_id IS NOT DISTINCT FROM $3))",
+                name, org_id, team_id,
+            )
+            if exists:
+                raise ValueError("Catalog already exists")
             await db.execute(
-                "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (name, org_id, team_id) DO NOTHING",
+                "INSERT INTO tool_catalogs (name, description, org_id, team_id, is_active) VALUES ($1,$2,$3,$4,$5)",
                 name, description, org_id, team_id, is_active,
             )
             row = await db.fetchrow(
                 "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at FROM tool_catalogs WHERE name = $1 AND ((org_id IS NOT DISTINCT FROM $2) AND (team_id IS NOT DISTINCT FROM $3))",
                 name, org_id, team_id,
             )
-            if not row:
-                raise ValueError("Catalog already exists")
             return dict(row)
         # SQLite path
         cur = await db.execute(
-            "SELECT id FROM tool_catalogs WHERE name = ? AND ( (org_id IS ? OR org_id = ?) AND (team_id IS ? OR team_id = ?) )",
+            "SELECT id FROM tool_catalogs WHERE LOWER(name) = LOWER(?) AND ( (org_id IS ? OR org_id = ?) AND (team_id IS ? OR team_id = ?) )",
             (name, None, org_id, None, team_id),
         )
         if await cur.fetchone():
@@ -141,4 +146,3 @@ async def delete_tool_catalog_entry(db, catalog_id: int, tool_name: str) -> None
     except Exception as e:
         logger.error(f"admin_tool_catalog_service.delete_tool_catalog_entry failed: {e}")
         raise
-

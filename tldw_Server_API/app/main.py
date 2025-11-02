@@ -1984,8 +1984,10 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "AuthNZ usage", "url": _ext_url("/docs-static/AUTHNZ_USAGE_EXAMPLES.md")}},
     {"name": "users", "description": "User management: create, list, roles, and profiles.",
      "externalDocs": {"description": "Permission matrix", "url": _ext_url("/docs-static/AUTHNZ_PERMISSION_MATRIX.md")}},
-    {"name": "admin", "description": "Administrative operations and diagnostics. Includes Jobs Admin endpoints: stats, prune, TTL sweep, requeue quarantined, and integrity sweep.",
+    {"name": "admin", "description": "Administrative operations and diagnostics (non-Jobs). For Jobs Admin endpoints (stats, prune, TTL sweep, requeue quarantined, integrity sweep), see the 'jobs' tag.",
      "externalDocs": {"description": "Jobs Admin Examples", "url": _ext_url("/docs-static/Code_Documentation/Jobs_Admin_Examples.md")}},
+    {"name": "jobs", "description": "Jobs queue manager and admin (SQLite/PG).",
+     "externalDocs": {"description": "Jobs Manager ordering", "url": _ext_url("/docs-static/Code_Documentation/Jobs_Manager.md")}},
     {"name": "media", "description": "Ingest and process media (video/audio/PDF/EPUB/HTML/Markdown).",
      "externalDocs": {"description": "Overview", "url": _ext_url("/docs-static/Documentation.md")}},
     {"name": "audio", "description": "Audio transcription and TTS (OpenAI-compatible).",
@@ -2170,10 +2172,7 @@ async def _guard_sandbox_artifact_path(request: Request, call_next):
         # Inspect raw ASGI path first to avoid client/Starlette normalization
         raw_path = request.scope.get("raw_path")
         path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path or "")
-        try:
-            logger.debug(f"artifact-guard raw_path={path_raw}")
-        except Exception:
-            pass
+        # Debug logging removed after verification
         # Quick filter: only check sandbox artifact endpoints
         # Example: /api/v1/sandbox/runs/{run_id}/artifacts/{path}
         if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
@@ -2955,7 +2954,11 @@ else:
     # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
     if _HAS_SANDBOX:
-        _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
+        if _TEST_MODE:
+            # In tests, force-include sandbox endpoints regardless of route policy
+            app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
+        else:
+            _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
     # Flashcards are now considered stable; include by default unless disabled
     _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=True)
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)

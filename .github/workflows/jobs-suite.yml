@@ -1,0 +1,167 @@
+name: Jobs Suite
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'tldw_Server_API/app/core/Jobs/**'
+      - 'tldw_Server_API/app/api/v1/endpoints/jobs_admin.py'
+      - 'tldw_Server_API/tests/Jobs/**'
+      - '.github/workflows/jobs-suite.yml'
+  schedule:
+    - cron: '0 7 * * 1'  # Weekly (Mon 07:00 UTC)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  jobs-sqlite:
+    name: Jobs (SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Ensure pytest-asyncio installed
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+
+      - name: Verify pytest-asyncio import
+        run: |
+          python - <<'PY'
+          import importlib
+          m = importlib.import_module('pytest_asyncio.plugin')
+          print('pytest_asyncio plugin OK')
+          PY
+
+      - name: Run Jobs tests (SQLite only)
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            -m "jobs and not pg_jobs" \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
+            --junit-xml=test-results-jobs-sqlite.xml
+
+      - name: Upload test results (SQLite)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-sqlite-results
+          path: test-results-jobs-sqlite.xml
+
+      - name: Upload coverage (SQLite)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-sqlite-coverage
+          path: coverage.xml
+
+  jobs-postgres:
+    name: Jobs (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: jobs-sqlite
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: tldw
+          POSTGRES_PASSWORD: tldw
+          POSTGRES_DB: tldw_content
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U tldw"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: 'true'
+      DISABLE_HEAVY_STARTUP: '1'
+      POSTGRES_TEST_HOST: 127.0.0.1
+      POSTGRES_TEST_DB: tldw_content
+      POSTGRES_TEST_USER: tldw
+      POSTGRES_TEST_PASSWORD: tldw
+      TLDW_TEST_POSTGRES_REQUIRED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python and deps (with uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev,multiplayer
+
+      - name: Install pg client and wait for PG
+        uses: ./.github/actions/wait-for-postgres
+        with:
+          host: 127.0.0.1
+          port: ${{ job.services.postgres.ports[5432] }}
+          user: tldw
+
+      - name: Export PG env vars
+        run: |
+          echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+          echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+
+      - name: Install pytest and psycopg
+        run: |
+          python -m pip install --upgrade pip
+          pip install "psycopg[binary]>=3.1" pytest pytest-asyncio
+
+      - name: Verify pytest-asyncio import
+        run: |
+          python - <<'PY'
+          import importlib
+          m = importlib.import_module('pytest_asyncio.plugin')
+          print('pytest_asyncio plugin OK')
+          PY
+
+      - name: Run Jobs tests (PostgreSQL only)
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            -m "pg_jobs" \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
+            --junit-xml=test-results-jobs-postgres.xml
+
+      - name: Upload test results (Postgres)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-postgres-results
+          path: test-results-jobs-postgres.xml
+
+      - name: Upload coverage (Postgres)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobs-postgres-coverage
+          path: coverage.xml
+
