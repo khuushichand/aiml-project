@@ -26,7 +26,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 
 class TestMessageValidation:
     """Test message parameter validation."""
-    
+
     @pytest.mark.unit
     def test_valid_user_message(self):
         """Test valid user message creation."""
@@ -36,7 +36,7 @@ class TestMessageValidation:
         )
         assert msg.role == "user"
         assert msg.content == "Hello, how are you?"
-    
+
     @pytest.mark.unit
     def test_valid_system_message(self):
         """Test valid system message creation."""
@@ -46,7 +46,7 @@ class TestMessageValidation:
         )
         assert msg.role == "system"
         assert msg.content == "You are a helpful assistant."
-    
+
     @pytest.mark.unit
     def test_valid_assistant_message(self):
         """Test valid assistant message creation."""
@@ -56,7 +56,7 @@ class TestMessageValidation:
         )
         assert msg.role == "assistant"
         assert msg.content == "I'm doing well, thank you!"
-    
+
     @pytest.mark.unit
     def test_message_with_name(self):
         """Test message with optional name field."""
@@ -66,7 +66,7 @@ class TestMessageValidation:
             name="user_123"
         )
         assert msg.name == "user_123"
-    
+
     @pytest.mark.unit
     def test_multimodal_user_message(self):
         """Test user message with multimodal content (text + image)."""
@@ -83,12 +83,12 @@ class TestMessageValidation:
         assert len(msg.content) == 2
 
 # ========================================================================
-# ChatCompletionRequest Validation Tests  
+# ChatCompletionRequest Validation Tests
 # ========================================================================
 
 class TestChatCompletionRequest:
     """Test ChatCompletionRequest model validation."""
-    
+
     @pytest.mark.unit
     def test_minimal_valid_request(self):
         """Test minimal valid chat completion request."""
@@ -101,7 +101,7 @@ class TestChatCompletionRequest:
         assert request.model == "gpt-3.5-turbo"
         assert len(request.messages) == 1
         assert request.messages[0].role == "user"
-    
+
     @pytest.mark.unit
     def test_request_with_all_parameters(self):
         """Test request with all optional parameters."""
@@ -126,16 +126,16 @@ class TestChatCompletionRequest:
         assert request.temperature == 0.7
         assert request.max_tokens == 150
         assert request.stop == ["\n", "END"]
-    
+
     @pytest.mark.unit
     def test_request_without_messages_fails(self):
         """Test that request without messages fails validation."""
         with pytest.raises(ValidationError) as exc_info:
             ChatCompletionRequest(model="gpt-3.5-turbo")
-        
+
         errors = exc_info.value.errors()
         assert any(e["loc"] == ("messages",) for e in errors)
-    
+
     @pytest.mark.unit
     def test_request_with_empty_messages_fails(self):
         """Test that request with empty messages list fails."""
@@ -144,10 +144,10 @@ class TestChatCompletionRequest:
                 model="gpt-3.5-turbo",
                 messages=[]
             )
-        
+
         errors = exc_info.value.errors()
         assert any("at least 1 item" in str(e) for e in errors)
-    
+
     @pytest.mark.unit
     def test_temperature_bounds(self):
         """Test temperature parameter bounds (0.0 to 2.0)."""
@@ -158,14 +158,14 @@ class TestChatCompletionRequest:
             temperature=0.0
         )
         assert request.temperature == 0.0
-        
+
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
             temperature=2.0
         )
         assert request.temperature == 2.0
-        
+
         # Invalid temperature (too high)
         with pytest.raises(ValidationError):
             ChatCompletionRequest(
@@ -173,7 +173,7 @@ class TestChatCompletionRequest:
                 messages=[{"role": "user", "content": "test"}],
                 temperature=2.1
             )
-        
+
         # Invalid temperature (negative)
         with pytest.raises(ValidationError):
             ChatCompletionRequest(
@@ -181,12 +181,12 @@ class TestChatCompletionRequest:
                 messages=[{"role": "user", "content": "test"}],
                 temperature=-0.1
             )
-    
-    @pytest.mark.unit 
+
+    @pytest.mark.unit
     def test_provider_validation(self):
         """Test API provider validation."""
         valid_providers = ["openai", "anthropic", "cohere", "groq", "mistral"]
-        
+
         for provider in valid_providers:
             request = ChatCompletionRequest(
                 api_provider=provider,
@@ -194,7 +194,7 @@ class TestChatCompletionRequest:
                 messages=[{"role": "user", "content": "test"}]
             )
             assert request.api_provider == provider
-    
+
     @pytest.mark.unit
     def test_streaming_parameter(self):
         """Test streaming parameter."""
@@ -204,7 +204,7 @@ class TestChatCompletionRequest:
             stream=True
         )
         assert request.stream is True
-        
+
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -218,20 +218,20 @@ class TestChatCompletionRequest:
 
 class TestResponseFormat:
     """Test response format specifications."""
-    
+
     @pytest.mark.unit
     def test_json_response_format(self):
         """Test JSON response format specification."""
         format_spec = ResponseFormat(type="json_object")
         assert format_spec.type == "json_object"
-        
+
         request = ChatCompletionRequest(
             model="gpt-4",
             messages=[{"role": "user", "content": "Return JSON"}],
             response_format={"type": "json_object"}
         )
         assert request.response_format.type == "json_object"
-    
+
     @pytest.mark.unit
     def test_text_response_format(self):
         """Test text response format (default)."""
@@ -244,7 +244,7 @@ class TestResponseFormat:
 
 class TestToolsAndFunctions:
     """Test tool and function definitions."""
-    
+
     @pytest.mark.unit
     def test_function_definition(self):
         """Test function definition for tool calling."""
@@ -262,7 +262,7 @@ class TestToolsAndFunctions:
         )
         assert func.name == "get_weather"
         assert "location" in func.parameters["required"]
-    
+
     @pytest.mark.unit
     def test_tool_definition(self):
         """Test tool definition with function."""
@@ -282,7 +282,7 @@ class TestToolsAndFunctions:
         )
         assert tool.type == "function"
         assert tool.function.name == "search"
-    
+
     @pytest.mark.unit
     def test_request_with_tools(self):
         """Test request with tool definitions."""
@@ -315,7 +315,7 @@ class TestToolsAndFunctions:
 
 class TestEdgeCasesAndErrors:
     """Test edge cases and error conditions."""
-    
+
     @pytest.mark.unit
     def test_invalid_role_fails(self):
         """Test that invalid message role fails validation."""
@@ -324,13 +324,13 @@ class TestEdgeCasesAndErrors:
                 role="invalid_role",  # Should be "user"
                 content="test"
             )
-    
+
     @pytest.mark.unit
     def test_missing_content_fails(self):
         """Test that message without content fails."""
         with pytest.raises(ValidationError):
             ChatCompletionUserMessageParam(role="user")
-    
+
     @pytest.mark.unit
     def test_max_tokens_bounds(self):
         """Test max_tokens parameter bounds."""
@@ -340,7 +340,7 @@ class TestEdgeCasesAndErrors:
             max_tokens=1
         )
         assert request.max_tokens == 1
-        
+
         # Negative max_tokens should fail
         with pytest.raises(ValidationError):
             ChatCompletionRequest(
@@ -348,7 +348,7 @@ class TestEdgeCasesAndErrors:
                 messages=[{"role": "user", "content": "test"}],
                 max_tokens=-1
             )
-    
+
     @pytest.mark.unit
     def test_n_parameter_bounds(self):
         """Test n parameter bounds (1 to 128)."""
@@ -358,14 +358,14 @@ class TestEdgeCasesAndErrors:
             n=1
         )
         assert request.n == 1
-        
+
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
             n=128
         )
         assert request.n == 128
-        
+
         # Too many completions
         with pytest.raises(ValidationError):
             ChatCompletionRequest(
@@ -373,7 +373,7 @@ class TestEdgeCasesAndErrors:
                 messages=[{"role": "user", "content": "test"}],
                 n=129
             )
-    
+
     @pytest.mark.unit
     def test_extra_fields_allowed(self):
         """Test that extra fields are allowed (for provider-specific params)."""

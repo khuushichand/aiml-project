@@ -35,4 +35,3 @@ async def try_get_collections_db_for_user(
         return None
     except Exception:
         return None
-

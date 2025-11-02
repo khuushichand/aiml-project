@@ -24,17 +24,17 @@ log_message() {
 check_sensitive_data() {
     local file_path="$1"
     local issues=""
-    
+
     # Check for common sensitive patterns
     if grep -qE "(api[_-]?key|secret|password|token|credential)" "$file_path" 2>/dev/null; then
         issues="${issues}SENSITIVE_DATA "
     fi
-    
+
     # Check for hardcoded credentials
     if grep -qE "(['\"])(AIza|sk-|ghp_|ghs_|pat_|github_pat_)" "$file_path" 2>/dev/null; then
         issues="${issues}HARDCODED_CREDENTIALS "
     fi
-    
+
     echo "$issues"
 }
 
@@ -43,7 +43,7 @@ check_code_quality() {
     local file_path="$1"
     local extension="${file_path##*.}"
     local issues=""
-    
+
     case "$extension" in
         py)
             # Check for Python issues
@@ -73,7 +73,7 @@ check_code_quality() {
             fi
             ;;
     esac
-    
+
     echo "$issues"
 }
 
@@ -81,7 +81,7 @@ check_code_quality() {
 run_project_checks() {
     local file_path="$1"
     local project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    
+
     # Run linting if available
     if [[ -f "$project_root/package.json" ]]; then
         # Check if file is JavaScript/TypeScript
@@ -95,7 +95,7 @@ run_project_checks() {
             fi
         fi
     fi
-    
+
     # Run Python checks if available
     if [[ "$file_path" =~ \.py$ ]]; then
         if command -v ruff >/dev/null 2>&1; then
@@ -112,36 +112,36 @@ audit_file() {
     local file_path="$2"
     local old_content="$3"
     local new_content="$4"
-    
+
     log_message "INFO" "Audit triggered by $tool_name for file: $file_path"
-    
+
     # Check if file exists
     if [[ ! -f "$file_path" ]]; then
         log_message "WARNING" "File does not exist: $file_path"
         return 1
     fi
-    
+
     # Get file stats
     local file_size=$(stat -f%z "$file_path" 2>/dev/null || stat -c%s "$file_path" 2>/dev/null)
     local file_lines=$(wc -l < "$file_path")
     log_message "INFO" "File stats: Size=${file_size} bytes, Lines=${file_lines}"
-    
+
     # Check for sensitive data
     local sensitive_issues=$(check_sensitive_data "$file_path")
     if [[ -n "$sensitive_issues" ]]; then
         log_message "WARNING" "Sensitive data detected: $sensitive_issues"
         echo "⚠️  WARNING: Potential sensitive data detected in $file_path: $sensitive_issues" >&2
     fi
-    
+
     # Check code quality
     local quality_issues=$(check_code_quality "$file_path")
     if [[ -n "$quality_issues" ]]; then
         log_message "INFO" "Code quality issues: $quality_issues"
     fi
-    
+
     # Run project-specific checks
     run_project_checks "$file_path"
-    
+
     # Log git diff if in a git repository
     if git rev-parse --git-dir >/dev/null 2>&1; then
         local git_status=$(git status --porcelain "$file_path" 2>/dev/null)
@@ -151,7 +151,7 @@ audit_file() {
             git diff "$file_path" 2>/dev/null | head -10 >> "$LOG_FILE"
         fi
     fi
-    
+
     # Create audit summary
     local audit_summary=$(cat <<EOF
 {
@@ -165,10 +165,10 @@ audit_file() {
 }
 EOF
 )
-    
+
     # Write to JSON audit log
     echo "$audit_summary" >> "$AUDIT_LOG_DIR/audit_$(date +%Y%m%d).json"
-    
+
     return 0
 }
 
@@ -177,11 +177,11 @@ EOF
 if [[ -p /dev/stdin ]]; then
     # Read JSON input
     input=$(cat)
-    
+
     # Extract relevant fields (basic parsing - could use jq if available)
     tool_name=$(echo "$input" | grep -o '"tool"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
     file_path=$(echo "$input" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-    
+
     # If we have the required information, run the audit
     if [[ -n "$tool_name" && -n "$file_path" ]]; then
         audit_file "$tool_name" "$file_path"

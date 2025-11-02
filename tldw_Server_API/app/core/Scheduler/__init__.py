@@ -24,14 +24,14 @@ Quick Start:
     async def process_video(video_id: int):
         # Process video
         return {"status": "completed"}
-    
+
     # Create and start scheduler
     scheduler = Scheduler()
     await scheduler.start()
-    
+
     # Submit a task
     task_id = await scheduler.submit("process_video", {"video_id": 123})
-    
+
     # Wait for completion
     result = await scheduler.wait_for_task(task_id)
 """
@@ -64,22 +64,22 @@ __all__ = [
     'stop_global_scheduler',
     'task',
     'get_registry',
-    
+
     # Core types
     'Task',
     'TaskStatus',
     'TaskPriority',
-    
+
     # Configuration
     'SchedulerConfig',
     'get_config',
     'set_config',
     'reset_config',
-    
+
     # Backend
     'create_backend',
     'BackendManager',
-    
+
     # Exceptions
     'SchedulerError',
     'BackendError',

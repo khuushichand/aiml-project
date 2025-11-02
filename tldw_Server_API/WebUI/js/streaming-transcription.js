@@ -19,10 +19,10 @@ class StreamingTranscriptionClient {
         this.responsesReceived = 0;
         this.durationInterval = null;
         this.visualizerAnimationId = null;
-        
+
         this.initializeUI();
     }
-    
+
     initializeUI() {
         // Cache UI elements
         this.elements = {
@@ -44,7 +44,7 @@ class StreamingTranscriptionClient {
             configHint: document.getElementById('streamingConfigHint'),
             configHintText: document.querySelector('#streamingConfigHint .config-text')
         };
-        
+
         // Initialize visualizer if canvas exists
         if (this.elements.visualizer) {
             this.initVisualizer();
@@ -108,59 +108,59 @@ class StreamingTranscriptionClient {
             }
         };
     }
-    
+
     initVisualizer() {
         const canvas = this.elements.visualizer;
         const ctx = canvas.getContext('2d');
-        
+
         // Set canvas size
         canvas.width = canvas.offsetWidth;
         canvas.height = 100;
-        
+
         const draw = () => {
             this.visualizerAnimationId = requestAnimationFrame(draw);
-            
+
             if (!this.analyser) {
                 ctx.fillStyle = '#000';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 return;
             }
-            
+
             const bufferLength = this.analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
             this.analyser.getByteFrequencyData(dataArray);
-            
+
             // Calculate volume
             const volume = Math.round(dataArray.reduce((a, b) => a + b) / bufferLength / 255 * 100);
             if (this.elements.volume) {
                 this.elements.volume.textContent = volume;
             }
-            
+
             // Draw frequency bars
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
+
             const barWidth = (canvas.width / bufferLength) * 2.5;
             let x = 0;
-            
+
             for (let i = 0; i < bufferLength; i++) {
                 const barHeight = (dataArray[i] / 255) * canvas.height;
-                
+
                 // Create gradient colors
                 const r = barHeight + 25 * (i / bufferLength);
                 const g = 250 * (i / bufferLength);
                 const b = 50;
-                
+
                 ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                 ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-                
+
                 x += barWidth + 1;
             }
         };
-        
+
         draw();
     }
-    
+
     async toggleConnection() {
         if (this.isConnected) {
             this.disconnect();
@@ -168,15 +168,15 @@ class StreamingTranscriptionClient {
             await this.connect();
         }
     }
-    
+
     async connect() {
         this.updateStatus('Connecting...', 'connecting');
-        
+
         try {
             // Get server URL and authentication
             const baseUrl = window.location.origin.replace('http', 'ws');
             const wsUrl = `${baseUrl}/api/v1/audio/stream/transcribe`;
-            
+
             // Get API token - first try from global API client, then localStorage
             let apiToken = '';
             if (window.apiClient && window.apiClient.token) {
@@ -188,15 +188,15 @@ class StreamingTranscriptionClient {
                     this.logDebug('Using API key from localStorage');
                 }
             }
-            
+
             if (!apiToken) {
                 this.logDebug('Warning: No API key found, connection may fail');
             }
-            
+
             const finalUrl = apiToken ? `${wsUrl}?token=${encodeURIComponent(apiToken)}` : wsUrl;
-            
+
             this.ws = new WebSocket(finalUrl);
-            
+
             this.ws.onopen = () => {
                 this.isConnected = true;
                 this.isConfigured = false;
@@ -211,27 +211,27 @@ class StreamingTranscriptionClient {
                         this.elements.configHintText.textContent = 'Waiting for server configuration…';
                     }
                 }
-                
+
                 // Send configuration immediately after connection
                 setTimeout(() => {
                     this.sendConfiguration();
                 }, 100); // Small delay to ensure connection is fully established
-                
+
                 this.logDebug('WebSocket connected');
                 this.updateConnectionInfo();
             };
-            
+
             this.ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 this.handleMessage(data);
             };
-            
+
             this.ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
                 this.logDebug(`WebSocket error: ${error}`);
                 this.addTranscript('Connection error occurred', 'error');
             };
-            
+
             this.ws.onclose = () => {
                 this.isConnected = false;
                 this.isConfigured = false;
@@ -243,35 +243,35 @@ class StreamingTranscriptionClient {
                 if (this.elements.configHint) {
                     this.elements.configHint.style.display = 'none';
                 }
-                
+
                 if (this.isRecording) {
                     this.stopRecording();
                 }
-                
+
                 this.logDebug('WebSocket disconnected');
                 this.updateConnectionInfo();
             };
-            
+
         } catch (error) {
             console.error('Connection failed:', error);
             this.updateStatus('Connection failed', 'disconnected');
             this.addTranscript(`Connection failed: ${error.message}`, 'error');
         }
     }
-    
+
     disconnect() {
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
     }
-    
+
     sendConfiguration() {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             this.logDebug('WebSocket not ready, cannot send configuration');
             return;
         }
-        
+
         const model = document.getElementById('streamingModel').value;
         const config = {
             type: 'config',
@@ -282,7 +282,7 @@ class StreamingTranscriptionClient {
             enable_vad: document.getElementById('streamingEnableVAD').checked,
             vad_threshold: parseFloat(document.getElementById('streamingVADThreshold').value || 0.5)
         };
-        
+
         if (model === 'parakeet') {
             config.variant = document.getElementById('streamingVariant').value;
             console.log('Parakeet variant selected:', config.variant);
@@ -314,16 +314,16 @@ class StreamingTranscriptionClient {
             // Whisper works better with longer chunks
             config.chunk_duration = 5.0;  // Override to optimal duration for Whisper
         }
-        
+
         console.log('Sending configuration:', config);
         this.ws.send(JSON.stringify(config));
         this.logDebug(`Sent config: ${JSON.stringify(config)}`);
     }
-    
+
     async startRecording() {
         try {
             // Request microphone access
-            const stream = await navigator.mediaDevices.getUserMedia({ 
+            const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: 1,
                     sampleRate: parseInt(document.getElementById('streamingSampleRate').value),
@@ -331,75 +331,75 @@ class StreamingTranscriptionClient {
                     noiseSuppression: true
                 }
             });
-            
+
             // Create audio context for visualization
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const source = this.audioContext.createMediaStreamSource(stream);
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
             source.connect(this.analyser);
-            
+
             // Log audio context info
             this.logDebug(`Audio context sample rate: ${this.audioContext.sampleRate}Hz`);
             this.logDebug(`Configured sample rate: ${parseInt(document.getElementById('streamingSampleRate').value)}Hz`);
-            
+
             // Create script processor for audio chunks
             // Increased buffer size for better performance and larger chunks
             const bufferSize = 16384; // Increased from 4096 (~1 second at 16kHz)
             const scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
             source.connect(scriptProcessor);
             scriptProcessor.connect(this.audioContext.destination);
-            
+
             // Initialize audio buffer for accumulation
             this.audioBuffer = [];
             this.bufferDuration = 0;
             const model = document.getElementById('streamingModel').value;
-            
+
             // Set target buffer duration based on model
             const targetDuration = model === 'whisper' ? 5.0 : 2.0; // seconds
             const configuredSampleRate = parseInt(document.getElementById('streamingSampleRate').value);
             const targetSamples = targetDuration * configuredSampleRate;
-            
+
             scriptProcessor.onaudioprocess = (event) => {
                 if (!this.isRecording) return;
-                
+
                 const inputData = event.inputBuffer.getChannelData(0);
                 let audioData = inputData;
-                
+
                 // Handle sample rate conversion if needed
                 if (this.audioContext.sampleRate !== configuredSampleRate) {
                     // Simple downsampling/upsampling
                     const ratio = configuredSampleRate / this.audioContext.sampleRate;
                     const newLength = Math.floor(inputData.length * ratio);
                     audioData = new Float32Array(newLength);
-                    
+
                     for (let i = 0; i < newLength; i++) {
                         const srcIndex = i / ratio;
                         const srcIndexFloor = Math.floor(srcIndex);
                         const srcIndexCeil = Math.min(Math.ceil(srcIndex), inputData.length - 1);
                         const fraction = srcIndex - srcIndexFloor;
-                        
+
                         // Linear interpolation for resampling
-                        audioData[i] = inputData[srcIndexFloor] * (1 - fraction) + 
+                        audioData[i] = inputData[srcIndexFloor] * (1 - fraction) +
                                       inputData[srcIndexCeil] * fraction;
                     }
                 }
-                
+
                 // Accumulate audio data
                 this.audioBuffer.push(...audioData);
-                
+
                 // Check if we have enough samples
                 if (this.audioBuffer.length >= targetSamples) {
                     // Create chunk from accumulated buffer
                     const chunkToSend = new Float32Array(this.audioBuffer.slice(0, targetSamples));
-                    
+
                     // Keep overlap for context (10% of buffer)
                     const overlapSamples = Math.floor(targetSamples * 0.1);
                     this.audioBuffer = this.audioBuffer.slice(targetSamples - overlapSamples);
-                    
+
                     // Convert to base64
                     const base64 = this.arrayBufferToBase64(chunkToSend.buffer);
-                    
+
                     // Send to WebSocket
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                         this.ws.send(JSON.stringify({
@@ -408,22 +408,22 @@ class StreamingTranscriptionClient {
                         }));
                         this.chunksSent++;
                         this.elements.chunks.textContent = this.chunksSent;
-                        
+
                         this.logDebug(`Sent audio chunk ${this.chunksSent}: ${chunkToSend.length} samples`);
                     }
                 }
             };
-            
+
             this.isRecording = true;
             this.startTime = Date.now();
             this.chunksSent = 0;
             this.responsesReceived = 0;
-            
+
             // Update UI
             this.elements.startBtn.disabled = true;
             this.elements.stopBtn.disabled = false;
             this.addTranscript('Recording started...', 'status');
-            
+
             // Start duration timer
             this.durationInterval = setInterval(() => {
                 const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
@@ -431,24 +431,24 @@ class StreamingTranscriptionClient {
                 const seconds = elapsed % 60;
                 this.elements.duration.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
             }, 1000);
-            
+
             this.logDebug('Recording started');
-            
+
         } catch (error) {
             console.error('Failed to start recording:', error);
             this.addTranscript(`Failed to start recording: ${error.message}`, 'error');
         }
     }
-    
+
     stopRecording() {
         if (this.isRecording) {
             this.isRecording = false;
-            
+
             // Send any remaining buffered audio before stopping
             if (this.audioBuffer && this.audioBuffer.length > 0) {
                 const remainingAudio = new Float32Array(this.audioBuffer);
                 const base64 = this.arrayBufferToBase64(remainingAudio.buffer);
-                
+
                 if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                     this.ws.send(JSON.stringify({
                         type: 'audio',
@@ -457,62 +457,62 @@ class StreamingTranscriptionClient {
                     this.chunksSent++;
                     this.elements.chunks.textContent = this.chunksSent;
                 }
-                
+
                 this.audioBuffer = [];
             }
-            
+
             // Stop audio context
             if (this.audioContext) {
                 this.audioContext.close();
                 this.audioContext = null;
                 this.analyser = null;
             }
-            
+
             // Send commit message to get final transcript
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 this.ws.send(JSON.stringify({ type: 'commit' }));
             }
-            
+
             // Update UI
             this.elements.startBtn.disabled = false;
             this.elements.stopBtn.disabled = true;
             this.addTranscript('Recording stopped', 'status');
-            
+
             // Stop duration timer
             if (this.durationInterval) {
                 clearInterval(this.durationInterval);
                 this.durationInterval = null;
             }
-            
+
             this.logDebug('Recording stopped');
         }
     }
-    
+
     handleMessage(data) {
         this.responsesReceived++;
         this.elements.responses.textContent = this.responsesReceived;
-        
+
         this.logDebug(`Received: ${JSON.stringify(data)}`);
-        
+
         switch (data.type) {
             case 'partial':
                 this.showPartial(data.text);
                 break;
-                
+
             case 'transcription':
             case 'final':
                 this.addTranscript(data.text, 'final');
                 this.hidePartial();
                 break;
-                
+
             case 'full_transcript':
                 this.addTranscript(`[Full Transcript] ${data.text}`, 'final');
                 break;
-                
+
             case 'error':
                 this.addTranscript(`Error: ${data.message}`, 'error');
                 break;
-                
+
             case 'status':
                 this.addTranscript(`Status: ${data.state} - ${data.model || ''}`, 'status');
                 // Enable Start only after config-ack (state === 'configured' or 'ready')
@@ -529,49 +529,49 @@ class StreamingTranscriptionClient {
                     if (this.elements.configHint) this.elements.configHint.style.display = 'none';
                 }
                 break;
-            
+
             case 'warning':
                 this.addTranscript(`Warning: ${data.message}`, 'warning');
                 if (data.fallback) {
                     this.addTranscript(`Using ${data.active_model} instead of ${data.original_model}`, 'warning');
                 }
                 break;
-                
+
             default:
                 console.log('Unknown message type:', data);
         }
     }
-    
+
     showPartial(text) {
         if (this.elements.partialBox && this.elements.partialText) {
             this.elements.partialBox.style.display = 'block';
             this.elements.partialText.textContent = text;
         }
     }
-    
+
     hidePartial() {
         if (this.elements.partialBox) {
             this.elements.partialBox.style.display = 'none';
         }
     }
-    
+
     addTranscript(text, type = 'final') {
         const entry = document.createElement('div');
         entry.className = `transcript-entry ${type}`;
-        
+
         const timestamp = new Date().toLocaleTimeString();
         entry.textContent = `[${timestamp}] ${text}`;
-        
+
         // Remove placeholder if exists
         const placeholder = this.elements.transcript.querySelector('.transcript-placeholder');
         if (placeholder) {
             placeholder.remove();
         }
-        
+
         this.elements.transcript.appendChild(entry);
         this.elements.transcript.scrollTop = this.elements.transcript.scrollHeight;
     }
-    
+
     clearTranscript() {
         this.elements.transcript.innerHTML = '<div class="transcript-placeholder">Connect and start recording to see transcript...</div>';
         this.elements.chunks.textContent = '0';
@@ -581,12 +581,12 @@ class StreamingTranscriptionClient {
         this.chunksSent = 0;
         this.responsesReceived = 0;
     }
-    
+
     updateStatus(text, state) {
         this.elements.statusText.textContent = text;
         this.elements.statusIndicator.className = `status-indicator ${state}`;
     }
-    
+
     updateConnectionInfo() {
         const info = {
             connected: this.isConnected,
@@ -594,20 +594,20 @@ class StreamingTranscriptionClient {
             readyState: this.ws ? this.ws.readyState : 'N/A',
             protocol: this.ws ? this.ws.protocol : 'N/A'
         };
-        
+
         this.elements.connectionInfo.textContent = JSON.stringify(info, null, 2);
     }
-    
+
     logDebug(message) {
         const timestamp = new Date().toISOString();
         const currentLog = this.elements.debug.textContent;
         const newLog = `[${timestamp}] ${message}\n${currentLog}`;
-        
+
         // Keep only last 20 messages
         const lines = newLog.split('\n').slice(0, 20);
         this.elements.debug.textContent = lines.join('\n');
     }
-    
+
     arrayBufferToBase64(buffer) {
         const bytes = new Uint8Array(buffer);
         let binary = '';
@@ -674,7 +674,7 @@ function startStreamingRecording() {
         console.log('Start button is disabled, ignoring click');
         return;
     }
-    
+
     if (streamingClient && streamingClient.isConnected) {
         // Ensure server has acknowledged configuration
         if (!streamingClient.isConfigured && !streamingClient.isReady) {
@@ -707,7 +707,7 @@ function updateModelOptions() {
     const languageGroup = document.getElementById('languageGroup');
     const whisperModelGroup = document.getElementById('whisperModelGroup');
     const whisperTaskGroup = document.getElementById('whisperTaskGroup');
-    
+
     if (model === 'parakeet') {
         variantGroup.style.display = 'block';
         languageGroup.style.display = 'block';

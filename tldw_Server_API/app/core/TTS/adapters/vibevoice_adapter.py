@@ -48,7 +48,7 @@ class VibeVoiceAdapter(TTSAdapter):
     Generates up to 90 minutes of speech with 4 distinct speakers.
     Features spontaneous background music and emergent singing capabilities.
     """
-    
+
     # Model variants available
     MODEL_VARIANTS = {
         "1.5B": {
@@ -57,30 +57,30 @@ class VibeVoiceAdapter(TTSAdapter):
             "frame_rate": 7.5   # Hz
         },
         "7B": {
-            "path": "WestZhang/VibeVoice-Large-pt", 
+            "path": "WestZhang/VibeVoice-Large-pt",
             "context": 32000,  # 32K context (~45 min generation)
             "frame_rate": 7.5   # Hz
         }
     }
-    
+
     # Voice presets loaded from files
     VOICE_PRESETS = {}
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        
+
         # Model variant selection (1.5B or 7B)
         self.variant = self.config.get("vibevoice_variant", "1.5B")
         if self.variant not in self.MODEL_VARIANTS:
             logger.warning(f"Unknown VibeVoice variant {self.variant}, defaulting to 1.5B")
             self.variant = "1.5B"
-        
+
         # Model configuration
         variant_config = self.MODEL_VARIANTS[self.variant]
         self.model_path = self.config.get("vibevoice_model_path", variant_config["path"])
         self.context_length = variant_config["context"]
         self.frame_rate = variant_config["frame_rate"]
-        
+
         # Device configuration with MPS support
         if self.config.get("vibevoice_device"):
             self.device = self.config.get("vibevoice_device")
@@ -91,30 +91,30 @@ class VibeVoiceAdapter(TTSAdapter):
             logger.info("Using MPS (Apple Silicon) for VibeVoice")
         else:
             self.device = "cpu"
-        
+
         # Audio configuration (VibeVoice typically uses 24 kHz)
         self.sample_rate = self.config.get("vibevoice_sample_rate", 24000)
-        
+
         # Model instances
         self.model = None
         self.processor = None
-        
+
         # Speaker settings (VibeVoice supports up to 4 speakers)
         self.max_speakers = 4
         self.default_speaker = self.config.get("vibevoice_default_speaker", 1)
-        
+
         # Context awareness
         self.enable_context = self.config.get("vibevoice_context", True)
         self.context_window = self.config.get("vibevoice_context_window", 512)
-        
+
         # VibeVoice specific features
         self.enable_background_music = self.config.get("vibevoice_background_music", False)
         self.enable_singing = self.config.get("vibevoice_enable_singing", False)
-        
+
         # Performance settings
         self.use_fp16 = self.config.get("vibevoice_use_fp16", True) and self.device in ["cuda", "mps"]
         self.batch_size = self.config.get("vibevoice_batch_size", 1)
-        
+
         # Memory optimization settings (4-bit quantization is effectively CUDA-only)
         requested_quant = bool(self.config.get("vibevoice_use_quantization", False))
         self.use_quantization = requested_quant and self.device == "cuda"
@@ -133,7 +133,7 @@ class VibeVoiceAdapter(TTSAdapter):
         cfg_auto = self.config.get("vibevoice_auto_download")
         env_auto = os.getenv("VIBEVOICE_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
         self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
-        
+
         # Advanced attention settings
         self.enable_sage = self.config.get("vibevoice_enable_sage", False)
         self.attention_fallback_chain = [
@@ -143,7 +143,7 @@ class VibeVoiceAdapter(TTSAdapter):
             "eager"
         ]
         self.attention_fallback_chain = [a for a in self.attention_fallback_chain if a]  # Remove None
-        
+
         # Default generation parameters
         self.default_cfg_scale = self.config.get("vibevoice_cfg_scale", 1.3)
         self.default_diffusion_steps = self.config.get("vibevoice_diffusion_steps", 20)
@@ -151,56 +151,56 @@ class VibeVoiceAdapter(TTSAdapter):
         self.default_top_p = self.config.get("vibevoice_top_p", 0.95)
         self.default_top_k = self.config.get("vibevoice_top_k", 50)  # New parameter
         self.default_attention_type = self.config.get("vibevoice_attention_type", "auto")
-        
+
         # Streaming optimization
         self.stream_chunk_size = self.config.get("vibevoice_stream_chunk_size", 0.25)  # seconds
         self.stream_buffer_size = self.config.get("vibevoice_stream_buffer_size", 4096)
-        
+
         # Setup paths
         self.model_dir = Path(self.config.get("vibevoice_model_dir", "./models/vibevoice"))
         self.cache_dir = Path(self.config.get("vibevoice_cache_dir", "./cache/vibevoice"))
-        
+
         # Voice samples folder for 1-shot cloning (like VibeVoice demo)
         self.voices_dir = Path(self.config.get("vibevoice_voices_dir", "./voices"))
         self.available_voices = {}  # Maps voice names to file paths
         # Optional default mapping for speakers to voices (ids or file paths)
         self.default_speakers_to_voices = self.config.get("vibevoice_speakers_to_voices")
-        
+
         # Cancellation support
         self._generation_cancelled = False
         self._current_generation_task = None
-        
+
         # Memory tracking
         self._memory_stats = {
             "peak_vram_gb": 0,
             "current_vram_gb": 0,
             "quantization_savings_gb": 0
         }
-    
+
     def _load_voice_files(self):
         """Load voice samples from voices folder for voice cloning"""
         self.available_voices.clear()
         self.VOICE_PRESETS.clear()
-        
+
         # Supported audio formats
         audio_extensions = [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"]
-        
+
         if self.voices_dir.exists():
             logger.info(f"Loading voices from {self.voices_dir}")
-            
+
             # Scan for voice files
             for ext in audio_extensions:
                 for voice_file in self.voices_dir.glob(f"*{ext}"):
                     voice_name = voice_file.stem  # Filename without extension
                     self.available_voices[voice_name] = str(voice_file)
-                    
+
                     # Try to extract gender from filename (e.g., "en-Alice_woman")
                     gender = "neutral"
                     if "woman" in voice_name.lower() or "female" in voice_name.lower():
                         gender = "female"
                     elif "man" in voice_name.lower() or "male" in voice_name.lower():
                         gender = "male"
-                    
+
                     # Add to voice presets
                     self.VOICE_PRESETS[voice_name] = VoiceInfo(
                         id=voice_name,
@@ -210,7 +210,7 @@ class VibeVoiceAdapter(TTSAdapter):
                         styles=["file-based"]
                     )
                     logger.info(f"Loaded voice: {voice_name} from {voice_file}")
-            
+
             if not self.available_voices:
                 logger.warning(f"No voice files found in {self.voices_dir}")
                 # Add default speaker options when no voice files are found
@@ -235,26 +235,26 @@ class VibeVoiceAdapter(TTSAdapter):
                     description=f"Default speaker {i}",
                     styles=["default"]
                 )
-    
+
     async def _load_user_voices(self, user_id: int):
         """Load user-specific uploaded voices"""
         try:
             from ...voice_manager import get_voice_manager
-            
+
             voice_manager = get_voice_manager()
             user_voices = await voice_manager.list_user_voices(user_id)
-            
+
             for voice_info in user_voices:
                 if voice_info.provider == "vibevoice":
                     # Get full path to voice file
                     voices_path = voice_manager.get_user_voices_path(user_id)
                     voice_file_path = voices_path / voice_info.file_path
-                    
+
                     if voice_file_path.exists():
                         # Register with custom: prefix
                         custom_id = f"custom:{voice_info.voice_id}"
                         self.available_voices[custom_id] = str(voice_file_path)
-                        
+
                         # Add to voice presets
                         self.VOICE_PRESETS[custom_id] = VoiceInfo(
                             id=custom_id,
@@ -263,31 +263,31 @@ class VibeVoiceAdapter(TTSAdapter):
                             description=voice_info.description or f"Custom voice: {voice_info.name}",
                             styles=["custom", "uploaded"]
                         )
-                        
+
                         logger.info(f"Loaded user voice: {voice_info.name} ({custom_id})")
-            
+
             logger.info(f"Loaded {len(user_voices)} user voices for VibeVoice")
-            
+
         except ImportError:
             logger.debug("Voice manager not available, skipping user voice loading")
         except Exception as e:
             logger.error(f"Error loading user voices: {e}")
-    
+
     async def initialize(self, user_id: Optional[int] = None) -> bool:
         """Initialize the VibeVoice TTS model"""
         try:
             logger.info(f"{self.provider_name}: Initializing VibeVoice TTS (variant: {self.variant}, model: {self.model_path})...")
-            
+
             # Load voice files from voices folder
             self._load_voice_files()
-            
+
             # Load user-specific voices if user_id provided
             if user_id:
                 await self._load_user_voices(user_id)
-            
+
             # Get resource manager for memory monitoring
             resource_manager = await get_resource_manager()
-            
+
             # Check memory before loading model
             if resource_manager.memory_monitor.is_memory_critical():
                 raise TTSInsufficientMemoryError(
@@ -295,7 +295,7 @@ class VibeVoiceAdapter(TTSAdapter):
                     provider=self.provider_name,
                     details=resource_manager.memory_monitor.get_memory_usage()
                 )
-            
+
             # Check for model files
             if not self._check_model_files():
                 if not self.auto_download:
@@ -309,19 +309,19 @@ class VibeVoiceAdapter(TTSAdapter):
                     )
                 logger.info(f"{self.provider_name}: Downloading VibeVoice models...")
                 await self._download_models()
-            
+
             # Load the model components
             logger.info(f"{self.provider_name}: Loading VibeVoice components...")
-            
+
             # Import VibeVoice
             try:
                 from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
                 from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
-                
+
                 # Load processor
                 logger.info(f"Loading VibeVoice processor from {self.model_path}")
                 self.processor = VibeVoiceProcessor.from_pretrained(self.model_path)
-                
+
                 # Determine dtype and attention implementation
                 if self.device == "cuda":
                     load_dtype = torch.bfloat16 if self.use_fp16 else torch.float32
@@ -329,13 +329,13 @@ class VibeVoiceAdapter(TTSAdapter):
                     load_dtype = torch.float16 if self.use_fp16 else torch.float32
                 else:
                     load_dtype = torch.float32
-                
+
                 # Determine attention implementation with fallback chain
                 attn_impl = self._get_best_attention_implementation()
-                
+
                 # Load main model with optional quantization
                 logger.info(f"Loading VibeVoice model with dtype={load_dtype}, device={self.device}, quantization={self.use_quantization}")
-                
+
                 if self.use_quantization:
                     # Load with 4-bit quantization for memory savings
                     try:
@@ -371,14 +371,14 @@ class VibeVoiceAdapter(TTSAdapter):
                         device_map="auto" if self.device != "cpu" else None,
                         attn_implementation=attn_impl
                     )
-                
+
                 # Set model to eval and configure inference
                 self.model.eval()
                 self.model.set_ddpm_inference_steps(num_steps=self.default_diffusion_steps)
-                
+
                 # Track memory usage
                 self._update_memory_stats()
-                
+
             except ImportError as e:
                 error_msg = (
                     f"{self.provider_name}: Required libraries not installed. "
@@ -399,11 +399,11 @@ class VibeVoiceAdapter(TTSAdapter):
                     provider=self.provider_name,
                     details={"error": str(e), "suggestion": error_msg}
                 )
-            
+
             # Set to evaluation mode
             if self.model:
                 self.model.eval()
-                
+
                 # Register model with resource manager
                 register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
@@ -412,17 +412,17 @@ class VibeVoiceAdapter(TTSAdapter):
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
-            
+
             # Warm up the model
             await self._warmup_model()
-            
+
             logger.info(
                 f"{self.provider_name}: Initialized successfully "
                 f"(Device: {self.device}, FP16: {self.use_fp16}, Context: {self.enable_context})"
             )
             self._status = ProviderStatus.AVAILABLE
             return True
-            
+
         except (TTSInsufficientMemoryError, TTSModelLoadError) as e:
             logger.error(f"{self.provider_name}: Initialization failed due to model/memory error: {e}")
             self._status = ProviderStatus.ERROR
@@ -443,7 +443,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
             )
-    
+
     def _check_model_files(self) -> bool:
         """Check if model files exist locally."""
         required_files = [
@@ -474,7 +474,7 @@ class VibeVoiceAdapter(TTSAdapter):
         if not try_path:
             self.model_path = str(self.model_dir)
         return True
-    
+
     async def _download_models(self):
         """Download VibeVoice models if not present with progress tracking"""
         # If model_path is already a local directory, don't attempt network download
@@ -489,17 +489,17 @@ class VibeVoiceAdapter(TTSAdapter):
         if not self.auto_download:
             logger.info(f"{self.provider_name}: Auto-download disabled, skipping model download")
             return False
-        
+
         # Create directories
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             from huggingface_hub import snapshot_download
             from tqdm import tqdm
-            
+
             logger.info(f"{self.provider_name}: Downloading {self.variant} model from {self.model_path}...")
-            
+
             class DownloadProgress:
                 def __init__(self):
                     self.pbar = None
@@ -508,7 +508,7 @@ class VibeVoiceAdapter(TTSAdapter):
                         self.pbar = tqdm(unit='B', unit_scale=True, desc="Downloading VibeVoice")
                     self.pbar.update(num_bytes)
             progress = DownloadProgress()
-            
+
             local_dir = snapshot_download(
                 repo_id=self.model_path,
                 local_dir=str(self.model_dir),
@@ -527,12 +527,12 @@ class VibeVoiceAdapter(TTSAdapter):
         except Exception as e:
             logger.error(f"{self.provider_name}: Model download failed: {e}")
             return False
-    
+
     async def _warmup_model(self):
         """Warm up the model with a test generation"""
         if not self.model:
             return
-        
+
         try:
             logger.debug(f"{self.provider_name}: Warming up model...")
             # Optional, guarded micro-forward to catch lazy init issues
@@ -628,12 +628,12 @@ class VibeVoiceAdapter(TTSAdapter):
         if any(v is None for v in voice_samples):
             return []
         return voice_samples  # type: ignore
-    
+
     async def get_capabilities(self) -> TTSCapabilities:
         """Get VibeVoice TTS capabilities"""
         # Variant-specific max generation time
         max_generation_minutes = 90 if self.variant == "1.5B" else 45
-        
+
         return TTSCapabilities(
             provider_name=f"VibeVoice-{self.variant}",
             supported_languages={"en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko", "zh"},
@@ -661,7 +661,7 @@ class VibeVoiceAdapter(TTSAdapter):
             sample_rate=self.sample_rate,
             default_format=AudioFormat.WAV
         )
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         """Generate speech using VibeVoice TTS"""
         if not await self.ensure_initialized():
@@ -669,14 +669,14 @@ class VibeVoiceAdapter(TTSAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
-        
+
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_name.lower())
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
-        
+
         # Check if a different model variant was requested
         requested_model = getattr(request, "model", None) or request.extra_params.get("model")
         if requested_model and requested_model in self.MODEL_VARIANTS:
@@ -685,7 +685,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 self.variant = requested_model
                 # Reload model with new variant
                 await self._reload_model_for_variant(requested_model)
-        
+
         # Extract generation parameters
         cfg_scale = request.cfg_scale or request.extra_params.get("cfg_scale", self.default_cfg_scale)
         diffusion_steps = request.diffusion_steps or request.extra_params.get("diffusion_steps", self.default_diffusion_steps)
@@ -694,23 +694,23 @@ class VibeVoiceAdapter(TTSAdapter):
         top_k = request.extra_params.get("top_k", self.default_top_k)  # New parameter
         seed = request.seed or request.extra_params.get("seed")
         attention_type = request.attention_type or request.extra_params.get("attention_type", self.default_attention_type)
-        
+
         # Validate parameters with extended ranges from ComfyUI
         cfg_scale = max(1.0, min(2.0, cfg_scale))
         diffusion_steps = max(5, min(100, diffusion_steps))
         temperature = max(0.1, min(2.0, temperature))
         top_p = max(0.1, min(1.0, top_p))
         top_k = max(0, min(100, top_k)) if top_k else 0  # 0 means disabled
-        
+
         # Parse text for multi-speaker support
         text, speaker_mapping = self._parse_multi_speaker_text(request.text)
-        
+
         # Process voice and speaker settings
         voice = request.voice or "speaker_1"
         speaker_id = request.extra_params.get("speaker_id", self.default_speaker)
         # Ensure speaker_id is within valid range (1-4)
         speaker_id = max(1, min(4, speaker_id))
-        
+
         # If multi-speaker text detected, use speaker mapping
         voice_references = {}
         if speaker_mapping:
@@ -722,10 +722,10 @@ class VibeVoiceAdapter(TTSAdapter):
                 else:
                     # Generate synthetic voice for this speaker
                     voice_references[speaker_num] = await self._generate_synthetic_voice(speaker_num)
-        
+
         # Handle voice cloning - check custom voices
         voice_reference_path = None
-        
+
         # Check if voice starts with "custom:" prefix (uploaded voice)
         if voice.startswith("custom:"):
             if voice in self.available_voices:
@@ -746,20 +746,20 @@ class VibeVoiceAdapter(TTSAdapter):
         # If no voice reference, generate synthetic voice
         elif not voice_reference_path and voice.startswith("speaker_"):
             voice_reference_path = await self._generate_synthetic_voice(speaker_id)
-        
+
         # Process multi-speaker if needed
         speakers = request.speakers if hasattr(request, 'speakers') else None
-        
+
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "
             f"speaker_id={speaker_id}, format={request.format.value}, "
             f"cfg={cfg_scale}, steps={diffusion_steps}, temp={temperature}, top_p={top_p}"
         )
-        
+
         try:
             # Reset cancellation flag for new generation
             self._generation_cancelled = False
-            
+
             # Prepare generation config with all parameters
             gen_config = {
                 "cfg_scale": cfg_scale,
@@ -773,7 +773,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 "voice_references": voice_references,
                 "speakers_to_voices": request.extra_params.get("speakers_to_voices") if hasattr(request, 'extra_params') else None,
             }
-            
+
             if request.stream:
                 # Return streaming response
                 return TTSResponse(
@@ -821,7 +821,7 @@ class VibeVoiceAdapter(TTSAdapter):
                         "memory_usage": self.get_memory_usage() if self.device != "cpu" else None
                     }
                 )
-                
+
         except (TTSProviderNotConfiguredError, TTSModelLoadError):
             raise
         except Exception as e:
@@ -835,8 +835,8 @@ class VibeVoiceAdapter(TTSAdapter):
             # Auto cleanup if enabled
             if self.auto_cleanup:
                 await self.cleanup_after_generation()
-    
-    
+
+
     async def _stream_audio_vibevoice(
         self,
         request: TTSRequest,
@@ -851,27 +851,27 @@ class VibeVoiceAdapter(TTSAdapter):
                 "VibeVoice model not initialized",
                 provider=self.provider_name
             )
-        
+
         # Import StreamingAudioWriter
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
             StreamingAudioWriter,
             AudioNormalizer
         )
-        
+
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(
             format=request.format.value,
             sample_rate=self.sample_rate,
             channels=1
         )
-        
+
         try:
             # Prepare input with speaker settings
             input_data = self._prepare_vibevoice_input(request, voice, speaker_id)
-            
+
             # Prepare input data for generation
             # VibeVoice uses voice samples directly, not embeddings
-            
+
             # Merge default mapping from config with request-provided mapping
             merged_mapping = None
             if isinstance(self.default_speakers_to_voices, dict):
@@ -887,7 +887,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 voice,
                 merged_mapping,
             )
-            
+
             # Prepare inputs for the model
             inputs = self.processor(
                 text=[input_data["text"]],  # Wrap in list for batch
@@ -896,41 +896,41 @@ class VibeVoiceAdapter(TTSAdapter):
                 return_tensors="pt",
                 return_attention_mask=True
             )
-            
+
             # Move tensors to device
             for k, v in inputs.items():
                 if torch.is_tensor(v):
                     inputs[k] = v.to(self.device)
-            
+
             # Prepare generation config from gen_config parameter
             cfg_scale = gen_config.get("cfg_scale", self.default_cfg_scale)
             temperature = gen_config.get("temperature", self.default_temperature)
             top_p = gen_config.get("top_p", self.default_top_p)
             top_k = gen_config.get("top_k", self.default_top_k)
             seed = gen_config.get("seed")
-            
+
             # Set seed for reproducibility
             if seed is not None:
                 torch.manual_seed(seed)
                 if self.device == "cuda":
                     torch.cuda.manual_seed(seed)
-            
+
             # Create generation config
             generation_config = {
                 'do_sample': temperature > 0.0,
                 'temperature': temperature if temperature > 0.0 else 1.0,
                 'top_p': top_p,
             }
-            
+
             # Add top_k if specified
             if top_k > 0:
                 generation_config['top_k'] = top_k
-            
+
             # Generate with VibeVoice model
             with torch.no_grad():
                 # Check for cancellation before generation
                 self._check_cancellation()
-                
+
                 outputs = self.model.generate(
                     **inputs,
                     # Bound generation to prevent runaway
@@ -943,23 +943,23 @@ class VibeVoiceAdapter(TTSAdapter):
                     show_progress_bar=False,
                     verbose=False
                 )
-                
+
                 # Get the generated audio
                 if outputs.speech_outputs and outputs.speech_outputs[0] is not None:
                     audio_array = outputs.speech_outputs[0].cpu().numpy()
-                    
+
                     # Stream the audio in chunks with configurable size
                     chunk_size = int(self.sample_rate * self.stream_chunk_size)
                     for i in range(0, len(audio_array), chunk_size):
                         # Check for cancellation during streaming
                         self._check_cancellation()
-                        
+
                         chunk = audio_array[i:i + chunk_size]
-                        
+
                         if len(chunk) > 0:
                             # Normalize to int16
                             normalized_chunk = normalizer.normalize(chunk, target_dtype=np.int16)
-                            
+
                             # Encode to target format
                             encoded_bytes = writer.write_chunk(normalized_chunk)
                             if encoded_bytes:
@@ -970,14 +970,14 @@ class VibeVoiceAdapter(TTSAdapter):
                         "Failed to generate audio",
                         provider=self.provider_name
                     )
-            
+
             # Finalize stream
             final_bytes = writer.write_chunk(finalize=True)
             if final_bytes:
                 yield final_bytes
-            
+
             logger.info(f"{self.provider_name}: Successfully generated audio with speaker={speaker_id}")
-            
+
         except TTSModelNotFoundError:
             raise
         except Exception as e:
@@ -997,7 +997,7 @@ class VibeVoiceAdapter(TTSAdapter):
                     logger.debug(f"Cleaned up temporary voice reference: {voice_reference_path}")
                 except Exception as e:
                     logger.warning(f"Failed to clean up voice reference: {e}")
-    
+
     async def _generate_complete_vibevoice(
         self,
         request: TTSRequest,
@@ -1011,7 +1011,7 @@ class VibeVoiceAdapter(TTSAdapter):
         async for chunk in self._stream_audio_vibevoice(request, voice, speaker_id, voice_reference_path):
             all_audio += chunk
         return all_audio
-    
+
     def _prepare_vibevoice_input(
         self,
         request: TTSRequest,
@@ -1032,16 +1032,16 @@ class VibeVoiceAdapter(TTSAdapter):
             "background_music": self.enable_background_music,
             "singing": self.enable_singing
         }
-    
-    
+
+
     async def _prepare_voice_reference(self, voice_reference: bytes) -> Optional[str]:
         """
         Prepare voice reference audio for VibeVoice with zero-shot cloning support.
         VibeVoice supports single-sample voice cloning (3-10 seconds recommended).
-        
+
         Args:
             voice_reference: Voice reference audio bytes
-            
+
         Returns:
             Path to temporary voice reference file or None if processing fails
         """
@@ -1051,7 +1051,7 @@ class VibeVoiceAdapter(TTSAdapter):
             from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference
             import soundfile as sf
             import librosa
-            
+
             # Process voice reference for VibeVoice requirements
             processed_audio, error = process_voice_reference(
                 voice_reference,
@@ -1059,11 +1059,11 @@ class VibeVoiceAdapter(TTSAdapter):
                 validate=True,
                 convert=True
             )
-            
+
             if error:
                 logger.error(f"Voice reference processing failed: {error}")
                 return None
-            
+
             # Save to temporary file
             with tempfile.NamedTemporaryFile(
                 suffix='.wav',
@@ -1072,13 +1072,13 @@ class VibeVoiceAdapter(TTSAdapter):
             ) as tmp_file:
                 tmp_file.write(processed_audio)
                 tmp_path = tmp_file.name
-            
+
             # Validate duration (3-10 seconds recommended)
             try:
                 # Load audio to check duration
                 audio_data, sr = sf.read(tmp_path)
                 duration = len(audio_data) / sr
-                
+
                 if duration < 3.0:
                     logger.warning(f"Voice reference is {duration:.1f}s, recommended minimum is 3s for better quality")
                 elif duration > 10.0:
@@ -1089,23 +1089,23 @@ class VibeVoiceAdapter(TTSAdapter):
                     sf.write(tmp_path, audio_data, sr)
                 else:
                     logger.info(f"Voice reference duration: {duration:.1f}s (optimal)")
-                
+
                 # Resample to 24kHz if needed (VibeVoice standard)
                 if sr != 24000:
                     logger.info(f"Resampling voice reference from {sr}Hz to 24000Hz")
                     audio_resampled = librosa.resample(audio_data, orig_sr=sr, target_sr=24000)
                     sf.write(tmp_path, audio_resampled, 24000)
-                    
+
             except Exception as e:
                 logger.warning(f"Could not validate voice reference duration: {e}")
-            
+
             logger.info(f"Voice reference prepared for VibeVoice: {tmp_path}")
             return tmp_path
-            
+
         except Exception as e:
             logger.error(f"Failed to prepare voice reference: {e}")
             return None
-    
+
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to VibeVoice voice"""
         # Handle custom: prefix
@@ -1115,25 +1115,25 @@ class VibeVoiceAdapter(TTSAdapter):
             else:
                 logger.warning(f"Custom voice {voice_id} not found")
                 return "speaker_1"
-        
+
         # Check available voices first
         if voice_id in self.available_voices:
             return voice_id
-            
+
         # Then check presets
         if voice_id in self.VOICE_PRESETS:
             return voice_id
-        
+
         # Try to map speaker numbers
         if voice_id.isdigit():
             speaker_num = int(voice_id)
             if 1 <= speaker_num <= 4:
                 return f"speaker_{speaker_num}"
-        
+
         # Default to speaker 1
         logger.warning(f"Voice {voice_id} not found, using default speaker_1")
         return "speaker_1"
-    
+
     def _parse_multi_speaker_text(self, text: str) -> Tuple[str, Optional[Dict[int, str]]]:
         """Parse text for multi-speaker markers and return cleaned text with speaker mapping."""
         # Pattern to match various speaker formats
@@ -1143,10 +1143,10 @@ class VibeVoiceAdapter(TTSAdapter):
             r'\[Speaker\s*(\d+)\]:\s*',  # [Speaker1]: text
             r'Speaker\s*(\d+):\s*',  # Speaker 1: text
         ]
-        
+
         speaker_mapping = {}
         cleaned_text = text
-        
+
         for pattern in patterns:
             matches = re.finditer(pattern, text)
             for match in matches:
@@ -1157,13 +1157,13 @@ class VibeVoiceAdapter(TTSAdapter):
                     speaker_mapping[speaker_idx] = f"speaker_{speaker_num}"
                     # Mark the text segment for this speaker
                     cleaned_text = cleaned_text.replace(match.group(0), f"[{speaker_idx}] ")
-        
+
         # If no speaker markers found, return original text
         if not speaker_mapping:
             return text, None
-        
+
         return cleaned_text, speaker_mapping
-    
+
     def preprocess_text(self, text: str, **kwargs) -> str:
         """Preprocess and format text for VibeVoice."""
         # Basic cleanup
@@ -1181,61 +1181,61 @@ class VibeVoiceAdapter(TTSAdapter):
             return text_conv
         # As a safe fallback, wrap entire text as a single-speaker script
         return f"Speaker 1: {text.strip()}"
-    
+
     async def _generate_synthetic_voice(self, speaker_id: int) -> Optional[str]:
         """Generate a synthetic voice sample for a speaker when no reference is available."""
         try:
             logger.info(f"Generating synthetic voice for speaker {speaker_id}")
-            
+
             # Create a deterministic synthetic voice based on speaker ID
             # This would typically use the model's voice generation capabilities
             # For now, return None to use default voice
             # In a real implementation, this would generate a voice sample
-            
+
             # Placeholder for synthetic voice generation
             # Could use techniques like:
             # - Random noise with speaker-specific seed
             # - Pre-generated synthetic samples
             # - Model's built-in voice synthesis
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Failed to generate synthetic voice: {e}")
             return None
-    
+
     async def _reload_model_for_variant(self, variant: str):
         """Reload the model with a different variant (1.5B or 7B)"""
         if variant not in self.MODEL_VARIANTS:
             raise ValueError(f"Invalid variant: {variant}. Must be one of {list(self.MODEL_VARIANTS.keys())}")
-        
+
         # Clean up existing model
         await self._cleanup_resources()
-        
+
         # Update configuration for new variant
         variant_config = self.MODEL_VARIANTS[variant]
         self.model_path = variant_config["path"]
         self.context_length = variant_config["context"]
         self.frame_rate = variant_config["frame_rate"]
-        
+
         # Reinitialize with new variant
         logger.info(f"Reloading VibeVoice with variant: {variant}")
         await self.initialize()
-    
+
     def _get_best_attention_implementation(self) -> str:
         """Get the best available attention implementation based on hardware and config."""
         if self.default_attention_type != "auto":
             return self.default_attention_type
-        
+
         for attn_type in self.attention_fallback_chain:
             if self._is_attention_available(attn_type):
                 logger.info(f"Using attention implementation: {attn_type}")
                 return attn_type
-        
+
         # Default fallback
         logger.info("Using default eager attention")
         return "eager"
-    
+
     def _is_attention_available(self, attn_type: str) -> bool:
         """Check if a specific attention implementation is available."""
         try:
@@ -1261,7 +1261,7 @@ class VibeVoiceAdapter(TTSAdapter):
         except ImportError:
             pass
         return False
-    
+
     def _calculate_quantization_savings(self):
         """Calculate estimated memory savings from quantization."""
         # Estimate based on model variant
@@ -1274,12 +1274,12 @@ class VibeVoiceAdapter(TTSAdapter):
         else:
             original_size_gb = 3.0
             quantized_size_gb = 1.1
-        
+
         self._memory_stats["quantization_savings_gb"] = original_size_gb - quantized_size_gb
         self._memory_stats["quantization_savings_percent"] = (
             (original_size_gb - quantized_size_gb) / original_size_gb * 100
         )
-    
+
     def _update_memory_stats(self):
         """Update memory usage statistics."""
         try:
@@ -1287,33 +1287,33 @@ class VibeVoiceAdapter(TTSAdapter):
                 # Get CUDA memory stats
                 allocated_gb = torch.cuda.memory_allocated() / 1024**3
                 reserved_gb = torch.cuda.memory_reserved() / 1024**3
-                
+
                 self._memory_stats["current_vram_gb"] = allocated_gb
                 self._memory_stats["reserved_vram_gb"] = reserved_gb
-                
+
                 # Update peak if necessary
                 if allocated_gb > self._memory_stats["peak_vram_gb"]:
                     self._memory_stats["peak_vram_gb"] = allocated_gb
-                
+
                 logger.debug(f"VRAM usage: {allocated_gb:.2f}GB allocated, {reserved_gb:.2f}GB reserved")
             elif self.device == "mps" and torch.backends.mps.is_available():
                 # MPS memory tracking is limited
                 try:
                     allocated_gb = torch.mps.current_allocated_memory() / 1024**3
                     self._memory_stats["current_vram_gb"] = allocated_gb
-                    
+
                     if allocated_gb > self._memory_stats["peak_vram_gb"]:
                         self._memory_stats["peak_vram_gb"] = allocated_gb
                 except Exception as e:
                     logger.debug(f"MPS memory tracking not available: error={e}")
         except Exception as e:
             logger.debug(f"Could not update memory stats: {e}")
-    
+
     def get_memory_usage(self) -> Dict[str, float]:
         """Get current memory usage statistics."""
         self._update_memory_stats()
         return self._memory_stats.copy()
-    
+
     async def _cleanup_resources(self):
         """Clean up VibeVoice adapter resources with enhanced memory management."""
         try:
@@ -1323,18 +1323,18 @@ class VibeVoiceAdapter(TTSAdapter):
                 if not self._current_generation_task.done():
                     self._current_generation_task.cancel()
                 self._current_generation_task = None
-            
+
             if self.model:
                 del self.model
             if self.processor:
                 del self.processor
-            
+
             self.model = None
             self.processor = None
-            
+
             # Force garbage collection
             gc.collect()
-            
+
             # Clear GPU cache if using CUDA
             if self.device == "cuda" and torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1343,39 +1343,39 @@ class VibeVoiceAdapter(TTSAdapter):
                 # Clear MPS cache for Apple Silicon
                 torch.mps.empty_cache()
                 torch.mps.synchronize()
-            
+
             # Update memory stats after cleanup
             self._update_memory_stats()
-            
+
             logger.debug(f"{self.provider_name}: Resources cleaned up")
         except Exception as e:
             logger.warning(f"{self.provider_name}: Error during cleanup: {e}")
-    
+
     async def cleanup_after_generation(self):
         """Clean up after each generation to free memory."""
         try:
             # Clear any temporary tensors
             gc.collect()
-            
+
             # Clear device cache without unloading model if auto_cleanup is enabled
             if self.auto_cleanup:
                 if self.device == "cuda" and torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 elif self.device == "mps" and torch.backends.mps.is_available():
                     torch.mps.empty_cache()
-                
+
                 # Update memory stats
                 self._update_memory_stats()
                 logger.debug(f"Post-generation cleanup: {self._memory_stats['current_vram_gb']:.2f}GB in use")
-                
+
         except Exception as e:
             logger.debug(f"Post-generation cleanup error: {e}")
-    
+
     def cancel_generation(self):
         """Cancel the current generation task."""
         self._generation_cancelled = True
         logger.info(f"{self.provider_name}: Generation cancelled by user")
-    
+
     def _check_cancellation(self):
         """Check if generation has been cancelled."""
         if self._generation_cancelled:

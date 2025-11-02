@@ -21,7 +21,7 @@ logger = logger
 
 class DatasetLoader:
     """Base class for dataset loading."""
-    
+
     @staticmethod
     def load_json(source: str) -> List[Dict[str, Any]]:
         """Load JSON dataset from file or URL."""
@@ -32,7 +32,7 @@ class DatasetLoader:
         else:
             with open(source, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-        
+
         # Handle different JSON structures
         if isinstance(data, list):
             return data
@@ -45,12 +45,12 @@ class DatasetLoader:
             return [data]
         else:
             raise ValueError(f"Unexpected JSON structure: {type(data)}")
-    
+
     @staticmethod
     def load_jsonl(source: str) -> List[Dict[str, Any]]:
         """Load JSONL dataset from file or URL."""
         data = []
-        
+
         if source.startswith(('http://', 'https://')):
             response = requests.get(source, stream=True, timeout=30)
             response.raise_for_status()
@@ -62,14 +62,14 @@ class DatasetLoader:
                 for line in f:
                     if line.strip():
                         data.append(json.loads(line))
-        
+
         return data
-    
+
     @staticmethod
     def load_csv(source: str, delimiter: str = ',') -> List[Dict[str, Any]]:
         """Load CSV dataset from file or URL."""
         data = []
-        
+
         if source.startswith(('http://', 'https://')):
             response = requests.get(source, timeout=15)
             response.raise_for_status()
@@ -78,17 +78,17 @@ class DatasetLoader:
         else:
             with open(source, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter=delimiter)
-        
+
         for row in reader:
             data.append(dict(row))
-        
+
         return data
-    
+
     @staticmethod
-    def load_huggingface(dataset_id: str, split: str = 'test', 
+    def load_huggingface(dataset_id: str, split: str = 'test',
                         limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Load dataset from HuggingFace.
-        
+
         Note: This requires the 'datasets' library to be installed.
         """
         try:
@@ -97,35 +97,35 @@ class DatasetLoader:
             logger.error("HuggingFace datasets library not installed. "
                         "Install with: pip install datasets")
             return []
-        
+
         try:
             # Load dataset
             dataset = load_dataset(dataset_id, split=split)
-            
+
             # Convert to list of dicts
             data = []
             for i, item in enumerate(dataset):
                 if limit and i >= limit:
                     break
                 data.append(dict(item))
-            
+
             return data
-            
+
         except Exception as e:
             logger.error(f"Failed to load HuggingFace dataset {dataset_id}: {e}")
             return []
-    
+
     @staticmethod
-    def stream_large_file(source: str, format: str = 'jsonl', 
+    def stream_large_file(source: str, format: str = 'jsonl',
                          chunk_size: int = 1000) -> Generator[List[Dict[str, Any]], None, None]:
         """Stream large datasets in chunks."""
         if format == 'jsonl':
             chunk = []
-            
+
             if source.startswith(('http://', 'https://')):
                 response = requests.get(source, stream=True, timeout=60)
                 response.raise_for_status()
-                
+
                 for line in response.iter_lines():
                     if line:
                         chunk.append(json.loads(line))
@@ -140,11 +140,11 @@ class DatasetLoader:
                             if len(chunk) >= chunk_size:
                                 yield chunk
                                 chunk = []
-            
+
             # Yield remaining items
             if chunk:
                 yield chunk
-        
+
         else:
             # For non-streaming formats, load all and chunk
             if format == 'json':
@@ -153,21 +153,21 @@ class DatasetLoader:
                 data = DatasetLoader.load_csv(source)
             else:
                 raise ValueError(f"Unsupported format for streaming: {format}")
-            
+
             for i in range(0, len(data), chunk_size):
                 yield data[i:i + chunk_size]
 
 
 class BenchmarkDatasetLoader:
     """Specialized loaders for specific benchmarks."""
-    
+
     @staticmethod
     def load_mmlu_pro(source: Optional[str] = None) -> List[Dict[str, Any]]:
         """Load MMLU Pro dataset."""
         if not source:
             # Default to HuggingFace
             return DatasetLoader.load_huggingface("TIGER-Lab/MMLU-Pro", split="test")
-        
+
         if source.startswith("huggingface://"):
             dataset_id = source.replace("huggingface://", "")
             return DatasetLoader.load_huggingface(dataset_id, split="test")
@@ -177,28 +177,28 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_jsonl(source)
             else:
                 return DatasetLoader.load_json(source)
-    
+
     @staticmethod
     def load_simple_bench(source: Optional[str] = None) -> List[Dict[str, Any]]:
         """Load Simple Bench dataset."""
         if not source:
             source = "https://raw.githubusercontent.com/simple-bench/SimpleBench/main/simple_bench_public.json"
-        
+
         data = DatasetLoader.load_json(source)
-        
+
         # Simple Bench has questions embedded in prompt with choices
         processed = []
         for item in data:
             # Extract choices from prompt (they're embedded as A., B., etc.)
             prompt = item.get("prompt", "")
-            
+
             # Basic parsing - would need more sophisticated parsing for production
             import re
             choices_pattern = r'([A-F])\.\s*([^\n]+)'
             matches = re.findall(choices_pattern, prompt)
-            
+
             choices = [match[1].strip() for match in matches]
-            
+
             processed.append({
                 "question": prompt.split('\n\n')[0] if '\n\n' in prompt else prompt,
                 "choices": choices,
@@ -206,29 +206,29 @@ class BenchmarkDatasetLoader:
                 "question_id": item.get("question_id", ""),
                 "_original": item
             })
-        
+
         return processed
-    
+
     @staticmethod
-    def load_aider_polyglot(source: Optional[str] = None, 
+    def load_aider_polyglot(source: Optional[str] = None,
                            language: str = "python") -> List[Dict[str, Any]]:
         """Load Aider Polyglot benchmark for a specific language."""
         if not source:
             source = f"https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/{language}"
-        
+
         # This would need custom parsing based on Aider's format
         # For now, return empty list as placeholder
         logger.warning("Aider Polyglot loader not fully implemented")
         return []
-    
+
     @staticmethod
-    def load_swe_bench(source: Optional[str] = None, 
+    def load_swe_bench(source: Optional[str] = None,
                       subset: str = "lite") -> List[Dict[str, Any]]:
         """Load SWE-bench dataset."""
         if not source:
             dataset_id = f"princeton-nlp/SWE-bench_{subset}" if subset else "princeton-nlp/SWE-bench"
             return DatasetLoader.load_huggingface(dataset_id, split="test")
-        
+
         if source.startswith("huggingface://"):
             dataset_id = source.replace("huggingface://", "")
             return DatasetLoader.load_huggingface(dataset_id, split="test")
@@ -238,22 +238,22 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_jsonl(source)
             else:
                 return DatasetLoader.load_json(source)
-    
+
     @staticmethod
-    def load_gpqa(source: Optional[str] = None, 
+    def load_gpqa(source: Optional[str] = None,
                  subset: str = "diamond") -> List[Dict[str, Any]]:
         """Load GPQA dataset."""
         if not source:
             # Default to HuggingFace
             dataset_id = "Idavidrein/gpqa"
             data = DatasetLoader.load_huggingface(dataset_id, split="train")
-            
+
             # Filter by subset if specified
             if subset and subset != "all":
                 data = [item for item in data if item.get("subset") == subset]
-            
+
             return data
-        
+
         if source.startswith("huggingface://"):
             dataset_id = source.replace("huggingface://", "")
             return DatasetLoader.load_huggingface(dataset_id)
@@ -263,16 +263,16 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_jsonl(source)
             else:
                 return DatasetLoader.load_json(source)
-    
+
     @staticmethod
     def load_bfcl(source: Optional[str] = None) -> List[Dict[str, Any]]:
         """Load Berkeley Function Calling Leaderboard dataset."""
         if not source:
             return DatasetLoader.load_huggingface(
-                "gorilla-llm/berkeley-function-calling-leaderboard", 
+                "gorilla-llm/berkeley-function-calling-leaderboard",
                 split="test"
             )
-        
+
         if source.startswith("huggingface://"):
             dataset_id = source.replace("huggingface://", "")
             return DatasetLoader.load_huggingface(dataset_id)
@@ -282,7 +282,7 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_jsonl(source)
             else:
                 return DatasetLoader.load_json(source)
-    
+
     @staticmethod
     def load_simpleqa(source: Optional[str] = None) -> List[Dict[str, Any]]:
         """Load SimpleQA dataset."""
@@ -295,7 +295,7 @@ class BenchmarkDatasetLoader:
                 logger.warning(f"SimpleQA dataset not found, using sample data. error={e}")
                 from tldw_Server_API.app.core.Evaluations.simpleqa_eval import SimpleQADataset
                 return SimpleQADataset.create_sample_dataset()
-        
+
         if source.startswith("huggingface://"):
             dataset_id = source.replace("huggingface://", "")
             return DatasetLoader.load_huggingface(dataset_id)
@@ -323,18 +323,18 @@ class BenchmarkDatasetLoader:
                 return SimpleQADataset.load_from_file(source)
 
 
-def load_benchmark_dataset(benchmark_name: str, 
+def load_benchmark_dataset(benchmark_name: str,
                           source: Optional[str] = None,
                           limit: Optional[int] = None,
                           **kwargs) -> List[Dict[str, Any]]:
     """Load dataset for a specific benchmark.
-    
+
     Args:
         benchmark_name: Name of the benchmark
         source: Optional custom source (file, URL, or HF dataset)
         limit: Maximum number of samples to load
         **kwargs: Additional benchmark-specific parameters
-    
+
     Returns:
         List of dataset items
     """
@@ -349,7 +349,7 @@ def load_benchmark_dataset(benchmark_name: str,
         "gpqa_diamond": lambda s: BenchmarkDatasetLoader.load_gpqa(s, subset="diamond"),
         "bfcl": BenchmarkDatasetLoader.load_bfcl,
     }
-    
+
     if benchmark_name in loaders:
         data = loaders[benchmark_name](source)
     else:
@@ -357,7 +357,7 @@ def load_benchmark_dataset(benchmark_name: str,
         if not source:
             logger.error(f"No source specified for unknown benchmark: {benchmark_name}")
             return []
-        
+
         if source.startswith("huggingface://"):
             dataset_id = source.replace("huggingface://", "")
             data = DatasetLoader.load_huggingface(dataset_id)
@@ -370,34 +370,34 @@ def load_benchmark_dataset(benchmark_name: str,
         else:
             logger.error(f"Cannot determine format for source: {source}")
             return []
-    
+
     # Apply limit if specified
     if limit and limit > 0:
         data = data[:limit]
-    
+
     return data
 
 
-def validate_dataset_format(data: List[Dict[str, Any]], 
+def validate_dataset_format(data: List[Dict[str, Any]],
                            required_fields: List[str]) -> Tuple[bool, List[str]]:
     """Validate that dataset has required fields.
-    
+
     Args:
         data: Dataset to validate
         required_fields: List of required field names
-    
+
     Returns:
         Tuple of (is_valid, list_of_missing_fields)
     """
     if not data:
         return False, ["Dataset is empty"]
-    
+
     # Check first item for fields
     first_item = data[0]
     missing_fields = []
-    
+
     for field in required_fields:
         if field not in first_item:
             missing_fields.append(field)
-    
+
     return len(missing_fields) == 0, missing_fields

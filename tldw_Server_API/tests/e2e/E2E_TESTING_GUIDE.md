@@ -27,7 +27,7 @@
 
 **Current State After Fixes**:
 - Documentation: Good - Comprehensive guide with clear examples
-- Test Coverage: Comprehensive - 175 tests covering all major workflows  
+- Test Coverage: Comprehensive - 175 tests covering all major workflows
 - Code Structure: Well organized with clear separation of concerns
 - Best Practices: Improved - Removed inappropriate mocking from E2E tests
 - Maintainability: Good - Clear structure and helper utilities
@@ -72,7 +72,7 @@ python -m pytest tldw_Server_API/tests/e2e/test_full_user_workflow.py::TestFullU
 ### Test Philosophy
 
 - **User-Centric**: Tests mirror actual user workflows
-- **Comprehensive**: Cover all major API functionalities  
+- **Comprehensive**: Cover all major API functionalities
 - **Adaptive**: Handle both single-user and multi-user modes
 - **Maintainable**: Clear structure with reusable components
 - **Performance-Aware**: Track execution times for optimization
@@ -133,7 +133,7 @@ e2e/
 Provides the core testing infrastructure:
 
 - **APIClient Class**: Wrapper for API interactions with authentication support
-- **Key Fixtures**: 
+- **Key Fixtures**:
   - `api_client`: Basic client instance
   - `authenticated_client`: Pre-authenticated client
   - `data_tracker`: Tracks created resources for cleanup
@@ -236,7 +236,7 @@ async def authenticated_client(api_client):
     # Check auth mode from health endpoint
     health = await api_client.get("/health")
     auth_mode = health.get("auth_mode", "single_user")
-    
+
     if auth_mode == "single_user":
         # Use X-API-KEY for single-user mode
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -250,17 +250,17 @@ async def authenticated_client(api_client):
             "password": "TestPassword123!",
             "email": f"test_{uuid.uuid4().hex[:8]}@example.com"
         }
-        
+
         # Register and login
         await api_client.post("/auth/register", json=user_data)
         login_response = await api_client.post("/auth/login", json={
             "username": user_data["username"],
             "password": user_data["password"]
         })
-        
+
         token = login_response["access_token"]
         api_client.set_auth_token(token)
-    
+
     return api_client
 ```
 
@@ -629,7 +629,7 @@ Add the method to `fixtures.py`:
 ```python
 # In APIClient class
 def generate_analytics(
-    self, 
+    self,
     media_ids: List[int],
     report_type: str = "summary",
     date_range: Optional[Dict[str, str]] = None
@@ -641,7 +641,7 @@ def generate_analytics(
     }
     if date_range:
         data["date_range"] = date_range
-    
+
     response = self.client.post(
         f"{API_PREFIX}/analytics/generate",
         json=data
@@ -682,7 +682,7 @@ def test_85_analytics_generation(self, api_client, data_tracker):
     # Prerequisite: Need media items
     if not self.media_items:
         pytest.skip("No media items available for analytics")
-    
+
     # Get valid media IDs
     media_ids = []
     for item in self.media_items[:3]:  # Use first 3 items
@@ -692,13 +692,13 @@ def test_85_analytics_generation(self, api_client, data_tracker):
                     media_ids.append(result["db_id"])
         elif item.get("id"):
             media_ids.append(item["id"])
-    
+
     if not media_ids:
         pytest.skip("No valid media IDs for analytics")
-    
+
     # Generate analytics request
     request_data = TestDataGenerator.sample_analytics_request()
-    
+
     try:
         # Generate report
         response = api_client.generate_analytics(
@@ -706,24 +706,24 @@ def test_85_analytics_generation(self, api_client, data_tracker):
             report_type=request_data["report_type"],
             date_range=request_data.get("date_range")
         )
-        
+
         # Verify response
         assert "report_id" in response
         assert response.get("status") in ["processing", "completed"]
-        
+
         # Track for cleanup
         if "report_id" in response:
             data_tracker.add_resource("analytics_report", response["report_id"])
-        
+
         # Store for later tests
         self.analytics_reports.append(response)
-        
+
         # If processing, wait and check status
         if response.get("status") == "processing":
             time.sleep(2)  # Wait for processing
             report = api_client.get_analytics_report(response["report_id"])
             assert report.get("status") == "completed"
-            
+
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 402:
             pytest.skip("Analytics feature requires premium subscription")
@@ -764,11 +764,11 @@ class FeatureStability:
             "performance_acceptable": False,
             "backwards_compatible": False
         }
-    
+
     def assess(self) -> bool:
         """Return True if feature is stable enough for E2E tests."""
         return all(self.criteria.values())
-    
+
     def report(self) -> str:
         """Generate stability report."""
         stable = sum(self.criteria.values())
@@ -816,7 +816,7 @@ APIs may return data in different formats. Handle multiple possibilities:
 async def extract_items_from_response(response):
     """Extract items from various response formats"""
     data = response.json()
-    
+
     # Handle different response structures
     if isinstance(data, list):
         # Direct list response
@@ -859,7 +859,7 @@ async def test_with_fallback(self):
     """Test with fallback behavior on failure"""
     try:
         # Try primary operation
-        response = await self.api_client.post("/media/transcribe", 
+        response = await self.api_client.post("/media/transcribe",
                                              json={"url": test_url})
         assert response.status_code == 200
         result = response.json()
@@ -870,7 +870,7 @@ async def test_with_fallback(self):
                                              json={"url": test_url, "skip_transcription": True})
         assert response.status_code == 200
         result = response.json()
-    
+
     return result
 ```
 
@@ -888,7 +888,7 @@ def assert_success_response(response, expected_status=200):
             "url": str(response.url),
             "method": response.request.method
         }
-        
+
         pytest.fail(
             f"Expected status {expected_status}, got {response.status_code}\n"
             f"Details: {json.dumps(error_details, indent=2)}"
@@ -902,7 +902,7 @@ async def retry_with_backoff(func, max_attempts=3, initial_delay=1):
     """Retry function with exponential backoff"""
     last_exception = None
     delay = initial_delay
-    
+
     for attempt in range(max_attempts):
         try:
             return await func()
@@ -922,10 +922,10 @@ async def retry_with_backoff(func, max_attempts=3, initial_delay=1):
 ```python
 class ResourceTracker:
     """Track created resources for cleanup"""
-    
+
     def __init__(self):
         self.resources = defaultdict(list)
-    
+
     def track(self, resource_type: str, resource_id: str, metadata: dict = None):
         """Track a created resource"""
         self.resources[resource_type].append({
@@ -933,11 +933,11 @@ class ResourceTracker:
             'created_at': datetime.now(),
             'metadata': metadata or {}
         })
-    
+
     async def cleanup(self, api_client):
         """Clean up all tracked resources in reverse order"""
         cleanup_order = ['notes', 'media', 'prompts', 'users']
-        
+
         for resource_type in cleanup_order:
             if resource_type in self.resources:
                 for resource in reversed(self.resources[resource_type]):
@@ -981,16 +981,16 @@ async with temporary_media(api_client, test_data) as media_id:
 ```python
 class TestDataBuilder:
     """Build test data with deterministic values"""
-    
+
     def __init__(self, seed=None):
         self.seed = seed or "test"
         self.counter = 0
-    
+
     def next_id(self):
         """Generate next deterministic ID"""
         self.counter += 1
         return f"{self.seed}_{self.counter}_{hashlib.md5(f'{self.seed}{self.counter}'.encode()).hexdigest()[:8]}"
-    
+
     def build_document(self, **overrides):
         """Build test document with defaults"""
         doc_id = self.next_id()
@@ -1059,17 +1059,17 @@ StrongAssertionHelpers.assert_rag_result_quality(result, query_terms=["AI", "mac
 def test_character_validation(self, api_client):
     """Test character with strong validation."""
     response = api_client.get_character(character_id)
-    
+
     # Use strong assertions for comprehensive validation
     StrongAssertionHelpers.assert_character_response(response)
     StrongAssertionHelpers.assert_exact_value(
-        response["version"], 
-        expected_version, 
+        response["version"],
+        expected_version,
         "version"
     )
     StrongAssertionHelpers.assert_non_empty_string(
-        response["name"], 
-        "character name", 
+        response["name"],
+        "character name",
         min_length=2
     )
 ```
@@ -1081,17 +1081,17 @@ def test_character_validation(self, api_client):
 ```python
 class SoftAssertions:
     """Collect multiple assertion failures"""
-    
+
     def __init__(self):
         self.failures = []
-    
+
     def assert_equal(self, actual, expected, message=""):
         """Soft assert equality"""
         try:
             assert actual == expected, message
         except AssertionError as e:
             self.failures.append(str(e))
-    
+
     def assert_all(self):
         """Raise all collected failures"""
         if self.failures:
@@ -1139,7 +1139,7 @@ async def test_processing():
 ```python
 async def test_processing():
     response = await api_client.post("/media/process", json=data)
-    
+
     # Poll with timeout
     timeout = time.time() + 30
     while time.time() < timeout:
@@ -1158,7 +1158,7 @@ async def test_processing():
 class TestSuite:
     def test_1_create(self):
         self.media_id = create_media()  # Bad: storing state
-    
+
     def test_2_update(self):
         update_media(self.media_id)  # Bad: depends on test_1
 ```
@@ -1172,7 +1172,7 @@ class TestSuite:
         media_id = create_media(api_client)
         yield media_id
         cleanup_media(api_client, media_id)
-    
+
     def test_update(self, media_id):
         # Good: independent test
         update_media(media_id)
@@ -1334,11 +1334,11 @@ Add checkpoints between major phases:
 def test_29_verify_ready_for_interaction(self, api_client):
     """CHECKPOINT: Verify system ready for chat phase."""
     print(f"\n=== PRE-PHASE 4 VERIFICATION ===")
-    
+
     # Check prerequisites
     has_media = len(TestFullUserWorkflow.media_items) > 0
     assert has_media or skip_if_no_media, "Need media for context"
-    
+
     print("=== Proceeding to Phase 4 ===")
 ```
 
@@ -1515,10 +1515,10 @@ pytest -s test_file.py::test_method
 ```python
 class PerformanceTracker:
     """Track and assert performance metrics"""
-    
+
     def __init__(self):
         self.metrics = defaultdict(list)
-    
+
     @contextmanager
     def measure(self, operation_name):
         """Measure operation duration"""
@@ -1528,7 +1528,7 @@ class PerformanceTracker:
         finally:
             duration = time.perf_counter() - start
             self.metrics[operation_name].append(duration)
-    
+
     def assert_performance(self, operation_name, max_duration):
         """Assert operation performance"""
         durations = self.metrics[operation_name]
@@ -1556,15 +1556,15 @@ async def concurrent_requests(api_client, endpoint, num_requests=10):
         response = await api_client.get(f"{endpoint}?page={i}")
         duration = time.perf_counter() - start
         return response.status_code, duration
-    
+
     # Execute concurrent requests
     tasks = [make_request(i) for i in range(num_requests)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     # Analyze results
     successful = sum(1 for r in results if isinstance(r, tuple) and r[0] == 200)
     avg_time = sum(r[1] for r in results if isinstance(r, tuple)) / len(results)
-    
+
     assert successful >= num_requests * 0.95, \
         f"Only {successful}/{num_requests} requests succeeded"
     assert avg_time < 2.0, \
@@ -1608,25 +1608,25 @@ on:
 jobs:
   e2e-tests:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v2
-    
+
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
         python-version: '3.10'
-    
+
     - name: Install dependencies
       run: |
         pip install -e .[dev]
         pip install pytest httpx pytest-cov
-    
+
     - name: Start API server
       run: |
         python -m uvicorn tldw_Server_API.app.main:app &
         sleep 5  # Wait for server to start
-    
+
     - name: Run E2E tests
       env:
         E2E_TEST_BASE_URL: http://localhost:8000
@@ -1636,7 +1636,7 @@ jobs:
           --junit-xml=test-results/e2e.xml \
           --cov=tldw_Server_API \
           --cov-report=xml
-    
+
     - name: Upload test results
       uses: actions/upload-artifact@v2
       if: always()
@@ -1676,7 +1676,7 @@ jobs:
 ```python
 def test_XX_feature_name(self, api_client, data_tracker):
     """Test feature_name functionality.
-    
+
     This test verifies that:
     1. Feature accepts valid input
     2. Returns expected response format
@@ -1685,25 +1685,25 @@ def test_XX_feature_name(self, api_client, data_tracker):
     """
     # Setup test data
     test_data = TestDataGenerator.sample_feature_data()
-    
+
     try:
         # Call API
         response = api_client.feature_endpoint(
             param1=test_data["param1"],
             param2=test_data.get("param2")
         )
-        
+
         # Verify response structure
         assert "expected_field" in response
         assert response.get("status") in ["valid", "values"]
-        
+
         # Track resources
         if "id" in response:
             data_tracker.add_resource("feature", response["id"])
-        
+
         # Store for later tests
         self.feature_results.append(response)
-        
+
     except httpx.HTTPStatusError as e:
         # Handle expected errors
         if e.response.status_code == 404:
@@ -1717,23 +1717,23 @@ def test_XX_feature_name(self, api_client, data_tracker):
 ```python
 class TestFeatureCRUD:
     """Test CRUD operations for new feature."""
-    
+
     created_ids = []
-    
+
     def test_create(self, api_client):
         """Test CREATE operation."""
         data = TestDataGenerator.sample_data()
         response = api_client.create_feature(data)
         assert "id" in response
         self.created_ids.append(response["id"])
-    
+
     def test_read(self, api_client):
         """Test READ operation."""
         if not self.created_ids:
             pytest.skip("No items to read")
         response = api_client.get_feature(self.created_ids[0])
         assert response["id"] == self.created_ids[0]
-    
+
     def test_update(self, api_client):
         """Test UPDATE operation."""
         if not self.created_ids:
@@ -1743,13 +1743,13 @@ class TestFeatureCRUD:
             {"field": "new_value"}
         )
         assert response["field"] == "new_value"
-    
+
     def test_delete(self, api_client):
         """Test DELETE operation."""
         if not self.created_ids:
             pytest.skip("No items to delete")
         api_client.delete_feature(self.created_ids[0])
-        
+
         # Verify deleted
         with pytest.raises(httpx.HTTPStatusError) as exc:
             api_client.get_feature(self.created_ids[0])
@@ -1764,21 +1764,21 @@ def test_async_operation(self, api_client):
     # Start async operation
     response = api_client.start_async_operation(data)
     operation_id = response["operation_id"]
-    
+
     # Poll for completion
     max_attempts = 30
     for attempt in range(max_attempts):
         status = api_client.get_operation_status(operation_id)
-        
+
         if status["state"] == "completed":
             break
         elif status["state"] == "failed":
             pytest.fail(f"Operation failed: {status.get('error')}")
-        
+
         time.sleep(1)  # Wait before next poll
     else:
         pytest.fail(f"Operation timed out after {max_attempts} seconds")
-    
+
     # Get results
     results = api_client.get_operation_results(operation_id)
     assert results["success"] == True
@@ -1793,47 +1793,47 @@ from typing import Dict, Any
 
 class TestFeatureComplete:
     """Complete test class template"""
-    
+
     @pytest.fixture(autouse=True)
     def setup(self, authenticated_client, data_tracker):
         """Setup for each test"""
         self.client = authenticated_client
         self.tracker = data_tracker
         self.test_data = TestDataBuilder()
-    
+
     async def test_feature_workflow(self):
         """Test complete feature workflow"""
         # Arrange
         test_input = self.test_data.build_document()
-        
+
         # Act - Create
         create_response = await self.client.post("/feature", json=test_input)
         assert create_response.status_code == 201
         feature_id = create_response.json()['id']
         self.tracker.track('feature', feature_id)
-        
+
         # Act - Read
         read_response = await self.client.get(f"/feature/{feature_id}")
         assert read_response.status_code == 200
         feature_data = read_response.json()
-        
+
         # Assert - Validate
         assert feature_data['id'] == feature_id
         assert_contains_subset(feature_data, test_input)
         assert_datetime_recent(feature_data['created_at'])
-        
+
         # Act - Update
         update_data = {"status": "updated"}
         update_response = await self.client.patch(
-            f"/feature/{feature_id}", 
+            f"/feature/{feature_id}",
             json=update_data
         )
         assert update_response.status_code == 200
-        
+
         # Act - Delete
         delete_response = await self.client.delete(f"/feature/{feature_id}")
         assert delete_response.status_code in [200, 204]
-        
+
         # Assert - Verify deletion
         verify_response = await self.client.get(f"/feature/{feature_id}")
         assert verify_response.status_code == 404
@@ -1850,7 +1850,7 @@ class TestFeatureComplete:
 - **Location**: `fixtures.py:493-530`
 - **Benefit**: Tests now fail gracefully with clear instructions if server isn't running
 
-#### 2. Test Independence 
+#### 2. Test Independence
 - **Added**: `setup_class()` method to reset state between test runs
 - **Added**: Helper methods like `_create_benchmark_if_needed()` for self-sufficient tests
 - **Location**: `test_full_user_workflow.py:66-77`

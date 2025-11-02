@@ -191,7 +191,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     except Exception as e:
         logger.error(f"Unexpected error decoding token: {e}")
         raise credentials_exception
-    
+
     if pii_redact_logs:
         logger.debug("Token decoded successfully for authenticated subject (redacted)")
     else:

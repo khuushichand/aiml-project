@@ -28,4 +28,3 @@ def test_ingestion_time_ner_extractor_skips_if_unavailable():
     # Expect at least one sentence-like claim with entities
     joined = "\n".join(c.get("claim_text", "") for c in claims)
     assert any(s in joined for s in ("Alice", "Acme", "Paris", "2020"))
-

@@ -21,4 +21,3 @@ def test_jobs_metrics_no_registry_noop(monkeypatch):
     met.increment_sla_breach({"domain": "d", "queue": "q", "job_type": "t"}, "duration")
     met.observe_queue_latency({"domain": "d", "queue": "q", "job_type": "t"}, None, None)
     met.observe_duration({"domain": "d", "queue": "q", "job_type": "t"}, None, None)
-

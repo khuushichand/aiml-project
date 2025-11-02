@@ -122,4 +122,3 @@ def test_numeric_compare_on_missing_key_generates_numeric_predicate():
     where_sql, params = adapter._build_where_from_filter({"score": {"$gte": 0.5}})
     assert "(metadata->>%s)::numeric >=" in where_sql
     assert params == ["score", 0.5]
-

@@ -33,4 +33,3 @@ def test_pricing_env_override(monkeypatch):
     assert pr == pytest.approx(0.123)
     assert cr == pytest.approx(0.456)
     assert est is False
-

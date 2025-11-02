@@ -75,7 +75,7 @@ except ImportError as e:
     logger.error(f"CRITICAL: Failed to import embeddings implementation: {e}")
     logger.error("Embeddings service cannot start without proper dependencies")
     EMBEDDINGS_AVAILABLE = False
-    
+
     # Raise error immediately - don't allow service to start
     raise RuntimeError(
         f"Embeddings service dependencies not available: {e}. "
@@ -163,7 +163,7 @@ MAX_RETRIES = 3
 PROVIDER_MODELS = {
     EmbeddingProvider.OPENAI: [
         "text-embedding-ada-002",
-        "text-embedding-3-small", 
+        "text-embedding-3-small",
         "text-embedding-3-large"
     ],
     EmbeddingProvider.COHERE: [
@@ -182,19 +182,19 @@ PROVIDER_MODELS = {
 
 class TTLCache:
     """Thread-safe cache with TTL support and automatic cleanup"""
-    
+
     def __init__(self, max_size: int = MAX_CACHE_SIZE, ttl_seconds: int = CACHE_TTL_SECONDS):
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.lock = Lock()
         self.cleanup_task = None
-        
+
     async def start_cleanup_task(self):
         """Start background cleanup task"""
         if self.cleanup_task is None:
             self.cleanup_task = asyncio.create_task(self._cleanup_loop())
-            
+
     async def stop_cleanup_task(self):
         """Stop background cleanup task"""
         if self.cleanup_task:
@@ -204,7 +204,7 @@ class TTLCache:
             except asyncio.CancelledError:
                 pass
             self.cleanup_task = None
-            
+
     async def _cleanup_loop(self):
         """Background task to clean up expired entries"""
         while True:
@@ -215,7 +215,7 @@ class TTLCache:
                 break
             except Exception as e:
                 logger.error(f"Error in cache cleanup: {e}")
-                
+
     async def cleanup_expired(self):
         """Remove expired entries from cache"""
         async with self.lock:
@@ -224,14 +224,14 @@ class TTLCache:
                 key for key, value in self.cache.items()
                 if current_time - value['timestamp'] > self.ttl_seconds
             ]
-            
+
             for key in expired_keys:
                 del self.cache[key]
-                
+
             if expired_keys:
                 logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
                 embedding_cache_size.set(len(self.cache))
-                
+
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache if not expired"""
         async with self.lock:
@@ -246,7 +246,7 @@ class TTLCache:
                     del self.cache[key]
                     embedding_cache_size.set(len(self.cache))
             return None
-            
+
     async def set(self, key: str, value: Any):
         """Set value in cache with TTL"""
         async with self.lock:
@@ -258,20 +258,20 @@ class TTLCache:
                     key=lambda k: self.cache[k].get('last_access', 0)
                 )
                 del self.cache[lru_key]
-                
+
             self.cache[key] = {
                 'value': value,
                 'timestamp': time.time(),
                 'last_access': time.time()
             }
             embedding_cache_size.set(len(self.cache))
-            
+
     async def clear(self):
         """Clear all cache entries"""
         async with self.lock:
             self.cache.clear()
             embedding_cache_size.set(0)
-            
+
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
         return {
@@ -286,11 +286,11 @@ class TTLCache:
 
 class ConnectionPoolManager:
     """Manages connection pools for different providers"""
-    
+
     def __init__(self):
         self.pools: Dict[str, aiohttp.ClientSession] = {}
         self.lock = Lock()
-        
+
     async def get_session(self, provider: str) -> aiohttp.ClientSession:
         """Get or create session for provider"""
         async with self.lock:
@@ -305,7 +305,7 @@ class ConnectionPoolManager:
                     timeout=timeout
                 )
             return self.pools[provider]
-            
+
     async def close_all(self):
         """Close all connection pools"""
         async with self.lock:
@@ -401,7 +401,7 @@ def build_provider_config(
     dimensions: Optional[int] = None
 ) -> Dict[str, Any]:
     """Build provider-specific configuration"""
-    
+
     # Get API keys from environment if not provided
     if provider == EmbeddingProvider.OPENAI:
         return {
@@ -435,7 +435,7 @@ async def create_embeddings_with_retry(
     model_id: Optional[str] = None
 ) -> List[List[float]]:
     """Create embeddings with retry logic"""
-    
+
     # Run in thread pool to avoid blocking
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
@@ -455,16 +455,16 @@ async def create_embeddings_batch_async(
     api_url: Optional[str] = None
 ) -> List[List[float]]:
     """Async wrapper for embeddings with caching and batching"""
-    
+
     embeddings = []
     uncached_texts = []
     uncached_indices = []
-    
+
     # Check cache
     for i, text in enumerate(texts):
         cache_key = get_cache_key(text, provider, model_id or "default", dimensions)
         cached = await embedding_cache.get(cache_key)
-        
+
         if cached:
             embeddings.append(cached)
             embedding_cache_hits.labels(provider=provider, model=model_id).inc()
@@ -472,7 +472,7 @@ async def create_embeddings_batch_async(
             embeddings.append(None)
             uncached_texts.append(text)
             uncached_indices.append(i)
-    
+
     # Process uncached texts
     if uncached_texts:
         config = build_provider_config(
@@ -482,13 +482,13 @@ async def create_embeddings_batch_async(
             api_url,
             dimensions
         )
-        
+
         # Process in batches
         all_new_embeddings = []
         for batch_start in range(0, len(uncached_texts), MAX_BATCH_SIZE):
             batch_end = min(batch_start + MAX_BATCH_SIZE, len(uncached_texts))
             batch_texts = uncached_texts[batch_start:batch_end]
-            
+
             try:
                 batch_embeddings = await create_embeddings_with_retry(
                     batch_texts,
@@ -502,16 +502,16 @@ async def create_embeddings_batch_async(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=f"Embedding service temporarily unavailable: {str(e)}"
                 )
-        
+
         # Update results and cache
         for i, (idx, text) in enumerate(zip(uncached_indices, uncached_texts)):
             embedding = all_new_embeddings[i]
             embeddings[idx] = embedding
-            
+
             # Cache asynchronously
             cache_key = get_cache_key(text, provider, model_id or "default", dimensions)
             await embedding_cache.set(cache_key, embedding)
-    
+
     return embeddings
 
 # ============================================================================
@@ -545,22 +545,22 @@ async def create_embedding_endpoint(
     x_provider: Optional[str] = None
 ):
     """Create embeddings with production-grade error handling and monitoring"""
-    
+
     # Track active requests
     active_embedding_requests.inc()
     start_time = time.time()
-    
+
     try:
         # Validate provider
         provider = x_provider or "openai"
         model = embedding_request.model
-        
+
         # Extract provider from model if specified
         if ":" in model:
             parts = model.split(":", 1)
             provider = parts[0]
             model = parts[1]
-        
+
         try:
             provider_enum = EmbeddingProvider(provider.lower())
         except ValueError:
@@ -568,10 +568,10 @@ async def create_embedding_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
             )
-        
+
         # Parse and validate input
         texts_to_embed: List[str] = []
-        
+
         if isinstance(embedding_request.input, str):
             if not embedding_request.input.strip():
                 raise HTTPException(
@@ -590,7 +590,7 @@ async def create_embedding_endpoint(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Maximum 2048 inputs allowed"
                 )
-            
+
             # Validate all strings
             if not all(isinstance(item, str) for item in embedding_request.input):
                 raise HTTPException(
@@ -603,7 +603,7 @@ async def create_embedding_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid input type"
             )
-        
+
         # Create embeddings
         try:
             embeddings = await create_embeddings_batch_async(
@@ -623,7 +623,7 @@ async def create_embedding_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create embeddings"
             )
-        
+
         # Format response
         output_data = []
         for i, embedding in enumerate(embeddings):
@@ -632,30 +632,30 @@ async def create_embedding_endpoint(
                 processed_value = base64.b64encode(byte_array).decode('utf-8')
             else:
                 processed_value = embedding
-            
+
             output_data.append(
                 EmbeddingData(
                     embedding=processed_value,
                     index=i
                 )
             )
-        
+
         # Calculate token usage
         num_tokens = sum(count_tokens(text, model) for text in texts_to_embed)
-        
+
         # Track metrics
         duration = time.time() - start_time
         embedding_request_duration.labels(
             provider=provider,
             model=model
         ).observe(duration)
-        
+
         embedding_requests_total.labels(
             provider=provider,
             model=model,
             status="success"
         ).inc()
-        
+
         logger.info(
             f"Created {len(output_data)} embeddings",
             extra={
@@ -665,7 +665,7 @@ async def create_embedding_endpoint(
                 "duration": duration
             }
         )
-        
+
         return CreateEmbeddingResponse(
             data=output_data,
             model=f"{provider}:{model}" if provider != "openai" else model,
@@ -674,7 +674,7 @@ async def create_embedding_endpoint(
                 total_tokens=num_tokens
             )
         )
-        
+
     finally:
         active_embedding_requests.dec()
 
@@ -686,13 +686,13 @@ async def clear_cache(
     current_user: User = Depends(get_request_user)
 ):
     """Clear the embedding cache - requires admin privileges"""
-    
+
     # SECURITY: Proper admin check
     require_admin(current_user)
-    
+
     cache_stats = embedding_cache.stats()
     await embedding_cache.clear()
-    
+
     logger.info(
         f"Cache cleared by admin",
         extra={
@@ -700,7 +700,7 @@ async def clear_cache(
             "entries_cleared": cache_stats['size']
         }
     )
-    
+
     return {
         "message": "Cache cleared successfully",
         "entries_removed": cache_stats['size']
@@ -712,7 +712,7 @@ async def clear_cache(
 )
 async def health_check():
     """Production health check endpoint"""
-    
+
     health_status = {
         "status": "healthy" if EMBEDDINGS_AVAILABLE else "degraded",
         "service": "embeddings_v5_production",
@@ -720,13 +720,13 @@ async def health_check():
         "cache_stats": embedding_cache.stats(),
         "active_requests": active_embedding_requests._value.get()
     }
-    
+
     if not EMBEDDINGS_AVAILABLE:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=health_status
         )
-    
+
     return health_status
 
 @router.get(
@@ -737,9 +737,9 @@ async def get_metrics(
     current_user: User = Depends(get_request_user)
 ):
     """Get detailed service metrics - requires admin privileges"""
-    
+
     require_admin(current_user)
-    
+
     return {
         "cache": embedding_cache.stats(),
         "active_requests": active_embedding_requests._value.get(),

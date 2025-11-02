@@ -43,4 +43,3 @@ def test_check_text_returns_sanitized_snippet_not_pattern():
             os.unlink(path)
         except Exception:
             pass
-

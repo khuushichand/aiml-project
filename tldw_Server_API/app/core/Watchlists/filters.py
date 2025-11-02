@@ -215,4 +215,3 @@ def evaluate_filters(filters: List[Dict[str, Any]], candidate: Dict[str, Any]) -
             key = f"id:{fid}" if fid is not None else f"idx:{idx}"
             return f.get("action"), {"key": key}
     return None, {}
-

@@ -40,4 +40,3 @@ def test_stream_ttl_env_cache_and_clear(monkeypatch):
     monkeypatch.delenv("AUDIO_STREAM_TTL_SECONDS", raising=False)
     aq.clear_stream_ttl_cache()
     assert aq._get_stream_ttl_seconds() == 120
-

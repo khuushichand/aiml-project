@@ -121,4 +121,3 @@ def test_storage_dim_mismatch_hard_error(monkeypatch):
     )
     with pytest.raises(RuntimeError):
         asyncio.run(w.process_message(msg))
-

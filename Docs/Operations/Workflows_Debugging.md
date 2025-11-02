@@ -69,4 +69,3 @@ Debug checklist:
 - Ensure `DATABASE_URL_WORKFLOWS` is consistent across app/test contexts.
 - SQLite: watch for `database is locked`; reduce concurrent writers or move to Postgres for heavier loads.
 - Postgres: monitor connection pool saturation and autovacuum on `workflow_events`.
-

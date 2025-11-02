@@ -33,4 +33,3 @@ def test_aggregate_results_schema(monkeypatch):
     assert isinstance(result["evidence"], list)
     assert isinstance(result["confidence"], float)
     assert isinstance(result["chunks"], list)
-

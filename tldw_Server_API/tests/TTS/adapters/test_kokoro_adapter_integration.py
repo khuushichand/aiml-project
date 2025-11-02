@@ -38,7 +38,7 @@ def check_kokoro_model_exists():
         "./models/kokoro/kokoro-v0_19.pth",
         "./models/kokoro/kokoro-v0_19.onnx"
     ]
-    
+
     for path in model_paths:
         if os.path.exists(path):
             return True, path
@@ -62,7 +62,7 @@ def get_compute_capability():
 @pytest.mark.asyncio
 class TestKokoroAdapterIntegration:
     """Integration tests for Kokoro adapter - requires model files"""
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files to be downloaded"
@@ -70,7 +70,7 @@ class TestKokoroAdapterIntegration:
     async def test_real_model_initialization(self):
         """Test initialization with real model files"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         if model_path.endswith('.onnx'):
             adapter = KokoroAdapter({
                 "kokoro_use_onnx": True,
@@ -82,14 +82,14 @@ class TestKokoroAdapterIntegration:
                 "kokoro_use_onnx": False,
                 "kokoro_model_path": model_path
             })
-        
+
         success = await adapter.initialize()
         assert success
         assert adapter._status == ProviderStatus.AVAILABLE
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -97,7 +97,7 @@ class TestKokoroAdapterIntegration:
     async def test_real_audio_generation(self):
         """Test actual audio generation with Kokoro"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         if model_path.endswith('.onnx'):
             adapter = KokoroAdapter({
                 "kokoro_use_onnx": True,
@@ -111,27 +111,27 @@ class TestKokoroAdapterIntegration:
                 "kokoro_model_path": model_path,
                 "kokoro_device": "cpu"
             })
-        
+
         await adapter.initialize()
-        
+
         request = TTSRequest(
             text="Hello, this is a test of the Kokoro text-to-speech system.",
             voice="af_bella",
             format=AudioFormat.WAV,
             stream=False
         )
-        
+
         response = await adapter.generate(request)
-        
+
         assert response.audio_data is not None
         assert len(response.audio_data) > 1000
         assert response.format == AudioFormat.WAV
         assert response.voice_used == "af_bella"
         assert response.provider == "Kokoro"
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -139,40 +139,40 @@ class TestKokoroAdapterIntegration:
     async def test_streaming_generation(self):
         """Test streaming audio generation"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": model_path.endswith('.onnx'),
             "kokoro_model_path": model_path,
             "kokoro_device": "cpu"
         })
-        
+
         if model_path.endswith('.onnx'):
             adapter.config["kokoro_voices_json"] = model_path.replace('.onnx', '_voices.json')
-        
+
         await adapter.initialize()
-        
+
         request = TTSRequest(
             text="Streaming test.",
             voice="am_adam",
             format=AudioFormat.WAV,
             stream=True
         )
-        
+
         response = await adapter.generate(request)
-        
+
         assert response.audio_stream is not None
-        
+
         chunks = []
         async for chunk in response.audio_stream:
             chunks.append(chunk)
-        
+
         assert len(chunks) > 0
         total_size = sum(len(chunk) for chunk in chunks)
         assert total_size > 1000
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -180,20 +180,20 @@ class TestKokoroAdapterIntegration:
     async def test_different_voices(self):
         """Test generation with different voices"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": model_path.endswith('.onnx'),
             "kokoro_model_path": model_path,
             "kokoro_device": "cpu"
         })
-        
+
         if model_path.endswith('.onnx'):
             adapter.config["kokoro_voices_json"] = model_path.replace('.onnx', '_voices.json')
-        
+
         await adapter.initialize()
-        
+
         voices = ["af_bella", "am_adam", "bf_emma", "bm_george"]
-        
+
         for voice in voices:
             request = TTSRequest(
                 text=f"Testing voice: {voice}",
@@ -201,15 +201,15 @@ class TestKokoroAdapterIntegration:
                 format=AudioFormat.WAV,
                 stream=False
             )
-            
+
             response = await adapter.generate(request)
-            
+
             assert response.audio_data is not None
             assert response.voice_used == voice
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -217,18 +217,18 @@ class TestKokoroAdapterIntegration:
     async def test_voice_mixing(self):
         """Test voice mixing feature"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": model_path.endswith('.onnx'),
             "kokoro_model_path": model_path,
             "kokoro_device": "cpu"
         })
-        
+
         if model_path.endswith('.onnx'):
             adapter.config["kokoro_voices_json"] = model_path.replace('.onnx', '_voices.json')
-        
+
         await adapter.initialize()
-        
+
         # Test mixed voice
         request = TTSRequest(
             text="Testing mixed voices",
@@ -236,15 +236,15 @@ class TestKokoroAdapterIntegration:
             format=AudioFormat.WAV,
             stream=False
         )
-        
+
         response = await adapter.generate(request)
-        
+
         assert response.audio_data is not None
         assert "af_bella" in response.voice_used or "mix" in response.voice_used.lower()
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0] or get_compute_capability() == "cpu",
         reason="Requires Kokoro model and GPU"
@@ -253,31 +253,31 @@ class TestKokoroAdapterIntegration:
         """Test GPU acceleration if available"""
         model_exists, model_path = check_kokoro_model_exists()
         compute = get_compute_capability()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": False,  # PyTorch for GPU
             "kokoro_model_path": model_path if model_path.endswith('.pth') else model_path.replace('.onnx', '.pth'),
             "kokoro_device": compute  # cuda or mps
         })
-        
+
         await adapter.initialize()
-        
+
         assert adapter.device == compute
-        
+
         request = TTSRequest(
             text="GPU acceleration test",
             voice="af_bella",
             format=AudioFormat.WAV,
             stream=False
         )
-        
+
         response = await adapter.generate(request)
-        
+
         assert response.audio_data is not None
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -285,18 +285,18 @@ class TestKokoroAdapterIntegration:
     async def test_phoneme_generation(self):
         """Test generation with phoneme input"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": model_path.endswith('.onnx'),
             "kokoro_model_path": model_path,
             "kokoro_device": "cpu"
         })
-        
+
         if model_path.endswith('.onnx'):
             adapter.config["kokoro_voices_json"] = model_path.replace('.onnx', '_voices.json')
-        
+
         await adapter.initialize()
-        
+
         # Use phonetic text
         request = TTSRequest(
             text="[ˈhɛloʊ ˈwɝld]",
@@ -305,14 +305,14 @@ class TestKokoroAdapterIntegration:
             stream=False,
             extra_params={"use_phonemes": True}
         )
-        
+
         response = await adapter.generate(request)
-        
+
         assert response.audio_data is not None
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -320,18 +320,18 @@ class TestKokoroAdapterIntegration:
     async def test_concurrent_requests(self):
         """Test handling multiple concurrent requests"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": model_path.endswith('.onnx'),
             "kokoro_model_path": model_path,
             "kokoro_device": "cpu"
         })
-        
+
         if model_path.endswith('.onnx'):
             adapter.config["kokoro_voices_json"] = model_path.replace('.onnx', '_voices.json')
-        
+
         await adapter.initialize()
-        
+
         # Create concurrent requests
         requests = [
             TTSRequest(
@@ -342,18 +342,18 @@ class TestKokoroAdapterIntegration:
             )
             for i in range(3)
         ]
-        
+
         # Execute concurrently
         tasks = [adapter.generate(req) for req in requests]
         responses = await asyncio.gather(*tasks)
-        
+
         assert len(responses) == 3
         for response in responses:
             assert response.audio_data is not None
-        
+
         # Cleanup
         await adapter.close()
-    
+
     @pytest.mark.skipif(
         not check_kokoro_model_exists()[0],
         reason="Requires Kokoro model files"
@@ -361,18 +361,18 @@ class TestKokoroAdapterIntegration:
     async def test_format_conversion(self):
         """Test audio format conversion"""
         model_exists, model_path = check_kokoro_model_exists()
-        
+
         adapter = KokoroAdapter({
             "kokoro_use_onnx": model_path.endswith('.onnx'),
             "kokoro_model_path": model_path,
             "kokoro_device": "cpu"
         })
-        
+
         if model_path.endswith('.onnx'):
             adapter.config["kokoro_voices_json"] = model_path.replace('.onnx', '_voices.json')
-        
+
         await adapter.initialize()
-        
+
         # Test MP3 output (requires conversion from WAV)
         request = TTSRequest(
             text="Format conversion test",
@@ -380,12 +380,12 @@ class TestKokoroAdapterIntegration:
             format=AudioFormat.MP3,
             stream=False
         )
-        
+
         response = await adapter.generate(request)
-        
+
         assert response.audio_data is not None
         assert response.format == AudioFormat.MP3
-        
+
         # Cleanup
         await adapter.close()
 

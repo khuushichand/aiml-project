@@ -82,4 +82,3 @@ async def test_unified_pipeline_post_verification_metadata(monkeypatch):
 
     # Generated answer should be updated to repaired answer
     assert res.generated_answer == "repaired answer"
-

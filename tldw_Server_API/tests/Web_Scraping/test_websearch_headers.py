@@ -13,4 +13,3 @@ def test_websearch_browser_headers_shape():
     # Provider additions
     assert headers.get("Connection") == "keep-alive"
     assert headers.get("Referer") == "https://www.google.com/"
-

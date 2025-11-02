@@ -48,7 +48,7 @@ class APIKeyScope(Enum):
 
 class APIKeyManager:
     """Manages API keys with rotation, expiration, and revocation capabilities"""
-    
+
     def __init__(self, db_pool: Optional[DatabasePool] = None):
         """Initialize API key manager"""
         self.db_pool = db_pool
@@ -65,22 +65,22 @@ class APIKeyManager:
             self._hmac_key_fingerprint = (key_material[:32])
         except Exception:
             self._hmac_key_fingerprint = ""
-        
+
     async def initialize(self):
         """Initialize database connection and ensure tables exist"""
         if self._initialized:
             return
-            
+
         # Get database pool
         if not self.db_pool:
             self.db_pool = await get_db_pool()
-        
+
         # Create API keys table if it doesn't exist
         await self._create_tables()
-        
+
         self._initialized = True
         logger.info("APIKeyManager initialized")
-    
+
     async def _create_tables(self):
         """Create API keys and related tables if they don't exist"""
         try:
@@ -113,13 +113,13 @@ class APIKeyManager:
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
-                    
+
                     # Create indexes
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
-                    
+
                     # Create API key audit log table
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS api_key_audit_log (
@@ -147,7 +147,7 @@ class APIKeyManager:
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
                     await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
-                    
+
                 else:
                     # SQLite
                     await conn.execute("""
@@ -203,7 +203,7 @@ class APIKeyManager:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
-                    
+
                     # Create API key audit log table
                     await conn.execute("""
                         CREATE TABLE IF NOT EXISTS api_key_audit_log (
@@ -218,19 +218,19 @@ class APIKeyManager:
                             FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
                         )
                     """)
-                    
+
                     await conn.commit()
-                    
+
                 logger.debug("API keys tables and indexes created/verified")
-                
+
         except Exception as e:
             logger.error(f"Failed to create API keys tables: {e}")
             raise DatabaseError(f"Failed to create API keys tables: {e}")
-    
+
     def generate_api_key(self) -> tuple[str, str]:
         """
         Generate a new API key
-        
+
         Returns:
             Tuple of (full_key, key_hash)
             - full_key: The complete API key to give to the user
@@ -239,28 +239,28 @@ class APIKeyManager:
         # Generate random key
         random_part = secrets.token_urlsafe(self.key_length)
         full_key = f"{self.key_prefix}{random_part}"
-        
+
         # Create HMAC hash for storage using centralized derivation
         hmac_key = derive_hmac_key(self.settings)
         key_hash = hmac.new(hmac_key, full_key.encode("utf-8"), hashlib.sha256).hexdigest()
-        
+
         return full_key, key_hash
-    
+
     def hash_api_key(self, api_key: str) -> str:
         """
         Hash an API key for comparison using HMAC-SHA256.
-        
+
         This provides better security than plain SHA256 by using a secret key,
         preventing length extension attacks.
-        
+
         Note: We use HMAC-SHA256 instead of Argon2 because:
         - API keys are already high-entropy (cryptographically random)
         - This hash is used for fast lookups on every API request
         - Argon2 would add unnecessary latency (100-1000x slower)
-        
+
         Args:
             api_key: The API key to hash
-            
+
         Returns:
             HMAC-SHA256 hash of the API key
         """
@@ -281,7 +281,7 @@ class APIKeyManager:
             if digest not in hashes:
                 hashes.append(digest)
         return hashes
-    
+
     async def create_api_key(
         self,
         user_id: int,
@@ -295,7 +295,7 @@ class APIKeyManager:
     ) -> Dict[str, Any]:
         """
         Create a new API key for a user
-        
+
         Args:
             user_id: User ID who owns the key
             name: Optional name for the key
@@ -305,22 +305,22 @@ class APIKeyManager:
             rate_limit: Custom rate limit for this key
             allowed_ips: List of allowed IP addresses
             metadata: Additional metadata
-            
+
         Returns:
             Dictionary with key information including the actual key (only shown once)
         """
         if not self._initialized:
             await self.initialize()
-        
+
         # Generate the key
         full_key, key_hash = self.generate_api_key()
         key_prefix = full_key[:10] + "..."  # Store prefix for identification
-        
+
         # Calculate expiration
         expires_at = None
         if expires_in_days:
             expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchval'):
@@ -359,15 +359,15 @@ class APIKeyManager:
                     )
                     key_id = cursor.lastrowid
                     await conn.commit()
-                
+
                 # Log the creation
                 await self._log_action(key_id, "created", user_id)
-                
+
                 if get_settings().PII_REDACT_LOGS:
                     logger.info("Created API key for authenticated user (details redacted)")
                 else:
                     logger.info(f"Created API key {key_id} for user {user_id}")
-                
+
                 return {
                     "id": key_id,
                     "key": full_key,  # Only returned on creation!
@@ -378,7 +378,7 @@ class APIKeyManager:
                     "created_at": datetime.utcnow().isoformat(),
                     "message": "Store this key securely - it will not be shown again"
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to create API key: {e}")
             raise DatabaseError(f"Failed to create API key: {e}")
@@ -560,7 +560,7 @@ class APIKeyManager:
         except Exception as e:
             logger.error(f"Failed to create virtual API key: {e}")
             raise DatabaseError(f"Failed to create virtual API key: {e}")
-    
+
     async def validate_api_key(
         self,
         api_key: str,
@@ -569,22 +569,22 @@ class APIKeyManager:
     ) -> Optional[Dict[str, Any]]:
         """
         Validate an API key and return its information
-        
+
         Args:
             api_key: The API key to validate
             required_scope: Required permission scope
             ip_address: Client IP address for validation and logging
-            
+
         Returns:
             Key information if valid, None if invalid
         """
         if not self._initialized:
             await self.initialize()
-        
+
         hash_candidates = self.hash_candidates(api_key)
         if not hash_candidates:
             return None
-        
+
         try:
             # Get key information (dialect-aware placeholders)
             if getattr(self.db_pool, 'pool', None) is not None:
@@ -623,10 +623,10 @@ class APIKeyManager:
                     """
                 params = (*hash_candidates, APIKeyStatus.ACTIVE.value)
                 result = await self.db_pool.fetchone(query, params)
-            
+
             if not result:
                 return None
-            
+
             key_info = dict(result)
             stored_hash = key_info.get("key_hash")
             primary_hash = hash_candidates[0]
@@ -637,7 +637,7 @@ class APIKeyManager:
                 if expires_at < datetime.utcnow():
                     await self._mark_expired(key_info['id'])
                     return None
-            
+
             # Check IP restrictions
             if key_info['allowed_ips']:
                 try:
@@ -664,7 +664,7 @@ class APIKeyManager:
                             f"API key {key_info['id']} used from unauthorized IP: {normalized_ip}"
                         )
                         return None
-            
+
             if stored_hash and stored_hash != primary_hash:
                 try:
                     await self.db_pool.execute(
@@ -678,13 +678,13 @@ class APIKeyManager:
                         f"Failed to normalize API key hash for key {key_info.get('id')}: {normalize_exc}"
                     )
             key_info.pop("key_hash", None)
-            
+
             # Check scope
             if required_scope:
                 key_scope = key_info['scope']
                 if not self._has_scope(key_scope, required_scope):
                     return None
-            
+
             # Update usage statistics
             await self._update_usage(key_info['id'], ip_address)
 
@@ -695,13 +695,13 @@ class APIKeyManager:
             except Exception as _e:
                 # Do not fail request on audit write
                 logger.debug(f"API key usage audit skipped/failed: {_e}")
-            
+
             return key_info
-            
+
         except Exception as e:
             logger.error(f"Failed to validate API key: {e}")
             return None
-    
+
     async def rotate_api_key(
         self,
         key_id: int,
@@ -710,30 +710,30 @@ class APIKeyManager:
     ) -> Dict[str, Any]:
         """
         Rotate an API key - create new one and revoke old one
-        
+
         Args:
             key_id: ID of the key to rotate
             user_id: User requesting rotation (for authorization)
             expires_in_days: Expiration for new key
-            
+
         Returns:
             New key information
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Get existing key info
             old_key = await self.db_pool.fetchone(
                 "SELECT * FROM api_keys WHERE id = ? AND user_id = ?",
                 key_id, user_id
             )
-            
+
             if not old_key:
                 raise ValueError("API key not found or unauthorized")
-            
+
             old_key = dict(old_key)
-            
+
             # Normalize stored JSON/JSONB fields that may already be parsed by the driver
             def _coerce_json_field(value):
                 if value is None:
@@ -755,14 +755,14 @@ class APIKeyManager:
                 allowed_ips=_coerce_json_field(old_key.get('allowed_ips')),
                 metadata=_coerce_json_field(old_key.get('metadata'))
             )
-            
+
             # Update rotation references
             async with self.db_pool.transaction() as conn:
                 # Mark old key as rotated
                 if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET status = $1, rotated_to = $2, revoked_at = $3,
                             revoke_reason = $4
                         WHERE id = $5
@@ -770,7 +770,7 @@ class APIKeyManager:
                         APIKeyStatus.ROTATED.value, new_key_result['id'],
                         datetime.utcnow(), "Key rotation", key_id
                     )
-                    
+
                     # Update new key with rotation reference
                     await conn.execute(
                         "UPDATE api_keys SET rotated_from = $1 WHERE id = $2",
@@ -779,7 +779,7 @@ class APIKeyManager:
                 else:
                     await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET status = ?, rotated_to = ?, revoked_at = ?,
                             revoke_reason = ?
                         WHERE id = ?
@@ -787,26 +787,26 @@ class APIKeyManager:
                         (APIKeyStatus.ROTATED.value, new_key_result['id'],
                          datetime.utcnow().isoformat(), "Key rotation", key_id)
                     )
-                    
+
                     await conn.execute(
                         "UPDATE api_keys SET rotated_from = ? WHERE id = ?",
                         (key_id, new_key_result['id'])
                     )
-                    
+
                     await conn.commit()
-            
+
             # Log the rotation
             await self._log_action(key_id, "rotated", user_id)
             await self._log_action(new_key_result['id'], "created_from_rotation", user_id)
-            
+
             logger.info(f"Rotated API key {key_id} to {new_key_result['id']}")
-            
+
             return new_key_result
-            
+
         except Exception as e:
             logger.error(f"Failed to rotate API key: {e}")
             raise DatabaseError(f"Failed to rotate API key: {e}")
-    
+
     async def revoke_api_key(
         self,
         key_id: int,
@@ -815,24 +815,24 @@ class APIKeyManager:
     ) -> bool:
         """
         Revoke an API key
-        
+
         Args:
             key_id: ID of the key to revoke
             user_id: User requesting revocation
             reason: Reason for revocation
-            
+
         Returns:
             True if successful
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     result = await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET status = $1, revoked_at = $2, revoked_by = $3,
                             revoke_reason = $4
                         WHERE id = $5 AND user_id = $6 AND status = $7
@@ -845,7 +845,7 @@ class APIKeyManager:
                 else:
                     cursor = await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET status = ?, revoked_at = ?, revoked_by = ?,
                             revoke_reason = ?
                         WHERE id = ? AND user_id = ? AND status = ?
@@ -856,17 +856,17 @@ class APIKeyManager:
                     )
                     success = cursor.rowcount > 0
                     await conn.commit()
-            
+
             if success:
                 await self._log_action(key_id, "revoked", user_id, {"reason": reason})
                 logger.info(f"Revoked API key {key_id}")
-            
+
             return success
-            
+
         except Exception as e:
             logger.error(f"Failed to revoke API key: {e}")
             raise DatabaseError(f"Failed to revoke API key: {e}")
-    
+
     async def list_user_keys(
         self,
         user_id: int,
@@ -874,56 +874,56 @@ class APIKeyManager:
     ) -> List[Dict[str, Any]]:
         """
         List all API keys for a user
-        
+
         Args:
             user_id: User ID
             include_revoked: Include revoked/expired keys
-            
+
         Returns:
             List of key information (without actual keys)
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             if include_revoked:
                 query = "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC"
             else:
                 query = """
-                    SELECT * FROM api_keys 
+                    SELECT * FROM api_keys
                     WHERE user_id = ? AND status = ?
                     ORDER BY created_at DESC
                 """
-                
+
             if include_revoked:
                 results = await self.db_pool.fetchall(query, user_id)
             else:
                 results = await self.db_pool.fetchall(query, user_id, APIKeyStatus.ACTIVE.value)
-            
+
             keys = []
             for row in results:
                 key_dict = dict(row)
                 # Never return the actual hash
                 key_dict.pop('key_hash', None)
                 keys.append(key_dict)
-            
+
             return keys
-            
+
         except Exception as e:
             logger.error(f"Failed to list user keys: {e}")
             raise DatabaseError(f"Failed to list user keys: {e}")
-    
+
     async def cleanup_expired_keys(self):
         """Mark expired keys as expired"""
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     result = await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET status = $1
                         WHERE status = $2 AND expires_at < $3
                         """,
@@ -934,7 +934,7 @@ class APIKeyManager:
                 else:
                     await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET status = ?
                         WHERE status = ? AND expires_at < ?
                         """,
@@ -943,12 +943,12 @@ class APIKeyManager:
                          datetime.utcnow().isoformat())
                     )
                     await conn.commit()
-            
+
             logger.debug("Cleaned up expired API keys")
-            
+
         except Exception as e:
             logger.error(f"Failed to cleanup expired keys: {e}")
-    
+
     def _has_scope(self, key_scope: str, required_scope: str) -> bool:
         """Check if key scope satisfies required scope"""
         scope_hierarchy = {
@@ -957,12 +957,12 @@ class APIKeyManager:
             "admin": 2,
             "service": 3
         }
-        
+
         key_level = scope_hierarchy.get(key_scope, 0)
         required_level = scope_hierarchy.get(required_scope, 0)
-        
+
         return key_level >= required_level
-    
+
     async def _update_usage(self, key_id: int, ip_address: Optional[str] = None):
         """Update usage statistics for a key"""
         try:
@@ -970,7 +970,7 @@ class APIKeyManager:
                 if hasattr(conn, 'fetchrow'):
                     await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET usage_count = COALESCE(usage_count, 0) + 1,
                             last_used_at = $1,
                             last_used_ip = $2
@@ -981,7 +981,7 @@ class APIKeyManager:
                 else:
                     await conn.execute(
                         """
-                        UPDATE api_keys 
+                        UPDATE api_keys
                         SET usage_count = COALESCE(usage_count, 0) + 1,
                             last_used_at = ?,
                             last_used_ip = ?
@@ -992,7 +992,7 @@ class APIKeyManager:
                     await conn.commit()
         except Exception as e:
             logger.error(f"Failed to update usage: {e}")
-    
+
     async def _mark_expired(self, key_id: int):
         """Mark a key as expired"""
         try:
@@ -1010,7 +1010,7 @@ class APIKeyManager:
                     await conn.commit()
         except Exception as e:
             logger.error(f"Failed to mark key as expired: {e}")
-    
+
     async def _log_action(
         self,
         key_id: int,

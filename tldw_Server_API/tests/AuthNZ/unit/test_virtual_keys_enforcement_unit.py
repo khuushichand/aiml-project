@@ -42,4 +42,3 @@ def test_enforce_scope_and_schedule_match(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         asyncio.run(dep(request=req2, credentials=creds))
     assert ei.value.status_code == 403
-

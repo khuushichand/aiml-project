@@ -66,4 +66,3 @@ async def test_export_usage_top_csv_text_smoke():
     csv_text = await export_usage_top_csv_text(pool, start="2024-01-01", end="2024-01-03", limit=5, metric="requests")
     assert csv_text.startswith("user_id,requests,errors,bytes_total,bytes_in_total,latency_avg_ms")
     assert "\n" in csv_text
-

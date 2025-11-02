@@ -30,23 +30,23 @@ async def validate_request_payload(
 ) -> Tuple[bool, Optional[str]]:
     """
     Validate the chat completion request payload.
-    
+
     Args:
         request_data: The chat completion request
         max_messages: Maximum allowed messages
         max_images: Maximum allowed images
         max_text_length: Maximum text length per message
-        
+
     Returns:
         Tuple of (is_valid, error_message)
     """
     # Check messages list
     if not request_data.messages:
         return False, "Messages list cannot be empty."
-    
+
     if len(request_data.messages) > max_messages:
         return False, f"Too many messages (max {max_messages}, got {len(request_data.messages)})."
-    
+
     # Count images across all messages
     total_image_parts = 0
     for msg_idx, msg_model in enumerate(request_data.messages):
@@ -61,10 +61,10 @@ async def validate_request_payload(
         elif isinstance(msg_model.content, str):
             if len(msg_model.content) > max_text_length:
                 return False, f"Message at index {msg_idx} text too long."
-    
+
     if total_image_parts > max_images:
         return False, f"Too many images in request (max {max_images}, found {total_image_parts})."
-    
+
     return True, None
 
 
@@ -79,18 +79,18 @@ async def get_or_create_character_context(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
     """
     Get or create character context for the chat.
-    
+
     Args:
         db: Database instance
         character_id: Optional character ID (string or numeric)
         loop: Event loop for async operations
-        
+
     Returns:
         Tuple of (character_card, character_db_id)
     """
     character_card = None
     final_character_db_id = None
-    
+
     if character_id:
         try:
             # Try as integer first
@@ -99,11 +99,11 @@ async def get_or_create_character_context(
         except ValueError:
             # Not an integer, try by name
             character_card = await loop.run_in_executor(None, db.get_character_card_by_name, character_id)
-        
+
         if character_card:
             final_character_db_id = character_card['id']
             logger.info(f"Loaded character '{character_card['name']}' (ID: {final_character_db_id})")
-    
+
     # Fall back to default character if needed
     if not character_card:
         character_card = await loop.run_in_executor(None, db.get_character_card_by_name, DEFAULT_CHARACTER_NAME)
@@ -187,7 +187,7 @@ async def get_or_create_conversation(
 ) -> Tuple[str, bool]:
     """
     Get existing conversation or create a new one with proper concurrency handling.
-    
+
     Args:
         db: Database instance
         conversation_id: Optional existing conversation ID
@@ -195,18 +195,18 @@ async def get_or_create_conversation(
         character_name: Character name for title
         client_id: Client identifier
         loop: Event loop
-        
+
     Returns:
         Tuple of (conversation_id, was_created)
     """
     was_created = False
-    
+
     if conversation_id:
         # Verify existing conversation
         conv_details = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
         if conv_details:
             # Validate ownership and character match
-            if (conv_details.get('character_id') == character_id and 
+            if (conv_details.get('character_id') == character_id and
                 conv_details.get('client_id') == client_id):
                 return conversation_id, False
             else:
@@ -216,7 +216,7 @@ async def get_or_create_conversation(
                     f"client:{conv_details.get('client_id')}"
                 )
                 conversation_id = None
-    
+
     # Create new conversation if needed with retry logic for race conditions
     if not conversation_id:
         timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -226,7 +226,7 @@ async def get_or_create_conversation(
             'title': title,
             'client_id': client_id
         }
-        
+
         # Try to create with retry on conflict
         max_retries = 3
         for attempt in range(max_retries):
@@ -250,7 +250,7 @@ async def get_or_create_conversation(
                 else:
                     logger.error(f"Failed to create conversation after {max_retries} attempts: {e}")
                     raise
-    
+
     return conversation_id, was_created
 
 
@@ -267,40 +267,40 @@ async def load_conversation_history(
 ) -> List[Dict[str, Any]]:
     """
     Load conversation history from database.
-    
+
     Args:
         db: Database instance
         conversation_id: Conversation ID
         character_card: Character card for context
         limit: Maximum messages to load
         loop: Event loop
-        
+
     Returns:
         List of messages in OpenAI format
     """
     if not loop:
         import asyncio
         loop = asyncio.get_running_loop()
-    
+
     historical_messages = []
-    
+
     try:
         # Load messages from database
         raw_history = await loop.run_in_executor(
-            None, 
-            db.get_messages_for_conversation, 
-            conversation_id, 
-            limit, 
-            0, 
+            None,
+            db.get_messages_for_conversation,
+            conversation_id,
+            limit,
+            0,
             "ASC"
         )
-        
+
         for db_msg in raw_history:
             role = "user" if db_msg.get("sender", "").lower() == "user" else "assistant"
-            
+
             # Build message content
             msg_parts = []
-            
+
             # Add text content
             text_content = db_msg.get("content", "")
             if text_content:
@@ -310,7 +310,7 @@ async def load_conversation_history(
                     char_name = character_card.get('name', "Assistant")
                     text_content = replace_placeholders(text_content, char_name, "User")
                 msg_parts.append({"type": "text", "text": text_content})
-            
+
             # Add images if present (supports multiple attachments)
             raw_images = db_msg.get("images") or []
             if (not raw_images) and db_msg.get("image_data") and db_msg.get("image_mime_type"):
@@ -356,14 +356,14 @@ async def load_conversation_history(
                     safe_name = character_card.get('name', '').replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
                     if safe_name:
                         hist_entry["name"] = safe_name
-                
+
                 historical_messages.append(hist_entry)
-        
+
         logger.info(f"Loaded {len(historical_messages)} historical messages for conversation {conversation_id}")
-        
+
     except Exception as e:
         logger.error(f"Error loading conversation history: {e}", exc_info=True)
-    
+
     return historical_messages
 
 
@@ -378,36 +378,36 @@ async def prepare_llm_messages(
 ) -> List[Dict[str, Any]]:
     """
     Prepare messages for LLM API call.
-    
+
     Args:
         request_messages: Messages from the request
         historical_messages: Historical conversation messages
         character_card: Optional character context
-        
+
     Returns:
         List of messages ready for LLM
     """
     llm_messages = []
-    
+
     # Add historical messages
     llm_messages.extend(historical_messages)
-    
+
     # Process current request messages
     for msg_model in request_messages:
         if msg_model.role == "system":
             continue  # System messages handled separately
-        
+
         msg_dict = msg_model.model_dump(exclude_none=True)
-        
+
         # Add character name for assistant messages (sanitized for OpenAI compatibility)
         if msg_model.role == "assistant" and character_card and character_card.get('name'):
             # OpenAI requires name to match pattern ^[^\\s<|\\\/>]+$ (no spaces or special chars)
             name = character_card.get('name', '').replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
             if name:  # Only add if name is not empty after sanitization
                 msg_dict["name"] = name
-        
+
         llm_messages.append(msg_dict)
-    
+
     return llm_messages
 
 
@@ -417,11 +417,11 @@ def extract_system_message(
 ) -> Optional[str]:
     """
     Extract system message from request or character card.
-    
+
     Args:
         request_messages: Messages from the request
         character_card: Optional character card with system prompt
-        
+
     Returns:
         System message string or None
     """
@@ -429,11 +429,11 @@ def extract_system_message(
     for msg in request_messages:
         if msg.role == 'system' and isinstance(msg.content, str):
             return msg.content
-    
+
     # Fall back to character system prompt
     if character_card and character_card.get('system_prompt'):
         return character_card.get('system_prompt')
-    
+
     return None
 
 
@@ -444,10 +444,10 @@ def extract_system_message(
 def extract_response_content(llm_response: Any) -> Optional[str]:
     """
     Extract text content from LLM response.
-    
+
     Args:
         llm_response: Response from LLM API
-        
+
     Returns:
         Extracted text content or None
     """
@@ -459,7 +459,7 @@ def extract_response_content(llm_response: Any) -> Optional[str]:
         if choices:
             message = choices[0].get("message", {})
             return message.get("content")
-    
+
     return None
 
 
@@ -473,11 +473,11 @@ def validate_provider_configuration(
 ) -> Tuple[bool, Optional[str]]:
     """
     Validate that a provider is properly configured.
-    
+
     Args:
         provider: Provider name
         api_keys: Dictionary of API keys
-        
+
     Returns:
         Tuple of (is_valid, error_message)
     """
@@ -485,12 +485,12 @@ def validate_provider_configuration(
         "openai", "anthropic", "cohere", "groq", "openrouter",
         "deepseek", "mistral", "google", "huggingface"
     ]
-    
+
     if provider in providers_requiring_keys:
         api_key = api_keys.get(provider)
         if not api_key:
             return False, f"API key for provider '{provider}' is missing or not configured."
-    
+
     return True, None
 
 

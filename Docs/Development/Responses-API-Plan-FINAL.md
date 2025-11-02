@@ -24,7 +24,7 @@ for item in response.output:
     if item.type == "function_call":
         # Execute function with arguments
         result = execute_function(item.name, json.loads(item.arguments))
-        
+
 # Step 3: Send function results back
 input.append({
     "type": "function_call_output",
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS response_function_calls (
     FOREIGN KEY (response_id) REFERENCES response_sessions(id)
 );
 
--- Track custom tool calls  
+-- Track custom tool calls
 CREATE TABLE IF NOT EXISTS response_custom_tools (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     response_id TEXT NOT NULL,
@@ -212,30 +212,30 @@ from loguru import logger
 
 class ResponseRunner:
     """Executes Responses API requests following OpenAI specification"""
-    
+
     def __init__(self, db_path: str):
         self.db = CharactersRAGDB(db_path)
         self.function_executor = FunctionExecutor()
         self.custom_tool_executor = CustomToolExecutor()
-    
+
     async def process_response(
         self,
         request: CreateResponseRequest
     ) -> ResponseObject:
         """Main entry point for processing a response"""
-        
+
         response_id = f"resp_{uuid.uuid4().hex[:12]}"
         start_time = time.time()
-        
+
         # Save initial request
         await self._save_request(response_id, request)
-        
+
         # Build messages from input array
         messages = self._build_messages(request.input)
-        
+
         # Prepare tools for LLM call
         functions = self._extract_functions(request.tools)
-        
+
         # Call LLM
         llm_response = await self._call_llm(
             model=request.model,
@@ -243,25 +243,25 @@ class ResponseRunner:
             functions=functions,
             instructions=request.instructions
         )
-        
+
         # Process LLM response into output array
         output = []
         pending_function_calls = []
-        
+
         # Handle different response types
         if llm_response.get("function_call"):
             # Single function call (non-parallel)
             fc_item = self._create_function_call_item(llm_response["function_call"])
             output.append(fc_item)
             pending_function_calls.append(fc_item)
-            
+
         elif llm_response.get("tool_calls"):
             # Multiple parallel function calls
             for tool_call in llm_response["tool_calls"]:
                 fc_item = self._create_function_call_item(tool_call)
                 output.append(fc_item)
                 pending_function_calls.append(fc_item)
-        
+
         # Add text content if present
         if llm_response.get("content"):
             output.append({
@@ -269,11 +269,11 @@ class ResponseRunner:
                 "type": "text",
                 "content": llm_response["content"]
             })
-        
+
         # Execute pending function calls if any
         if pending_function_calls and request.tool_choice != "none":
             function_results = await self._execute_functions(pending_function_calls)
-            
+
             # If we have function results, we need another LLM call
             if function_results:
                 # Add function results to input
@@ -284,7 +284,7 @@ class ResponseRunner:
                         "call_id": call_id,
                         "output": str(result)
                     })
-                
+
                 # Make final call
                 final_messages = self._build_messages(new_input)
                 final_response = await self._call_llm(
@@ -292,7 +292,7 @@ class ResponseRunner:
                     messages=final_messages,
                     instructions=request.instructions
                 )
-                
+
                 # Add final text response
                 if final_response.get("content"):
                     output.append({
@@ -300,13 +300,13 @@ class ResponseRunner:
                         "type": "text",
                         "content": final_response["content"]
                     })
-        
+
         # Calculate aggregated text
         output_text = " ".join([
-            item["content"] for item in output 
+            item["content"] for item in output
             if item.get("type") == "text"
         ])
-        
+
         # Save and return response
         response_obj = ResponseObject(
             id=response_id,
@@ -317,11 +317,11 @@ class ResponseRunner:
             output_text=output_text,
             usage=llm_response.get("usage")
         )
-        
+
         await self._save_response(response_id, response_obj)
-        
+
         return response_obj
-    
+
     def _create_function_call_item(self, function_call: Dict) -> Dict:
         """Create a function call item for the output array"""
         return {
@@ -331,16 +331,16 @@ class ResponseRunner:
             "name": function_call["name"],
             "arguments": function_call.get("arguments", "{}")
         }
-    
+
     async def _execute_functions(self, function_calls: List[Dict]) -> Dict[str, Any]:
         """Execute function calls and return results keyed by call_id"""
         results = {}
-        
+
         for fc in function_calls:
             try:
                 func_name = fc["name"]
                 func_args = json.loads(fc["arguments"])
-                
+
                 # Execute function based on name
                 if func_name == "get_weather":
                     result = await self._get_weather(**func_args)
@@ -351,26 +351,26 @@ class ResponseRunner:
                 else:
                     # Custom function handling
                     result = await self.function_executor.execute(func_name, func_args)
-                
+
                 results[fc["call_id"]] = result
-                
+
             except Exception as e:
                 logger.error(f"Function {func_name} failed: {e}")
                 results[fc["call_id"]] = {"error": str(e)}
-        
+
         return results
-    
+
     async def _file_search(self, query: str, **kwargs) -> Dict:
         """Integrate with existing RAG service"""
         from tldw_Server_API.app.core.RAG.RAG_Search.simplified.enhanced_rag_service_v2 import EnhancedRAGServiceV2
-        
+
         rag_service = EnhancedRAGServiceV2()
         results = await rag_service.search(
             query=query,
             top_k=kwargs.get("top_k", 5),
             return_citations=True
         )
-        
+
         return {"results": results}
 ```
 
@@ -394,16 +394,16 @@ async def create_response(
 ):
     """
     Create a response using OpenAI Responses API format.
-    
+
     This endpoint:
     1. Accepts an input array (not messages)
     2. Returns an output array with function calls and text
     3. Handles function/custom tool execution
     4. Supports streaming
     """
-    
+
     runner = ResponseRunner(db.db_path)
-    
+
     if request.stream:
         # Return streaming response
         return StreamingResponse(
@@ -420,23 +420,23 @@ async def stream_response(
     request: CreateResponseRequest
 ) -> AsyncGenerator[str, None]:
     """Stream response events"""
-    
+
     response_id = f"resp_{uuid.uuid4().hex[:12]}"
-    
+
     # Process with streaming
     async for event in runner.process_response_stream(request, response_id):
         if event["type"] == "response.output_item.added":
             # New function call started
             yield f"data: {json.dumps(event)}\n\n"
-            
+
         elif event["type"] == "response.function_call_arguments.delta":
             # Function arguments streaming
             yield f"data: {json.dumps(event)}\n\n"
-            
+
         elif event["type"] == "response.function_call_arguments.done":
             # Function call complete
             yield f"data: {json.dumps(event)}\n\n"
-    
+
     yield "data: [DONE]\n\n"
 ```
 
@@ -450,11 +450,11 @@ from typing import Dict, Any, Optional
 
 class CustomToolExecutor:
     """Handles custom tool execution with grammar validation"""
-    
+
     def __init__(self):
         self.lark_parsers = {}
         self.regex_patterns = {}
-    
+
     async def execute_custom_tool(
         self,
         tool_name: str,
@@ -462,20 +462,20 @@ class CustomToolExecutor:
         model_output: str
     ) -> Dict[str, Any]:
         """Execute a custom tool with optional grammar validation"""
-        
+
         # Validate against grammar if specified
         if tool_config.format:
             syntax = tool_config.format.get("syntax")
             definition = tool_config.format.get("definition")
-            
+
             if syntax == "lark":
                 if not self._validate_lark(definition, model_output):
                     raise ValueError(f"Output does not match Lark grammar")
-                    
+
             elif syntax == "regex":
                 if not self._validate_regex(definition, model_output):
                     raise ValueError(f"Output does not match regex pattern")
-        
+
         # Execute tool-specific logic
         if tool_name == "code_exec":
             return await self._execute_code(model_output)
@@ -484,26 +484,26 @@ class CustomToolExecutor:
         else:
             # Generic custom tool handling
             return {"result": model_output}
-    
+
     def _validate_lark(self, grammar: str, text: str) -> bool:
         """Validate text against Lark grammar"""
         try:
             if grammar not in self.lark_parsers:
                 self.lark_parsers[grammar] = Lark(grammar)
-            
+
             parser = self.lark_parsers[grammar]
             parser.parse(text)
             return True
         except Exception:
             return False
-    
+
     def _validate_regex(self, pattern: str, text: str) -> bool:
         """Validate text against regex pattern"""
         try:
             if pattern not in self.regex_patterns:
                 # Use Rust regex syntax compatibility
                 self.regex_patterns[pattern] = re.compile(pattern)
-            
+
             regex = self.regex_patterns[pattern]
             return bool(regex.match(text))
         except Exception:

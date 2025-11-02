@@ -18,4 +18,3 @@ short section title and a one-line summary.
 
 Changelog:
 - v1.0: Initial default prompts for outline/situating.
-

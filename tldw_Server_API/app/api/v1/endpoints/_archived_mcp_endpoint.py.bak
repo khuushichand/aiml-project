@@ -98,13 +98,13 @@ async def authenticate(
 ):
     """
     Authenticate and get access token.
-    
+
     Supports multiple authentication methods:
     - API key authentication
     - Client credentials (client_id + client_secret)
     """
     client = None
-    
+
     if auth_request.api_key:
         client = auth_manager.authenticate_api_key(auth_request.api_key)
     elif auth_request.client_id and auth_request.client_secret:
@@ -112,16 +112,16 @@ async def authenticate(
             auth_request.client_id,
             auth_request.client_secret
         )
-    
+
     if not client:
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials"
         )
-    
+
     # Generate token
     token = auth_manager.generate_token(client)
-    
+
     return MCPAuthResponse(
         access_token=token,
         token_type="bearer",
@@ -133,7 +133,7 @@ async def authenticate(
 
 
 @router.post(
-    "/auth/clients", 
+    "/auth/clients",
     response_model=Dict[str, Any],
     dependencies=[Depends(require_permission(MCPPermission.ADMIN_USERS))]
 )
@@ -143,7 +143,7 @@ async def create_client(
 ):
     """
     Create a new MCP client (requires admin permissions).
-    
+
     Returns the client info and API key. The API key is only shown once.
     """
     # Parse permissions
@@ -153,7 +153,7 @@ async def create_client(
             MCPPermission(p) for p in request.permissions
             if p in [e.value for e in MCPPermission]
         }
-    
+
     # Create client
     client, api_key = auth_manager.create_client(
         name=request.name,
@@ -162,7 +162,7 @@ async def create_client(
         allowed_tools=request.allowed_tools,
         rate_limit=request.rate_limit
     )
-    
+
     return {
         "client": {
             "client_id": client.client_id,
@@ -187,7 +187,7 @@ async def list_clients(
 ):
     """List all MCP clients (requires admin permissions)"""
     clients = auth_manager.list_clients()
-    
+
     return [
         ClientInfo(
             client_id=client.client_id,
@@ -213,10 +213,10 @@ async def get_client(
 ):
     """Get client information (requires admin permissions)"""
     client = auth_manager.get_client(client_id)
-    
+
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    
+
     return ClientInfo(
         client_id=client.client_id,
         name=client.name,
@@ -242,10 +242,10 @@ async def delete_client(
             status_code=400,
             detail="Cannot delete your own client"
         )
-    
+
     if not auth_manager.delete_client(client_id):
         raise HTTPException(status_code=404, detail="Client not found")
-    
+
     return {"status": "deleted", "client_id": client_id}
 
 
@@ -270,7 +270,7 @@ async def get_current_client_info(
 async def mcp_websocket(websocket: WebSocket):
     """
     WebSocket endpoint for MCP clients.
-    
+
     The MCP protocol uses WebSocket for real-time bidirectional communication.
     Clients must send a CONNECT message first to establish a session.
     Authentication can be done via:
@@ -290,10 +290,10 @@ async def get_server_status(
 ):
     """Get MCP server status"""
     server = get_mcp_server()
-    
+
     # Count active contexts
     contexts = await server.context_manager.list_contexts()
-    
+
     return ServerStatus(
         status="running",
         version="0.1.0",
@@ -310,10 +310,10 @@ async def list_tools(
 ):
     """List available MCP tools"""
     server = get_mcp_server()
-    
+
     tags = [tag] if tag else None
     tools = server.tool_registry.list_tools(tags=tags)
-    
+
     return [
         ToolInfo(
             name=tool.name,
@@ -330,11 +330,11 @@ async def list_tools(
 async def get_tool_info(tool_name: str):
     """Get information about a specific tool"""
     server = get_mcp_server()
-    
+
     tool = server.tool_registry.get_tool(tool_name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
-    
+
     return ToolInfo(
         name=tool.name,
         description=tool.description,
@@ -348,14 +348,14 @@ async def get_tool_info(tool_name: str):
 async def create_context(request: ContextCreateRequest):
     """Create a new context"""
     server = get_mcp_server()
-    
+
     context = await server.context_manager.create_context(
         name=request.name,
         content=request.content,
         metadata=request.metadata,
         ttl=request.ttl
     )
-    
+
     return {
         "id": context.id,
         "name": context.name,
@@ -370,11 +370,11 @@ async def list_contexts(
 ):
     """List all contexts"""
     server = get_mcp_server()
-    
+
     contexts = await server.context_manager.list_contexts(
         include_expired=include_expired
     )
-    
+
     return [
         {
             "id": ctx.id,
@@ -392,11 +392,11 @@ async def list_contexts(
 async def get_context(context_id: str):
     """Get a specific context"""
     server = get_mcp_server()
-    
+
     context = await server.context_manager.get_context(context_id)
     if not context:
         raise HTTPException(status_code=404, detail=f"Context '{context_id}' not found")
-    
+
     return context.dict()
 
 
@@ -404,16 +404,16 @@ async def get_context(context_id: str):
 async def update_context(context_id: str, request: ContextUpdateRequest):
     """Update a context"""
     server = get_mcp_server()
-    
+
     context = await server.context_manager.update_context(
         context_id,
         request.updates,
         request.merge
     )
-    
+
     if not context:
         raise HTTPException(status_code=404, detail=f"Context '{context_id}' not found")
-    
+
     return {"status": "updated", "context_id": context_id}
 
 
@@ -421,9 +421,9 @@ async def update_context(context_id: str, request: ContextUpdateRequest):
 async def delete_context(context_id: str):
     """Delete a context"""
     server = get_mcp_server()
-    
+
     await server.context_manager.delete_context(context_id)
-    
+
     return {"status": "deleted", "context_id": context_id}
 
 
@@ -495,7 +495,7 @@ async def summarize_media(
 async def health_check():
     """Check MCP server health"""
     server = get_mcp_server()
-    
+
     return {
         "status": "healthy",
         "server_running": True,

@@ -31,4 +31,3 @@ def test_medrxiv_raw_details_json(client_with_auth):
     assert resp.status_code in (200, 502, 504), resp.text
     if resp.status_code == 200:
         assert "json" in resp.headers.get("content-type", "").lower()
-

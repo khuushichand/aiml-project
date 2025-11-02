@@ -48,10 +48,10 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 def approximate_token_count(history):
     """
     Approximate the token count for a chat history.
-    
+
     Args:
         history: Chat history in various formats
-        
+
     Returns:
         Approximate token count
     """
@@ -568,9 +568,9 @@ def chat(
                         elif image_history_mode == "tag_past":
                             mime_type_part = "image"
                             if image_url_data.startswith("data:image/") and ";base64," in image_url_data:
-                                try: 
+                                try:
                                     mime_type_part = image_url_data.split(';base64,')[0].split('/')[-1]
-                                except Exception as e: 
+                                except Exception as e:
                                     logging.debug(f"Failed to extract MIME type from data URI: {e}")
                                     mime_type_part = "image"
                             processed_hist_content_parts.append({"type": "text", "text": f"<image: prior_history.{mime_type_part}>"})

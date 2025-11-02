@@ -36,7 +36,7 @@ class OptimizationConfig(BaseModel):
     budget_limit: Optional[float] = Field(None, ge=0.0, description="Maximum budget in dollars")
     # Strategy-specific knobs (optional, forward-compatible)
     strategy_params: Dict[str, Any] = Field(default_factory=dict, description="Additional strategy-specific parameters (e.g., beam_width, mutation_rate)")
-    
+
     @field_validator('temperature_range')
     @classmethod
     def validate_temperature_range(cls, v):
@@ -83,7 +83,7 @@ class OptimizationResponse(TimestampMixin, UUIDMixin):
     total_cost: Optional[float]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class OptimizationStatusResponse(BaseModel):
@@ -138,7 +138,7 @@ class JobResponse(TimestampMixin, UUIDMixin):
     max_retries: int
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class JobStatusResponse(BaseModel):

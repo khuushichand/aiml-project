@@ -8,7 +8,7 @@ This document describes the comprehensive testing strategy for the Evaluations m
 
 ### Core Principles
 
-1. **No Excessive Mocking**: 
+1. **No Excessive Mocking**:
    - Unit tests: Mock only external services (LLMs, embeddings APIs)
    - Integration tests: Zero mocking - use real components
    - Property tests: Zero mocking - use generated data
@@ -143,7 +143,7 @@ def test_average_score_bounds(scores):
 @pytest.fixture
 def temp_db_path() -> Path:
     """Temporary database with full schema."""
-    
+
 @pytest.fixture
 def in_memory_db() -> sqlite3.Connection:
     """In-memory database for fast tests."""
@@ -154,11 +154,11 @@ def in_memory_db() -> sqlite3.Connection:
 @pytest.fixture
 def evaluation_manager(temp_db_path):
     """Configured EvaluationManager instance."""
-    
+
 @pytest.fixture
 def rag_evaluator():
     """RAGEvaluator without embeddings (unit tests)."""
-    
+
 @pytest.fixture
 def rag_evaluator_with_embeddings():
     """RAGEvaluator with embeddings (integration tests)."""
@@ -169,7 +169,7 @@ def rag_evaluator_with_embeddings():
 @pytest.fixture
 def sample_evaluation_data():
     """Standard evaluation test data."""
-    
+
 @pytest.fixture
 def evaluation_data_generator():
     """Random data generator for property tests."""

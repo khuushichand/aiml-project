@@ -85,7 +85,7 @@ https://github.com/xufangzhi/phi-Decoding
     https://arxiv.org/html/2503.13288v1
 https://github.com/elder-plinius/CL4R1T4S/tree/main
 COSTAR
-Context, Objective, Style, Tone, Audience, Response 
+Context, Objective, Style, Tone, Audience, Response
 https://towardsdatascience.com/how-i-won-singapores-gpt-4-prompt-engineering-competition-34c195a93d41
 ```
 Context: This is about setting the stage. You tell the AI the backstory of what you’re asking. Imagine saying, “We’re planning a birthday party,” instead of just blurting out, “How do I bake a cake?” This way, the AI gets the full picture and can give you a better answer.
@@ -149,7 +149,7 @@ Follow-up questions:
 ```
  "After every answer provide 3 enumerated ways to continue the conversations or possible questions I might have."
 
-I basically find myself just typing 1, 2, 3 to continue conversations in ways I might have never thought of, or often, questions that I would reasonably have. 
+I basically find myself just typing 1, 2, 3 to continue conversations in ways I might have never thought of, or often, questions that I would reasonably have.
 ```
 
 
@@ -182,10 +182,10 @@ self.prompts = {
             Text:
             """,
 
-            "Summary": """Summarize the following transcript into a concise and informative summary. 
+            "Summary": """Summarize the following transcript into a concise and informative summary.
             Identify the core message, main arguments, and key pieces of information presented in the video.
             The summary should capture the essence of the video's content in a clear and easily understandable way.
-            Aim for a summary that is shorter than the original transcript but still accurately reflects its key points.  
+            Aim for a summary that is shorter than the original transcript but still accurately reflects its key points.
             Focus on conveying the most important information and conclusions.
 All output must be generated entirely in [Language]. Do not use any other language at any point in the response. Do not include this unorganized text into your response.
 Text: """,
@@ -224,7 +224,3 @@ Text:"""
         }
         self.selected_category = "Balanced and Detailed" # Default Category
 ```
-
-
-
-

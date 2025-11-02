@@ -17,35 +17,35 @@ from typing import Dict, Any, List, Optional
 
 class TestDataGenerator:
     """Generate test data for various API endpoints."""
-    
+
     @staticmethod
     def random_string(length: int = 10, prefix: str = "") -> str:
         """Generate a random string."""
         chars = string.ascii_lowercase + string.digits
         random_part = ''.join(random.choice(chars) for _ in range(length))
         return f"{prefix}{random_part}" if prefix else random_part
-    
+
     @staticmethod
     def random_email() -> str:
         """Generate a random email address."""
         return f"test_{TestDataGenerator.random_string(8)}@example.com"
-    
+
     @staticmethod
     def random_username() -> str:
         """Generate a random username."""
         return f"user_{TestDataGenerator.random_string(8)}"
-    
+
     # Sample content generators
     @staticmethod
     def sample_text_content(seed: Optional[str] = None) -> str:
         """Generate dynamic sample text content for testing."""
         import hashlib
         from datetime import datetime
-        
+
         # Create unique content based on seed or timestamp
         unique_id = seed or datetime.now().isoformat()
         hash_suffix = hashlib.md5(unique_id.encode()).hexdigest()[:8]
-        
+
         # Randomly select topics for variety
         topics = random.choice([
             ["Natural Language Processing", "Machine Learning", "Document Analysis", "Information Retrieval"],
@@ -53,24 +53,24 @@ class TestDataGenerator:
             ["Data Science", "Statistical Analysis", "Big Data", "Predictive Modeling"],
             ["Quantum Computing", "Cryptography", "Blockchain", "Distributed Systems"]
         ])
-        
+
         # Generate dynamic content that varies between test runs
         return f"""
         # Test Document {hash_suffix} - E2E Testing
-        
+
         Generated: {datetime.now().isoformat()}
         Test ID: {hash_suffix}
-        
+
         This is a dynamically generated test document for end-to-end testing of the tldw_server API.
         Each test run creates unique content to avoid caching issues and ensure proper functionality.
-        
+
         ## Introduction
         The purpose of document {hash_suffix} is to provide realistic, unique content for testing
         various features including transcription, analysis, and search functionality.
-        
+
         ## Key Topics for This Test
         {chr(10).join(f"- {topic}" for topic in topics)}
-        
+
         ## Technical Details
         This system uses advanced AI techniques to process and understand content.
         Test iteration {random.randint(1000, 9999)} includes:
@@ -78,19 +78,19 @@ class TestDataGenerator:
         2. Semantic analysis with confidence {random.uniform(0.85, 0.99):.2%}
         3. Entity recognition for {random.randint(10, 50)} entity types
         4. Summarization using {random.choice(['extractive', 'abstractive', 'hybrid'])} methods
-        
+
         ## Random Test Data
         - Test value A: {random.randint(100, 999)}
         - Test value B: {TestDataGenerator.random_string(10)}
         - Test timestamp: {datetime.now().timestamp()}
-        
+
         ## Conclusion
         Document {hash_suffix} validates the core functionality of the system during
         end-to-end testing with unique, non-cached content.
-        
+
         Keywords: testing-{hash_suffix}, documentation, AI, NLP, machine learning, unique-{unique_id[:8]}
         """
-    
+
     @staticmethod
     def sample_transcript() -> str:
         """Generate sample transcript content."""
@@ -107,7 +107,7 @@ class TestDataGenerator:
         [00:00:45] Speaker 2: We're seeing them used in translation, summarization, and question answering.
         [00:00:50] Speaker 1: Fascinating. Thank you for this insight.
         """
-    
+
     @staticmethod
     def sample_web_content() -> Dict[str, str]:
         """Generate sample web content data."""
@@ -133,7 +133,7 @@ class TestDataGenerator:
                 "tags": ["AI", "ML", "Technology"]
             }
         }
-    
+
     @staticmethod
     def sample_chat_messages() -> List[Dict[str, str]]:
         """Generate sample chat messages."""
@@ -144,7 +144,7 @@ class TestDataGenerator:
             {"role": "user", "content": "Can you give me an example?"},
             {"role": "assistant", "content": "Sure! Email spam filters are a common example. They learn to identify spam by analyzing patterns in emails marked as spam by users."}
         ]
-    
+
     @staticmethod
     def sample_character_card() -> Dict[str, Any]:
         """Generate a sample character card."""
@@ -169,7 +169,7 @@ class TestDataGenerator:
             ],
             "avatar": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
         }
-    
+
     @staticmethod
     def sample_note() -> Dict[str, Any]:
         """Generate a sample note."""
@@ -177,21 +177,21 @@ class TestDataGenerator:
             "title": f"Test Note {TestDataGenerator.random_string(5)}",
             "content": """
             # Research Notes
-            
+
             ## Key Findings
             - AI systems are becoming more sophisticated
             - Natural language processing has made significant advances
             - Machine learning models require large amounts of data
-            
+
             ## Important Concepts
             1. **Neural Networks**: Computational models inspired by the human brain
             2. **Deep Learning**: ML using multi-layered neural networks
             3. **Transformers**: Architecture that revolutionized NLP
-            
+
             ## References
             - Paper 1: "Attention Is All You Need"
             - Paper 2: "BERT: Pre-training of Deep Bidirectional Transformers"
-            
+
             ## Next Steps
             - Review transformer architecture in detail
             - Experiment with fine-tuning models
@@ -204,7 +204,7 @@ class TestDataGenerator:
                 "importance": "high"
             }
         }
-    
+
     @staticmethod
     def sample_prompt_template() -> Dict[str, str]:
         """Generate a sample prompt template."""
@@ -221,13 +221,13 @@ class TestDataGenerator:
             - Include main points
             - Maintain factual accuracy
             - Use clear, concise language
-            
+
             Summary:
             """,
             "category": "summarization",
             "tags": ["summary", "analysis", "test"]
         }
-    
+
     @staticmethod
     def sample_evaluation_criteria() -> Dict[str, Any]:
         """Generate sample evaluation criteria."""
@@ -260,7 +260,7 @@ class TestDataGenerator:
                 }
             ]
         }
-    
+
     @staticmethod
     def sample_media_metadata() -> Dict[str, Any]:
         """Generate sample media metadata."""
@@ -277,7 +277,7 @@ class TestDataGenerator:
                 "created": datetime.now().isoformat()
             }
         }
-    
+
     @staticmethod
     def sample_search_queries() -> List[str]:
         """Generate sample search queries."""
@@ -293,7 +293,7 @@ class TestDataGenerator:
             "model evaluation metrics",
             "AI ethics and bias"
         ]
-    
+
     @staticmethod
     def sample_keywords() -> List[str]:
         """Generate sample keywords."""
@@ -303,7 +303,7 @@ class TestDataGenerator:
             "data science", "algorithms", "optimization", "statistics",
             "python", "tensorflow", "pytorch", "research", "innovation"
         ]
-    
+
     @staticmethod
     def sample_urls() -> List[str]:
         """Generate sample URLs for web scraping tests."""
@@ -313,7 +313,7 @@ class TestDataGenerator:
             "https://www.example.org/sample-content",
             "https://test.example.net/documentation"
         ]
-    
+
     @staticmethod
     def malicious_payloads() -> Dict[str, List[str]]:
         """Generate various malicious payloads for security testing."""
@@ -397,7 +397,7 @@ class TestDataGenerator:
                 "\ud800",  # Surrogate half
             ],
         }
-    
+
     @staticmethod
     def boundary_values() -> Dict[str, Any]:
         """Generate boundary test values."""
@@ -430,7 +430,7 @@ class TestDataGenerator:
             'arrays': {
                 'empty': [],
                 'nested_empty': [[], [], []],
-                'deeply_nested': [[[[[[[[[[[]]]]]]]]]]], 
+                'deeply_nested': [[[[[[[[[[[]]]]]]]]]]],
                 'very_large': list(range(100000)),
             },
             'objects': {
@@ -440,7 +440,7 @@ class TestDataGenerator:
                 'very_deep': None,  # Set up with deep nesting in code
             }
         }
-    
+
     @staticmethod
     def generate_corrupted_file_data() -> Dict[str, bytes]:
         """Generate corrupted file data for various formats."""
@@ -456,7 +456,7 @@ class TestDataGenerator:
             'json': b'{"corrupted: true, invalid json}',  # Malformed JSON
             'xml': b'<root><unclosed>',  # Malformed XML
         }
-    
+
     @staticmethod
     def generate_stress_test_data() -> Dict[str, Any]:
         """Generate data for stress testing."""
@@ -467,7 +467,7 @@ class TestDataGenerator:
             'unicode_stress': ''.join(chr(i) for i in range(0x1F600, 0x1F650)) * 1000,
             'binary_data': bytes(random.randint(0, 255) for _ in range(1024 * 1024)),
         }
-    
+
     @staticmethod
     def generate_test_user() -> Dict[str, str]:
         """Generate a test user with edge case variations."""
@@ -497,9 +497,9 @@ class TestDataGenerator:
                 "password": "A" * 100 + "1!",
             },
         ]
-        
+
         return random.choice(variations)
-    
+
     @staticmethod
     def generate_test_batch(count: int = 5) -> List[Dict[str, Any]]:
         """Generate a batch of test items."""
@@ -520,7 +520,7 @@ class TestDataGenerator:
 
 class TestScenarios:
     """Pre-defined test scenarios for comprehensive testing."""
-    
+
     @staticmethod
     def research_workflow() -> Dict[str, Any]:
         """Scenario: Research workflow with multiple sources."""
@@ -560,7 +560,7 @@ class TestScenarios:
                 }
             ]
         }
-    
+
     @staticmethod
     def content_creation_workflow() -> Dict[str, Any]:
         """Scenario: Content creation and organization."""
@@ -591,7 +591,7 @@ class TestScenarios:
                 }
             ]
         }
-    
+
     @staticmethod
     def media_processing_workflow() -> Dict[str, Any]:
         """Scenario: Media processing and analysis."""
@@ -659,6 +659,6 @@ def generate_batch_data(data_type: str, count: int = 5) -> List[Dict[str, Any]]:
         "messages": lambda: {"messages": TestDataGenerator.sample_chat_messages()},
         "keywords": lambda: {"keywords": random.sample(TestDataGenerator.sample_keywords(), 5)}
     }
-    
+
     generator = generators.get(data_type, lambda: {})
     return [generator() for _ in range(count)]

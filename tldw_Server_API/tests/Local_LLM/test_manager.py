@@ -20,4 +20,3 @@ async def test_manager_get_server_status_unsupported():
     mgr = LLMInferenceManager(LLMManagerConfig(huggingface=HuggingFaceConfig(enabled=True)))
     with pytest.raises(InferenceError):
         await mgr.get_server_status("huggingface")
-

@@ -13,7 +13,7 @@ A secure, production-ready Model Context Protocol implementation that consolidat
 
 ### Security Layer (All vulnerabilities fixed!)
 - **JWT Authentication** (`auth/jwt_manager.py`) - No hardcoded secrets, token rotation
-- **RBAC** (`auth/rbac.py`) - Fine-grained permissions with role inheritance  
+- **RBAC** (`auth/rbac.py`) - Fine-grained permissions with role inheritance
 - **Rate Limiting** (`auth/rate_limiter.py`) - Token bucket and sliding window algorithms
 
 ### Production Features
@@ -216,13 +216,13 @@ class MyModule(BaseModule):
     async def on_initialize(self):
         # Initialize resources
         pass
-    
+
     async def check_health(self) -> Dict[str, bool]:
         return {"service": True}
-    
+
     async def get_tools(self) -> List[Dict[str, Any]]:
         return [...]
-    
+
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]):
         # Execute tool with circuit breaker
         return await self.execute_with_circuit_breaker(

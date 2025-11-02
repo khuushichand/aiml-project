@@ -77,7 +77,7 @@ class CreateEvaluationRequest(OpenAIBaseModel):
         description="Inline dataset (if not using dataset_id)"
     )
     metadata: Optional[EvaluationMetadata] = None
-    
+
     @model_validator(mode='after')
     def validate_dataset(self):
         """Ensure either dataset_id or dataset is provided"""
@@ -152,7 +152,7 @@ class RunProgress(OpenAIBaseModel):
     failed_samples: int = 0
     current_batch: int = 0
     percent_complete: float = 0.0
-    
+
     @model_validator(mode='after')
     def calculate_percent(self):
         """Calculate completion percentage"""

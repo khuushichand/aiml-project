@@ -67,7 +67,7 @@ def track_metrics(
 ) -> Callable[[F], F]:
     """
     Decorator to automatically track metrics for a function.
-    
+
     Args:
         name: Base name for metrics (defaults to function name)
         labels: Static labels to add to all metrics
@@ -78,7 +78,7 @@ def track_metrics(
         call_metric: Custom name for call counter metric
         error_metric: Custom name for error counter metric
         label_extractor: Function to extract labels from args/kwargs
-        
+
     Returns:
         Decorated function
     """
@@ -117,7 +117,7 @@ def track_metrics(
         except Exception:
             # Metrics must never break the application flow
             pass
-        
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
@@ -130,40 +130,40 @@ def track_metrics(
                             metric_labels.update(extracted)
                     except Exception as e:
                         logger.debug(f"Label extraction failed: {e}")
-                
+
                 # Track call count
                 if track_calls:
                     increment_counter(call_metric_name, labels=metric_labels)
-                
+
                 start_time = time.time()
                 try:
                     result = await func(*args, **kwargs)
-                    
+
                     # Track duration
                     if track_duration:
                         duration = time.time() - start_time
                         observe_histogram(duration_metric_name, duration, labels=metric_labels)
-                    
+
                     return result
-                    
+
                 except Exception as e:
                     # Track errors
                     if track_errors:
                         error_labels = dict(metric_labels)
                         error_labels["error_type"] = type(e).__name__
                         increment_counter(error_metric_name, labels=error_labels)
-                    
+
                     # Still track duration for failed calls
                     if track_duration:
                         duration = time.time() - start_time
                         failed_labels = dict(metric_labels)
                         failed_labels["status"] = "error"
                         observe_histogram(duration_metric_name, duration, labels=failed_labels)
-                    
+
                     raise
-            
+
             return async_wrapper
-        
+
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
@@ -176,40 +176,40 @@ def track_metrics(
                             metric_labels.update(extracted)
                     except Exception as e:
                         logger.debug(f"Label extraction failed: {e}")
-                
+
                 # Track call count
                 if track_calls:
                     increment_counter(call_metric_name, labels=metric_labels)
-                
+
                 start_time = time.time()
                 try:
                     result = func(*args, **kwargs)
-                    
+
                     # Track duration
                     if track_duration:
                         duration = time.time() - start_time
                         observe_histogram(duration_metric_name, duration, labels=metric_labels)
-                    
+
                     return result
-                    
+
                 except Exception as e:
                     # Track errors
                     if track_errors:
                         error_labels = dict(metric_labels)
                         error_labels["error_type"] = type(e).__name__
                         increment_counter(error_metric_name, labels=error_labels)
-                    
+
                     # Still track duration for failed calls
                     if track_duration:
                         duration = time.time() - start_time
                         failed_labels = dict(metric_labels)
                         failed_labels["status"] = "error"
                         observe_histogram(duration_metric_name, duration, labels=failed_labels)
-                    
+
                     raise
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 
@@ -220,12 +220,12 @@ def measure_latency(
 ) -> Callable[[F], F]:
     """
     Decorator to measure function latency.
-    
+
     Args:
         metric_name: Name of the histogram metric
         labels: Static labels
         buckets: Custom histogram buckets
-        
+
     Returns:
         Decorated function
     """
@@ -243,7 +243,7 @@ def measure_latency(
                 ))
         except Exception:
             pass
-        
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
@@ -253,7 +253,7 @@ def measure_latency(
                 finally:
                     latency = time.time() - start_time
                     observe_histogram(histogram_name, latency, labels=labels)
-            
+
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -264,9 +264,9 @@ def measure_latency(
                 finally:
                     latency = time.time() - start_time
                     observe_histogram(histogram_name, latency, labels=labels)
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 
@@ -277,12 +277,12 @@ def count_calls(
 ) -> Callable[[F], F]:
     """
     Decorator to count function calls.
-    
+
     Args:
         metric_name: Name of the counter metric
         labels: Static labels
         label_extractor: Function to extract labels from args
-        
+
     Returns:
         Decorated function
     """
@@ -299,7 +299,7 @@ def count_calls(
                 ))
         except Exception:
             pass
-        
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
@@ -311,10 +311,10 @@ def count_calls(
                             metric_labels.update(extracted)
                     except Exception as e:
                         logger.debug(f"label_extractor failed (async): error={e}")
-                
+
                 increment_counter(counter_name, labels=metric_labels)
                 return await func(*args, **kwargs)
-            
+
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -327,12 +327,12 @@ def count_calls(
                             metric_labels.update(extracted)
                     except Exception as e:
                         logger.debug(f"label_extractor failed (sync): error={e}")
-                
+
                 increment_counter(counter_name, labels=metric_labels)
                 return func(*args, **kwargs)
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 
@@ -343,12 +343,12 @@ def track_errors(
 ) -> Callable[[F], F]:
     """
     Decorator to track function errors.
-    
+
     Args:
         metric_name: Name of the error counter metric
         labels: Static labels
         include_traceback: Whether to log full traceback
-        
+
     Returns:
         Decorated function
     """
@@ -366,7 +366,7 @@ def track_errors(
                 ))
         except Exception:
             pass
-        
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
@@ -376,14 +376,14 @@ def track_errors(
                     error_labels = dict(labels or {})
                     error_labels["error_type"] = type(e).__name__
                     error_labels["function"] = func.__name__
-                    
+
                     increment_counter(error_metric, labels=error_labels)
-                    
+
                     if include_traceback:
                         logger.error(f"Error in {func.__name__}: {e}\n{traceback.format_exc()}")
-                    
+
                     raise
-            
+
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -394,16 +394,16 @@ def track_errors(
                     error_labels = dict(labels or {})
                     error_labels["error_type"] = type(e).__name__
                     error_labels["function"] = func.__name__
-                    
+
                     increment_counter(error_metric, labels=error_labels)
-                    
+
                     if include_traceback:
                         logger.error(f"Error in {func.__name__}: {e}\n{traceback.format_exc()}")
-                    
+
                     raise
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 
@@ -415,13 +415,13 @@ def monitor_resource(
 ) -> Callable[[F], F]:
     """
     Decorator to monitor resource usage (e.g., database connections).
-    
+
     Args:
         resource_name: Name of the resource
         metric_name: Base name for metrics
         track_count: Track active resource count
         track_usage: Track resource usage duration
-        
+
     Returns:
         Decorated function
     """
@@ -507,7 +507,7 @@ def track_llm_usage(
 ) -> Callable[[F], F]:
     """
     Decorator to track LLM API usage and costs.
-    
+
     Args:
         provider: LLM provider name
         model: Model name
@@ -515,7 +515,7 @@ def track_llm_usage(
         track_cost: Track API costs
         cost_per_1k_prompt: Cost per 1000 prompt tokens
         cost_per_1k_completion: Cost per 1000 completion tokens
-        
+
     Returns:
         Decorated function
     """
@@ -527,40 +527,40 @@ def track_llm_usage(
                     "provider": provider or "unknown",
                     "model": model or "unknown"
                 }
-                
+
                 # Track request
                 increment_counter("llm_requests_total", labels={**labels, "status": "started"})
-                
+
                 start_time = time.time()
                 try:
                     result = await func(*args, **kwargs)
-                    
+
                     # Track success
                     increment_counter("llm_requests_total", labels={**labels, "status": "success"})
-                    
+
                     # Track duration
                     duration = time.time() - start_time
                     observe_histogram("llm_request_duration_seconds", duration, labels=labels)
-                    
+
                     # Extract token counts if available
                     if track_tokens and isinstance(result, dict):
                         prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
                         completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
-                        
+
                         if prompt_tokens:
                             increment_counter(
                                 "llm_tokens_used_total",
                                 prompt_tokens,
                                 labels={**labels, "type": "prompt"}
                             )
-                        
+
                         if completion_tokens:
                             increment_counter(
                                 "llm_tokens_used_total",
                                 completion_tokens,
                                 labels={**labels, "type": "completion"}
                             )
-                        
+
                         # Calculate and track cost
                         if track_cost and (cost_per_1k_prompt or cost_per_1k_completion):
                             cost = (
@@ -568,13 +568,13 @@ def track_llm_usage(
                                 (completion_tokens / 1000) * cost_per_1k_completion
                             )
                             increment_counter("llm_cost_dollars", cost, labels=labels)
-                    
+
                     return result
-                    
+
                 except Exception as e:
                     increment_counter("llm_requests_total", labels={**labels, "status": "error"})
                     raise
-            
+
             return async_wrapper
         else:
             @functools.wraps(func)
@@ -583,40 +583,40 @@ def track_llm_usage(
                     "provider": provider or "unknown",
                     "model": model or "unknown"
                 }
-                
+
                 # Track request
                 increment_counter("llm_requests_total", labels={**labels, "status": "started"})
-                
+
                 start_time = time.time()
                 try:
                     result = func(*args, **kwargs)
-                    
+
                     # Track success
                     increment_counter("llm_requests_total", labels={**labels, "status": "success"})
-                    
+
                     # Track duration
                     duration = time.time() - start_time
                     observe_histogram("llm_request_duration_seconds", duration, labels=labels)
-                    
+
                     # Extract token counts if available
                     if track_tokens and isinstance(result, dict):
                         prompt_tokens = result.get("usage", {}).get("prompt_tokens", 0)
                         completion_tokens = result.get("usage", {}).get("completion_tokens", 0)
-                        
+
                         if prompt_tokens:
                             increment_counter(
                                 "llm_tokens_used_total",
                                 prompt_tokens,
                                 labels={**labels, "type": "prompt"}
                             )
-                        
+
                         if completion_tokens:
                             increment_counter(
                                 "llm_tokens_used_total",
                                 completion_tokens,
                                 labels={**labels, "type": "completion"}
                             )
-                        
+
                         # Calculate and track cost
                         if track_cost and (cost_per_1k_prompt or cost_per_1k_completion):
                             cost = (
@@ -624,15 +624,15 @@ def track_llm_usage(
                                 (completion_tokens / 1000) * cost_per_1k_completion
                             )
                             increment_counter("llm_cost_dollars", cost, labels=labels)
-                    
+
                     return result
-                    
+
                 except Exception as e:
                     increment_counter("llm_requests_total", labels={**labels, "status": "error"})
                     raise
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 
@@ -642,11 +642,11 @@ def cache_metrics(
 ) -> Callable[[F], F]:
     """
     Decorator to track cache hit/miss metrics.
-    
+
     Args:
         cache_name: Name of the cache
         track_ratio: Track hit ratio as gauge
-        
+
     Returns:
         Decorated function
     """
@@ -680,27 +680,27 @@ def cache_metrics(
                 ))
         except Exception:
             pass
-        
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 result = await func(*args, **kwargs)
-                
+
                 # Check if result indicates cache hit
                 cache_hit = False
                 actual_result = result
-                
+
                 if isinstance(result, tuple) and len(result) == 2:
                     actual_result, cache_hit = result
                 elif hasattr(result, "from_cache"):
                     cache_hit = result.from_cache
-                
+
                 # Track metrics
                 if cache_hit:
                     increment_counter("cache_hits_total", labels={"cache": cache_name})
                 else:
                     increment_counter("cache_misses_total", labels={"cache": cache_name})
-                
+
                 # Track hit ratio if enabled
                 if track_ratio:
                     registry = get_metrics_registry()
@@ -709,30 +709,30 @@ def cache_metrics(
                     total = hits + misses
                     ratio = hits / total if total > 0 else 0
                     set_gauge("cache_hit_ratio", ratio, labels={"cache": cache_name})
-                
+
                 return actual_result
-            
+
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
                 result = func(*args, **kwargs)
-                
+
                 # Check if result indicates cache hit
                 cache_hit = False
                 actual_result = result
-                
+
                 if isinstance(result, tuple) and len(result) == 2:
                     actual_result, cache_hit = result
                 elif hasattr(result, "from_cache"):
                     cache_hit = result.from_cache
-                
+
                 # Track metrics
                 if cache_hit:
                     increment_counter("cache_hits_total", labels={"cache": cache_name})
                 else:
                     increment_counter("cache_misses_total", labels={"cache": cache_name})
-                
+
                 # Track hit ratio if enabled
                 if track_ratio:
                     registry = get_metrics_registry()
@@ -741,9 +741,9 @@ def cache_metrics(
                     total = hits + misses
                     ratio = hits / total if total > 0 else 0
                     set_gauge("cache_hit_ratio", ratio, labels={"cache": cache_name})
-                
+
                 return actual_result
-            
+
             return sync_wrapper
-    
+
     return decorator

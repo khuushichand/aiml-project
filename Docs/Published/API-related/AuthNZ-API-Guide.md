@@ -302,43 +302,43 @@ async function login(username, password) {
     },
     body: new URLSearchParams({ username, password })
   });
-  
+
   if (!response.ok) {
     throw new Error('Login failed');
   }
-  
+
   const data = await response.json();
   // Store tokens securely
   localStorage.setItem('access_token', data.access_token);
   localStorage.setItem('refresh_token', data.refresh_token);
-  
+
   return data;
 }
 
 // Make authenticated request
 async function makeAuthenticatedRequest(endpoint) {
   const token = localStorage.getItem('access_token');
-  
+
   const response = await fetch(`http://localhost:8000/api/v1${endpoint}`, {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     }
   });
-  
+
   if (response.status === 401) {
     // Token expired, try refresh
     await refreshToken();
     return makeAuthenticatedRequest(endpoint);
   }
-  
+
   return response.json();
 }
 
 // Refresh token
 async function refreshToken() {
   const refreshToken = localStorage.getItem('refresh_token');
-  
+
   const response = await fetch('http://localhost:8000/api/v1/auth/refresh', {
     method: 'POST',
     headers: {
@@ -346,13 +346,13 @@ async function refreshToken() {
     },
     body: JSON.stringify({ refresh_token: refreshToken })
   });
-  
+
   if (!response.ok) {
     // Refresh failed, redirect to login
     window.location.href = '/login';
     return;
   }
-  
+
   const data = await response.json();
   localStorage.setItem('access_token', data.access_token);
 }
@@ -387,7 +387,7 @@ class TLDWClient:
         self.access_token = None
         self.refresh_token = None
         self.token_expires = None
-    
+
     def login(self, username, password):
         """Login and store tokens"""
         response = self.session.post(
@@ -396,19 +396,19 @@ class TLDWClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded'}
         )
         response.raise_for_status()
-        
+
         data = response.json()
         self.access_token = data['access_token']
         self.refresh_token = data['refresh_token']
         self.token_expires = datetime.now() + timedelta(seconds=data['expires_in'])
-        
+
         # Set authorization header
         self.session.headers.update({
             'Authorization': f'Bearer {self.access_token}'
         })
-        
+
         return data
-    
+
     def refresh_access_token(self):
         """Refresh the access token"""
         response = self.session.post(
@@ -416,28 +416,28 @@ class TLDWClient:
             json={'refresh_token': self.refresh_token}
         )
         response.raise_for_status()
-        
+
         data = response.json()
         self.access_token = data['access_token']
         self.token_expires = datetime.now() + timedelta(seconds=data['expires_in'])
-        
+
         # Update authorization header
         self.session.headers.update({
             'Authorization': f'Bearer {self.access_token}'
         })
-    
+
     def request(self, method, endpoint, **kwargs):
         """Make authenticated request with automatic token refresh"""
         # Check if token needs refresh
         if self.token_expires and datetime.now() >= self.token_expires:
             self.refresh_access_token()
-        
+
         response = self.session.request(
             method,
             f'{self.base_url}/api/v1{endpoint}',
             **kwargs
         )
-        
+
         # If unauthorized, try refreshing token once
         if response.status_code == 401:
             self.refresh_access_token()
@@ -446,7 +446,7 @@ class TLDWClient:
                 f'{self.base_url}/api/v1{endpoint}',
                 **kwargs
             )
-        
+
         response.raise_for_status()
         return response.json()
 
@@ -599,20 +599,20 @@ Auth endpoints enforce strict rate limits. When limits are exceeded, responses i
 async function makeRequestWithRetry(url, options, maxRetries = 3) {
   for (let i = 0; i < maxRetries; i++) {
     const response = await fetch(url, options);
-    
+
     if (response.status === 429) {
       // Get retry delay from standard header
       const retryAfter = response.headers.get('Retry-After');
       const delay = retryAfter ? parseInt(retryAfter) * 1000 : (i + 1) * 1000;
-      
+
       console.log(`Rate limited. Retrying after ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       continue;
     }
-    
+
     return response;
   }
-  
+
   throw new Error('Max retries exceeded');
 }
 ```
@@ -653,11 +653,11 @@ class AuthService {
     this.token = null;
     this.refreshToken = null;
   }
-  
+
   async authenticate() {
     // Handle login, token storage, refresh
   }
-  
+
   async makeAuthenticatedRequest(endpoint, options) {
     // Handle auth headers, refresh, retry
   }

@@ -154,13 +154,13 @@ async def list_templates(
 ) -> ChunkingTemplateListResponse:
     """
     List all available chunking templates with optional filtering.
-    
+
     Returns:
         List of chunking templates matching the filter criteria
     """
     try:
         if response is not None:
-            _emit_db_capability_headers(response, db, ["list_chunking_templates"]) 
+            _emit_db_capability_headers(response, db, ["list_chunking_templates"])
             _set_db_capability_gauge(response)
         _ensure_fallback_policy(db, ["list_chunking_templates"])  # Enforce prod safeguard
         if _supports(db, 'list_chunking_templates'):
@@ -184,7 +184,7 @@ async def list_templates(
                     if tags and not any(t in (rec.get('tags') or []) for t in tags):
                         continue
                     templates.append(rec)
-        
+
         # Convert to response format
         template_responses = []
         for template in templates:
@@ -201,13 +201,13 @@ async def list_templates(
                 version=template['version'],
                 user_id=template['user_id']
             ))
-        
+
         resp = ChunkingTemplateListResponse(
             templates=template_responses,
             total=len(template_responses)
         )
         return resp
-        
+
     except Exception as e:
         logger.error(f"Error listing templates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -221,13 +221,13 @@ async def get_template(
 ) -> ChunkingTemplateResponse:
     """
     Get a specific chunking template by name.
-    
+
     Args:
         template_name: Name of the template to retrieve
-        
+
     Returns:
         The requested chunking template
-        
+
     Raises:
         404: Template not found
     """
@@ -241,10 +241,10 @@ async def get_template(
                 if template_name in bucket:
                     template = bucket[template_name]
                     break
-        
+
         if not template:
             raise HTTPException(status_code=404, detail=f"Template '{template_name}' not found")
-        
+
         return ChunkingTemplateResponse(
             id=template['id'],
             uuid=template['uuid'],
@@ -258,7 +258,7 @@ async def get_template(
             version=template['version'],
             user_id=template['user_id']
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -275,13 +275,13 @@ async def create_template(
 ) -> ChunkingTemplateResponse:
     """
     Create a new chunking template.
-    
+
     Args:
         template_data: Template configuration and metadata
-        
+
     Returns:
         The created chunking template
-        
+
     Raises:
         400: Invalid template configuration
         409: Template with same name already exists
@@ -290,10 +290,10 @@ async def create_template(
         # Convert template config to JSON string
         tmpl_dict = model_dump_compat(template_data.template)
         template_json = json.dumps(tmpl_dict)
-        
+
         # Emit DB capability headers for diagnostics
         if response is not None:
-            _emit_db_capability_headers(response, db, ["create_chunking_template", "get_chunking_template"]) 
+            _emit_db_capability_headers(response, db, ["create_chunking_template", "get_chunking_template"])
             _set_db_capability_gauge(response)
         _ensure_fallback_policy(db, ["create_chunking_template", "get_chunking_template"])  # Enforce prod safeguard
         # Create template in database (or fallback)
@@ -347,7 +347,7 @@ async def create_template(
             version=stored['version'],
             user_id=stored['user_id']
         )
-        
+
     except Exception as e:
         msg = str(e)
         if "already exists" in msg:
@@ -369,14 +369,14 @@ async def update_template(
 ) -> ChunkingTemplateResponse:
     """
     Update an existing chunking template.
-    
+
     Args:
         template_name: Name of the template to update
         template_update: Fields to update
-        
+
     Returns:
         The updated chunking template
-        
+
     Raises:
         400: Cannot modify built-in templates
         404: Template not found
@@ -440,7 +440,7 @@ async def update_template(
                     detail={"success": False, "error": "Invalid template payload", "error_code": "BAD_TEMPLATE"},
                 ) from exc
             template_json = json.dumps(tmpl_dict)
-        
+
         # Update template
         if _supports(db, 'update_chunking_template'):
             try:
@@ -470,7 +470,7 @@ async def update_template(
                     rec['updated_at'] = _now_iso()
                     success = True
                     break
-        
+
         if not success:
             # Attempt to disambiguate failure: not found vs built-in
             existing = None
@@ -490,7 +490,7 @@ async def update_template(
             if existing.get('is_builtin'):
                 raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates", "error_code": "BUILTIN"})
             raise HTTPException(status_code=500, detail={"success": False, "error": "Failed to update template", "error_code": "SERVER_ERROR"})
-        
+
         # Get updated template
         updated = None
         try:
@@ -509,7 +509,7 @@ async def update_template(
                 if template_name in bucket:
                     updated = bucket[template_name]
                     break
-        
+
         try:
             increment_counter("chunking_templates_update_total", labels={"mode": "native" if _supports(db, 'update_chunking_template') else 'fallback', "success": str(bool(updated)).lower()})
         except Exception:
@@ -527,7 +527,7 @@ async def update_template(
             version=updated['version'],
             user_id=updated['user_id']
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -545,11 +545,11 @@ async def delete_template(
 ) -> None:
     """
     Delete a chunking template.
-    
+
     Args:
         template_name: Name of the template to delete
         hard_delete: If true, permanently delete; otherwise soft delete
-        
+
     Raises:
         400: Cannot delete built-in templates
         404: Template not found
@@ -606,7 +606,7 @@ async def delete_template(
                     del bucket[template_name]
                     success = True
                     break
-        
+
         if not success:
             # Attempt to disambiguate failure: not found vs built-in
             existing = None
@@ -636,7 +636,7 @@ async def delete_template(
             increment_counter("chunking_templates_delete_total", labels={"mode": "native" if _supports(db, 'delete_chunking_template') else 'fallback', "hard": str(bool(hard_delete)).lower(), "success": str(bool(success)).lower()})
         except Exception:
             pass
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -654,13 +654,13 @@ async def apply_template(
 ) -> ApplyTemplateResponse:
     """
     Apply a chunking template to text.
-    
+
     Args:
         request: Template name and text to chunk
-        
+
     Returns:
         The chunked text results
-        
+
     Raises:
         404: Template not found
         400: Template application error
@@ -668,7 +668,7 @@ async def apply_template(
     try:
         # Emit DB capability headers for diagnostics
         if response is not None:
-            _emit_db_capability_headers(response, db, ["get_chunking_template", "list_chunking_templates"]) 
+            _emit_db_capability_headers(response, db, ["get_chunking_template", "list_chunking_templates"])
             _set_db_capability_gauge(response)
         _ensure_fallback_policy(db, ["get_chunking_template", "list_chunking_templates"])  # Enforce prod safeguard
         # Get template from database or fallback
@@ -691,13 +691,13 @@ async def apply_template(
                     break
         if not template_data:
             raise HTTPException(status_code=404, detail={"success": False, "error": f"Template '{request.template_name}' not found", "error_code": "NOT_FOUND"})
-        
+
         # Parse template JSON
         template_config = json.loads(template_data['template_json'])
-        
+
         # Create ChunkingTemplate object
         stages = []
-        
+
         # Add preprocessing stage if exists
         if 'preprocessing' in template_config:
             stages.append(TemplateStage(
@@ -705,14 +705,14 @@ async def apply_template(
                 operations=template_config['preprocessing'],
                 enabled=True
             ))
-        
+
         # Add chunking stage
         stages.append(TemplateStage(
             name='chunk',
             operations=[template_config['chunking']],
             enabled=True
         ))
-        
+
         # Add postprocessing stage if exists
         if 'postprocessing' in template_config:
             stages.append(TemplateStage(
@@ -720,7 +720,7 @@ async def apply_template(
                 operations=template_config['postprocessing'],
                 enabled=True
             ))
-        
+
         template = ChunkingTemplate(
             name=template_data['name'],
             description=template_data['description'] or "",
@@ -729,15 +729,15 @@ async def apply_template(
             default_options=template_config['chunking'].get('config', {}),
             metadata={'tags': template_data['tags']}
         )
-        
+
         # Apply template using TemplateProcessor
         processor = TemplateProcessor()
-        
+
         # Override options if provided
         options = {}
         if request.override_options:
             options.update(request.override_options)
-        
+
         chunks = processor.process_template(
             text=request.text,
             template=template,
@@ -758,7 +758,7 @@ async def apply_template(
                 'template_version': template_data['version']
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -772,16 +772,16 @@ async def validate_template(
 ) -> TemplateValidationResponse:
     """
     Validate a template configuration without saving it.
-    
+
     Args:
         template_config: Template configuration to validate
-        
+
     Returns:
         Validation results with any errors or warnings
     """
     errors = []
     warnings = []
-    
+
     try:
         # Check required fields
         if 'chunking' not in template_config:
@@ -807,7 +807,7 @@ async def validate_template(
                         field='chunking.method',
                         message=f"Unknown chunking method '{chunking['method']}'. Valid methods: {', '.join(sorted(available_methods))}"
                     ))
-        
+
         # Validate hierarchical options (either top-level or inside chunking.config)
         def _get_cfg_path(cfg: Dict[str, Any], path: List[str]) -> Optional[Any]:
             cur = cfg
@@ -928,7 +928,7 @@ async def validate_template(
                             field=f'preprocessing[{i}]',
                             message='Each preprocessing operation must have an "operation" field'
                         ))
-        
+
         # Validate postprocessing operations
         if 'postprocessing' in template_config:
             if not isinstance(template_config['postprocessing'], list):
@@ -943,7 +943,7 @@ async def validate_template(
                             field=f'postprocessing[{i}]',
                             message='Each postprocessing operation must have an "operation" field'
                         ))
-        
+
         # Try to serialize as JSON to catch any serialization issues
         try:
             json.dumps(template_config)
@@ -952,13 +952,13 @@ async def validate_template(
                 field='template_config',
                 message=f'Template configuration is not JSON serializable: {str(e)}'
             ))
-        
+
         return TemplateValidationResponse(
             valid=len(errors) == 0,
             errors=errors if errors else None,
             warnings=warnings if warnings else None
         )
-        
+
     except Exception as e:
         logger.error(f"Error validating template: {e}")
         return TemplateValidationResponse(

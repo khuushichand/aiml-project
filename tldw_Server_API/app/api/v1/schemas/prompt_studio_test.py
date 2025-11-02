@@ -43,7 +43,7 @@ class TestCaseResponse(TestCaseBase, TimestampMixin, UUIDMixin):
     signature_id: Optional[int]
     actual_outputs: Optional[Dict[str, Any]] = None
     is_generated: bool = False
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class TestCaseBulkCreate(BaseModel):
@@ -109,7 +109,7 @@ class TestRunResponse(TestRunBase, UUIDMixin):
     prompt_id: int
     test_case_id: int
     created_at: datetime
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class BatchTestRequest(BaseModel):
@@ -167,7 +167,7 @@ class EvaluationResponse(TimestampMixin, UUIDMixin):
     error_message: Optional[str]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class EvaluationStatusResponse(BaseModel):

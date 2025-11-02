@@ -13,4 +13,3 @@ def test_template_learner_produces_boundaries():
     assert isinstance(tpl, dict)
     assert 'boundaries' in tpl
     assert len(tpl['boundaries']) > 0
-

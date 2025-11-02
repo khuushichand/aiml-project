@@ -19,7 +19,7 @@ https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
 https://github.com/beir-cellar/beir/wiki/Load-your-custom-dataset
 https://apple.github.io/embedding-atlas/overview.html
 https://arxiv.org/html/2508.01959v1#S6
-https://huggingface.co/SituatedEmbedding/SitEmb-v1.5-Qwen3  
+https://huggingface.co/SituatedEmbedding/SitEmb-v1.5-Qwen3
 https://huggingface.co/spaces/hesamation/primer-llm-embedding?section=what_are_embeddings?
 https://sgnt.ai/p/embeddings-explainer/
 https://arxiv.org/abs/2508.21038
@@ -41,11 +41,3 @@ https://huggingface.co/blog/manu/colpali
 https://huggingface.co/ibm-granite/granite-embedding-english-r2
 
 https://huggingface.co/ibm-granite/granite-embedding-small-english-r2
-
-
-
-
-
-
-
-

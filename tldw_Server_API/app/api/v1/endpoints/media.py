@@ -873,7 +873,7 @@ def get_add_media_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Coerce JSON string inputs for urls into a list for robustness
         if isinstance(urls, str):
@@ -2232,12 +2232,12 @@ async def get_transcription_models():
             {"value": "parakeet-onnx", "label": "Parakeet ONNX", "description": "Cross-platform optimization"}
         ]
     }
-    
+
     # Also return a flat list of all values for validation
     all_models = []
     for category_models in models_by_category.values():
         all_models.extend([model["value"] for model in category_models])
-    
+
     return {
         "categories": models_by_category,
         "all_models": all_models
@@ -2532,7 +2532,7 @@ async def _save_uploaded_files(
                     "error": f"File type '{file_extension}' is not allowed for security reasons"
                 })
                 continue # Skip to the next file
-            
+
             # Honor allowed_extensions if provided by checking all candidate suffixes
             if normalized_allowed_extensions and not any(c in normalized_allowed_extensions for c in candidates or [file_extension]):
                 logger.warning(f"Skipping file '{original_filename}' due to disallowed extension '{file_extension}'. Allowed: {allowed_extensions}")
@@ -4620,7 +4620,7 @@ async def add_media(
                 allowed_extensions=allowed_exts,
                 skip_archive_scanning=(str(form_data.media_type).lower() == 'email' and bool(getattr(form_data, 'accept_archives', False)))
             )
-            
+
             # Check for file errors and return appropriate HTTP errors immediately
             for err_info in file_save_errors:
                 error_msg = err_info.get("error", "")
@@ -4639,7 +4639,7 @@ async def add_media(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=error_msg
                     )
-            
+
             # Adapt file saving errors to the standard result format
             for err_info in file_save_errors:
                  results.append({
@@ -4812,13 +4812,13 @@ async def add_media(
         if form_data.generate_embeddings:
             logger.info("Generating embeddings for successfully processed media items...")
             embedding_tasks = []
-            
+
             for result in results:
                 # Only generate embeddings for successfully stored items
                 if result.get("status") == "Success" and result.get("db_id"):
                     media_id = result["db_id"]
                     logger.info(f"Scheduling embedding generation for media ID {media_id}")
-                    
+
                     # Add background task for embedding generation
                     async def generate_embeddings_task(media_id: int):
                         try:
@@ -4826,11 +4826,11 @@ async def add_media(
                                 generate_embeddings_for_media,
                                 get_media_content
                             )
-                            
+
                             media_content = await get_media_content(media_id, db)
                             embedding_model = form_data.embedding_model or "Qwen/Qwen3-Embedding-4B-GGUF"
                             embedding_provider = form_data.embedding_provider or "huggingface"
-                            
+
                             result = await generate_embeddings_for_media(
                                 media_id=media_id,
                                 media_content=media_content,
@@ -4842,11 +4842,11 @@ async def add_media(
                             logger.info(f"Embedding generation result for media {media_id}: {result}")
                         except Exception as e:
                             logger.error(f"Failed to generate embeddings for media {media_id}: {e}")
-                    
+
                     # Run embedding generation in background
                     background_tasks.add_task(generate_embeddings_task, media_id)
                     result["embeddings_scheduled"] = True
-        
+
         # --- 8. Determine Final Status Code and Return Response (Success Path) ---
         # TempDirManager handles cleanup automatically on exit from 'with' block
         final_status_code = _determine_final_status(results)
@@ -4988,7 +4988,7 @@ def get_process_videos_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Create the Pydantic model instance using the parsed form data.
         form_instance = ProcessVideosForm(
@@ -5466,7 +5466,7 @@ def get_process_audios_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Map form fields to ProcessAudiosForm fields
         form_instance = ProcessAudiosForm(
@@ -6920,7 +6920,7 @@ async def process_documents_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
     process_document_content(Path("/abs/article.docx"), perform_chunking=True, perform_analysis=True, api_name="openai")
     ```
-    
+
     URL inputs must resolve to a supported document format. The server accepts URLs that either:
     - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, .json, or
     - provide `Content-Disposition` with a filename that ends with an allowed extension, or
@@ -7288,7 +7288,7 @@ def get_process_pdfs_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Create the Pydantic model instance using the parsed form data.
         form_instance = ProcessPDFsForm(
@@ -7497,7 +7497,7 @@ async def process_pdfs_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
     await process_pdf_task(file_bytes, filename="paper.pdf", parser="pymupdf4llm", perform_chunking=True, api_name="openai")
     ```
-    
+
     URL inputs must resolve to a PDF. The server accepts URLs that either:
     - end with `.pdf`, or
     - provide `Content-Disposition` with a filename ending in `.pdf`, or

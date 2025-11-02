@@ -66,4 +66,3 @@ def test_batch_token_arrays_input_base64(client):
         raw = np.frombuffer(base64.b64decode(b64), dtype=np.float32)
         # Should match requested dimensions
         assert len(raw) == 128
-

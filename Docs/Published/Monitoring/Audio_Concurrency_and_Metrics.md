@@ -69,4 +69,3 @@ Recommended Redis settings:
 - If WS sessions close with code `4003` and `{ error_type: "quota_exceeded" }`, the daily minutes budget was exhausted mid-stream.
 - If jobs appear starved for a specific owner, enable `AUDIO_JOBS_OWNER_STRICT=true` and inspect `/summary-by-owner`.
 - If counters look inconsistent across replicas, verify `REDIS_URL` reachability and that `AUDIO_QUOTA_USE_REDIS=true` is set.
-

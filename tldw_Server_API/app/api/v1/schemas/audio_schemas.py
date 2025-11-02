@@ -103,7 +103,7 @@ class OpenAISpeechRequest(BaseModel):
 
 class OpenAITranscriptionRequest(BaseModel):
     """Request schema for OpenAI-compatible transcription endpoint"""
-    
+
     file: bytes = Field(..., description="The audio file to transcribe")
     model: str = Field(
         default="whisper-1",
@@ -135,7 +135,7 @@ class OpenAITranscriptionRequest(BaseModel):
 
 class OpenAITranscriptionResponse(BaseModel):
     """Response schema for OpenAI-compatible transcription endpoint"""
-    
+
     text: str = Field(..., description="The transcribed text")
     language: Optional[str] = Field(None, description="The language of the input audio")
     duration: Optional[float] = Field(None, description="The duration of the input audio in seconds")
@@ -145,7 +145,7 @@ class OpenAITranscriptionResponse(BaseModel):
 
 class OpenAITranslationRequest(BaseModel):
     """Request schema for OpenAI-compatible translation endpoint"""
-    
+
     file: bytes = Field(..., description="The audio file to translate")
     model: str = Field(
         default="whisper-1",

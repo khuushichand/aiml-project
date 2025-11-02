@@ -84,4 +84,3 @@ def test_cancel_import_job_flow(client):
     if sresp.status_code == 200:
         status = sresp.json().get("status")
         assert status in ("cancelled", "completed", "failed", "in_progress", "pending")
-

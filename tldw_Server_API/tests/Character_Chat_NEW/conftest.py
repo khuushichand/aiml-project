@@ -54,15 +54,15 @@ def pytest_collection_modifyitems(config, items):
 def test_env_vars():
     """Set up test environment variables."""
     original_env = os.environ.copy()
-    
+
     # Set test mode
     os.environ["TEST_MODE"] = "true"
     os.environ["CHARACTER_DB_PATH"] = ":memory:"
     os.environ["MAX_CHAT_HISTORY"] = "100"
     os.environ["RATE_LIMIT_PER_MINUTE"] = "30"
-    
+
     yield
-    
+
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
@@ -76,9 +76,9 @@ def test_db_path() -> Generator[Path, None, None]:
     """Create a temporary database file that gets cleaned up."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
         db_path = Path(tmp_file.name)
-    
+
     yield db_path
-    
+
     # Cleanup
     try:
         if db_path.exists():
@@ -95,11 +95,11 @@ def character_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
         db_path=str(test_db_path),
         client_id="test_client"
     )
-    
+
     # Schema is initialized automatically in constructor
-    
+
     yield db
-    
+
     # Cleanup
     try:
         db.close_all_connections()
@@ -110,7 +110,7 @@ def character_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
 def populated_character_db(character_db) -> CharactersRAGDB:
     """Create a CharactersRAGDB with test data."""
     db = character_db
-    
+
     # Create test character cards using the actual database method
     char1_id = db.add_character_card({
         "name": "Test Character 1",
@@ -119,7 +119,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         "first_message": "Hello! I'm Test Character 1.",
         "creator": "test_user"
     })
-    
+
     char2_id = db.add_character_card({
         "name": "Fantasy Wizard",
         "description": "A wise wizard from a fantasy world",
@@ -127,7 +127,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         "first_message": "Greetings, traveler. What brings you to my tower?",
         "creator": "test_user"
     })
-    
+
     char3_id = db.add_character_card({
         "name": "Science Assistant",
         "description": "An AI assistant specialized in science",
@@ -135,12 +135,12 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         "first_message": "Hello! Ready to explore the world of science?",
         "creator": "science_user"
     })
-    
+
     # Create test chats using the actual database method
     import uuid
     chat1_id = str(uuid.uuid4())
     chat2_id = str(uuid.uuid4())
-    
+
     db.add_conversation({
         'id': chat1_id,
         'character_id': char1_id,
@@ -152,7 +152,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         'client_id': 'test_client',
         'version': 1
     })
-    
+
     db.add_conversation({
         'id': chat2_id,
         'character_id': char2_id,
@@ -164,12 +164,12 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         'client_id': 'test_client',
         'version': 1
     })
-    
+
     # Add messages to chats using the actual database method
     import uuid
     msg1_id = str(uuid.uuid4())
     msg2_id = str(uuid.uuid4())
-    
+
     db.add_message({
         'id': msg1_id,
         'conversation_id': chat1_id,
@@ -180,7 +180,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         'client_id': 'test_client',
         'version': 1
     })
-    
+
     db.add_message({
         'id': msg2_id,
         'conversation_id': chat1_id,
@@ -191,7 +191,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
         'client_id': 'test_client',
         'version': 1
     })
-    
+
     return db
 
 # NOTE: CharacterChatManager doesn't exist - this fixture is disabled
@@ -199,9 +199,9 @@ def populated_character_db(character_db) -> CharactersRAGDB:
 # def chat_manager(test_db_path) -> Generator[CharacterChatManager, None, None]:
 #     """Create a CharacterChatManager instance for testing."""
 #     manager = CharacterChatManager(db_path=str(test_db_path))
-#     
+#
 #     yield manager
-#     
+#
 #     # Cleanup
 #     try:
 #         manager.close()
@@ -212,7 +212,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
 def chat_dictionary_service(test_db_path) -> Generator[ChatDictionaryService, None, None]:
     """Create a ChatDictionaryService instance for testing."""
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-    
+
     db = CharactersRAGDB(str(test_db_path), client_id="test_client")
     service = ChatDictionaryService(db)
 
@@ -232,7 +232,7 @@ def chat_dictionary_service(test_db_path) -> Generator[ChatDictionaryService, No
 def world_book_service(test_db_path) -> Generator[WorldBookService, None, None]:
     """Create a WorldBookService instance for testing."""
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-    
+
     db = CharactersRAGDB(str(test_db_path), client_id="test_client")
     service = WorldBookService(db)
 
@@ -252,10 +252,10 @@ def world_book_service(test_db_path) -> Generator[WorldBookService, None, None]:
 def mock_character_db():
     """Create a mock CharactersRAGDB for unit tests."""
     db = MagicMock(spec=CharactersRAGDB)
-    
+
     # Mock initialization
     db.initialize_db = Mock(return_value=None)
-    
+
     # Mock character methods
     db.add_character_card = Mock(return_value=1)  # Matches facade behaviour
     db.create_character_card = Mock(return_value=1)  # Keep for direct tests
@@ -280,7 +280,7 @@ def mock_character_db():
     db.update_character_card = Mock(return_value=True)
     db.soft_delete_character_card = Mock(return_value=True)
     db.delete_character_card = Mock(return_value=True)
-    
+
     # Mock chat methods
     db.create_chat = Mock(return_value=1)
     db.get_chat = Mock(return_value={
@@ -294,14 +294,14 @@ def mock_character_db():
     db.add_message = Mock(return_value=1)
     db.get_messages = Mock(return_value=[])
     db.delete_chat_session = Mock(return_value=True)
-    
+
     return db
 
 @pytest.fixture
 def mock_chat_manager(mock_character_db):
     """Create a CharacterChatManager with mocked database for unit tests."""
     from tldw_Server_API.tests.Character_Chat_NEW.test_utils import CharacterChatManager
-    
+
     with patch('tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB.CharactersRAGDB', return_value=mock_character_db):
         manager = CharacterChatManager(db_path=":memory:")
         manager.db = mock_character_db
@@ -734,7 +734,7 @@ def test_client(test_env_vars, character_db):
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     from tldw_Server_API.app.core.config import settings as global_settings
-    
+
     # Create test user
     test_user = User(
         id=1,
@@ -743,37 +743,37 @@ def test_client(test_env_vars, character_db):
         is_admin=True,
         is_active=True
     )
-    
+
     # Override database dependency
     def override_get_chacha_db_for_user():
         """Override to return test database."""
         return character_db
-    
+
     # Override user authentication for testing - bypass all auth
     async def override_get_request_user():
         """Override to return a test user."""
         return test_user
-    
+
     async def override_get_current_user():
         """Override get_current_user to bypass authentication."""
         return test_user
-    
+
     # Set up dependency overrides
     app.dependency_overrides[get_chacha_db_for_user] = override_get_chacha_db_for_user
     app.dependency_overrides[get_request_user] = override_get_request_user
     app.dependency_overrides[get_current_user] = override_get_current_user
-    
+
     # Also try to override the settings to ensure consistent API key
     settings_instance = get_settings()
     original_api_key = settings_instance.SINGLE_USER_API_KEY
     settings_instance.SINGLE_USER_API_KEY = 'test-api-key'
-    
+
     with TestClient(app) as client:
         yield client
-    
+
     # Cleanup
     app.dependency_overrides.clear()
-    
+
     # Restore API key
     settings_instance.SINGLE_USER_API_KEY = original_api_key
 
@@ -817,7 +817,7 @@ def create_test_chat(db, character_id, user_id='test_user', **kwargs):
     """Helper to create a test chat session."""
     import uuid
     chat_id = str(uuid.uuid4())
-    
+
     db.add_conversation({
         'id': chat_id,
         'character_id': character_id,
@@ -829,7 +829,7 @@ def create_test_chat(db, character_id, user_id='test_user', **kwargs):
         'client_id': 'test_client',
         'version': 1
     })
-    
+
     return chat_id
 
 def create_test_world_book(service, **kwargs):

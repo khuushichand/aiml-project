@@ -23,4 +23,3 @@ spec:
                 name: tldw-app
                 port:
                   number: 8000
-

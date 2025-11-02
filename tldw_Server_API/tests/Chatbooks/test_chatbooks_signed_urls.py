@@ -103,4 +103,3 @@ def test_signed_download_expired_exp_param(client, monkeypatch):
 
     dresp = client.get(url)
     assert dresp.status_code == 410
-

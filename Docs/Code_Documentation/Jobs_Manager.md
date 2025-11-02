@@ -39,4 +39,3 @@ Two acquisition paths exist:
 If you notice any discrepancy between this note and behavior in code or tests, check:
 - `JobManager.acquire_next_job` docstring and the two PG code paths
 - Environment toggles such as `JOBS_PG_SINGLE_UPDATE_ACQUIRE`
-

@@ -239,7 +239,7 @@ https://github.com/albirrkarim/react-speech-highlight-demo
     - Use relevant labels for buttons - Don't use generic labels like "click here"
     - Use a 'large' font size for buttons.
     - Don't wrap text on buttons - text should be on one line
-    - Use action verbs as button labels 
+    - Use action verbs as button labels
     - Don't use disabled buttons when possible - Show an error or CTA instead
     - Place buttons side-by-side when possible
     - Use standard layout for buttons - Don't use unusual icons or styles for buttons

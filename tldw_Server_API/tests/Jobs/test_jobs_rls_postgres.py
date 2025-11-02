@@ -108,4 +108,3 @@ def test_rls_applies_to_events_and_controls(monkeypatch):
             assert sla_count >= 1
     finally:
         conn.close()
-

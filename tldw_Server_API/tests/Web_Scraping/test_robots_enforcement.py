@@ -32,4 +32,3 @@ Disallow: /page
         fake_fetch,
     )
     assert is_allowed_by_robots("https://example.com/page", "UA") is False
-

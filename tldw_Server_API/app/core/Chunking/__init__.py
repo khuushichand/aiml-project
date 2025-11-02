@@ -76,37 +76,37 @@ except Exception:
 
 # For backward compatibility with existing code
 # These will be implemented as we port more functionality
-def improved_chunking_process(text: str, 
+def improved_chunking_process(text: str,
                              chunk_options: dict = None,
                              tokenizer_name_or_path: str = None,
                              llm_call_func = None,
                              llm_api_config: dict = None) -> list:
     """
     Backward compatibility function for improved chunking process.
-    
+
     Args:
         text: Text to chunk
         chunk_options: Dictionary of chunking options
         tokenizer_name_or_path: Optional tokenizer (not used in new API)
         llm_call_func: Optional LLM function for methods like rolling_summarize
         llm_api_config: Optional LLM configuration
-        
+
     Returns:
         List of chunk dictionaries with text and metadata
     """
     options = chunk_options or {}
-    
+
     # Extract options
     method = options.get('method', 'words')
     max_size = options.get('max_size', 400)
     overlap = options.get('overlap', 200)
     language = options.get('language', 'en')
     code_mode = str(options.get('code_mode', 'auto')).lower() if str(method).lower() == 'code' else None
-    
+
     # Create chunker with LLM support if provided
     chunker = Chunker(llm_call_func=llm_call_func, llm_config=llm_api_config)
     # Remove duplicates from options
-    filtered_options = {k: v for k, v in options.items() 
+    filtered_options = {k: v for k, v in options.items()
                        if k not in ['method', 'max_size', 'overlap', 'language']}
     chunks = chunker.chunk_text_with_metadata(
         text=text,
@@ -116,7 +116,7 @@ def improved_chunking_process(text: str,
         language=language,
         **filtered_options
     )
-    
+
     # Convert to expected format
     result = []
     for chunk in chunks:
@@ -135,34 +135,34 @@ def improved_chunking_process(text: str,
                 **({'code_mode_used': code_mode} if code_mode is not None else {}),
             }
         })
-    
+
     return result
 
 
 def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
     """
     Backward compatibility function for chunking for embeddings.
-    
+
     Args:
         text: Text to chunk
         file_name: Name of the file being processed
         **kwargs: Additional options
-        
+
     Returns:
         List of chunk dictionaries suitable for embedding
     """
     # Create chunker with embedding-optimized settings
     chunker = Chunker()
-    
+
     # Use semantic chunking if available, otherwise sentences
     method = kwargs.get('method', 'sentences')
     max_size = kwargs.get('max_size', 512)  # Good size for embeddings
     overlap = kwargs.get('overlap', 50)
-    
+
     # Remove duplicates from kwargs
-    filtered_kwargs = {k: v for k, v in kwargs.items() 
+    filtered_kwargs = {k: v for k, v in kwargs.items()
                       if k not in ['method', 'max_size', 'overlap']}
-    
+
     chunks = chunker.chunk_text_with_metadata(
         text=text,
         method=method,
@@ -170,7 +170,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
         overlap=overlap,
         **filtered_kwargs
     )
-    
+
     # Format for embedding
     result = []
     import hashlib as _hashlib
@@ -211,7 +211,7 @@ def chunk_for_embedding(text: str, file_name: str, **kwargs) -> list:
                 'captions': captions,
             }
         })
-    
+
     return result
 
 
@@ -256,7 +256,7 @@ class EnhancedChunk:
     chunk_index: int
     metadata: Dict[str, Any] = field(default_factory=dict)
     parent_id: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -269,7 +269,7 @@ class EnhancedChunk:
             "metadata": self.metadata,
             "parent_id": self.parent_id
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'EnhancedChunk':
         """Create from dictionary."""
@@ -279,7 +279,7 @@ class EnhancedChunk:
                 chunk_type = ChunkType(chunk_type)
             except ValueError:
                 chunk_type = ChunkType.TEXT
-        
+
         return cls(
             id=data["id"],
             content=data["content"],
@@ -296,15 +296,15 @@ __all__ = [
     # Main classes
     'Chunker',
     'create_chunker',
-    
+
     # Configuration
     'ChunkerConfig',
     'ChunkingMethod',
-    
+
     # Results
     'ChunkResult',
     'ChunkMetadata',
-    
+
     # Exceptions
     'ChunkingError',
     'InvalidInputError',
@@ -316,13 +316,13 @@ __all__ = [
     'ProcessingError',
     'ConfigurationError',
     'CacheError',
-    
+
     # Backward compatibility
     'improved_chunking_process',
     'chunk_for_embedding',
     'EnhancedChunk',
     'ChunkType',
-    
+
     # Base classes for extensions
     'BaseChunkingStrategy',
 ]

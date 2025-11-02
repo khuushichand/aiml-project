@@ -13,7 +13,7 @@
 }
 
 /* Keep operation summaries tidy with wrapping */
-.swagger-ui .opblock-summary-path, 
+.swagger-ui .opblock-summary-path,
 .swagger-ui .opblock-summary-description {
   white-space: normal;
 }
@@ -29,7 +29,7 @@
 }
 
 /* Improve table readability */
-.swagger-ui table thead tr th, 
+.swagger-ui table thead tr th,
 .swagger-ui table tbody tr td {
   white-space: normal;
 }
@@ -43,4 +43,3 @@
 .swagger-ui .information-container .info .description {
   line-height: 1.5;
 }
-

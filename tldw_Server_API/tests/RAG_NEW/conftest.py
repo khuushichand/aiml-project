@@ -93,7 +93,7 @@ def populated_media_db(media_database) -> MediaDatabase:
     # Add test media items
     from datetime import datetime
     from uuid import uuid4
-    
+
     test_items = [
         {
             "media_id": str(uuid4()),
@@ -112,7 +112,7 @@ def populated_media_db(media_database) -> MediaDatabase:
             "ingestion_date": datetime.now().isoformat()
         }
     ]
-    
+
     for item in test_items:
         media_database.add_media_with_keywords(
             title=item["title"],
@@ -121,7 +121,7 @@ def populated_media_db(media_database) -> MediaDatabase:
             author=item.get("author"),
             ingestion_date=item.get("ingestion_date")
         )
-    
+
     return media_database
 
 # =====================================================================

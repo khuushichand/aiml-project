@@ -29,4 +29,3 @@ export function Tabs({ items, value, onChange, className }: { items: TabItem[]; 
     </div>
   );
 }
-

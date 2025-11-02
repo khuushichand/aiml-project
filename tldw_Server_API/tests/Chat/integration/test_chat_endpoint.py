@@ -45,20 +45,20 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
     """Helper to make requests with CSRF token included"""
     if headers is None:
         headers = {}
-    
+
     # Get CSRF token from cookies if not already set
     if not hasattr(client, 'csrf_token'):
         # Make a GET request to get CSRF token
         response = client.get("/api/v1/health")
         csrf_token = response.cookies.get("csrf_token", "")
         client.csrf_token = csrf_token
-    
+
     # Add CSRF token to headers (preserving any existing headers)
     headers = dict(headers)  # Make a copy to avoid modifying the original
     headers["X-CSRF-Token"] = getattr(client, 'csrf_token', '')
-    
+
     print(f"DEBUG make_request_with_csrf: Final headers being sent: {headers}")
-    
+
     # Make the request
     method_func = getattr(client, method.lower())
     return method_func(url, headers=headers, **kwargs)
@@ -67,7 +67,7 @@ def get_auth_headers(auth_token):
     """Get appropriate auth headers based on AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
-    
+
     if settings.AUTH_MODE == "multi_user":
         return {"Authorization": auth_token}
     else:
@@ -83,17 +83,17 @@ def client():
         # Get a CSRF token by making a GET request first
         response = c.get("/api/v1/health")  # Or any GET endpoint
         csrf_token = response.cookies.get("csrf_token", "")
-        
+
         # Store the token in the client for use in tests
         c.csrf_token = csrf_token
         c.cookies = {"csrf_token": csrf_token}
-        
+
         # Add helper method to client
         c.post_with_csrf = lambda url, **kwargs: make_request_with_csrf(c, "POST", url, **kwargs)
         c.put_with_csrf = lambda url, **kwargs: make_request_with_csrf(c, "PUT", url, **kwargs)
         c.patch_with_csrf = lambda url, **kwargs: make_request_with_csrf(c, "PATCH", url, **kwargs)
         c.delete_with_csrf = lambda url, **kwargs: make_request_with_csrf(c, "DELETE", url, **kwargs)
-        
+
         yield c
 
 
@@ -110,12 +110,12 @@ def mock_user():
 @pytest.fixture(autouse=True)
 def setup_auth_override(mock_user):
     """Automatically override authentication for all tests.
-    
+
     Note: The chat endpoint doesn't use dependency injection for auth,
     so we need to mock the auth utility functions instead.
     """
     from unittest.mock import patch
-    
+
     # Mock the auth utility functions used by the chat endpoint
     with patch('tldw_Server_API.app.api.v1.endpoints.chat.is_authentication_required', return_value=False):
         # When auth is not required, the endpoint won't check the token
@@ -125,18 +125,18 @@ def setup_auth_override(mock_user):
 def valid_auth_token() -> str:
     """Generate appropriate auth token based on current AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    
+
     settings = get_settings()
-    
+
     if settings.AUTH_MODE == "multi_user":
         # In multi-user mode, we need a proper JWT token
         # For testing, we'll create a mock JWT token using the actual JWT secret
         import jwt
         import datetime
-        
+
         # Use the actual JWT secret from settings
         secret_key = settings.JWT_SECRET_KEY or os.getenv("JWT_SECRET_KEY", "test-secret-key")
-        
+
         payload = {
             "sub": "1",  # User ID as string
             "username": "test_user",

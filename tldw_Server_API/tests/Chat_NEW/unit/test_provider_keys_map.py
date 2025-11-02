@@ -10,4 +10,3 @@ def test_provider_requires_key_map_basic():
     # Local providers typically do not require keys
     for prov in ["llama.cpp", "kobold", "ooba", "tabbyapi", "vllm", "local-llm", "ollama", "aphrodite"]:
         assert PROVIDER_REQUIRES_KEY.get(prov) is False
-

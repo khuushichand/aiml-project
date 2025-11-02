@@ -113,7 +113,7 @@ MODULE_STRUCTURE = {
         "lines": "~150",
         "functions": [
             "replace_placeholders",
-            "replace_user_placeholder", 
+            "replace_user_placeholder",
             "extract_character_id_from_ui_choice",
             "get_character_list_for_ui"
         ]
@@ -209,14 +209,14 @@ __all__ = [
     'extract_character_id_from_ui_choice',
     'get_character_list_for_ui',
     'map_sender_to_role',
-    
+
     # I/O
     'extract_json_from_image_file',
     'import_character_card_from_json_string',
     'load_character_card_from_string_content',
     'import_and_save_character_from_file',
     'load_chat_history_from_file_and_save_to_db',
-    
+
     # Validation
     'parse_v1_card',
     'parse_v2_card',
@@ -227,7 +227,7 @@ __all__ = [
     'validate_character_book',
     'validate_character_book_entry',
     'validate_v2_card',
-    
+
     # Database
     '_prepare_character_data_for_db_storage',
     'create_new_character_from_data',
@@ -237,7 +237,7 @@ __all__ = [
     'search_characters_by_query_text',
     'load_character_and_image',
     'load_character_wrapper',
-    
+
     # Chat
     'process_db_messages_to_ui_history',
     'process_db_messages_to_rich_ui_history',
@@ -255,7 +255,7 @@ __all__ = [
     'set_message_ranking',
     'remove_message_from_conversation',
     'find_messages_in_conversation',
-    
+
     # Templates
     'get_character_template',
     'list_character_templates',

@@ -13,4 +13,3 @@ def test_vlm_backends_endpoint():
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)
-

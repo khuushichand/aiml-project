@@ -36,4 +36,3 @@ def test_advanced_agentic_cache_get_set_and_invalidate_prefix():
     assert cache.get(ns, "short") == {"v": 3}
     time.sleep(1.2)
     assert cache.get(ns, "short") is None
-

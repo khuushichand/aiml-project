@@ -60,4 +60,3 @@ def test_minute_limit_exact_endpoint_and_reset_header(tmp_path):
         assert reset_epoch <= int(time.time()) + 60
 
     asyncio.run(_first())
-

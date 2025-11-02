@@ -18,7 +18,7 @@ from pathlib import Path
 
 class TestAddMediaEndpoint:
     """Test the /media/add endpoint."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription')
     def test_add_video_from_url(self, mock_transcribe, test_client, auth_headers, test_video_file):
@@ -50,16 +50,16 @@ class TestAddMediaEndpoint:
         data = response.json()
         assert isinstance(data, dict) and "results" in data
         assert any(item.get("db_id") for item in data.get("results", []))
-    
+
     @pytest.mark.unit
     def test_add_document_with_content(self, test_client, auth_headers, populated_media_db, test_text_file):
         """Test adding a document by uploading a text file."""
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.main import app
-        
+
         # Override dependency to use test database
         app.dependency_overrides[get_media_db_for_user] = lambda: populated_media_db
-        
+
         try:
             with open(test_text_file, 'rb') as f:
                 files = [("files", ("test_document.txt", f, "text/plain"))]
@@ -85,10 +85,10 @@ class TestAddMediaEndpoint:
             # Verify it was added to database by title lookup
             media = populated_media_db.get_media_by_title("Test Document")
             assert media is not None
-            
+
         finally:
             app.dependency_overrides.clear()
-    
+
     @pytest.mark.unit
     def test_add_with_invalid_url(self, test_client, auth_headers):
         """Test adding media with invalid URL returns 422."""
@@ -105,7 +105,7 @@ class TestAddMediaEndpoint:
             headers=auth_headers
         )
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    
+
     @pytest.mark.unit
     def test_add_without_required_fields(self, test_client, auth_headers):
         """Test adding media without any URLs or files should be 400."""
@@ -123,15 +123,15 @@ class TestAddMediaEndpoint:
 
 class TestChunkingStrategies:
     """Test different chunking strategies during media addition."""
-    
+
     @pytest.mark.unit
     def test_add_with_token_chunking(self, test_client, auth_headers, populated_media_db, test_media_dir):
         """Test adding media with token-based chunking via upload."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-        
+
         app.dependency_overrides[get_media_db_for_user] = lambda: populated_media_db
-        
+
         try:
             long_file = Path(test_media_dir) / "long.txt"
             long_file.write_text(" ".join([f"This is sentence number {i}." for i in range(100)]))
@@ -153,18 +153,18 @@ class TestChunkingStrategies:
                 )
 
             assert response.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
-            
+
         finally:
             app.dependency_overrides.clear()
-    
+
     @pytest.mark.unit
     def test_add_with_sentence_chunking(self, test_client, auth_headers, populated_media_db, test_media_dir):
         """Test adding media with sentence-based chunking via upload."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-        
+
         app.dependency_overrides[get_media_db_for_user] = lambda: populated_media_db
-        
+
         try:
             content_file = Path(test_media_dir) / "sentences.txt"
             content_file.write_text("First sentence. Second sentence. Third sentence. Fourth sentence.")
@@ -186,7 +186,7 @@ class TestChunkingStrategies:
                 )
 
             assert response.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
-            
+
         finally:
             app.dependency_overrides.clear()
 
@@ -196,15 +196,15 @@ class TestChunkingStrategies:
 
 class TestDatabasePersistence:
     """Test that media is properly persisted to database."""
-    
+
     @pytest.mark.unit
     def test_media_persisted_correctly(self, test_client, auth_headers, media_database, test_text_file):
         """Test that media is correctly saved to database."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-        
+
         app.dependency_overrides[get_media_db_for_user] = lambda: media_database
-        
+
         try:
             with open(test_text_file, 'rb') as f:
                 files = [("files", ("persist.txt", f, "text/plain"))]
@@ -234,18 +234,18 @@ class TestDatabasePersistence:
             assert media is not None
             assert media["title"] == "Persistence Test"
             assert isinstance(media.get("content"), str) and len(media["content"]) > 0
-            
+
         finally:
             app.dependency_overrides.clear()
-    
+
     @pytest.mark.unit
     def test_media_versioning(self, test_client, auth_headers, media_database, test_media_dir):
         """Test that media versions are tracked."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-        
+
         app.dependency_overrides[get_media_db_for_user] = lambda: media_database
-        
+
         try:
             # Add initial media by upload
             v1_file = Path(test_media_dir) / "v1.txt"
@@ -282,7 +282,7 @@ class TestDatabasePersistence:
             if resp2.status_code == status.HTTP_201_CREATED:
                 versions = media_database.get_all_document_versions(media_id, include_content=False, include_deleted=False)
                 assert len(list(versions)) >= 1
-            
+
         finally:
             app.dependency_overrides.clear()
 
@@ -441,7 +441,7 @@ class TestClaimsExtractionToggles:
 
 class TestErrorHandling:
     """Test error handling in the add media endpoint."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription')
     def test_transcription_failure_handling(self, mock_transcribe, test_client, auth_headers, test_video_file):
@@ -470,13 +470,13 @@ class TestErrorHandling:
             )
 
         assert response.status_code in (status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS)
-    
+
     @pytest.mark.unit
     def test_database_failure_handling(self, test_client, auth_headers):
         """Test handling of database failures."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-        
+
         # Provide a DB object with an invalid path so worker instantiation fails
         class BadDB:
             db_path_str = "/nonexistent/path/to/dbdir/Media_DB_v2.db"
@@ -503,13 +503,13 @@ class TestErrorHandling:
 
 class TestFileUpload:
     """Test file upload functionality."""
-    
+
     @pytest.mark.unit
     def test_upload_text_file(self, test_client, auth_headers, test_text_file):
         """Test uploading a text file."""
         with open(test_text_file, 'rb') as f:
             files = {"file": ("test.txt", f, "text/plain")}
-            
+
             response = test_client.post(
                 "/api/v1/media/add",
                 files=[("files", ("test.txt", f, "text/plain"))],
@@ -524,16 +524,16 @@ class TestFileUpload:
                 assert lst.status_code == 200
                 items = lst.json().get("items", [])
                 assert any(i.get("title") == "Uploaded Text File" for i in items)
-    
+
     @pytest.mark.unit
     def test_upload_invalid_file_type(self, test_client, auth_headers, test_media_dir):
         """Test rejection of invalid file types."""
         exe_file = test_media_dir / "test.exe"
         exe_file.write_bytes(b'MZ\x00\x00')  # PE header
-        
+
         with open(exe_file, 'rb') as f:
             files = {"file": ("test.exe", f, "application/x-msdownload")}
-            
+
             response = test_client.post(
                 "/api/v1/media/add",
                 files=[("files", ("test.exe", f, "application/x-msdownload"))],

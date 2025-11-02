@@ -2,7 +2,7 @@
 
 ## Overview
 - Chunking is the process of breaking down a document into smaller pieces, or "chunks". This is useful for a variety of reasons, such as:
-- 
+-
 
 
 
@@ -13,7 +13,7 @@
 
 
 ### Implementation in tldw
-- 
+-
 
 ```
 
@@ -39,16 +39,3 @@ https://arxiv.org/abs/2506.15655e
 
 https://hierarchychunker.codeaxion.com/#pricing
 https://github.com/ofriw/chunkhound?tab=readme-ov-file
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -24,10 +24,10 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         """
         Initialize the LLMBudgetMiddleware and prepare per-request settings handling.
-        
+
         Parameters:
             app: The ASGI application to wrap.
-        
+
         Notes:
             Uses a lightweight settings cache with a generation-based invalidation
             (see AuthNZ.settings.get_settings_generation). This avoids repeated
@@ -89,10 +89,10 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
     def _should_check(self, path: str) -> bool:
         """
         Determine whether LLM budget and virtual-key enforcement should be applied to the given request path.
-        
+
         Parameters:
             path (str): The request URL path to evaluate (e.g., "/api/v1/chat/completions").
-        
+
         Returns:
             `True` if enforcement should be applied to the provided request path, `False` otherwise.
         """
@@ -125,9 +125,9 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
         Enforces virtual API-key LLM allowlists and budget limits for incoming requests to configured LLM endpoints.
-        
+
         If the request targets a monitored LLM endpoint and the resolved API key is a virtual key, this middleware will validate endpoint, provider, and model allowlists and check the key's budget; it forwards the request unchanged when enforcement is not applicable or passes all checks.
-        
+
         Returns:
             Response: An HTTP response. May be a 403 JSONResponse when the key is forbidden, a 402 JSONResponse when the virtual key is over budget, or the downstream handler's Response when the request is allowed or enforcement is skipped.
         """

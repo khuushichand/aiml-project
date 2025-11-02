@@ -11,14 +11,14 @@ List of stuff I don't feel like filing an issue for (yet).
 - https://adamj.eu/tech/2024/12/30/python-temporary-files-directories-unittest/
 - Documentation
 - Update README
-- Update CONTRIBUTING 
+- Update CONTRIBUTING
 - Scraping Pipeline-related
     - Fully test + Write tests for cookie cloner script
     - Update Scraping pipeline to use cookie cloner script
     - Add option to Scraping page to use cookie cloner script
 - TTS/STT-related
     - https://github.com/rmusser01/tldw/issues/8
-    - Add page for 
+    - Add page for
 - Building Infra
       - https://notes.billmill.org/blog/2024/06/Serving_a_billion_web_requests_with_boring_code.html
 - API
@@ -28,7 +28,7 @@ List of stuff I don't feel like filing an issue for (yet).
 - Add global System prompts for Summarization API calls
 - ERROR:root:Error in perform_full_text_search (Media DB): 'NoneType' object has no attribute 'split'
 
-- 
+-
 - PDF Parsing
     - marker https://github.com/VikParuchuri/marker
     https://github.com/pdf2htmlEX/pdf2htmlEX
@@ -178,14 +178,14 @@ Benefits:
 
 # Executive Summary: Phase 2 Plan for Sync System
 
-After the initial local-first SQLite deployment, the next critical steps for scaling are: (1) enforce **server-assigned timestamps** to eliminate clock drift issues, (2) persist **deferred link operations** across sessions for robustness, (3) implement **client acknowledgment tracking and garbage collection** for `sync_log` growth control, (4) prepare for a **Postgres backend** with Row-Level Security for multi-tenant support, and (5) enhance **metrics and observability**.  
+After the initial local-first SQLite deployment, the next critical steps for scaling are: (1) enforce **server-assigned timestamps** to eliminate clock drift issues, (2) persist **deferred link operations** across sessions for robustness, (3) implement **client acknowledgment tracking and garbage collection** for `sync_log` growth control, (4) prepare for a **Postgres backend** with Row-Level Security for multi-tenant support, and (5) enhance **metrics and observability**.
 **Timing:** These upgrades must begin before expanding beyond ~20 devices or any production multi-user environment to avoid costly retrofitting.
 
 Here’s a **clean, forward-looking "Phase 2 Growth Plan" memo** you can use internally or forward to leadership:
 
 ---
 
-# Phase 2: Growth Plan for Synchronization System  
+# Phase 2: Growth Plan for Synchronization System
 **(Post-Initial SQLite Deployment)**
 
 ## Objective:
@@ -195,23 +195,23 @@ Ensure that the synchronization architecture, originally designed for small team
 
 ## Key Focus Areas:
 
-1. **Server-Authoritative Timestamps**  
-   Transition from trusting client-generated `last_modified` timestamps to **server-assigned timestamps** during sync ingestion.  
+1. **Server-Authoritative Timestamps**
+   Transition from trusting client-generated `last_modified` timestamps to **server-assigned timestamps** during sync ingestion.
    - Required to eliminate inconsistencies caused by client clock drift.
    - Impacts conflict resolution logic (LWW becomes truly canonical).
 
-2. **Persistent Deferred Queue for Links**  
-   Refactor deferred link/unlink operations (`MediaKeywords`) to **persist across sessions**.  
+2. **Persistent Deferred Queue for Links**
+   Refactor deferred link/unlink operations (`MediaKeywords`) to **persist across sessions**.
    - Deferred changes must survive application crashes, network failures, or sync retries.
    - Design persistent "deferred queue" table or mechanism.
 
-3. **`sync_log` Garbage Collection Mechanism**  
+3. **`sync_log` Garbage Collection Mechanism**
    Implement **client acknowledgment** tracking and **safe vacuuming** of old `sync_log` entries.
    - Prevent unbounded database growth.
    - Server must track per-client sync state (last change_id or last_modified).
    - Design deletion policies (e.g., "only purge changes acknowledged by 100% of active clients").
 
-4. **Postgres Backend Hardening**  
+4. **Postgres Backend Hardening**
    Prepare for a Postgres backend with:
    - Equivalent metadata integrity protections (triggers or `CHECK` constraints).
    - **Row Level Security (RLS)** policies for true tenant isolation.

@@ -205,7 +205,7 @@ Factual Extraction RAG
 Models
 	https://huggingface.co/THUDM/GLM-Z1-32B-0414
 	https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e
-	
+
 Agentic RAG
 	https://arxiv.org/pdf/2501.09136
 	https://github.com/asinghcsu/AgenticRAG-Survey
@@ -270,7 +270,7 @@ Context Relevancy
 	https://arxiv.org/abs/2404.10198
 	https://github.com/kevinwu23/StanfordClashEval
 ```
-@Rock-star-007 from reddit: I added 3 nodes in my agent - query intent identifier, query rephraser , search_scope identifier. You try to identify what what the user is intending to ask. The rephrase the question as per the intent. You need to write prompts for rephrasing accordingly. Then identify what specific documents the user might be talking about. Then perform retrieval step with appropriate scope, then do generation. 
+@Rock-star-007 from reddit: I added 3 nodes in my agent - query intent identifier, query rephraser , search_scope identifier. You try to identify what what the user is intending to ask. The rephrase the question as per the intent. You need to write prompts for rephrasing accordingly. Then identify what specific documents the user might be talking about. Then perform retrieval step with appropriate scope, then do generation.
 ```
 
 
@@ -438,7 +438,7 @@ Vector-related
   * https://arxiv.org/abs/2401.08406
   * https://github.com/NirDiamant/RAG_Techniques?tab=readme-ov-file
   * https://github.com/jxnl/n-levels-of-rag
-  * https://winder.ai/llm-architecture-rag-implementation-design-patterns/ 
+  * https://winder.ai/llm-architecture-rag-implementation-design-patterns/
   * https://medium.com/@yufan1602/modular-rag-and-rag-flow-part-%E2%85%B0-e69b32dc13a3
 	https://news.ycombinator.com/item?id=42174829
 
@@ -550,7 +550,7 @@ Existing
 	    * Analytical Strategy: Aims for comprehensive coverage of a topic, exploring different aspects.
   	  * Opinion Strategy: Tries to gather diverse viewpoints on a subjective issue.
     	* Contextual Strategy: Incorporates user-specific context to tailor the retrieval.
-- **Generation & Post-Generation** 
+- **Generation & Post-Generation**
 	- Prompt Compression
 		* https://github.com/microsoft/LLMLingua
 	- **Citations**
@@ -585,7 +585,7 @@ Existing
 			1. Text
 				* Chunked and turned into vector embeddings
 			2. Images and Diagrams
-				* Turn into vector embeddings using a multi-modal/vision model 
+				* Turn into vector embeddings using a multi-modal/vision model
 			3. Tables
 				* Summarized with an LLM, descriptions embedded and used for indexing
 				* After retrieval, table is used as is.
@@ -621,7 +621,7 @@ Existing
 				2. Construct a knowledge graph by extracting entities and their relationships from each chunk.
 				3. Simultaneously, Graph RAG employs a multi-stage iterative process. This process requires the LLM to determine if all entities have been extracted, similar to a binary classification problem.
 				4. Element Instances → Element Summaries → Graph Communities → Community Summaries
-					* Graph RAG employs community detection algorithms to identify community structures within the graph, incorporating closely linked entities into the same community. 
+					* Graph RAG employs community detection algorithms to identify community structures within the graph, incorporating closely linked entities into the same community.
 					* `In this scenario, even if LLM fails to identify all variants of an entity consistently during extraction, community detection can help establish the connections between these variants. Once grouped into a community, it signifies that these variants refer to the same entity connotation, just with different expressions or synonyms. This is akin to entity disambiguation in the field of knowledge graph.`
 					* `After identifying the community, we can generate report-like summaries for each community within the Leiden hierarchy. These summaries are independently useful in understanding the global structure and semantics of the dataset. They can also be used to comprehend the corpus without any problems.`
 				5. Community Summaries → Community Answers → Global Answer
@@ -650,7 +650,7 @@ Existing
 			* Rewrite a query into a cypher query
 		3. Self-query Retriever
 			* Vector DBs
-			* Auto-generate metadata filters from query 
+			* Auto-generate metadata filters from query
 	9. **Query Translation**
 		1. Query Decomposition - Decompose or re-phrase the input question
 			1. Multi-Query
@@ -659,7 +659,7 @@ Existing
 					* `The core idea of the sub-question strategy is to generate and propose sub-questions related to the main question during the question-answering process to better understand and answer the main question. These sub-questions are usually more specific and can help the system to understand the main question more deeply, thereby improving retrieval accuracy and providing correct answers.`
 					1. First, the sub-question strategy generates multiple sub-questions from the user query using LLM (Large Language Model).
 					2. Then, each sub-question undergoes the RAG process to obtain its own answer (retrieval generation).
-					3. Finally, the answers to all sub-questions are merged to obtain the final answer. 
+					3. Finally, the answers to all sub-questions are merged to obtain the final answer.
 					4. Sub Question prompt: - https://github.com/run-llama/llama_index/blob/main/llama-index-integrations/question_gen/llama-index-question-gen-openai/llama_index/question_gen/openai/base.py#L18-L45
 					```
 					You are a world class state of the art agent.
@@ -689,8 +689,8 @@ Existing
 					2. Create a(or multiple) stepback question - `What was Estella Leopold's education history?`
 					3. Answer Stepback answer
 					4. Perform reasoning using stepback question + answer to create final answer
-			3. RAG-Fusion - Combining multiple data sources in one RAG (Walking RAG?) 
-				- 3 parts: 
+			3. RAG-Fusion - Combining multiple data sources in one RAG (Walking RAG?)
+				- 3 parts:
 					1. Query Generation - Generate multiple sub-queries from the user’s input to capture diverse perspectives and fully understand the user’s intent.
 					2. Sub-query Retrieval - Retrieve relevant information for each sub-query from large datasets and repositories, ensuring comprehensive and in-depth search results.
 					3. Reciprocal Rank Fusion - Merge the retrieved documents using Reciprocal Rank Fusion (RRF) to combine their ranks, prioritizing the most relevant and comprehensive results.
@@ -703,11 +703,11 @@ Existing
 		- Literally just ask the LLM to do it.
 	11. **Query Extension**
 	12. **Query Expansion**
-		* 
+		*
 		1. Query Expansion with a generated answer
 			* Paper: https://arxiv.org/abs/2212.10496
 			* `We use the LLM to generate an answer, before performing the similarity search. If it is a question that can only be answered using our internal knowledge, we indirectly ask the model to hallucinate, and use the hallucinated answer to search for content that is similar to the answer and not the user query itself.`
-			* Given an input query, this method first instructs an LLM to provide a hypothetical answer, whatever its correctness. 
+			* Given an input query, this method first instructs an LLM to provide a hypothetical answer, whatever its correctness.
 				* Then, the query and the generated answer are combined in a prompt and sent to the retrieval system.
 			- Implementations:
 				- HyDE (Hypothetical Document Embeddings)
@@ -718,13 +718,13 @@ Existing
 				- Others?
 		2. Query Expansion with multiple related questions
 			* We ask the LLM to generate N questions related to the original query and then send them all to the retrieval system
-			* 
+			*
 	13. **Multiple System Prompts**
 		* Generate multiple prompts, consolidate answer
 	14. **Query Routing** - Let LLM decide which datastore to use for information retrieval based on user's query
 		1. Logical Routing - Let LLM choose DB based on question
 		2. Semantic Routing - embed question and choose prompt based on similarity
-	15. **Response Summarization** - Using summaries of returned items 
+	15. **Response Summarization** - Using summaries of returned items
 	16. **Ranking***
 			1. Re-Rank
 				* https://div.beehiiv.com/p/advanced-rag-series-retrieval
@@ -766,7 +766,7 @@ Existing
 			3. Web Search for Corrections:
 				* When incorrect retrieval occurs, the system leverages large-scale web search to find more diverse and accurate external knowledge.`
 	3. **Rewrite-Retrieve-Read (RRR)**
-		* https://arxiv.org/pdf/2305.14283 
+		* https://arxiv.org/pdf/2305.14283
 	4. **Choosing the appropriate/correct model**
 	5. **Agents**
 	6. **Evaluation**
@@ -924,7 +924,7 @@ JSON file store Vector indexing
 		- Multi-Query - Expand original question into multiple
 		- Sub-Query - `The process of sub-question planning represents the generation of the necessary sub-questions to contextualize and fully answer the original question when combined. `
 		- Chain-of-Verification(CoVe) - The expanded queries undergo validation by LLM to achieve the effect of reducing hallucinations. Validated expanded queries typically exhibit higher reliability.
-			* https://arxiv.org/abs/2309.11495 
+			* https://arxiv.org/abs/2309.11495
 		- Query Transformation
 			- Rewrite
 				* The original queries are not always optimal for LLM retrieval, especially in real-world scenarios. Therefore, we can prompt LLM to rewrite the queries.
@@ -932,7 +932,7 @@ JSON file store Vector indexing
 				* `When responding to queries, LLM constructs hypothetical documents (assumed answers) instead of directly searching the query and its computed vectors in the vector database. It focuses on embedding similarity from answer to answer rather than seeking embedding similarity for the problem or query. In addition, it also includes Reverse HyDE, which focuses on retrieval from query to query.`
 				* https://medium.aiplanet.com/advanced-rag-improving-retrieval-using-hypothetical-document-embeddings-hyde-1421a8ec075a?gi=b7fa45dc0f32&source=post_page-----e69b32dc13a3--------------------------------
 			- Reverse HyDE
-				* 
+				*
 			- Step-back prompting
 				* https://arxiv.org/abs/2310.06117
 				* https://cobusgreyling.medium.com/a-new-prompt-engineering-technique-has-been-introduced-called-step-back-prompting-b00e8954cacb
@@ -1083,7 +1083,7 @@ https://gist.github.com/Donavan/62e238aa0a40ca88191255a070e356a2
 		- Research:
 			- Attribution Bench: https://osu-nlp-group.github.io/AttributionBench/
 				* Finetuning T5 models outperform otherwise SOTA models.
-				* Complexity of questions and data are issues. 
+				* Complexity of questions and data are issues.
 			- ContextCite: https://gradientscience.org/contextcite/
 				* Hot shit?
 				* https://gradientscience.org/contextcite-applications/

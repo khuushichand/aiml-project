@@ -80,5 +80,3 @@ def test_mcp_http_and_ws(api_client):
     # 5) Metrics (may require admin) - allow 200/401/403
     m = api_client.client.get("/api/v1/mcp/metrics")
     assert m.status_code in (200, 401, 403)
-
-

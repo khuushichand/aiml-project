@@ -195,7 +195,7 @@ Each provider adapter implements voice cloning through the `_prepare_voice_refer
 ```python
 class HiggsAdapter(TTSAdapter):
     async def _prepare_voice_reference(
-        self, 
+        self,
         voice_reference: bytes
     ) -> Optional[str]:
         """Process and prepare voice reference for Higgs."""
@@ -206,16 +206,16 @@ class HiggsAdapter(TTSAdapter):
             validate=True,
             convert=True
         )
-        
+
         if error:
             logger.error(f"Voice reference processing failed: {error}")
             return None
-            
+
         # Save to temporary file
         temp_path = f"/tmp/voice_ref_{uuid.uuid4()}.wav"
         with open(temp_path, 'wb') as f:
             f.write(processed_audio)
-            
+
         return temp_path
 
 #### IndexTTS2 Emotion Parameters
@@ -239,7 +239,7 @@ Voice references are stored as temporary files during processing:
 try:
     # Process with voice reference
     audio_data = await self._generate_with_reference(
-        text, 
+        text,
         voice_ref_path
     )
 finally:
@@ -299,24 +299,24 @@ def prepare_voice_sample(input_path, output_path, target_sr=24000):
     """Prepare voice sample for cloning."""
     # Load audio
     audio, sr = librosa.load(input_path, sr=None)
-    
+
     # Resample if needed
     if sr != target_sr:
         audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
-    
+
     # Normalize amplitude
     audio = audio / np.max(np.abs(audio))
     audio = audio * 0.95  # Leave headroom
-    
+
     # Trim silence
     audio, _ = librosa.effects.trim(audio, top_db=20)
-    
+
     # Apply gentle compression
     audio = np.tanh(audio * 0.7) / 0.7
-    
+
     # Save processed audio
     sf.write(output_path, audio, target_sr, subtype='PCM_16')
-    
+
     return len(audio) / target_sr  # Return duration
 ```
 
@@ -327,27 +327,27 @@ def validate_voice_sample(audio_path):
     """Validate voice sample quality."""
     audio, sr = librosa.load(audio_path, sr=None)
     duration = len(audio) / sr
-    
+
     # Check duration
     if duration < 3:
         return False, "Audio too short (min 3 seconds)"
     if duration > 30:
         return False, "Audio too long (max 30 seconds)"
-    
+
     # Check energy level
     rms = np.sqrt(np.mean(audio**2))
     if rms < 0.01:
         return False, "Audio too quiet"
-    
+
     # Check for clipping
     if np.max(np.abs(audio)) >= 0.99:
         return False, "Audio is clipping"
-    
+
     # Check silence ratio
     silence = np.sum(np.abs(audio) < 0.01) / len(audio)
     if silence > 0.3:
         return False, "Too much silence in audio"
-    
+
     return True, "Audio validated successfully"
 ```
 
@@ -365,7 +365,7 @@ def clone_voice(text, voice_file, provider="higgs"):
     # Read and encode voice sample
     voice_data = Path(voice_file).read_bytes()
     voice_b64 = base64.b64encode(voice_data).decode()
-    
+
     # Make API request
     response = requests.post(
         "http://localhost:8000/api/v1/audio/speech",
@@ -377,7 +377,7 @@ def clone_voice(text, voice_file, provider="higgs"):
             "response_format": "mp3"
         }
     )
-    
+
     if response.status_code == 200:
         return response.content
     else:
@@ -399,11 +399,11 @@ class VoiceCloner:
     def __init__(self, base_url="http://localhost:8000"):
         self.base_url = base_url
         self.session = requests.Session()
-    
+
     def clone_with_emotion(self, text, voice_file, emotion="neutral"):
         """Clone voice with emotion control (Chatterbox)."""
         voice_b64 = self._encode_file(voice_file)
-        
+
         response = self.session.post(
             f"{self.base_url}/api/v1/audio/speech",
             json={
@@ -419,11 +419,11 @@ class VoiceCloner:
             }
         )
         return response.content
-    
+
     def clone_with_music(self, text, voice_file, enable_music=True):
         """Clone voice with background music (VibeVoice)."""
         voice_b64 = self._encode_file(voice_file)
-        
+
         response = self.session.post(
             f"{self.base_url}/api/v1/audio/speech",
             json={
@@ -439,7 +439,7 @@ class VoiceCloner:
             }
         )
         return response.content
-    
+
     def _encode_file(self, file_path):
         """Encode file to base64."""
         with open(file_path, 'rb') as f:
@@ -459,11 +459,11 @@ async def batch_clone_voices(
     provider: str = "higgs"
 ) -> List[bytes]:
     """Clone multiple texts with same voice concurrently."""
-    
+
     # Prepare voice reference once
     with open(voice_file, 'rb') as f:
         voice_b64 = base64.b64encode(f.read()).decode()
-    
+
     async def clone_single(session, text):
         async with session.post(
             "http://localhost:8000/api/v1/audio/speech",
@@ -475,7 +475,7 @@ async def batch_clone_voices(
             }
         ) as response:
             return await response.read()
-    
+
     # Process concurrently
     async with aiohttp.ClientSession() as session:
         tasks = [clone_single(session, text) for text in texts]
@@ -503,15 +503,15 @@ audio_files = asyncio.run(
        def __init__(self, ttl_hours=24):
            self.cache = {}
            self.ttl = ttl_hours * 3600
-       
+
        def get_or_process(self, audio_data, provider):
            cache_key = hashlib.md5(audio_data).hexdigest()
-           
+
            if cache_key in self.cache:
                cached, timestamp = self.cache[cache_key]
                if time.time() - timestamp < self.ttl:
                    return cached
-           
+
            # Process and cache
            processed = process_voice_reference(audio_data, provider)
            self.cache[cache_key] = (processed, time.time())
@@ -543,11 +543,11 @@ audio_files = asyncio.run(
 ```python
 class VoiceConsentManager:
     """Manage voice cloning consent."""
-    
+
     def __init__(self, db_path="consent.db"):
         self.db = sqlite3.connect(db_path)
         self._init_db()
-    
+
     def record_consent(
         self,
         voice_id: str,
@@ -557,17 +557,17 @@ class VoiceConsentManager:
     ):
         """Record consent for voice cloning."""
         self.db.execute("""
-            INSERT INTO voice_consent 
+            INSERT INTO voice_consent
             (voice_id, owner_name, consent_text, expiry_date, created_at)
             VALUES (?, ?, ?, ?, ?)
         """, (voice_id, owner_name, consent_text, expiry_date, datetime.now()))
         self.db.commit()
-    
+
     def verify_consent(self, voice_id: str) -> bool:
         """Verify active consent exists."""
         result = self.db.execute("""
             SELECT expiry_date FROM voice_consent
-            WHERE voice_id = ? 
+            WHERE voice_id = ?
             AND (expiry_date IS NULL OR expiry_date > ?)
         """, (voice_id, datetime.now())).fetchone()
         return result is not None
@@ -578,7 +578,7 @@ class VoiceConsentManager:
 ```python
 class VoiceCloningAudit:
     """Audit voice cloning usage."""
-    
+
     def log_usage(
         self,
         user_id: str,
@@ -597,7 +597,7 @@ class VoiceCloningAudit:
             "duration": duration,
             "ip_address": request.remote_addr
         }
-        
+
         # Log to file or database
         logger.info(f"Voice cloning audit: {json.dumps(audit_entry)}")
 ```
@@ -657,22 +657,22 @@ def generate_with_watermark(text, voice_ref, user_id):
 def diagnose_voice_quality(voice_file):
     """Diagnose potential voice quality issues."""
     audio, sr = librosa.load(voice_file, sr=None)
-    
+
     issues = []
-    
+
     # Check SNR
     signal_power = np.mean(audio**2)
     noise_floor = np.percentile(np.abs(audio), 5)**2
     snr = 10 * np.log10(signal_power / noise_floor)
     if snr < 15:
         issues.append(f"Low SNR: {snr:.1f}dB (recommend >15dB)")
-    
+
     # Check frequency content
     D = np.abs(librosa.stft(audio))
     spectral_rolloff = librosa.feature.spectral_rolloff(S=D, sr=sr)[0]
     if np.mean(spectral_rolloff) < 2000:
         issues.append("Limited frequency range")
-    
+
     return issues
 ```
 
@@ -710,13 +710,13 @@ def debug_voice_request(voice_file):
     # Check file size
     size_mb = os.path.getsize(voice_file) / 1024 / 1024
     print(f"File size: {size_mb:.2f}MB")
-    
+
     # Check audio properties
     audio, sr = librosa.load(voice_file, sr=None)
     duration = len(audio) / sr
     print(f"Duration: {duration:.2f}s")
     print(f"Sample rate: {sr}Hz")
-    
+
     # Check encoding
     try:
         with open(voice_file, 'rb') as f:

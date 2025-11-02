@@ -65,22 +65,22 @@ class UserDatabase:
     Manages user authentication and authorization using the DatabaseBackend interface,
     supporting both SQLite and PostgreSQL backends.
     """
-    
+
     _CURRENT_SCHEMA_VERSION = 1
-    
-    def __init__(self, backend: Optional[DatabaseBackend] = None, 
+
+    def __init__(self, backend: Optional[DatabaseBackend] = None,
                  config: Optional[DatabaseConfig] = None,
                  client_id: str = "auth_service"):
         """
         Initialize UserDatabase instance.
-        
+
         Args:
             backend: Pre-configured DatabaseBackend instance
             config: DatabaseConfig for creating a new backend
             client_id: Identifier for the client/instance making changes
         """
         self.client_id = client_id
-        
+
         # Use provided backend or create from config
         if backend:
             self.backend = backend
@@ -99,10 +99,10 @@ class UserDatabase:
                 sqlite_path=str(default_sqlite_path)
             )
             self.backend = DatabaseBackendFactory.create_backend(config)
-        
+
         # Initialize schema if needed
         self._initialize_schema()
-        
+
         logger.info(f"UserDatabase initialized with {self.backend.backend_type.value} backend for client {client_id}")
 
     def _initialize_schema(self):
@@ -111,7 +111,7 @@ class UserDatabase:
         schema_name = "users_auth_schema.sql"
         # Go up to the project root (tldw_server/)
         base_path = Path(__file__).parent.parent.parent.parent.parent
-        
+
         if self.backend.backend_type == BackendType.SQLITE:
             schema_path = base_path / "Databases" / "SQLite" / "Schema" / schema_name
         elif self.backend.backend_type == BackendType.POSTGRESQL:
@@ -119,7 +119,7 @@ class UserDatabase:
         else:
             logger.warning(f"No schema path defined for backend type: {self.backend.backend_type}")
             return
-        
+
         schema_statements: Optional[List[str]] = None
         loaded_from_file = False
 
@@ -155,22 +155,22 @@ class UserDatabase:
     ########################################################################################################################
     # User Management Methods
     ########################################################################################################################
-    
-    def create_user(self, username: str, email: str, password_hash: str, 
+
+    def create_user(self, username: str, email: str, password_hash: str,
                    role: str = 'user', **kwargs) -> int:
         """
         Create a new user.
-        
+
         Args:
             username: Unique username
             email: User email address
             password_hash: Hashed password
             role: Initial role (default: 'user')
             **kwargs: Additional user fields
-            
+
         Returns:
             int: User ID of created user
-            
+
         Raises:
             DuplicateUserError: If username or email already exists
         """
@@ -196,10 +196,10 @@ class UserDatabase:
                     (username, email),
                     connection=conn,
                 )
-                
+
                 if existing.rows:
                     raise DuplicateUserError(f"Username or email already exists")
-                
+
                 # Insert user
                 result = self.backend.execute(
                     """
@@ -218,14 +218,14 @@ class UserDatabase:
                 if not user_lookup.rows:
                     raise UserDatabaseError("Failed to locate newly created user record")
                 user_id = user_lookup.rows[0]['id']
-                
+
                 # Assign default role
                 role_result = self.backend.execute(
                     "SELECT id FROM roles WHERE name = ?",
                     (role,),
                     connection=conn,
                 )
-                
+
                 if role_result.rows:
                     role_id = role_result.rows[0]['id']
                     self.backend.execute(
@@ -233,7 +233,7 @@ class UserDatabase:
                         (user_id, role_id),
                         connection=conn,
                     )
-                
+
                 # Log the creation
                 self._audit_log(
                     'user_created',
@@ -242,10 +242,10 @@ class UserDatabase:
                     {'username': username, 'email': email, 'role': role},
                     connection=conn,
                 )
-                
+
                 logger.info(f"Created user {username} with ID {user_id}")
                 return user_id
-                
+
         except Exception as e:
             # Preserve explicit duplicate signal
             if isinstance(e, DuplicateUserError):
@@ -254,17 +254,17 @@ class UserDatabase:
             if ("duplicate" in emsg) or ("unique" in emsg) or ("already exists" in emsg):
                 raise DuplicateUserError("Username or email already exists")
             raise UserDatabaseError(f"Failed to create user: {e}")
-    
-    def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None, 
+
+    def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None,
                  email: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get user by ID, username, or email.
-        
+
         Args:
             user_id: User ID
             username: Username
             email: Email address
-            
+
         Returns:
             Dict containing user data or None if not found
         """
@@ -282,7 +282,7 @@ class UserDatabase:
             )
         else:
             return None
-        
+
         if result.rows:
             user_dict = result.rows[0]
             # Normalize metadata to dict
@@ -305,15 +305,15 @@ class UserDatabase:
             user_dict['roles'] = self.get_user_roles(user_dict['id'])
             return user_dict
         return None
-    
+
     def update_user(self, user_id: int, **updates) -> bool:
         """
         Update user information.
-        
+
         Args:
             user_id: User ID to update
             **updates: Fields to update
-            
+
         Returns:
             bool: True if update successful
         """
@@ -322,18 +322,18 @@ class UserDatabase:
             allowed_fields = ['email', 'is_active', 'is_verified', 'metadata']
             set_clause = []
             values = []
-            
+
             for field, value in updates.items():
                 if field in allowed_fields:
                     set_clause.append(f"{field} = ?")
                     values.append(value if field != 'metadata' else json.dumps(value))
-            
+
             if not set_clause:
                 return False
-            
+
             values.append(user_id)
             query = f"UPDATE users SET {', '.join(set_clause)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-            
+
             result = self.backend.execute(query, tuple(values), connection=conn)
 
             success = False
@@ -353,56 +353,56 @@ class UserDatabase:
             if success:
                 self._audit_log('user_updated', user_id, None, updates, connection=conn)
             return success
-    
+
     def delete_user(self, user_id: int) -> bool:
         """
         Delete a user (soft delete by setting is_active = 0).
-        
+
         Args:
             user_id: User ID to delete
-            
+
         Returns:
             bool: True if deletion successful
         """
         return self.update_user(user_id, is_active=False)
-    
+
     ########################################################################################################################
     # Role and Permission Management
     ########################################################################################################################
-    
+
     def get_user_roles(self, user_id: int) -> List[str]:
         """
         Get all roles assigned to a user.
-        
+
         Args:
             user_id: User ID
-            
+
         Returns:
             List of role names
         """
         result = self.backend.execute(
             """
-            SELECT r.name 
+            SELECT r.name
             FROM roles r
             JOIN user_roles ur ON r.id = ur.role_id
             WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
             """,
             (user_id,)
         )
-        
+
         return [row['name'] for row in result.rows]
-    
+
     def assign_role(self, user_id: int, role_name: str, granted_by: Optional[int] = None,
                    expires_at: Optional[datetime] = None) -> bool:
         """
         Assign a role to a user.
-        
+
         Args:
             user_id: User ID
             role_name: Name of role to assign
             granted_by: ID of user granting the role
             expires_at: Optional expiration datetime
-            
+
         Returns:
             bool: True if assignment successful
         """
@@ -412,13 +412,13 @@ class UserDatabase:
                 "SELECT id FROM roles WHERE name = ?", (role_name,),
                 connection=conn,
             )
-            
+
             if not role_result.rows:
                 # Gracefully handle unknown roles per tests
                 return False
-            
+
             role_id = role_result.rows[0]['id']
-            
+
             try:
                 # Use REPLACE for SQLite, ON CONFLICT for PostgreSQL
                 if self.backend.backend_type == BackendType.SQLITE:
@@ -430,34 +430,34 @@ class UserDatabase:
                     query = """
                         INSERT INTO user_roles (user_id, role_id, granted_by, expires_at)
                         VALUES (?, ?, ?, ?)
-                        ON CONFLICT (user_id, role_id) 
+                        ON CONFLICT (user_id, role_id)
                         DO UPDATE SET granted_by = EXCLUDED.granted_by, expires_at = EXCLUDED.expires_at
                     """
-                
+
                 self.backend.execute(
                     query,
                     (user_id, role_id, granted_by, expires_at),
                     connection=conn,
                 )
-                
+
                 self._audit_log('role_assigned', user_id, granted_by,
                               {'role': role_name, 'expires_at': expires_at.isoformat() if expires_at else None},
                               connection=conn)
                 return True
-                
+
             except Exception as e:
                 logger.error(f"Failed to assign role: {e}")
                 return False
-    
+
     def revoke_role(self, user_id: int, role_name: str, revoked_by: Optional[int] = None) -> bool:
         """
         Revoke a role from a user.
-        
+
         Args:
             user_id: User ID
             role_name: Name of role to revoke
             revoked_by: ID of user revoking the role
-            
+
         Returns:
             bool: True if revocation successful
         """
@@ -467,30 +467,30 @@ class UserDatabase:
                 "SELECT id FROM roles WHERE name = ?", (role_name,),
                 connection=conn,
             )
-            
+
             if not role_result.rows:
                 return False
-            
+
             role_id = role_result.rows[0]['id']
-            
+
             result = self.backend.execute(
                 "DELETE FROM user_roles WHERE user_id = ? AND role_id = ?",
                 (user_id, role_id),
                 connection=conn,
             )
-            
+
             if result.rowcount > 0:
                 self._audit_log('role_revoked', user_id, revoked_by, {'role': role_name}, connection=conn)
                 return True
             return False
-    
+
     def get_user_permissions(self, user_id: int) -> List[str]:
         """
         Get all permissions for a user (from roles and direct assignments).
-        
+
         Args:
             user_id: User ID
-            
+
         Returns:
             List of permission names
         """
@@ -505,9 +505,9 @@ class UserDatabase:
             """,
             (user_id,)
         )
-        
+
         permissions = set(row['name'] for row in role_perms.rows)
-        
+
         # Get direct permissions (add granted, remove revoked)
         direct_perms = self.backend.execute(
             """
@@ -518,48 +518,48 @@ class UserDatabase:
             """,
             (user_id,)
         )
-        
+
         for row in direct_perms.rows:
             if row['granted']:
                 permissions.add(row['name'])
             else:
                 permissions.discard(row['name'])
-        
+
         return list(permissions)
-    
+
     def has_permission(self, user_id: int, permission: str) -> bool:
         """Check if user has a specific permission."""
         permissions = self.get_user_permissions(user_id)
         return permission in permissions
-    
+
     def has_role(self, user_id: int, role: str) -> bool:
         """Check if user has a specific role."""
         roles = self.get_user_roles(user_id)
         return role in roles
-    
+
     ########################################################################################################################
     # Registration Code Management
     ########################################################################################################################
-    
-    def create_registration_code(self, created_by: Optional[int] = None, 
+
+    def create_registration_code(self, created_by: Optional[int] = None,
                                 expires_in_days: int = 7,
                                 max_uses: int = 1,
                                 role: str = 'user') -> str:
         """
         Create a new registration code.
-        
+
         Args:
             created_by: User ID who created the code
             expires_in_days: Days until code expires
             max_uses: Maximum number of times code can be used
             role: Default role to assign to users who register with this code
-            
+
         Returns:
             str: The generated registration code
         """
         code = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
-        
+
         with self.backend.transaction() as conn:
             # Get role ID
             role_result = self.backend.execute(
@@ -567,7 +567,7 @@ class UserDatabase:
                 connection=conn,
             )
             role_id = role_result.rows[0]['id'] if role_result.rows else None
-            
+
             self.backend.execute(
                 """
                 INSERT INTO registration_codes (code, created_by, expires_at, max_uses, role_id)
@@ -576,21 +576,21 @@ class UserDatabase:
                 (code, created_by, expires_at, max_uses, role_id),
                 connection=conn,
             )
-            
+
             self._audit_log('registration_code_created', None, created_by,
                           {'code': code[:8] + '...', 'max_uses': max_uses, 'role': role},
                           connection=conn)
-            
+
             logger.info(f"Created registration code {code[:8]}... with {max_uses} uses")
             return code
-    
+
     def validate_registration_code(self, code: str) -> Optional[Dict[str, Any]]:
         """
         Validate a registration code.
-        
+
         Args:
             code: Registration code to validate
-            
+
         Returns:
             Dict with code info if valid, None if invalid
         """
@@ -599,27 +599,27 @@ class UserDatabase:
             SELECT rc.*, r.name as role_name
             FROM registration_codes rc
             LEFT JOIN roles r ON rc.role_id = r.id
-            WHERE rc.code = ? 
+            WHERE rc.code = ?
             AND rc.is_active = ?
             AND rc.expires_at > CURRENT_TIMESTAMP
             AND rc.times_used < rc.max_uses
             """,
             (code, True if self.backend.backend_type == BackendType.POSTGRESQL else 1)
         )
-        
+
         return result.rows[0] if result.rows else None
-    
+
     def use_registration_code(self, code: str, user_id: int, ip_address: Optional[str] = None,
                              user_agent: Optional[str] = None) -> bool:
         """
         Mark a registration code as used.
-        
+
         Args:
             code: Registration code
             user_id: User ID who used the code
             ip_address: IP address of registration
             user_agent: User agent string
-            
+
         Returns:
             bool: True if code was successfully used
         """
@@ -633,12 +633,12 @@ class UserDatabase:
                 (code, True if self.backend.backend_type == BackendType.POSTGRESQL else 1),
                 connection=conn,
             )
-            
+
             if not code_result.rows:
                 return False
-            
+
             code_id = code_result.rows[0]['id']
-            
+
             active_value = True if self.backend.backend_type == BackendType.POSTGRESQL else 1
             update_params = (code_id, active_value)
 
@@ -703,7 +703,7 @@ class UserDatabase:
                     (code_id,),
                     connection=conn,
                 )
-            
+
             # Record usage
             self.backend.execute(
                 """
@@ -713,24 +713,24 @@ class UserDatabase:
                 (code_id, user_id, ip_address, user_agent),
                 connection=conn,
             )
-            
+
             self._audit_log('registration_code_used', user_id, None,
                           {'code': code[:8] + '...', 'ip': ip_address},
                           connection=conn)
-            
+
             return True
-    
+
     ########################################################################################################################
     # Authentication Methods
     ########################################################################################################################
-    
+
     def record_login(self, user_id: int, ip_address: Optional[str] = None,
                     user_agent: Optional[str] = None) -> bool:
         """Record a successful login."""
         with self.backend.transaction() as conn:
             self.backend.execute(
                 """
-                UPDATE users 
+                UPDATE users
                 SET last_login = CURRENT_TIMESTAMP,
                     failed_login_attempts = 0,
                     locked_until = NULL
@@ -739,12 +739,12 @@ class UserDatabase:
                 (user_id,),
                 connection=conn,
             )
-            
+
             self._audit_log('login_success', user_id, None,
                           {'ip': ip_address, 'user_agent': user_agent},
                           connection=conn)
             return True
-    
+
     def record_failed_login(self, username: str, ip_address: Optional[str] = None) -> int:
         """Record a failed login attempt."""
         with self.backend.transaction() as conn:
@@ -752,14 +752,14 @@ class UserDatabase:
             if self.backend.backend_type == BackendType.SQLITE:
                 self.backend.execute(
                     """
-                    UPDATE users 
+                    UPDATE users
                     SET failed_login_attempts = failed_login_attempts + 1
                     WHERE username = ?
                     """,
                     (username,),
                     connection=conn,
                 )
-                
+
                 result = self.backend.execute(
                     "SELECT failed_login_attempts, id FROM users WHERE username = ?",
                     (username,),
@@ -768,7 +768,7 @@ class UserDatabase:
             else:
                 result = self.backend.execute(
                     """
-                    UPDATE users 
+                    UPDATE users
                     SET failed_login_attempts = failed_login_attempts + 1
                     WHERE username = ?
                     RETURNING failed_login_attempts, id
@@ -776,11 +776,11 @@ class UserDatabase:
                     (username,),
                     connection=conn,
                 )
-            
+
             if result.rows:
                 attempts = result.rows[0]['failed_login_attempts']
                 user_id = result.rows[0]['id']
-                
+
                 # Lock account after 5 attempts
                 if attempts >= 5:
                     lock_until = datetime.now(timezone.utc) + timedelta(minutes=15)
@@ -789,30 +789,30 @@ class UserDatabase:
                         (lock_until, user_id),
                         connection=conn,
                     )
-                
+
                 self._audit_log('login_failed', None, None,
                               {'username': username, 'ip': ip_address, 'attempts': attempts},
                               connection=conn)
-                
+
                 return attempts
             return 0
-    
+
     def is_account_locked(self, user_id: int) -> bool:
         """Check if user account is locked."""
         result = self.backend.execute(
             """
-            SELECT locked_until FROM users 
+            SELECT locked_until FROM users
             WHERE id = ? AND locked_until > CURRENT_TIMESTAMP
             """,
             (user_id,)
         )
-        
+
         return len(result.rows) > 0
-    
+
     ########################################################################################################################
     # Helper Methods
     ########################################################################################################################
-    
+
     def _audit_log(
         self,
         event_type: str,

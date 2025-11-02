@@ -271,17 +271,17 @@ Concurrency & Scheduling
 - Legal/compliance: user acknowledgment for scraping settings; documentation
 
 ## 22) Open Questions / Next Steps
-- Outputs retention/versioning strategy and storage limits.  
+- Outputs retention/versioning strategy and storage limits.
   **Answer:** Shipped: every output is versioned and stamped with `expires_at`. Global defaults are driven by `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` / `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`, and jobs can override via `output_prefs.retention`. Naming convention `<RUN_NAME>-Output-<n>` holds; add admin UX for managing expirations.
-- Template/editor experience (file-based vs. UI-driven), templating language.  
+- Template/editor experience (file-based vs. UI-driven), templating language.
   **Answer:** File-based templates + CRUD API are live (Jinja2 sandbox). Next iteration: UI-driven editor built atop the same endpoints. Template language remains Jinja2; validation hooks exist server-side.
-- Delivery mechanisms (email, Chatbook, Media DB aggregation).  
+- Delivery mechanisms (email, Chatbook, Media DB aggregation).
   **Answer:** Email delivery (mockable SMTP) and Chatbook generated-document storage ship in v0.2.1 with per-job defaults. Media DB aggregation remains roadmap work.
-- Per-job rate limiting UI; per-user Postgres backend support.  
+- Per-job rate limiting UI; per-user Postgres backend support.
   **Answer:** Expose rate-limit controls via API first; surface UI later. Postgres backend is deferred until the broader DB abstraction is ready.
-- WebUI parity for new items/outputs endpoints.  
+- WebUI parity for new items/outputs endpoints.
   **Answer:** Achieved: the Next.js admin watchlists tab lists items, previews outputs, edits per-job defaults (template/retention/delivery), and surfaces run stats. Future UI work focuses on template editing and richer item review.
-- Content Collections alignment.  
+- Content Collections alignment.
   **Answer:** When the Collections `content_items` tables land, update Watchlists ingestion to dual-write (Media DB + Collections DB) and ensure `/watchlists/items` and `/items` endpoints stay consistent. Postgres enablement remains deferred to Stage 2 so both modules migrate together.
 
 ---

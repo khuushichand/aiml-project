@@ -206,7 +206,7 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # Timeouts for long evaluations
         proxy_read_timeout 300s;
         proxy_connect_timeout 75s;
@@ -254,7 +254,7 @@ groups:
         for: 5m
         annotations:
           summary: High evaluation error rate
-          
+
       - alert: SlowEvaluations
         expr: histogram_quantile(0.95, evaluation_duration_seconds) > 30
         for: 10m

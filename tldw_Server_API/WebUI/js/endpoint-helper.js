@@ -10,7 +10,7 @@ class EndpointHelper {
             retryDelay: 1000,
             retryableStatuses: [408, 429, 500, 502, 503, 504]
         };
-        
+
         this.timeoutConfig = {
             default: 30000,  // 30 seconds
             long: 120000,    // 2 minutes for long operations
@@ -54,9 +54,9 @@ class EndpointHelper {
         // Add request button
         const buttonClass = method === 'DELETE' ? 'btn-danger' : '';
         const confirmDelete = method === 'DELETE' ? `if(confirm('Are you sure?')) ` : '';
-        
+
         html += `
-            <button class="api-button ${buttonClass}" 
+            <button class="api-button ${buttonClass}"
                     onclick="${confirmDelete}endpointHelper.executeRequest('${id}', '${method}', '${path}', '${bodyType}', '${timeout}')">
                 ${this.getButtonText(method)}
             </button>
@@ -103,7 +103,7 @@ class EndpointHelper {
                 html += `
                     <label for="${fieldId}">${label} ${requiredMark}:</label>
                     <select id="${fieldId}">
-                        ${options.map(opt => 
+                        ${options.map(opt =>
                             `<option value="${opt.value}" ${opt.value === defaultValue ? 'selected' : ''}>
                                 ${opt.label}
                             </option>`
@@ -133,8 +133,8 @@ class EndpointHelper {
             case 'number':
                 html += `
                     <label for="${fieldId}">${label} ${requiredMark}:</label>
-                    <input type="number" id="${fieldId}" 
-                           value="${defaultValue}" 
+                    <input type="number" id="${fieldId}"
+                           value="${defaultValue}"
                            placeholder="${placeholder}"
                            ${field.min !== undefined ? `min="${field.min}"` : ''}
                            ${field.max !== undefined ? `max="${field.max}"` : ''}
@@ -145,8 +145,8 @@ class EndpointHelper {
             default: // text, password, etc.
                 html += `
                     <label for="${fieldId}">${label} ${requiredMark}:</label>
-                    <input type="${type}" id="${fieldId}" 
-                           value="${defaultValue}" 
+                    <input type="${type}" id="${fieldId}"
+                           value="${defaultValue}"
                            placeholder="${placeholder}">
                 `;
         }
@@ -205,15 +205,15 @@ class EndpointHelper {
             return await requestFn();
         } catch (error) {
             const shouldRetry = this.shouldRetry(error, attempt);
-            
+
             if (shouldRetry) {
                 const delay = this.retryConfig.retryDelay * attempt;
                 Toast.warning(`Request failed. Retrying in ${delay}ms... (Attempt ${attempt + 1}/${this.retryConfig.maxRetries})`);
-                
+
                 await this.delay(delay);
                 return this.executeWithRetry(requestFn, endpointId, attempt + 1);
             }
-            
+
             throw error;
         }
     }
@@ -229,14 +229,14 @@ class EndpointHelper {
         // Check if error has a retryable status code
         const errorMessage = error.message || '';
         const statusMatch = errorMessage.match(/HTTP (\d+)/);
-        
+
         if (statusMatch) {
             const status = parseInt(statusMatch[1]);
             return this.retryConfig.retryableStatuses.includes(status);
         }
 
         // Retry on network errors
-        return errorMessage.includes('NetworkError') || 
+        return errorMessage.includes('NetworkError') ||
                errorMessage.includes('Failed to fetch') ||
                errorMessage.includes('timeout');
     }
@@ -297,14 +297,14 @@ class EndpointHelper {
         if (!section) {
             section = document.getElementById(endpointId);
         }
-        
+
         if (!section) return data;
 
         // Find all inputs in this section
         const inputs = section.querySelectorAll('input, textarea, select');
         inputs.forEach(input => {
             const name = input.id.replace(`${endpointId}_`, '');
-            
+
             // Skip path parameters and special fields
             if (name.includes('response') || name.includes('curl') || name.includes('payload')) {
                 return;
@@ -331,13 +331,13 @@ class EndpointHelper {
         if (!section) {
             section = document.getElementById(endpointId);
         }
-        
+
         if (!section) return formData;
 
         const inputs = section.querySelectorAll('input, textarea, select');
         inputs.forEach(input => {
             const name = input.id.replace(`${endpointId}_`, '');
-            
+
             if (input.type === 'file' && input.files.length > 0) {
                 Array.from(input.files).forEach(file => {
                     formData.append(name, file);
@@ -431,7 +431,7 @@ class EndpointHelper {
             const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
                 ? apiClient.generateCurlV2(method, processedPath, { body, query })
                 : apiClient.generateCurl(method, processedPath, { body, query }));
-            
+
             curlEl.textContent = curlCommand;
             curlEl.style.display = curlEl.style.display === 'none' ? 'block' : 'none';
 
@@ -453,7 +453,7 @@ class EndpointHelper {
                 note.textContent = '';
                 note.style.display = 'none';
             }
-            
+
             // Copy to clipboard button
             if (!curlEl.nextElementSibling || !curlEl.nextElementSibling.classList.contains('copy-curl')) {
                 const copyBtn = document.createElement('button');
@@ -507,10 +507,10 @@ class EndpointHelper {
 
         if (parallel) {
             // Execute all operations in parallel
-            const promises = operations.map((op, index) => 
+            const promises = operations.map((op, index) =>
                 this.executeBatchOperation(op, index, total, onProgress)
             );
-            
+
             if (stopOnError) {
                 return Promise.all(promises);
             } else {

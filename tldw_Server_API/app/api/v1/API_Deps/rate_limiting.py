@@ -13,7 +13,7 @@ def get_test_aware_remote_address(request):
     # ONLY check for TEST_MODE in environment - NEVER trust client headers
     if os.getenv("TEST_MODE") == "true":
         return None  # Bypass rate limiting in test mode
-    
+
     return _original_get_remote_address(request)
 
 def create_limiter():

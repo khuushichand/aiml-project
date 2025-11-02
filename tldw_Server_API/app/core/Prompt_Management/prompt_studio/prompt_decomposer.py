@@ -23,4 +23,3 @@ class PromptDecomposer:
         segments = [p.strip() for p in parts if p and p.strip()]
         # Cap to a small number of segments for MVP
         return segments[:6]
-

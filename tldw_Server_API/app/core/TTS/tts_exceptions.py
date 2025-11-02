@@ -11,17 +11,17 @@ from datetime import datetime
 
 class TTSError(Exception):
     """Base exception for all TTS-related errors"""
-    
+
     def __init__(
-        self, 
-        message: str, 
-        provider: Optional[str] = None, 
+        self,
+        message: str,
+        provider: Optional[str] = None,
         error_code: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None
     ):
         """
         Initialize TTS error.
-        
+
         Args:
             message: Human-readable error message
             provider: Name of the TTS provider that failed
@@ -34,7 +34,7 @@ class TTSError(Exception):
         self.error_code = error_code
         self.details = details or {}
         self.timestamp = datetime.utcnow()
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for API responses"""
         return {
@@ -220,7 +220,7 @@ def validation_error(field: str, value: Any, constraint: str, **kwargs) -> TTSVa
     details["field"] = field
     details["value"] = value
     details["constraint"] = constraint
-    
+
     message = f"Validation failed for field '{field}': {constraint}"
     return TTSValidationError(message, details=details)
 
@@ -249,7 +249,7 @@ def rate_limit_error(provider: str, retry_after: Optional[int] = None, **kwargs)
     details = kwargs.get("details", {})
     if retry_after:
         details["retry_after"] = retry_after
-    
+
     return TTSRateLimitError(
         f"Rate limit exceeded for {provider}",
         provider=provider,
@@ -263,7 +263,7 @@ def timeout_error(provider: str, timeout_seconds: Optional[int] = None, **kwargs
     details = kwargs.get("details", {})
     if timeout_seconds:
         details["timeout_seconds"] = timeout_seconds
-    
+
     return TTSTimeoutError(
         f"Timeout waiting for {provider} response",
         provider=provider,
@@ -276,10 +276,10 @@ def timeout_error(provider: str, timeout_seconds: Optional[int] = None, **kwargs
 def categorize_error(error: Exception) -> str:
     """
     Categorize error for better handling decisions.
-    
+
     Args:
         error: Exception to categorize
-        
+
     Returns:
         Error category string
     """
@@ -344,10 +344,10 @@ ERROR_STATUS_CODES = {
 def get_http_status_code(error: TTSError) -> int:
     """
     Get appropriate HTTP status code for TTS error.
-    
+
     Args:
         error: TTS error instance
-        
+
     Returns:
         HTTP status code
     """
@@ -357,10 +357,10 @@ def get_http_status_code(error: TTSError) -> int:
 def get_http_status_for_error(error: Exception) -> int:
     """
     Get appropriate HTTP status code for any error (alias for compatibility).
-    
+
     Args:
         error: The error
-        
+
     Returns:
         HTTP status code
     """
@@ -372,41 +372,41 @@ def get_http_status_for_error(error: Exception) -> int:
 def is_retryable_error(error: Exception) -> bool:
     """
     Check if an error is retryable.
-    
+
     Args:
         error: The exception to check
-        
+
     Returns:
         True if the error is retryable
     """
     # Non-retryable errors (check these first since some inherit from retryable types)
-    if isinstance(error, (TTSValidationError, TTSAuthenticationError, 
+    if isinstance(error, (TTSValidationError, TTSAuthenticationError,
                          TTSProviderNotConfiguredError, TTSModelNotFoundError,
                          TTSConfigurationError)):
         return False
-    
+
     # Retryable errors
-    if isinstance(error, (TTSNetworkError, TTSTimeoutError, TTSRateLimitError, 
+    if isinstance(error, (TTSNetworkError, TTSTimeoutError, TTSRateLimitError,
                          TTSProviderError, TTSProviderUnavailableError,
                          TTSResourceError)):
         return True
-    
+
     # Unknown errors are not retryable by default
     return False
 
 
-def resource_error(provider: str, resource_type: str, required: Any = None, 
+def resource_error(provider: str, resource_type: str, required: Any = None,
                   available: Any = None, **kwargs) -> TTSResourceError:
     """
     Create a resource error.
-    
+
     Args:
         provider: Provider name
         resource_type: Type of resource (memory, gpu, etc)
         required: Required amount
         available: Available amount
         **kwargs: Additional details
-        
+
     Returns:
         TTSResourceError instance
     """
@@ -416,11 +416,11 @@ def resource_error(provider: str, resource_type: str, required: Any = None,
         'available': available,
         **kwargs
     }
-    
+
     message = f"Insufficient {resource_type} for {provider}"
     if required and available:
         message += f" (required: {required}, available: {available})"
-    
+
     return TTSResourceError(message, provider=provider, details=details)
 
 #

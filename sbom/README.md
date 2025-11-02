@@ -27,4 +27,3 @@ Notes
 - For container/OS-level SBOMs, consider using syft:
   - syft dir:. -o cyclonedx-json=sbom/sbom-syft.cdx.json
   - syft <image> -o cyclonedx-json=sbom/sbom-image.cdx.json
-

@@ -42,13 +42,13 @@ class RateLimitConfig:
     burst_size: int
     max_cost_per_day: float
     max_cost_per_month: float
-    
+
     @classmethod
     def for_tier(cls, tier: UserTier) -> "RateLimitConfig":
         """Get configuration for a tier from external config."""
         # Try to get configuration from external config first
         tier_config = get_rate_limit_config(tier.value)
-        
+
         if tier_config:
             return cls(
                 tier=tier,
@@ -60,7 +60,7 @@ class RateLimitConfig:
                 max_cost_per_day=tier_config.max_cost_per_day,
                 max_cost_per_month=tier_config.max_cost_per_month
             )
-        
+
         # Fallback to hardcoded defaults if external config not available
         fallback_configs = {
             UserTier.FREE: cls(
@@ -114,32 +114,32 @@ class RateLimitConfig:
                 max_cost_per_month=10.0
             )
         }
-        
+
         logger.warning(f"Using fallback configuration for tier {tier.value}")
         return fallback_configs.get(tier, fallback_configs[UserTier.FREE])
 
 
 class UserRateLimiter:
     """Per-user rate limiter with tier-based limits."""
-    
+
     def __init__(self, db_path: Optional[str] = None):
         """
         Initialize user rate limiter.
-        
+
         Args:
             db_path: Path to rate limiting database
         """
         if db_path is None:
             # Default to canonical per-user evaluations DB (single-user ID in legacy contexts)
             db_path = DatabasePaths.get_evaluations_db_path(DatabasePaths.get_single_user_id())
-        
+
         self.db_path = str(db_path)
         self._init_database()
-        
+
         # In-memory cache for rate limit data (with TTL)
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_ttl = 60  # seconds
-    
+
     def _init_database(self):
         """Initialize rate limiting tables."""
         # Register explicit adapters to avoid deprecated defaults on Python 3.12+
@@ -167,7 +167,7 @@ class UserRateLimiter:
                     notes TEXT
                 )
             """)
-            
+
             # Rate limit tracking table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS rate_limit_tracking (
@@ -179,12 +179,12 @@ class UserRateLimiter:
                     cost REAL DEFAULT 0.0
                 )
             """)
-            
+
             # Create indexes separately
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracking_user ON rate_limit_tracking(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracking_time ON rate_limit_tracking(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracking_endpoint ON rate_limit_tracking(endpoint)")
-            
+
             # Daily usage summary
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS daily_usage (
@@ -196,9 +196,9 @@ class UserRateLimiter:
                     PRIMARY KEY (user_id, date)
                 )
             """)
-            
+
             conn.commit()
-    
+
     async def check_rate_limit(
         self,
         user_id: str,
@@ -209,14 +209,14 @@ class UserRateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Check if user can make request based on their tier limits.
-        
+
         Args:
             user_id: User identifier
             endpoint: API endpoint being accessed
             is_batch: Whether this is a batch evaluation
             tokens_requested: Estimated tokens for request
             estimated_cost: Estimated cost for request
-            
+
         Returns:
             Tuple of (is_allowed, metadata)
             - is_allowed: Whether request is allowed
@@ -224,24 +224,24 @@ class UserRateLimiter:
         """
         # Get user's rate limit configuration
         config = await self._get_user_config(user_id)
-        
+
         # Check per-minute limits
         minute_check = await self._check_minute_limit(user_id, endpoint, is_batch, config)
         if not minute_check[0]:
             return minute_check
-        
+
         # Check daily limits
         daily_check = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
         if not daily_check[0]:
             return daily_check
-        
+
         # Record the request
         await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
-        
+
         # Return success with rate limit headers
         metadata = self._generate_rate_limit_headers(user_id, config, minute_check[1], daily_check[1])
         return True, metadata
-    
+
     async def _get_user_config(self, user_id: str) -> RateLimitConfig:
         """Get user's rate limit configuration."""
         # Check cache first
@@ -250,7 +250,7 @@ class UserRateLimiter:
             cached = self._cache[cache_key]
             if time.time() - cached["timestamp"] < self._cache_ttl:
                 return cached["config"]
-        
+
         # Query database
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -261,9 +261,9 @@ class UserRateLimiter:
                 FROM user_rate_limits
                 WHERE user_id = ?
             """, (user_id,))
-            
+
             row = cursor.fetchone()
-            
+
             if row:
                 # Check if custom limits have expired (tolerate naive or aware timestamps)
                 expired = False
@@ -282,7 +282,7 @@ class UserRateLimiter:
                     # Reset to default tier
                     tier = UserTier.FREE
                     config = RateLimitConfig.for_tier(tier)
-                    
+
                     # Update database
                     cursor.execute("""
                         UPDATE user_rate_limits
@@ -305,7 +305,7 @@ class UserRateLimiter:
             else:
                 # Create default configuration for new user
                 config = RateLimitConfig.for_tier(UserTier.FREE)
-                
+
                 cursor.execute("""
                     INSERT INTO user_rate_limits (
                         user_id, tier, evaluations_per_minute, batch_evaluations_per_minute,
@@ -319,15 +319,15 @@ class UserRateLimiter:
                     config.max_cost_per_day, config.max_cost_per_month
                 ))
                 conn.commit()
-        
+
         # Cache the configuration
         self._cache[cache_key] = {
             "config": config,
             "timestamp": time.time()
         }
-        
+
         return config
-    
+
     async def _check_minute_limit(
         self,
         user_id: str,
@@ -345,21 +345,21 @@ class UserRateLimiter:
             reset_seconds = max(1, 60 - seconds_into_window)
         except Exception:
             reset_seconds = 60
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Count requests in last minute
             cursor.execute(
                 "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint = ?",
                 (user_id, minute_ago.isoformat(), endpoint)
             )
-            
+
             request_count = cursor.fetchone()[0]
-            
+
             # Check against limit
             limit = config.batch_evaluations_per_minute if is_batch else config.evaluations_per_minute
-            
+
             # Check burst allowance
             if request_count >= limit:
                 # Check if within burst window
@@ -368,9 +368,9 @@ class UserRateLimiter:
                     "SELECT COUNT(*) FROM rate_limit_tracking WHERE user_id = ? AND timestamp > ? AND endpoint = ?",
                     (user_id, burst_window.isoformat(), endpoint)
                 )
-                
+
                 burst_count = cursor.fetchone()[0]
-                
+
                 if burst_count >= config.burst_size:
                     # Retry after the remaining seconds in the current minute window
                     retry_after = reset_seconds
@@ -382,14 +382,14 @@ class UserRateLimiter:
                         "tier": config.tier.value,
                         "reset_seconds": reset_seconds,
                     }
-            
+
             return True, {
                 "requests_remaining": max(0, limit - request_count - 1),
                 "limit": limit,
                 "window": "1 minute",
                 "reset_seconds": reset_seconds,
             }
-    
+
     async def _check_daily_limits(
         self,
         user_id: str,
@@ -399,24 +399,24 @@ class UserRateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """Check daily usage limits."""
         today = datetime.now(timezone.utc).date()
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Get today's usage
             cursor.execute("""
                 SELECT total_evaluations, total_tokens, total_cost
                 FROM daily_usage
                 WHERE user_id = ? AND date = ?
             """, (user_id, str(today)))
-            
+
             row = cursor.fetchone()
-            
+
             if row:
                 total_evaluations, total_tokens, total_cost = row
             else:
                 total_evaluations = total_tokens = total_cost = 0
-            
+
             # Check limits
             if total_evaluations >= config.evaluations_per_day:
                 return False, {
@@ -425,7 +425,7 @@ class UserRateLimiter:
                     "used": total_evaluations,
                     "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
                 }
-            
+
             if total_tokens + tokens_requested > config.total_tokens_per_day:
                 return False, {
                     "error": "Daily token limit exceeded",
@@ -434,7 +434,7 @@ class UserRateLimiter:
                     "requested": tokens_requested,
                     "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
                 }
-            
+
             if total_cost + estimated_cost > config.max_cost_per_day:
                 return False, {
                     "error": "Daily cost limit exceeded",
@@ -443,13 +443,13 @@ class UserRateLimiter:
                     "requested": estimated_cost,
                     "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
                 }
-            
+
             return True, {
                 "evaluations_remaining": config.evaluations_per_day - total_evaluations - 1,
                 "tokens_remaining": config.total_tokens_per_day - total_tokens - tokens_requested,
                 "cost_remaining": config.max_cost_per_day - total_cost - estimated_cost
             }
-    
+
     async def _record_request(
         self,
         user_id: str,
@@ -460,14 +460,14 @@ class UserRateLimiter:
         """Record a request for tracking."""
         now = datetime.now(timezone.utc)
         today = now.date()
-        
+
         with sqlite3.connect(self.db_path) as conn:
             # Record in tracking table
             conn.execute(
                 "INSERT INTO rate_limit_tracking (user_id, endpoint, timestamp, tokens_used, cost) VALUES (?, ?, ?, ?, ?)",
                 (user_id, endpoint, now.isoformat(), tokens_used, cost)
             )
-            
+
             # Update daily usage
             conn.execute("""
                 INSERT INTO daily_usage (user_id, date, total_evaluations, total_tokens, total_cost)
@@ -477,9 +477,9 @@ class UserRateLimiter:
                     total_tokens = total_tokens + ?,
                     total_cost = total_cost + ?
             """, (user_id, str(today), tokens_used, cost, tokens_used, cost))
-            
+
             conn.commit()
-    
+
     def _generate_rate_limit_headers(
         self,
         user_id: str,
@@ -506,7 +506,7 @@ class UserRateLimiter:
                 "daily": daily_metadata
             }
         }
-    
+
     async def upgrade_user_tier(
         self,
         user_id: str,
@@ -516,19 +516,19 @@ class UserRateLimiter:
     ) -> bool:
         """
         Upgrade a user's tier.
-        
+
         Args:
             user_id: User identifier
             new_tier: New tier to assign
             expires_at: Optional expiration for temporary upgrades
             custom_limits: Optional custom limit overrides
-            
+
         Returns:
             True if upgrade successful
         """
         try:
             config = RateLimitConfig.for_tier(new_tier)
-            
+
             # Apply custom limits if provided
             if custom_limits:
                 # If moving to CUSTOM with partial overrides, default to no burst unless specified
@@ -537,7 +537,7 @@ class UserRateLimiter:
                 for key, value in custom_limits.items():
                     if hasattr(config, key):
                         setattr(config, key, value)
-            
+
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -553,7 +553,7 @@ class UserRateLimiter:
                     config.max_cost_per_day, config.max_cost_per_month,
                     expires_at, user_id
                 ))
-                
+
                 if cursor.rowcount == 0:
                     # User doesn't exist, create new entry
                     cursor.execute("""
@@ -569,51 +569,51 @@ class UserRateLimiter:
                         config.max_cost_per_day, config.max_cost_per_month,
                         expires_at
                     ))
-                
+
                 conn.commit()
-            
+
             # Clear cache
             cache_key = f"config_{user_id}"
             if cache_key in self._cache:
                 del self._cache[cache_key]
-            
+
             logger.info(f"Upgraded user {user_id} to tier {new_tier.value}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to upgrade user tier: {e}")
             return False
-    
+
     async def get_usage_summary(self, user_id: str) -> Dict[str, Any]:
         """
         Get usage summary for a user.
-        
+
         Args:
             user_id: User identifier
-            
+
         Returns:
             Usage summary with current limits and consumption
         """
         config = await self._get_user_config(user_id)
         today = datetime.now(timezone.utc).date()
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Get today's usage
             cursor.execute("""
                 SELECT total_evaluations, total_tokens, total_cost
                 FROM daily_usage
                 WHERE user_id = ? AND date = ?
             """, (user_id, str(today)))
-            
+
             row = cursor.fetchone()
-            
+
             if row:
                 total_evaluations, total_tokens, total_cost = row
             else:
                 total_evaluations = total_tokens = total_cost = 0
-            
+
             # Get monthly cost
             month_start = today.replace(day=1)
             cursor.execute("""
@@ -621,9 +621,9 @@ class UserRateLimiter:
                 FROM daily_usage
                 WHERE user_id = ? AND date >= ?
             """, (user_id, str(month_start)))
-            
+
             monthly_cost = cursor.fetchone()[0] or 0.0
-        
+
         return {
             "user_id": user_id,
             "tier": config.tier.value,

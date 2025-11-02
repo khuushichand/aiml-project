@@ -28,4 +28,3 @@ def test_mcp_request_tools_list_unauth_returns_403_hint():
     assert isinstance(detail, dict)
     assert detail.get("message") in ("Insufficient permissions",)
     assert "hint" in detail
-

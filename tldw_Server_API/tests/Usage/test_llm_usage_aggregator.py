@@ -152,4 +152,3 @@ async def test_llm_aggregate_sqlite(monkeypatch):
     assert int(row1["errors"]) == 1
     assert int(row1["total_tokens"]) == 170
     assert float(row1["total_cost_usd"]) > 0.0
-

@@ -36,12 +36,12 @@ def load_mediawiki_import_config():
     base_dir = Path(__file__).parent.resolve()
     config_path = base_dir / '..' / '..' / '..' / '..' / 'Config_Files' / 'mediawiki_import_config.yaml'
     config_path = config_path.resolve()
-    
+
     # Verify the path is within the project structure
     project_root = base_dir.parent.parent.parent.parent.resolve()
     if not str(config_path).startswith(str(project_root)):
         raise ValueError("Config file path is outside project directory")
-    
+
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
@@ -55,10 +55,10 @@ _FILE_HANDLER_ID: Optional[int] = None
 
 def get_safe_log_path(log_filename: str) -> Optional[Path]:
     """Generate safe log file path.
-    
+
     Args:
         log_filename: Name of the log file
-    
+
     Returns:
         Safe Path object for log file or None if unsafe
     """
@@ -67,12 +67,12 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
         if not re.match(r'^[a-zA-Z0-9_\-]+\.log$', log_filename):
             logger.warning(f"Invalid log filename: {log_filename}")
             return None
-        
+
         # Check for path traversal attempts
         if any(pattern in log_filename for pattern in ['..', '/', '\\', '\x00']):
             logger.warning(f"Path traversal attempt in log filename: {log_filename}")
             return None
-        
+
         # Build safe log directory path
         base_dir = Path(__file__).parent.resolve()
         project_root = base_dir.parent.parent.parent.parent.resolve()
@@ -91,13 +91,13 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
                 log_dir = project_root / 'Logs'
         else:
             log_dir = project_root / 'Logs'
-        
+
         # Create log directory if it doesn't exist
         log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Construct full log path
         log_path = (log_dir / log_filename).resolve()
-        
+
         # Verify the path is within the log directory
         try:
             common_path = os.path.commonpath([str(log_path), str(log_dir)])
@@ -107,7 +107,7 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
         except ValueError:
             logger.warning(f"Invalid log file path: {log_path}")
             return None
-        
+
         return log_path
     except Exception as e:
         logger.error(f"Error creating safe log path: {e}")
@@ -155,14 +155,14 @@ setup_media_wiki_logger('mediawiki_import', log_file='mediawiki_import.log')
 
 def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Path:
     """Validate and resolve file path to prevent path traversal attacks.
-    
+
     Args:
         file_path: Path to validate
         allowed_dir: Optional directory to restrict file access to (default: current working directory)
-    
+
     Returns:
         Resolved safe Path object
-    
+
     Raises:
         ValueError: If path is invalid or attempts traversal
     """
@@ -170,35 +170,35 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         # Check for null bytes which can truncate paths
         if '\x00' in file_path:
             raise ValueError("Null byte in path")
-        
+
         # Additional checks for suspicious patterns first
         if '../' in file_path or '..' + os.sep in file_path:
             raise ValueError("Path traversal attempt detected")
-        
+
         # Convert to Path and resolve to absolute path
         path = Path(file_path).resolve()
-        
+
         # Check if path exists
         if not path.exists():
             raise ValueError("File does not exist")
-        
+
         # Check if it's a file (not a directory or symlink to directory)
         if not path.is_file():
             raise ValueError("Path is not a regular file")
-        
+
         # Check for symlink attacks
         if path.is_symlink():
             # Resolve the symlink and check if it's within allowed directory
             real_path = path.resolve()
             if allowed_dir and not str(real_path).startswith(str(allowed_dir)):
                 raise ValueError("Symlink points outside allowed directory")
-        
+
         # Default to current working directory if no allowed_dir specified
         if allowed_dir is None:
             # For MediaWiki dumps, we expect them to be in a reasonable location
             # Default to allowing files in current directory and subdirectories
             allowed_dir = Path.cwd()
-        
+
         allowed = Path(allowed_dir).resolve()
         # Use os.path.commonpath for secure path containment check
         try:
@@ -208,12 +208,12 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         except ValueError:
             # Paths are on different drives (Windows) or otherwise incomparable
             raise ValueError("Access denied: Path is outside allowed directory")
-        
+
         # Check file size to prevent processing huge files
         max_file_size = 1024 * 1024 * 1024  # 1GB limit
         if path.stat().st_size > max_file_size:
             raise ValueError("File size exceeds maximum allowed size")
-        
+
         return path
     except (ValueError, OSError) as e:
         # Log the error internally but don't expose the path in the error message
@@ -223,51 +223,51 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
 
 def sanitize_wiki_name(wiki_name: str) -> str:
     """Sanitize wiki name to prevent path traversal and injection attacks.
-    
+
     Args:
         wiki_name: Wiki name to sanitize
-    
+
     Returns:
         Sanitized wiki name
-    
+
     Raises:
         ValueError: If wiki name contains invalid characters
     """
     # Check for null bytes first
     if '\x00' in wiki_name:
         raise ValueError("Invalid wiki name: Contains null byte")
-    
+
     # Only allow alphanumeric, underscore, hyphen, and spaces
     if not re.match(r'^[a-zA-Z0-9_\- ]+$', wiki_name):
         raise ValueError("Invalid wiki name: Only alphanumeric characters, underscores, hyphens, and spaces are allowed")
-    
+
     # Additional security checks
     if any(pattern in wiki_name for pattern in ['..', '/', '\\']):
         raise ValueError("Invalid wiki name: Contains forbidden characters")
-    
+
     # Replace spaces with underscores for filesystem safety
     safe_name = wiki_name.replace(' ', '_')
-    
+
     # Limit length to prevent issues
     if len(safe_name) > 100:
         raise ValueError(f"Wiki name too long (max 100 characters)")
-    
+
     return safe_name
 
 
 def get_safe_checkpoint_path(wiki_name: str, checkpoint_dir: Optional[Path] = None) -> Path:
     """Generate safe checkpoint file path.
-    
+
     Args:
         wiki_name: Wiki name for checkpoint
         checkpoint_dir: Directory for checkpoint files (default: current directory)
-    
+
     Returns:
         Safe Path object for checkpoint file
     """
     # Sanitize wiki name first
     safe_wiki_name = sanitize_wiki_name(wiki_name)
-    
+
     # Use provided directory or default to a safe location
     if checkpoint_dir:
         base_dir = Path(checkpoint_dir).resolve()
@@ -275,11 +275,11 @@ def get_safe_checkpoint_path(wiki_name: str, checkpoint_dir: Optional[Path] = No
         # Default to a checkpoints subdirectory
         base_dir = Path('./checkpoints').resolve()
         base_dir.mkdir(exist_ok=True)
-    
+
     # Construct checkpoint filename
     checkpoint_filename = f"{safe_wiki_name}_import_checkpoint.json"
     checkpoint_path = base_dir / checkpoint_filename
-    
+
     # Verify the path is within the expected directory using secure method
     try:
         # Use os.path.commonpath for secure path containment check
@@ -291,7 +291,7 @@ def get_safe_checkpoint_path(wiki_name: str, checkpoint_dir: Optional[Path] = No
     except ValueError:
         # Paths are on different drives (Windows) or otherwise incomparable
         raise ValueError("Invalid checkpoint path")
-    
+
     return checkpoint_path
 
 
@@ -578,7 +578,7 @@ def load_checkpoint(file_path: str) -> int:
     except ValueError:
         # File doesn't exist yet, which is fine for checkpoints
         return 0
-    
+
     if safe_path.exists():
         try:
             with open(safe_path, 'r') as f:
@@ -594,18 +594,18 @@ def save_checkpoint(file_path: str, last_processed_id: int):
     # Check for null bytes
     if '\x00' in str(file_path):
         raise ValueError("Null byte in checkpoint path")
-    
+
     # Validate the path is safe before any operations
     if '../' in str(file_path) or '..' + os.sep in str(file_path):
         raise ValueError("Path traversal attempt in checkpoint file")
-    
+
     # Convert to Path and resolve
     safe_path = Path(file_path).resolve()
-    
+
     # Ensure we're writing to the checkpoints directory
     checkpoints_dir = Path('./checkpoints').resolve()
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Verify the resolved path is within checkpoints directory
     try:
         common_path = os.path.commonpath([str(safe_path), str(checkpoints_dir)])
@@ -613,10 +613,10 @@ def save_checkpoint(file_path: str, last_processed_id: int):
             raise ValueError("Checkpoint file must be within checkpoints directory")
     except ValueError:
         raise ValueError("Invalid checkpoint file path")
-    
+
     # Use atomic write to prevent partial writes and race conditions
     safe_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Write to temporary file first
     fd, temp_path = tempfile.mkstemp(dir=safe_path.parent, prefix='.tmp_', suffix='.json')
     try:
@@ -654,7 +654,7 @@ def import_mediawiki_dump(
         except Exception:
             _allowed_dir = None
         safe_file_path = validate_file_path(file_path, allowed_dir=_allowed_dir)
-        
+
         logging.info(
             f"Importing MediaWiki dump: {safe_file_path} for wiki: {safe_wiki_name}. StoreDB: {store_to_db}, StoreVector: {store_to_vector_db}")
         final_chunk_options = chunk_options_override if chunk_options_override else media_wiki_import_config.get(
@@ -715,7 +715,7 @@ def import_mediawiki_dump(
                 # Validate checkpoint file path before deletion to ensure it's still safe
                 checkpoint_resolved = checkpoint_file.resolve()
                 checkpoints_dir = Path('./checkpoints').resolve()
-                
+
                 # Use os.path.commonpath to verify the file is still within expected directory
                 try:
                     common_path = os.path.commonpath([str(checkpoint_resolved), str(checkpoints_dir)])

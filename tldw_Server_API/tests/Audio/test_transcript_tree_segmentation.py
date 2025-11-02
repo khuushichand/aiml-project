@@ -116,4 +116,3 @@ def test_segments_metadata_preserved():
     assert "Alice" in segs[0]["speakers"] and "Bob" in segs[1]["speakers"]
     assert segs[0]["start_time"] == entries[0]["start"]
     assert segs[1]["end_time"] == entries[-1]["end"]
-

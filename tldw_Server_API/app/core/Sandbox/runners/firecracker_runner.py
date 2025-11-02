@@ -31,4 +31,3 @@ class FirecrackerRunner:
     async def start_run(self, spec: RunSpec) -> RunStatus:
         logger.debug(f"FirecrackerRunner.start_run called with spec: {spec}")
         raise NotImplementedError("FirecrackerRunner is not implemented in this scaffold")
-

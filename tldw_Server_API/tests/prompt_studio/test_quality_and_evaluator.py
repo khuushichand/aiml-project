@@ -36,4 +36,3 @@ def test_safe_constraint_eval():
     assert pe._safe_eval_constraint("x + y == 7", names) is True
     # Disallow dangerous constructs
     assert pe._safe_eval_constraint("(__import__('os')).system('ls')", names) is False
-

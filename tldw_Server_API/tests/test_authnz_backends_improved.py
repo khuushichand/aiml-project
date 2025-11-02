@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 class TestConfig:
     """Test configuration for different backends"""
-    
+
     @staticmethod
     def get_sqlite_config(temp_dir: str) -> DatabaseConfig:
         """Get SQLite test configuration with isolation"""
@@ -49,7 +49,7 @@ class TestConfig:
             sqlite_wal_mode=True,
             sqlite_foreign_keys=True
         )
-    
+
     @staticmethod
     def get_postgresql_config() -> DatabaseConfig:
         """Get PostgreSQL test configuration"""
@@ -69,19 +69,19 @@ class TestConfig:
 
 class AuthNZTestBase(unittest.TestCase):
     """Base class for AuthNZ backend tests with proper setup/teardown"""
-    
+
     backend_type: str = "sqlite"
     user_db: Optional[UserDatabase] = None
     password_service: PasswordService = None
     temp_dir: Optional[str] = None
     test_users: list = None
-    
+
     @classmethod
     def setUpClass(cls):
         """Set up class-level resources"""
         cls.password_service = PasswordService()
         cls.test_users = []
-    
+
     def setUp(self):
         """Set up test database for each test"""
         if self.backend_type == "sqlite":
@@ -89,10 +89,10 @@ class AuthNZTestBase(unittest.TestCase):
             config = TestConfig.get_sqlite_config(self.temp_dir)
         else:
             config = TestConfig.get_postgresql_config()
-        
+
         self.user_db = UserDatabase(config=config, client_id="test_suite")
         self.test_users = []  # Track users created in this test
-    
+
     def tearDown(self):
         """Clean up after each test"""
         # Clean up test users
@@ -116,28 +116,28 @@ class AuthNZTestBase(unittest.TestCase):
                             pass  # User might already be deleted
             except Exception as e:
                 print(f"Warning: Failed to clean up test users: {e}")
-        
+
         # Clean up temp directory for SQLite
         if self.temp_dir:
             import shutil
             shutil.rmtree(self.temp_dir, ignore_errors=True)
-    
+
     def create_test_user(self, username_prefix: str = "test") -> Dict[str, Any]:
         """Helper to create a test user with unique credentials"""
         username = f"{username_prefix}_{secrets.token_hex(4)}"
         email = f"{username}@example.com"
         password = "Secure#Pass2024$NoSeq"  # Avoids sequential chars
         password_hash = self.password_service.hash_password(password)
-        
+
         user_id = self.user_db.create_user(
             username=username,
             email=email,
             password_hash=password_hash,
             role="user"
         )
-        
+
         self.test_users.append(user_id)
-        
+
         return {
             "id": user_id,
             "username": username,
@@ -152,24 +152,24 @@ class AuthNZTestBase(unittest.TestCase):
 
 class TestUserCRUD(AuthNZTestBase):
     """Test user CRUD operations"""
-    
+
     def test_create_user_success(self):
         """Test successful user creation"""
         user_data = self.create_test_user("crud_create")
-        
+
         self.assertIsNotNone(user_data["id"])
         self.assertIsInstance(user_data["id"], int)
-        
+
         # Verify user exists
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertIsNotNone(user)
         self.assertEqual(user["username"], user_data["username"])
         self.assertEqual(user["email"], user_data["email"])
-    
+
     def test_create_user_duplicate_username(self):
         """Test duplicate username prevention"""
         user_data = self.create_test_user("crud_dup")
-        
+
         # Try to create with same username
         with self.assertRaises(DuplicateUserError):
             self.user_db.create_user(
@@ -177,11 +177,11 @@ class TestUserCRUD(AuthNZTestBase):
                 email="different@example.com",
                 password_hash=user_data["password_hash"]
             )
-    
+
     def test_create_user_duplicate_email(self):
         """Test duplicate email prevention"""
         user_data = self.create_test_user("crud_email")
-        
+
         # Try to create with same email
         with self.assertRaises(DuplicateUserError):
             self.user_db.create_user(
@@ -189,79 +189,79 @@ class TestUserCRUD(AuthNZTestBase):
                 email=user_data["email"],
                 password_hash=user_data["password_hash"]
             )
-    
+
     def test_read_user_by_id(self):
         """Test reading user by ID"""
         user_data = self.create_test_user("crud_read")
-        
+
         user = self.user_db.get_user(user_id=user_data["id"])
-        
+
         self.assertIsNotNone(user)
         self.assertEqual(user["id"], user_data["id"])
         self.assertEqual(user["username"], user_data["username"])
         self.assertEqual(user["email"], user_data["email"])
         self.assertIn("user", user["roles"])
-    
+
     def test_read_user_by_username(self):
         """Test reading user by username"""
         user_data = self.create_test_user("crud_username")
-        
+
         user = self.user_db.get_user(username=user_data["username"])
-        
+
         self.assertIsNotNone(user)
         self.assertEqual(user["id"], user_data["id"])
         self.assertEqual(user["username"], user_data["username"])
-    
+
     def test_read_nonexistent_user(self):
         """Test reading non-existent user returns None"""
         user = self.user_db.get_user(user_id=999999)
         self.assertIsNone(user)
-        
+
         user = self.user_db.get_user(username="nonexistent_user")
         self.assertIsNone(user)
-    
+
     def test_update_user_success(self):
         """Test successful user update"""
         user_data = self.create_test_user("crud_update")
-        
+
         # Update user
         success = self.user_db.update_user(
             user_data["id"],
             is_verified=True,
             metadata={"test": "data", "number": 42}
         )
-        
+
         self.assertTrue(success)
-        
+
         # Verify changes
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertTrue(user["is_verified"])
         self.assertEqual(user["metadata"]["test"], "data")
         self.assertEqual(user["metadata"]["number"], 42)
-    
+
     def test_update_nonexistent_user(self):
         """Test updating non-existent user"""
         success = self.user_db.update_user(
             999999,
             is_verified=True
         )
-        
+
         self.assertFalse(success)
-    
+
     def test_delete_user_soft(self):
         """Test soft delete (deactivation)"""
         user_data = self.create_test_user("crud_delete")
-        
+
         # Soft delete
         success = self.user_db.delete_user(user_data["id"])
-        
+
         self.assertTrue(success)
-        
+
         # User should still exist but be inactive
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertIsNotNone(user)
         self.assertFalse(user["is_active"])
-    
+
     def test_delete_nonexistent_user(self):
         """Test deleting non-existent user"""
         success = self.user_db.delete_user(999999)
@@ -273,86 +273,86 @@ class TestUserCRUD(AuthNZTestBase):
 
 class TestRBAC(AuthNZTestBase):
     """Test Role-Based Access Control functionality"""
-    
+
     def test_assign_role(self):
         """Test role assignment"""
         user_data = self.create_test_user("rbac_assign")
-        
+
         # Assign admin role
         success = self.user_db.assign_role(user_data["id"], "admin")
         self.assertTrue(success)
-        
+
         # Check roles
         roles = self.user_db.get_user_roles(user_data["id"])
         self.assertIn("admin", roles)
         self.assertIn("user", roles)  # Original role
-    
+
     def test_assign_invalid_role(self):
         """Test assigning non-existent role"""
         user_data = self.create_test_user("rbac_invalid")
-        
+
         # Should handle gracefully
         success = self.user_db.assign_role(user_data["id"], "nonexistent_role")
         self.assertFalse(success)
-    
+
     def test_revoke_role(self):
         """Test role revocation"""
         user_data = self.create_test_user("rbac_revoke")
-        
+
         # Assign then revoke
         self.user_db.assign_role(user_data["id"], "admin")
         success = self.user_db.revoke_role(user_data["id"], "admin")
-        
+
         self.assertTrue(success)
-        
+
         # Check role is gone
         roles = self.user_db.get_user_roles(user_data["id"])
         self.assertNotIn("admin", roles)
         self.assertIn("user", roles)  # Original role remains
-    
+
     def test_permissions_inheritance(self):
         """Test permission inheritance from roles"""
         user_data = self.create_test_user("rbac_perms")
-        
+
         # User role permissions
         user_perms = self.user_db.get_user_permissions(user_data["id"])
         self.assertIn("media.read", user_perms)
         self.assertIn("media.create", user_perms)
         self.assertNotIn("system.configure", user_perms)
-        
+
         # Add admin role
         self.user_db.assign_role(user_data["id"], "admin")
-        
+
         # Admin should have all permissions
         admin_perms = self.user_db.get_user_permissions(user_data["id"])
         self.assertIn("media.read", admin_perms)
         self.assertIn("media.delete", admin_perms)
         self.assertIn("system.configure", admin_perms)
         self.assertIn("users.manage_roles", admin_perms)
-    
+
     def test_custom_role(self):
         """Test custom role with no default permissions"""
         user_data = self.create_test_user("rbac_custom")
-        
+
         # Remove default role and assign custom
         self.user_db.revoke_role(user_data["id"], "user")
         self.user_db.assign_role(user_data["id"], "custom")
-        
+
         # Custom role should have no permissions by default
         roles = self.user_db.get_user_roles(user_data["id"])
         self.assertIn("custom", roles)
-        
+
         perms = self.user_db.get_user_permissions(user_data["id"])
         self.assertEqual(len(perms), 0)
-    
+
     def test_permission_helpers(self):
         """Test permission checking helpers"""
         user_data = self.create_test_user("rbac_helpers")
-        
+
         # Check role helpers
         self.assertTrue(self.user_db.has_role(user_data["id"], "user"))
         self.assertFalse(self.user_db.has_role(user_data["id"], "admin"))
-        
+
         # Check permission helpers
         self.assertTrue(self.user_db.has_permission(user_data["id"], "media.read"))
         self.assertFalse(self.user_db.has_permission(user_data["id"], "system.configure"))
@@ -363,7 +363,7 @@ class TestRBAC(AuthNZTestBase):
 
 class TestRegistrationCodes(AuthNZTestBase):
     """Test registration code functionality"""
-    
+
     def test_create_registration_code(self):
         """Test creating registration code"""
         code = self.user_db.create_registration_code(
@@ -372,17 +372,17 @@ class TestRegistrationCodes(AuthNZTestBase):
             max_uses=3,
             role="viewer"
         )
-        
+
         self.assertIsNotNone(code)
         self.assertGreater(len(code), 20)
-        
+
         # Validate the code
         code_info = self.user_db.validate_registration_code(code)
         self.assertIsNotNone(code_info)
         self.assertEqual(code_info["max_uses"], 3)
         self.assertEqual(code_info["times_used"], 0)
         self.assertEqual(code_info["role_name"], "viewer")
-    
+
     def test_use_registration_code(self):
         """Test using registration code"""
         # Create code
@@ -392,7 +392,7 @@ class TestRegistrationCodes(AuthNZTestBase):
             max_uses=2,
             role="viewer"
         )
-        
+
         # Create user and use code
         user_data = self.create_test_user("reg_use")
         success = self.user_db.use_registration_code(
@@ -401,13 +401,13 @@ class TestRegistrationCodes(AuthNZTestBase):
             ip_address="127.0.0.1",
             user_agent="Test Suite"
         )
-        
+
         self.assertTrue(success)
-        
+
         # Check usage count
         code_info = self.user_db.validate_registration_code(code)
         self.assertEqual(code_info["times_used"], 1)
-    
+
     def test_registration_code_max_uses(self):
         """Test registration code max uses enforcement"""
         # Create code with 1 use
@@ -417,19 +417,19 @@ class TestRegistrationCodes(AuthNZTestBase):
             max_uses=1,
             role="viewer"
         )
-        
+
         # Use it once
         user1 = self.create_test_user("reg_max1")
         self.user_db.use_registration_code(code, user1["id"])
-        
+
         # Try to use again - should fail or return false
         user2 = self.create_test_user("reg_max2")
-        
+
         # Code should be invalid after max uses
         code_info = self.user_db.validate_registration_code(code)
         if code_info:
             self.assertGreaterEqual(code_info["times_used"], code_info["max_uses"])
-    
+
     def test_expired_registration_code(self):
         """Test expired registration code"""
         # Create code that expires immediately
@@ -439,7 +439,7 @@ class TestRegistrationCodes(AuthNZTestBase):
             max_uses=1,
             role="viewer"
         )
-        
+
         # Should be invalid
         code_info = self.user_db.validate_registration_code(code)
         # Expired codes might return None or have is_active=False
@@ -455,28 +455,28 @@ class TestRegistrationCodes(AuthNZTestBase):
 
 class TestAuthentication(AuthNZTestBase):
     """Test authentication tracking functionality"""
-    
+
     def test_record_login(self):
         """Test recording successful login"""
         user_data = self.create_test_user("auth_login")
-        
+
         success = self.user_db.record_login(
             user_data["id"],
             ip_address="192.168.1.1",
             user_agent="Mozilla/5.0"
         )
-        
+
         self.assertTrue(success)
-        
+
         # Check login was recorded
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertIsNotNone(user["last_login"])
         self.assertEqual(user["failed_login_attempts"], 0)
-    
+
     def test_record_failed_login(self):
         """Test recording failed login attempts"""
         user_data = self.create_test_user("auth_failed")
-        
+
         # Record multiple failures
         for i in range(1, 4):
             attempts = self.user_db.record_failed_login(
@@ -484,39 +484,39 @@ class TestAuthentication(AuthNZTestBase):
                 ip_address="192.168.1.1"
             )
             self.assertEqual(attempts, i)
-        
+
         # Check failed attempts were recorded
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertEqual(user["failed_login_attempts"], 3)
-    
+
     def test_account_lockout(self):
         """Test account lockout after max failed attempts"""
         user_data = self.create_test_user("auth_lockout")
-        
+
         # Record 5 failed attempts (typical lockout threshold)
         for _ in range(5):
             self.user_db.record_failed_login(user_data["username"])
-        
+
         # Check if account is locked
         is_locked = self.user_db.is_account_locked(user_data["id"])
         self.assertTrue(is_locked)
-        
+
         # Verify lockout in user data
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertEqual(user["failed_login_attempts"], 5)
         self.assertIsNotNone(user.get("locked_until"))
-    
+
     def test_reset_failed_attempts_on_success(self):
         """Test that failed attempts reset on successful login"""
         user_data = self.create_test_user("auth_reset")
-        
+
         # Record some failed attempts
         for _ in range(3):
             self.user_db.record_failed_login(user_data["username"])
-        
+
         # Record successful login
         self.user_db.record_login(user_data["id"])
-        
+
         # Failed attempts should be reset
         user = self.user_db.get_user(user_id=user_data["id"])
         self.assertEqual(user["failed_login_attempts"], 0)
@@ -527,7 +527,7 @@ class TestAuthentication(AuthNZTestBase):
 
 class TestEdgeCases(AuthNZTestBase):
     """Test edge cases and error handling"""
-    
+
     def test_empty_username(self):
         """Test creating user with empty username"""
         with self.assertRaises((ValueError, UserDatabaseError)):
@@ -536,7 +536,7 @@ class TestEdgeCases(AuthNZTestBase):
                 email="test@example.com",
                 password_hash="hash"
             )
-    
+
     def test_invalid_email_format(self):
         """Test creating user with invalid email"""
         # This might be handled at schema level or return error
@@ -554,11 +554,11 @@ class TestEdgeCases(AuthNZTestBase):
         except (ValueError, UserDatabaseError):
             # Expected for strict validation
             pass
-    
+
     def test_very_long_username(self):
         """Test creating user with very long username"""
         long_username = "u" * 1000  # 1000 characters
-        
+
         try:
             user_id = self.user_db.create_user(
                 username=long_username,
@@ -573,18 +573,18 @@ class TestEdgeCases(AuthNZTestBase):
         except (ValueError, UserDatabaseError):
             # Expected if length limit enforced
             pass
-    
+
     def test_none_values(self):
         """Test handling of None values"""
         user = self.user_db.get_user(user_id=None)
         self.assertIsNone(user)
-        
+
         user = self.user_db.get_user(username=None)
         self.assertIsNone(user)
-        
+
         success = self.user_db.update_user(None, is_verified=True)
         self.assertFalse(success)
-        
+
         success = self.user_db.delete_user(None)
         self.assertFalse(success)
 
@@ -665,13 +665,13 @@ class TestAuthDatabaseConfigDetection(unittest.TestCase):
 def create_test_suite(backend_type: str) -> unittest.TestSuite:
     """Create test suite for specific backend"""
     suite = unittest.TestSuite()
-    
+
     # Set backend type for all test classes
     for test_class in [TestUserCRUD, TestRBAC, TestRegistrationCodes,
                        TestAuthentication, TestEdgeCases, TestAuthDatabaseConfigDetection]:
         test_class.backend_type = backend_type
         suite.addTests(unittest.TestLoader().loadTestsFromTestCase(test_class))
-    
+
     return suite
 
 ########################################################################################################################
@@ -701,16 +701,16 @@ def main():
         action="store_true",
         help="Stop on first failure"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Determine backends to test
     backends = []
     if args.backend == "both":
         backends = ["sqlite", "postgresql"]
     else:
         backends = [args.backend]
-    
+
     # Check PostgreSQL availability
     if "postgresql" in backends:
         try:
@@ -720,37 +720,37 @@ def main():
             print("\n⚠️  PostgreSQL backend not available (psycopg2 not installed)")
             print("   Install with: pip install psycopg2-binary")
             backends.remove("postgresql")
-    
+
     # Run tests for each backend
     all_results = []
-    
+
     for backend in backends:
         print(f"\n{'='*60}")
         print(f"Testing {backend.upper()} Backend")
         print(f"{'='*60}")
-        
+
         # Create test suite
         suite = create_test_suite(backend)
-        
+
         # Run tests
         runner = unittest.TextTestRunner(
             verbosity=args.verbose + 1,
             failfast=args.failfast
         )
-        
+
         result = runner.run(suite)
         all_results.append((backend, result))
-    
+
     # Print summary
     print(f"\n{'='*60}")
     print("FINAL SUMMARY")
     print(f"{'='*60}")
-    
+
     total_passed = 0
     total_failed = 0
     total_errors = 0
     total_skipped = 0
-    
+
     for backend, result in all_results:
         passed = result.testsRun - len(result.failures) - len(result.errors)
         print(f"\n{backend.upper()}:")
@@ -759,18 +759,18 @@ def main():
         print(f"  Failed: {len(result.failures)}")
         print(f"  Errors: {len(result.errors)}")
         print(f"  Skipped: {len(result.skipped)}")
-        
+
         total_passed += passed
         total_failed += len(result.failures)
         total_errors += len(result.errors)
         total_skipped += len(result.skipped)
-    
+
     print(f"\nTOTAL:")
     print(f"  Passed: {total_passed}")
     print(f"  Failed: {total_failed}")
     print(f"  Errors: {total_errors}")
     print(f"  Skipped: {total_skipped}")
-    
+
     # Return appropriate exit code
     if total_failed > 0 or total_errors > 0:
         print("\n❌ Some tests failed")

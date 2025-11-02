@@ -8,10 +8,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import (
-    APIRouter, 
-    Depends, 
-    HTTPException, 
-    Query, 
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
     Path,
     BackgroundTasks,
     status
@@ -37,7 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     MessageListResponse
 )
 
-# Character chat helpers  
+# Character chat helpers
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     retrieve_message_details,
     edit_message_content,
@@ -78,32 +78,32 @@ def _verify_conversation_access(
 ) -> Dict[str, Any]:
     """
     Verify user has access to a conversation.
-    
+
     Args:
         db: Database instance
         conversation_id: Conversation ID to check
         user_id: User ID to verify
-        
+
     Returns:
         Conversation data if access allowed
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized
     """
     conversation = db.get_conversation_by_id(conversation_id)
-    
+
     if not conversation:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Chat session {conversation_id} not found"
         )
-    
+
     if conversation.get('client_id') != str(user_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this chat session"
         )
-    
+
     return conversation
 
 def _verify_message_access(
@@ -149,16 +149,16 @@ async def send_message(
 ):
     """
     Add a new message to a chat session.
-    
+
     Args:
         chat_id: Chat session ID
         message_data: Message content and metadata
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         Created message details
-        
+
     Raises:
         HTTPException: 404 if chat not found, 403 if unauthorized, 429 if rate limited
     """
@@ -167,7 +167,7 @@ async def send_message(
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "message_send")
         await rate_limiter.check_message_send_rate(current_user.id)
-        
+
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
         # Enforce per-chat message cap
@@ -178,7 +178,7 @@ async def send_message(
             raise
         except Exception:
             logger.debug("Non-fatal: message cap check skipped")
-        
+
         # Validate parent message if provided
         if message_data.parent_message_id:
             parent_msg = _verify_message_access(db, message_data.parent_message_id, current_user.id)
@@ -187,10 +187,10 @@ async def send_message(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Parent message must be from the same conversation"
                 )
-        
+
         # Create message
         message_id = str(uuid.uuid4())
-        
+
         # Map role to sender format used in database
         sender_map = {
             "user": "user",
@@ -198,7 +198,7 @@ async def send_message(
             "system": "system"
         }
         sender = sender_map.get(message_data.role, "user")
-        
+
         msg_data = {
             'id': message_id,
             'conversation_id': chat_id,
@@ -208,7 +208,7 @@ async def send_message(
             'client_id': str(current_user.id),
             'version': 1
         }
-        
+
         # Handle image if provided
         if message_data.image_base64:
             try:
@@ -228,16 +228,16 @@ async def send_message(
                 msg_data['image_mime_type'] = 'image/png'  # Default, could detect
             except Exception as e:
                 logger.warning(f"Failed to decode image data: {e}")
-        
+
         # Add to database
         created_id = db.add_message(msg_data)
-        
+
         if not created_id:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create message"
             )
-        
+
         # Update conversation metadata (last_modified/version) via DB abstraction
         conv_for_update = db.get_conversation_by_id(chat_id)
         if conv_for_update:
@@ -245,20 +245,20 @@ async def send_message(
                 db.update_conversation(chat_id, {}, conv_for_update.get('version', 1))
             except (ConflictError, CharactersRAGDBError):
                 logger.debug(f"Non-fatal: failed to bump conversation metadata for {chat_id}")
-        
+
         # Get character details for placeholders
         character_id = conversation.get('character_id')
         character = db.get_character_card_by_id(character_id) if character_id else None
         character_name = character.get('name', 'Assistant') if character else 'Assistant'
         user_name = conversation.get('user_name', 'User')
-        
+
         # Retrieve created message with placeholder parameters
         created_msg = retrieve_message_details(db, created_id, character_name, user_name)
-        
+
         logger.info(f"Created message {created_id} in chat {chat_id} by user {current_user.id}")
-        
+
         return _convert_db_message_to_response(created_msg)
-        
+
     except HTTPException:
         raise
     except ConflictError as e:
@@ -284,7 +284,7 @@ async def send_message(
         )
 
 
-@router.get("/chats/{chat_id}/messages", 
+@router.get("/chats/{chat_id}/messages",
             summary="Get messages in a chat", tags=["Messages"])
 async def get_chat_messages(
     chat_id: str = Path(..., description="Chat session ID"),
@@ -300,7 +300,7 @@ async def get_chat_messages(
 ):
     """
     Get messages from a chat session.
-    
+
     Args:
         chat_id: Chat session ID
         limit: Maximum number of messages to return
@@ -310,35 +310,35 @@ async def get_chat_messages(
         format_for_completions: Return in format ready for /api/v1/chat/completions
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         List of messages with pagination info, or formatted for completions if requested
-        
+
     Raises:
         HTTPException: 404 if chat not found, 403 if unauthorized
     """
     try:
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
-        
+
         # Get messages (honor include_deleted and DB pagination)
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset, include_deleted=include_deleted)
-        
+
         if not messages:
             messages = []
         paginated = messages
-        
+
         # If character context or completions format requested
         if include_character_context or format_for_completions:
             # Get character info
             character_id = conversation.get('character_id')
             character = db.get_character_card_by_id(character_id) if character_id else None
-            
+
             if format_for_completions:
                 # Return format ready for chat completions endpoint
                 formatted_messages = []
                 metadata_extra_map: Dict[str, Any] = {}
-                
+
                 # Add system prompt if character exists
                 if character and include_character_context:
                     system_prompt_parts = [
@@ -353,7 +353,7 @@ async def get_chat_messages(
                         "role": "system",
                         "content": system_prompt.strip()
                     })
-                
+
                 # Add conversation messages with optional tool role messages
                 import re as _re
                 _suffix_re = _re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", _re.DOTALL)
@@ -445,7 +445,7 @@ async def get_chat_messages(
                     else:
                         # No tools: append base message as-is
                         formatted_messages.append(base_message)
-                
+
                 resp_obj: Dict[str, Any] = {
                     "character_name": character.get('name') if character else None,
                     "character_id": character_id,
@@ -458,7 +458,7 @@ async def get_chat_messages(
                     # Provide sidecar of metadata.extra without polluting message objects
                     resp_obj["metadata_extra"] = metadata_extra_map
                 return resp_obj
-            
+
             # Otherwise return standard format with character info
             # Build standard response messages, optionally including tool_calls
             built_messages = []
@@ -485,7 +485,7 @@ async def get_chat_messages(
                 limit=limit,
                 offset=offset
             )
-            
+
             # Add character context as additional field
             if character:
                 response_dict = response.model_dump()
@@ -496,9 +496,9 @@ async def get_chat_messages(
                     "system_prompt": character.get('system_prompt')
                 }
                 return response_dict
-            
+
             return response
-        
+
         # Standard response
         # Standard response (no character context)
         built_messages = []
@@ -547,15 +547,15 @@ async def get_message(
 ):
     """
     Get details of a specific message.
-    
+
     Args:
         message_id: Message ID
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         Message details
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized
     """
@@ -572,7 +572,7 @@ async def get_message(
             except Exception:
                 pass
         return resp
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -594,40 +594,40 @@ async def edit_message(
 ):
     """
     Edit the content of a message.
-    
+
     Args:
         message_id: Message ID to edit
         update_data: New message content
         expected_version: Expected version for optimistic locking
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         Updated message details
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
         # Verify message access
         message = _verify_message_access(db, message_id, current_user.id)
-        
+
         # Check version
         if message.get('version', 1) != expected_version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Version mismatch. Expected {expected_version}, found {message.get('version', 1)}"
             )
-        
+
         # Update message content
         success = edit_message_content(db, message_id, update_data.content, expected_version)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update message"
             )
-        
+
         # Update conversation metadata (last_modified/version) via DB abstraction
         conv = db.get_conversation_by_id(message['conversation_id'])
         if conv:
@@ -635,21 +635,21 @@ async def edit_message(
                 db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
             except (ConflictError, CharactersRAGDBError):
                 logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
-        
+
         # Get character details for placeholders
         conversation = db.get_conversation_by_id(message['conversation_id'])
         character_id = conversation.get('character_id') if conversation else None
         character = db.get_character_card_by_id(character_id) if character_id else None
         character_name = character.get('name', 'Assistant') if character else 'Assistant'
         user_name = conversation.get('user_name', 'User') if conversation else 'User'
-        
+
         # Retrieve updated message with placeholder parameters
         updated_msg = retrieve_message_details(db, message_id, character_name, user_name)
-        
+
         logger.info(f"Updated message {message_id} by user {current_user.id}")
-        
+
         return _convert_db_message_to_response(updated_msg)
-        
+
     except HTTPException:
         raise
     except ConflictError as e:
@@ -676,36 +676,36 @@ async def delete_message(
 ):
     """
     Soft delete a message from a conversation.
-    
+
     Args:
         message_id: Message ID to delete
         expected_version: Expected version for optimistic locking
         db: Database instance
         current_user: Authenticated user
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
         # Verify message access
         message = _verify_message_access(db, message_id, current_user.id)
-        
+
         # Check version
         if message.get('version', 1) != expected_version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Version mismatch. Expected {expected_version}, found {message.get('version', 1)}"
             )
-        
+
         # Soft delete the message
         success = remove_message_from_conversation(db, message_id, expected_version)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete message"
             )
-        
+
         # Update conversation metadata (last_modified/version) via DB abstraction
         conv = db.get_conversation_by_id(message['conversation_id'])
         if conv:
@@ -713,9 +713,9 @@ async def delete_message(
                 db.update_conversation(message['conversation_id'], {}, conv.get('version', 1))
             except (ConflictError, CharactersRAGDBError):
                 logger.debug(f"Non-fatal: failed to bump conversation metadata for {message['conversation_id']}")
-        
+
         logger.info(f"Soft deleted message {message_id} by user {current_user.id}")
-        
+
     except HTTPException:
         raise
     except ConflictError as e:
@@ -743,24 +743,24 @@ async def search_messages(
 ):
     """
     Search for messages in a chat session.
-    
+
     Args:
         chat_id: Chat session ID
         query: Search query string
         limit: Maximum number of results
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         List of matching messages
-        
+
     Raises:
         HTTPException: 404 if chat not found, 403 if unauthorized
     """
     try:
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
-        
+
         # Resolve character/user names for placeholder-aware search
         character_id = conversation.get('character_id')
         character = db.get_character_card_by_id(character_id) if character_id else None
@@ -775,17 +775,17 @@ async def search_messages(
             user_name_for_placeholders=user_name,
             limit=limit,
         )
-        
+
         if not results:
             results = []
-        
+
         return MessageListResponse(
             messages=[_convert_db_message_to_response(msg) for msg in results],
             total=len(results),
             limit=limit,
             offset=0
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:

@@ -65,4 +65,3 @@ Example list response
   "metadata": {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}
 }
 ```
-

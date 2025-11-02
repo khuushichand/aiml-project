@@ -1,7 +1,7 @@
 # RAG API Documentation
 
-**Version**: Unified Pipeline 1.0.0  
-**Last Updated**: 2025-10-26  
+**Version**: Unified Pipeline 1.0.0
+**Last Updated**: 2025-10-26
 **Status**: Production Ready
 
 ## Table of Contents
@@ -305,4 +305,3 @@ From legacy RAG docs to the unified pipeline
 - Search types: replace legacy `search_type` with `search_mode` (`fts`|`vector`|`hybrid`) and optional `fts_level` (`media`|`chunk`).
 - Reranking: use `reranking_strategy` among `flashrank`, `cross_encoder`, `hybrid`, `llama_cpp`, `llm_scoring`, `two_tier`, or `none`.
 - Sources: valid values are `media_db`, `notes`, `characters`, `chats` (aliases handled as noted above).
-

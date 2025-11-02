@@ -65,4 +65,3 @@ def test_postgres_evaluations_basic_if_available(tmp_path):
     assert isinstance(items, list)
     assert any(it["id"] == eval_id for it in items)
     assert has_more in (True, False)
-

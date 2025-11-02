@@ -32,4 +32,3 @@ def test_pricing_overrides_env(monkeypatch):
     assert pytest.approx(p_in2, rel=1e-6) == 0.123
     assert pytest.approx(p_out2, rel=1e-6) == 0.456
     assert est2 is True
-

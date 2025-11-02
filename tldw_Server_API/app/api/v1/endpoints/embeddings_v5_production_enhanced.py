@@ -502,7 +502,7 @@ CIRCUIT_BREAKER_SUCCESS_THRESHOLD = 2
 PROVIDER_MODELS = {
     EmbeddingProvider.OPENAI: [
         "text-embedding-ada-002",
-        "text-embedding-3-small", 
+        "text-embedding-3-small",
         "text-embedding-3-large"
     ],
     EmbeddingProvider.COHERE: [
@@ -603,7 +603,7 @@ def _build_user_metadata(user: Optional[User]) -> Optional[Dict[str, Any]]:
 
 class TTLCache:
     """Thread-safe cache with TTL support and automatic cleanup"""
-    
+
     def __init__(self, max_size: int = MAX_CACHE_SIZE, ttl_seconds: int = CACHE_TTL_SECONDS):
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
@@ -619,7 +619,7 @@ class TTLCache:
             self._use_thread = True
         self.hits = 0
         self.misses = 0
-        
+
     async def start_cleanup_task(self):
         """Start background cleanup task"""
         if self._use_thread:
@@ -650,7 +650,7 @@ class TTLCache:
         else:
             if self.cleanup_task is None:
                 self.cleanup_task = asyncio.create_task(self._cleanup_loop())
-            
+
     async def stop_cleanup_task(self):
         """Stop background cleanup task"""
         if self._use_thread:
@@ -673,7 +673,7 @@ class TTLCache:
                 except asyncio.CancelledError:
                     pass
                 self.cleanup_task = None
-            
+
     async def _cleanup_loop(self):
         """Background task to clean up expired entries"""
         while True:
@@ -684,7 +684,7 @@ class TTLCache:
                 break
             except Exception as e:
                 logger.error(f"Error in cache cleanup: {e}")
-                
+
     def _cleanup_expired_locked(self):
         """Remove expired entries under the cache lock."""
         with self._lock:
@@ -704,7 +704,7 @@ class TTLCache:
     async def cleanup_expired(self):
         """Async wrapper for cache cleanup."""
         self._cleanup_expired_locked()
-                
+
     async def get(self, key: str) -> Optional[Any]:
         """Get value from cache if not expired"""
         with self._lock:
@@ -723,7 +723,7 @@ class TTLCache:
             embedding_cache_size.set(len(self.cache))
             self.misses += 1
             return None
-            
+
     async def set(self, key: str, value: Any):
         """Set value in cache with TTL"""
         with self._lock:
@@ -737,14 +737,14 @@ class TTLCache:
                 except Exception:
                     pass
                 del self.cache[lru_key]
-                
+
             self.cache[key] = {
                 'value': value,
                 'timestamp': time.time(),
                 'last_access': time.time()
             }
             embedding_cache_size.set(len(self.cache))
-            
+
     async def clear(self):
         """Clear all cache entries"""
         with self._lock:
@@ -752,7 +752,7 @@ class TTLCache:
             embedding_cache_size.set(0)
             self.hits = 0
             self.misses = 0
-            
+
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
         with self._lock:
@@ -772,12 +772,12 @@ class TTLCache:
 
 class ConnectionPoolManager:
     """Manages connection pools with proper cleanup"""
-    
+
     def __init__(self):
         self.pools: Dict[str, aiohttp.ClientSession] = {}
         self.lock = Lock()
         self._closed = False
-        
+
     async def get_session(self, provider: str) -> aiohttp.ClientSession:
         """Get or create session for provider"""
         async with self.lock:
@@ -807,7 +807,7 @@ class ConnectionPoolManager:
                     timeout=timeout
                 )
             return self.pools[provider]
-            
+
     async def close_all(self):
         """Close all connection pools"""
         async with self.lock:
@@ -815,7 +815,7 @@ class ConnectionPoolManager:
             for session in self.pools.values():
                 await session.close()
             self.pools.clear()
-            
+
     async def remove_provider(self, provider: str):
         """Remove and close specific provider's session"""
         async with self.lock:
@@ -831,7 +831,7 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
     """Get or create circuit breaker for provider"""
     breaker_name = f"embeddings_{provider}"
     breaker = circuit_breaker_registry.get(breaker_name)
-    
+
     if not breaker:
         breaker = CircuitBreaker(
             name=breaker_name,
@@ -841,7 +841,7 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
             success_threshold=CIRCUIT_BREAKER_SUCCESS_THRESHOLD
         )
         circuit_breaker_registry.register(breaker)
-    
+
     return breaker
 
 # ============================================================================
@@ -1311,7 +1311,7 @@ def build_provider_config(
     dimensions: Optional[int] = None
 ) -> Dict[str, Any]:
     """Build provider-specific configuration"""
-    
+
     if provider == EmbeddingProvider.OPENAI:
         return {
             "provider": "openai",
@@ -1376,7 +1376,7 @@ async def create_embeddings_with_circuit_breaker(
 ) -> List[List[float]]:
     """Create embeddings with circuit breaker protection"""
     breaker = get_or_create_circuit_breaker(provider)
-    
+
     try:
         # Use circuit breaker to protect the call
         async def _create():
@@ -1466,7 +1466,7 @@ async def create_embeddings_with_circuit_breaker(
                     return embs
             else:
                 raise ValueError(f"Unknown provider: {provider}")
-            
+
             # Wrap config in expected structure for embeddings service batch helper
             # Include explicit defaults so batching helper does not fall back to OpenAI
             provider_qualified_id = f"{provider}:{model_id}"
@@ -1479,7 +1479,7 @@ async def create_embeddings_with_circuit_breaker(
                     "models": {provider_qualified_id: model_cfg},
                 }
             }
-            
+
             # Pass provider-qualified override to avoid implicit defaults inside the batcher
             return await batching_create_embeddings_batch_async(
                 texts=texts,
@@ -1487,9 +1487,9 @@ async def create_embeddings_with_circuit_breaker(
                 model_id_override=provider_qualified_id,
                 metadata=metadata,
             )
-        
+
         return await breaker.call_async(_create)
-        
+
     except CircuitBreakerError as e:
         logger.warning(f"Circuit breaker open for {provider}: {e}")
         raise HTTPException(
@@ -1510,16 +1510,16 @@ async def create_embeddings_batch_async(
     metadata: Optional[Dict[str, Any]] = None,
 ) -> List[List[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
-    
+
     embeddings = []
     uncached_texts = []
     uncached_indices = []
-    
+
     # Check cache
     for i, text in enumerate(texts):
         cache_key = get_cache_key(text, provider, model_id or "default", dimensions)
         cached = await embedding_cache.get(cache_key)
-        
+
         if cached:
             embeddings.append(cached)
             # Ensure Prometheus labels are always strings
@@ -1528,7 +1528,7 @@ async def create_embeddings_batch_async(
             embeddings.append(None)
             uncached_texts.append(text)
             uncached_indices.append(i)
-    
+
     # Process uncached texts
     if uncached_texts:
         try:
@@ -1538,7 +1538,7 @@ async def create_embeddings_batch_async(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
             )
-        
+
         config = build_provider_config(
             provider_enum,
             model_id,
@@ -1546,7 +1546,7 @@ async def create_embeddings_batch_async(
             api_url,
             dimensions
         )
-        
+
         # Process in batches with circuit breaker (or synthesize in test mode for OpenAI)
         all_new_embeddings = []
         if provider == "openai" and os.getenv("TESTING", "").lower() == "true" and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true":
@@ -1567,7 +1567,7 @@ async def create_embeddings_batch_async(
             for batch_start in range(0, len(uncached_texts), MAX_BATCH_SIZE):
                 batch_end = min(batch_start + MAX_BATCH_SIZE, len(uncached_texts))
                 batch_texts = uncached_texts[batch_start:batch_end]
-                
+
                 try:
                     batch_embeddings = await create_embeddings_with_circuit_breaker(
                         batch_texts,
@@ -1581,23 +1581,23 @@ async def create_embeddings_batch_async(
                     raise
                 except Exception as e:
                     logger.error(f"Failed to create embeddings for batch: {e}")
-                    
+
                     # Try to close and recreate connection for this provider
                     await connection_manager.remove_provider(provider)
-                    
+
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail=f"Embedding service error: {str(e)}"
                     )
-        
+
         # Update results and cache
         for i, (idx, text) in enumerate(zip(uncached_indices, uncached_texts)):
             embedding = all_new_embeddings[i]
             embeddings[idx] = embedding
-            
+
             cache_key = get_cache_key(text, provider, model_id or "default", dimensions)
             await embedding_cache.set(cache_key, embedding)
-    
+
     return embeddings
 
 # ============================================================================
@@ -1639,7 +1639,7 @@ async def create_embedding_endpoint(
     response: Response = None
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
-    
+
     if not EMBEDDINGS_AVAILABLE:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1648,7 +1648,7 @@ async def create_embedding_endpoint(
 
     active_embedding_requests.inc()
     start_time = time.time()
-    
+
     user_metadata = _build_user_metadata(current_user)
 
     try:
@@ -1738,7 +1738,7 @@ async def create_embedding_endpoint(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
         else:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
-        
+
         # Enforce per-model token length limits (fail-fast)
         max_tokens = _get_model_max_tokens(provider, model)
         too_long: List[Tuple[int, int]] = []  # (index, token_count)
@@ -1906,7 +1906,7 @@ async def create_embedding_endpoint(
                     response.headers['X-Embeddings-Dimensions-Policy'] = dims_policy_used
             except Exception:
                 pass
-        
+
         # Format response
         output_data = []
         for i, embedding in enumerate(embeddings):
@@ -1919,33 +1919,33 @@ async def create_embedding_endpoint(
                 processed_value = base64.b64encode(arr.tobytes()).decode('utf-8')
             else:
                 processed_value = arr.tolist()
-            
+
             output_data.append(
                 EmbeddingData(
                     embedding=processed_value,
                     index=i
                 )
             )
-        
+
         # Calculate token usage
         if provided_token_arrays:
             num_tokens = provided_token_count
         else:
             num_tokens = sum(count_tokens(text, model) for text in texts_to_embed)
-        
+
         # Track metrics
         duration = time.time() - start_time
         embedding_request_duration.labels(
             provider=provider,
             model=model
         ).observe(duration)
-        
+
         embedding_requests_total.labels(
             provider=provider,
             model=model,
             status="success"
         ).inc()
-        
+
         logger.info(
             f"Created {len(output_data)} embeddings",
             extra={
@@ -1957,7 +1957,7 @@ async def create_embedding_endpoint(
                 "dimensions_policy": dims_policy_used,
             }
         )
-        
+
         # Persist a usage log entry (best-effort)
         try:
             user_id = getattr(current_user, 'id', None)
@@ -2001,7 +2001,7 @@ async def create_embedding_endpoint(
                 total_tokens=num_tokens
             )
         )
-        
+
     finally:
         active_embedding_requests.dec()
 
@@ -2322,12 +2322,12 @@ async def clear_cache(
     current_user: User = Depends(get_request_user)
 ):
     """Clear the embedding cache - requires admin privileges"""
-    
+
     require_admin(current_user)
-    
+
     cache_stats = embedding_cache.stats()
     await embedding_cache.clear()
-    
+
     logger.info(
         f"Cache cleared by admin",
         extra={
@@ -2335,7 +2335,7 @@ async def clear_cache(
             "entries_cleared": cache_stats['size']
         }
     )
-    
+
     return {
         "message": "Cache cleared successfully",
         "entries_removed": cache_stats['size']
@@ -2490,7 +2490,7 @@ async def get_collection_stats(
 )
 async def health_check():
     """Enhanced health check with circuit breaker status"""
-    
+
     # Get circuit breaker status for all providers
     breaker_status = {}
     for provider in EmbeddingProvider:
@@ -2503,7 +2503,7 @@ async def health_check():
                 "failure_count": status_info["failure_count"],
                 "last_failure": status_info["last_failure_time"]
             }
-    
+
     try:
         hyde_enabled = bool(settings.get("HYDE_ENABLED", False))
     except Exception:
@@ -2534,7 +2534,7 @@ async def health_check():
             hyde_info["k_fraction"] = float(hyde_k_fraction)
         except Exception:
             pass
-    
+
     health_status = {
         "status": "healthy" if EMBEDDINGS_AVAILABLE else "degraded",
         "service": "embeddings_v5_production_enhanced",
@@ -2544,13 +2544,13 @@ async def health_check():
         "circuit_breakers": breaker_status,
         "hyde": hyde_info,
     }
-    
+
     if not EMBEDDINGS_AVAILABLE:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=health_status
         )
-    
+
     return health_status
 
 @router.get(
@@ -2561,9 +2561,9 @@ async def get_circuit_breakers(
     current_user: User = Depends(get_request_user)
 ):
     """Get detailed circuit breaker status - requires admin privileges"""
-    
+
     require_admin(current_user)
-    
+
     return circuit_breaker_registry.get_all_status()
 
 @router.post(
@@ -2575,20 +2575,20 @@ async def reset_circuit_breaker(
     current_user: User = Depends(get_request_user)
 ):
     """Reset specific circuit breaker - requires admin privileges"""
-    
+
     require_admin(current_user)
-    
+
     breaker_name = f"embeddings_{provider}"
     breaker = circuit_breaker_registry.get(breaker_name)
-    
+
     if not breaker:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Circuit breaker for provider '{provider}' not found"
         )
-    
+
     breaker.reset()
-    
+
     logger.info(
         f"Circuit breaker reset by admin",
         extra={
@@ -2596,7 +2596,7 @@ async def reset_circuit_breaker(
             "provider": provider
         }
     )
-    
+
     return {
         "message": f"Circuit breaker for '{provider}' reset successfully"
     }
@@ -2609,9 +2609,9 @@ async def get_metrics(
     current_user: User = Depends(get_request_user)
 ):
     """Get detailed service metrics - requires admin privileges"""
-    
+
     require_admin(current_user)
-    
+
     # Helper to sum counters across all labels
     def _sum_counter(c):
         try:

@@ -52,19 +52,19 @@ from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 def validate_user_id(user_id: str) -> str:
     """
     Validates and sanitizes user_id to prevent path traversal attacks.
-    
+
     Args:
         user_id: The user identifier to validate
-        
+
     Returns:
         Sanitized user_id
-        
+
     Raises:
         ValueError: If user_id contains invalid characters or patterns
     """
     if not user_id:
         raise ValueError("user_id cannot be empty")
-    
+
     # Convert to string
     raw_user_id = str(user_id)
     # First, check raw input for forbidden characters (before trimming)
@@ -73,52 +73,52 @@ def validate_user_id(user_id: str) -> str:
         # Best-effort unified audit (non-blocking)
         log_security_violation(user_id=raw_user_id[:50], action="path_traversal_attempt", metadata={"attempted_value": raw_user_id[:100]})
         raise ValueError("Invalid user_id: contains forbidden characters")
-    
+
     # Now trim safe leading/trailing whitespace
     user_id = raw_user_id.strip()
-    
+
     # Only allow alphanumeric, underscore, and hyphen
     if not re.match(r'^[a-zA-Z0-9_-]+$', user_id):
         logger.error(f"Invalid user_id format: {user_id[:50]}")
         log_security_violation(user_id=user_id[:50], action="invalid_user_id", metadata={"reason": "invalid_characters"})
         raise ValueError("Invalid user_id: must contain only alphanumeric characters, underscores, and hyphens")
-    
+
     # Limit length to prevent DoS
     if len(user_id) > 255:
         raise ValueError("Invalid user_id: exceeds maximum length of 255 characters")
-    
+
     return user_id
 
 def validate_model_id(model_id: str) -> str:
     """
     Validates model identifier to prevent injection attacks.
-    
+
     Args:
         model_id: The model identifier to validate
-        
+
     Returns:
         Validated model_id
-        
+
     Raises:
         ValueError: If model_id contains invalid patterns
     """
     if not model_id:
         raise ValueError("model_id cannot be empty")
-    
+
     model_id = str(model_id).strip()
-    
+
     # Allow forward slash for model paths like "org/model" but prevent traversal
     if '..' in model_id or model_id.startswith('/') or '\\' in model_id:
         logger.error(f"Invalid model_id format: {model_id[:100]}")
         raise ValueError("Invalid model_id: contains forbidden patterns")
-    
+
     # Allow alphanumeric, underscore, hyphen, forward slash, and dot
     if not re.match(r'^[a-zA-Z0-9_\-/\.]+$', model_id):
         raise ValueError("Invalid model_id: contains invalid characters")
-    
+
     if len(model_id) > 500:
         raise ValueError("Invalid model_id: exceeds maximum length")
-    
+
     return model_id
 
 #
@@ -157,7 +157,7 @@ class ChromaDBManager:
         except ValueError as e:
             logger.error(f"Initialization failed: {e}")
             raise
-        
+
         self.user_embedding_config = user_embedding_config
         self._lock = threading.RLock()  # Instance-specific lock
 
@@ -172,10 +172,10 @@ class ChromaDBManager:
         if not user_db_base_path.exists():
             logger.error(f"USER_DB_BASE_DIR does not exist: {user_db_base_path}")
             raise ValueError(f"USER_DB_BASE_DIR does not exist: {user_db_base_path}")
-        
+
         # Construct path safely with validated user_id
         self.user_chroma_path: Path = (user_db_base_path / self.user_id / "chroma_storage").resolve()
-        
+
         # Ensure the resolved path is within the base directory (defense in depth)
         try:
             self.user_chroma_path.relative_to(user_db_base_path)
@@ -580,7 +580,7 @@ class ChromaDBManager:
             # Try to get from embedding_config first, then fall back to False
             create_contextualized = self.embedding_config.get("enable_contextual_chunking", False)
             logger.debug(f"Using contextual chunking from config: {create_contextualized}")
-        
+
         effective_llm_model_for_context = llm_model_for_context or self.embedding_config.get(
             "contextual_llm_model", self.embedding_config.get(
                 "default_llm_for_contextualization", "gpt-3.5-turbo"))

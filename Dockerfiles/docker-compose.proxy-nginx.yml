@@ -28,4 +28,3 @@ services:
       # Map your certs directory or change paths in nginx.conf
       - /etc/letsencrypt:/etc/letsencrypt:ro
     restart: unless-stopped
-

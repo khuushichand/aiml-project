@@ -18,11 +18,11 @@ import { toBool } from '@/lib/authz';
 export function Header() {
   const router = useRouter();
   const { isAuthenticated, user, logout } = useAuth();
-  
+
   const handleLogout = () => {
     logout();
   };
-  
+
   const showRunsEnv = (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== '0' && (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== 'false';
   const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
   const userIsAdmin = useIsAdmin();
@@ -40,7 +40,7 @@ export function Header() {
     { href: '/evaluations', label: 'Evals' },
     { href: '/config', label: 'Config' },
   ];
-  
+
   return (
     <header className="border-b border-gray-200 bg-white">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -51,7 +51,7 @@ export function Header() {
               TLDW
             </Link>
           </div>
-          
+
           {/* Navigation */}
           <nav className="hidden md:flex md:space-x-8">
             {navLinks.map((link) => (
@@ -69,7 +69,7 @@ export function Header() {
               </Link>
             ))}
           </nav>
-          
+
           {/* User menu */}
           <div className="flex items-center space-x-4">
             {isAuthenticated ? (

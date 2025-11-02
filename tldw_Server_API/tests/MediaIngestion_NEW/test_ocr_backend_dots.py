@@ -33,4 +33,3 @@ def test_dots_backend_registry_resolution_when_installed():
     # Ensure ocr_image returns a string; content may be empty depending on env setup
     out = backend.ocr_image(png_bytes, lang="eng")
     assert isinstance(out, str)
-

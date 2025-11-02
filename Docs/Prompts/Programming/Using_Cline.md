@@ -15,7 +15,7 @@ Your memory loss is actually an advantage - it forces you to maintain perfect do
 Context System
 Core Files
 
-Maintain these files in cline_docs/: 
+Maintain these files in cline_docs/:
 productContext.md
 - Why we're building this
 - Core user problems/solutions
@@ -210,4 +210,4 @@ Core Principles
 
     ActiveContext.md is source of truth
 
-Remember: You're an expert who happens to lose memory - write documentation that helps you maintain that expertise through each reset. 
+Remember: You're an expert who happens to lose memory - write documentation that helps you maintain that expertise through each reset.

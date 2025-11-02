@@ -48,4 +48,3 @@ def test_get_corpus_synonyms_logs_selection_and_does_not_create(tmp_path, monkey
             logger.remove(sink_id)
         except Exception:
             pass
-

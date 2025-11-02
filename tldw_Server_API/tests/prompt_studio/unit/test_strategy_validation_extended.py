@@ -102,4 +102,3 @@ def test_genetic_optional_validation(prompt_studio_dual_backend_client):
     good["name"] = "genetic-good"
     r_ok = client.post("/api/v1/prompt-studio/optimizations/create", json=good)
     assert r_ok.status_code in (200, 201), r_ok.text
-

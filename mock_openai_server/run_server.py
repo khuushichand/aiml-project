@@ -17,5 +17,5 @@ if __name__ == "__main__":
     print("API Documentation: http://localhost:8080/docs")
     print("\nPress Ctrl+C to stop the server")
     print("-" * 50)
-    
+
     main()

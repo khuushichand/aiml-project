@@ -6,4 +6,3 @@ can be supported without changing ingestion code.
 
 Backends can be added under `backends/` and registered in `registry.py`.
 """
-

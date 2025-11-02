@@ -78,7 +78,7 @@
 </head>
 <body>
     <h1>🎙️ TTS System Test Interface</h1>
-    
+
     <div class="test-section">
         <h2>Test Configuration</h2>
         <div>
@@ -88,20 +88,20 @@
             <input type="password" id="api-key" placeholder="Optional" style="width: 200px;">
         </div>
     </div>
-    
+
     <div class="test-section">
         <h2>Provider Status Check</h2>
         <button onclick="checkHealth()">Check All Providers</button>
         <div id="health-status" class="status info" style="display:none;"></div>
     </div>
-    
+
     <div class="test-section">
         <h2>Text Input</h2>
         <textarea id="test-text" rows="4">
 This is a test of the TTS system. Each provider has unique capabilities and voice characteristics that we can explore.
         </textarea>
     </div>
-    
+
     <div class="test-section">
         <h2>Test Each Provider</h2>
         <div class="provider-grid">
@@ -119,7 +119,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 <div id="vibevoice-status"></div>
                 <audio id="vibevoice-audio" controls style="display:none;"></audio>
             </div>
-            
+
             <!-- NeuTTS Air -->
             <div class="provider-card">
                 <h3>☁️ NeuTTS Air</h3>
@@ -181,7 +181,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 <div id="kokoro-status"></div>
                 <audio id="kokoro-audio" controls style="display:none;"></audio>
             </div>
-            
+
             <!-- Higgs -->
             <div class="provider-card">
                 <h3>⚛️ Higgs</h3>
@@ -196,7 +196,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 <div id="higgs-status"></div>
                 <audio id="higgs-audio" controls style="display:none;"></audio>
             </div>
-            
+
             <!-- Chatterbox -->
             <div class="provider-card">
                 <h3>💬 Chatterbox</h3>
@@ -211,7 +211,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 <div id="chatterbox-status"></div>
                 <audio id="chatterbox-audio" controls style="display:none;"></audio>
             </div>
-            
+
             <!-- OpenAI -->
             <div class="provider-card">
                 <h3>🧠 OpenAI</h3>
@@ -228,7 +228,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 <div id="openai-status"></div>
                 <audio id="openai-audio" controls style="display:none;"></audio>
             </div>
-            
+
             <!-- ElevenLabs -->
             <div class="provider-card">
                 <h3>🎙️ ElevenLabs</h3>
@@ -245,7 +245,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
             </div>
         </div>
     </div>
-    
+
     <div class="test-section">
         <h2>Batch Test</h2>
         <button onclick="testAllProviders()">Test All Available Providers</button>
@@ -256,32 +256,32 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
     <script>
         const API_BASE = () => document.getElementById('api-url').value;
         const API_KEY = () => document.getElementById('api-key').value;
-        
+
         async function checkHealth() {
             const statusDiv = document.getElementById('health-status');
             statusDiv.style.display = 'block';
             statusDiv.className = 'status info';
             statusDiv.innerHTML = 'Checking provider health...';
-            
+
             try {
                 const response = await fetch(`${API_BASE()}/audio/health`, {
                     headers: API_KEY() ? { 'Authorization': `Bearer ${API_KEY()}` } : {}
                 });
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
-                
+
                 const data = await response.json();
-                
+
                 if (data.status === 'healthy') {
                     statusDiv.className = 'status success';
                     let html = '<strong>System Status: Healthy</strong><br>';
-                    
+
                     if (data.providers) {
                         html += `<br>Total Providers: ${data.providers.total}<br>`;
                         html += `Available: ${data.providers.available}<br><br>`;
-                        
+
                         if (data.providers.details) {
                             html += '<strong>Provider Details:</strong><br>';
                             for (const [provider, info] of Object.entries(data.providers.details)) {
@@ -291,7 +291,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                             }
                         }
                     }
-                    
+
                     statusDiv.innerHTML = html;
                 } else {
                     statusDiv.className = 'status error';
@@ -302,7 +302,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 statusDiv.innerHTML = `Error checking health: ${error.message}`;
             }
         }
-        
+
         async function testProvider(provider) {
             const text = document.getElementById('test-text').value;
             // Most providers use a voice select; NeuTTS uses special fields
@@ -310,10 +310,10 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
             const voice = voiceSel ? voiceSel.value : 'default';
             const statusDiv = document.getElementById(`${provider}-status`);
             const audioEl = document.getElementById(`${provider}-audio`);
-            
+
             statusDiv.className = 'status info';
             statusDiv.innerHTML = 'Generating speech...';
-            
+
             try {
                 // Build request based on provider
                 let request = {
@@ -322,7 +322,7 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                     response_format: 'mp3',
                     stream: false
                 };
-                
+
                 // Add provider-specific model
                 switch(provider) {
                     case 'vibevoice':
@@ -377,38 +377,38 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                     },
                     body: JSON.stringify(request)
                 });
-                
+
                 if (!response.ok) {
                     const error = await response.text();
                     throw new Error(error || `HTTP ${response.status}`);
                 }
-                
+
                 const blob = await response.blob();
                 const url = URL.createObjectURL(blob);
-                
+
                 audioEl.src = url;
                 audioEl.style.display = 'block';
                 audioEl.play();
-                
+
                 statusDiv.className = 'status success';
                 statusDiv.innerHTML = `✅ Success! Audio generated (${(blob.size / 1024).toFixed(2)} KB)`;
-                
+
             } catch (error) {
                 statusDiv.className = 'status error';
                 statusDiv.innerHTML = `❌ Error: ${error.message}`;
                 audioEl.style.display = 'none';
             }
         }
-        
+
         async function testAllProviders() {
             const providers = ['vibevoice', 'kokoro', 'higgs', 'chatterbox', 'openai', 'elevenlabs'];
             const batchStatus = document.getElementById('batch-status');
-            
+
             batchStatus.className = 'status info';
             batchStatus.innerHTML = 'Testing all providers...';
-            
+
             let results = [];
-            
+
             for (const provider of providers) {
                 try {
                     await testProvider(provider);
@@ -416,15 +416,15 @@ This is a test of the TTS system. Each provider has unique capabilities and voic
                 } catch (error) {
                     results.push(`❌ ${provider}`);
                 }
-                
+
                 // Small delay between tests
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
-            
+
             batchStatus.className = 'status success';
             batchStatus.innerHTML = '<strong>Batch Test Complete:</strong><br>' + results.join('<br>');
         }
-        
+
         // ---- Simple recorder + helpers for NeuTTS ----
         let _rec = { mr: null, chunks: [], stream: null };
         window._neuttsRecBlob = null;

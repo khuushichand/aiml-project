@@ -17,7 +17,7 @@ class ChatUI {
         this.autoSaveTimer = null; // For debouncing
         this.loadPresets();
     }
-    
+
     // Cleanup method to prevent memory leaks
     cleanup() {
         // Clear all event listeners
@@ -27,7 +27,7 @@ class ChatUI {
             }
         });
         this.eventListeners.clear();
-        
+
         // Clear drag-drop handlers
         this.dragDropHandlers.forEach((handlers, element) => {
             if (element && handlers) {
@@ -37,7 +37,7 @@ class ChatUI {
             }
         });
         this.dragDropHandlers.clear();
-        
+
         // Clear auto-save timer
         if (this.autoSaveTimer) {
             clearTimeout(this.autoSaveTimer);
@@ -118,14 +118,14 @@ class ChatUI {
                         <option value="tool" ${role === 'tool' ? 'selected' : ''}>Tool</option>
                     </select>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="${prefix}_message_content_${id}">Content:</label>
                     <div class="message-content-wrapper">
-                        <textarea 
-                            id="${prefix}_message_content_${id}" 
-                            class="message-content-area" 
-                            rows="3" 
+                        <textarea
+                            id="${prefix}_message_content_${id}"
+                            class="message-content-area"
+                            rows="3"
                             placeholder="Enter message content..."
                             oninput="chatUI.handleContentChange('${prefix}', ${id})"
                         >${content}</textarea>
@@ -196,7 +196,7 @@ class ChatUI {
                     this.dragDropHandlers.delete(imageWrapper);
                 }
             }
-            
+
             messageDiv.remove();
             this.autoSaveMessages(prefix);
             Toast.success('Message removed');
@@ -282,7 +282,7 @@ class ChatUI {
     initImageDragDrop(prefix, id) {
         const wrapper = document.querySelector(`#${prefix}_message_image_${id}`)?.parentElement;
         if (!wrapper) return;
-        
+
         // Clean up existing handlers if any
         const existingHandlers = this.dragDropHandlers.get(wrapper);
         if (existingHandlers) {
@@ -303,19 +303,19 @@ class ChatUI {
         const dropHandler = (e) => {
             e.preventDefault();
             wrapper.classList.remove('drag-over');
-            
+
             const fileInput = document.getElementById(`${prefix}_message_image_${id}`);
             if (e.dataTransfer.files.length > 0 && e.dataTransfer.files[0].type.startsWith('image/')) {
                 fileInput.files = e.dataTransfer.files;
                 this.handleImageUpload(prefix, id);
             }
         };
-        
+
         // Add new handlers
         wrapper.addEventListener('dragover', dragoverHandler);
         wrapper.addEventListener('dragleave', dragleaveHandler);
         wrapper.addEventListener('drop', dropHandler);
-        
+
         // Store handlers for cleanup
         this.dragDropHandlers.set(wrapper, {
             dragover: dragoverHandler,
@@ -464,7 +464,7 @@ class ChatUI {
         if (this.autoSaveTimer) {
             clearTimeout(this.autoSaveTimer);
         }
-        
+
         // Debounce auto-save by 500ms
         this.autoSaveTimer = setTimeout(() => {
             try {
@@ -512,7 +512,7 @@ class ChatUI {
     async sendChatRequest() {
         const prefix = 'chatCompletions';
         const responseArea = document.getElementById('chatCompletions_response');
-        
+
         if (!responseArea) {
             console.error('Response area not found');
             return;
@@ -521,7 +521,7 @@ class ChatUI {
         try {
             // Build payload
             const payload = this.buildPayload(prefix);
-            
+
             // Show loading
             Loading.show(responseArea.parentElement, 'Sending request...');
             responseArea.textContent = '';
@@ -540,7 +540,7 @@ class ChatUI {
                 await this.handleStreamingResponse(responseArea, payload);
             } else {
                 const response = await apiClient.post('/api/v1/chat/completions', payload);
-                
+
                 // Display response with JSON viewer
                 const viewer = new JSONViewer(responseArea, response, {
                     expanded: 2,
@@ -602,7 +602,7 @@ class ChatUI {
 
         // Add final message
         responseArea.textContent += '\n\n[Stream completed]';
-        
+
         if (metadata) {
             responseArea.textContent += `\n[Conversation ID: ${metadata.conversation_id}]`;
         }
@@ -642,7 +642,7 @@ class ChatUI {
 
     saveCurrentAsPreset(name) {
         const prefix = 'chatCompletions';
-        
+
         try {
             const payload = this.buildPayload(prefix);
             const preset = {
@@ -674,7 +674,7 @@ const chatUI = new ChatUI();
 // Initialize chat completions tab when loaded
 function initializeChatCompletionsTab() {
     const prefix = 'chatCompletions';
-    
+
     // Check if already initialized
     const container = document.getElementById(`${prefix}_messagesContainer`);
     if (!container || container.children.length > 0) {

@@ -31,7 +31,7 @@ def document_strategy(draw):
     chunk_index = draw(st.integers(min_value=0, max_value=100))
     chunk_type = draw(st.sampled_from(["text", "code", "table", "header", "list"]))
     score = draw(st.floats(min_value=0.0, max_value=1.0))
-    
+
     return Document(
         id=doc_id,
         content=content,
@@ -61,7 +61,7 @@ def context_strategy(draw):
         st.one_of(st.integers(), st.floats(), st.booleans(), st.text()),
         max_size=10
     ))
-    
+
     context = SimpleContext(query=query, original_query=query, config=config)
     context.documents = documents
     return context
@@ -69,7 +69,7 @@ def context_strategy(draw):
 
 class TestContextualRetrievalProperties:
     """Property-based tests for contextual retrieval."""
-    
+
     @given(context=context_strategy())
     @settings(max_examples=100, deadline=1000)
     @pytest.mark.asyncio
@@ -78,12 +78,12 @@ class TestContextualRetrievalProperties:
         original_count = len(context.documents)
         # Count documents with parent_id
         docs_with_parent = sum(1 for d in context.documents if d.metadata.get("parent_id"))
-        
+
         result = await expand_with_parent_context(context)
-        
+
         # Only documents with parent_id are included in expansion
         assert len(result.documents) == docs_with_parent
-    
+
     @given(context=context_strategy())
     @settings(max_examples=100, deadline=1000)
     @pytest.mark.asyncio
@@ -91,13 +91,13 @@ class TestContextualRetrievalProperties:
         """Property: Document IDs with parent_id should be preserved during expansion."""
         # Only documents with parent_id are expanded
         original_ids_with_parent = {doc.id for doc in context.documents if doc.metadata.get("parent_id")}
-        
+
         result = await expand_with_parent_context(context)
-        
+
         result_ids = {doc.id for doc in result.documents}
         # IDs of documents with parent_id should be preserved
         assert original_ids_with_parent == result_ids
-    
+
     @given(
         context=context_strategy(),
         expansion_size=st.integers(min_value=100, max_value=2000)
@@ -107,13 +107,13 @@ class TestContextualRetrievalProperties:
     async def test_expansion_size_bounds(self, context, expansion_size):
         """Property: Expansion should respect size boundaries."""
         result = await expand_with_parent_context(context, expansion_size=expansion_size)
-        
+
         # Each document's expansion should be bounded
         for doc in result.documents:
             if doc.metadata.get("expanded"):
                 # The expanded content shouldn't be absurdly large
                 assert len(doc.content) <= len(doc.content) + expansion_size * 3  # Allow some overhead
-    
+
     @given(
         context=context_strategy(),
         include_types=st.lists(st.sampled_from(["text", "code", "table", "header", "list"]), min_size=0, max_size=3),
@@ -128,16 +128,16 @@ class TestContextualRetrievalProperties:
             include_types=include_types if include_types else None,
             exclude_types=exclude_types if exclude_types else None
         )
-        
+
         # Check all remaining documents match filter criteria
         for doc in result.documents:
             chunk_type = doc.metadata.get("chunk_type", "text")
-            
+
             if include_types:
                 assert chunk_type in include_types
             if exclude_types:
                 assert chunk_type not in exclude_types
-    
+
     @given(
         context=context_strategy(),
         priorities=st.dictionaries(
@@ -153,13 +153,13 @@ class TestContextualRetrievalProperties:
         """Property: After prioritization, documents should be ordered by score."""
         if not context.documents:
             return  # Skip empty contexts
-        
+
         result = await prioritize_by_chunk_type(context, type_priorities=priorities)
-        
+
         # Check that documents are sorted by score (descending)
         scores = [doc.score for doc in result.documents]
         assert scores == sorted(scores, reverse=True)
-    
+
     @given(
         context=context_strategy(),
         priorities=st.dictionaries(
@@ -175,7 +175,7 @@ class TestContextualRetrievalProperties:
         """Property: Priority multipliers should correctly adjust scores."""
         if not context.documents:
             return
-        
+
         # Snapshot original docs' expected scores BEFORE mutation/sorting
         original_info = []  # list of tuples: (id, expected_score, orig_score)
         for d in context.documents:
@@ -203,7 +203,7 @@ class TestContextualRetrievalProperties:
 
             if not found:
                 assert False, f"Doc {doc_id} score mismatch: expected {expected_score}, not found in results"
-    
+
     @given(documents=document_list_strategy(min_size=1, max_size=50))
     @settings(max_examples=100, deadline=1000)
     def test_parent_grouping_consistency(self, documents):
@@ -216,11 +216,11 @@ class TestContextualRetrievalProperties:
                 if parent_id not in parent_groups:
                     parent_groups[parent_id] = []
                 parent_groups[parent_id].append(doc)
-        
+
         # Each group should have consistent parent_id
         for parent_id, group in parent_groups.items():
             assert all(doc.metadata.get("parent_id") == parent_id for doc in group)
-    
+
     @given(
         text=st.text(min_size=10, max_size=1000),
         chunk_size=st.integers(min_value=10, max_value=100),
@@ -230,7 +230,7 @@ class TestContextualRetrievalProperties:
         """Property: Contextualization should only occur when enabled."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze') as mock_analyze:
             mock_analyze.return_value = "context"
-            
+
             # Simulate chunking with/without contextualization
             if enable_contextual:
                 # When enabled, analyze should be called
@@ -238,7 +238,7 @@ class TestContextualRetrievalProperties:
             else:
                 # When disabled, analyze should not be called
                 assert enable_contextual == False
-            
+
             # The flag should control behavior deterministically
             assert isinstance(enable_contextual, bool)
 
@@ -246,10 +246,10 @@ class TestContextualRetrievalProperties:
 class ContextualRetrievalStateMachine(RuleBasedStateMachine):
     """
     Stateful testing for contextual retrieval operations.
-    
+
     Tests that sequences of operations maintain consistency.
     """
-    
+
     def __init__(self):
         super().__init__()
         self.context = None
@@ -257,7 +257,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
         self.filter_applied = False
         self.expansion_applied = False
         self.prioritization_applied = False
-    
+
     @initialize()
     def setup(self):
         """Initialize with a context containing documents."""
@@ -277,14 +277,14 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
             for i in range(10)
         ]
         self.original_doc_count = len(self.context.documents)
-    
+
     @rule()
     def apply_expansion(self):
         """Rule: Apply parent context expansion (sync wrapper)."""
         result = asyncio.run(expand_with_parent_context(self.context))
         self.context = result
         self.expansion_applied = True
-    
+
     @rule(
         include_types=st.lists(st.sampled_from(["text", "code", "table"]), min_size=1, max_size=2)
     )
@@ -293,7 +293,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
         result = asyncio.run(filter_chunks_by_type(self.context, include_types=include_types))
         self.context = result
         self.filter_applied = True
-    
+
     @rule(
         priorities=st.dictionaries(
             st.sampled_from(["text", "code", "table"]),
@@ -307,7 +307,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
         result = asyncio.run(prioritize_by_chunk_type(self.context, type_priorities=priorities))
         self.context = result
         self.prioritization_applied = True
-    
+
     @invariant()
     def documents_not_empty(self):
         """Invariant: Context should always have documents if started with any."""
@@ -315,7 +315,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
             # Some operations might filter all docs, but that's valid
             assert self.context is not None
             assert hasattr(self.context, 'documents')
-    
+
     @invariant()
     def scores_valid(self):
         """Invariant: All document scores should be valid numbers."""
@@ -324,7 +324,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
                 assert isinstance(doc.score, (int, float))
                 assert 0 <= doc.score <= 10  # Reasonable bounds after multiplication
                 assert doc.score == doc.score  # Not NaN
-    
+
     @invariant()
     def metadata_preserved(self):
         """Invariant: Essential metadata should be preserved."""
@@ -333,7 +333,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
                 assert isinstance(doc.metadata, dict)
                 # Should have at least some metadata
                 assert len(doc.metadata) > 0
-    
+
     @invariant()
     def ids_unique(self):
         """Invariant: Document IDs should remain unique."""
@@ -359,15 +359,15 @@ def test_configuration_combinations(enable_contextual, llm_model, context_window
         "contextual_llm_model": llm_model,
         "context_window_size": context_window
     }
-    
+
     # Configuration should be valid
     assert isinstance(config["enable_contextual_chunking"], bool)
-    
+
     if enable_contextual:
         # When enabled, should have a model (use default if None)
         model = config["contextual_llm_model"] or "gpt-3.5-turbo"
         assert isinstance(model, str)
-    
+
     if context_window is not None:
         assert 100 <= context_window <= 2000
 @dataclass

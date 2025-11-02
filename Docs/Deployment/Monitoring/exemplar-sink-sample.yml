@@ -25,4 +25,3 @@ service:
     logs:
       receivers: [filelog]
       exporters: [loki]
-

@@ -60,4 +60,3 @@ async def test_heartbeat_renews_lease(prompt_studio_dual_backend_db, monkeypatch
     await task
     j_done = db.get_job(job["id"])
     assert j_done["status"] in ("completed", "failed")
-

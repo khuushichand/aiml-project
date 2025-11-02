@@ -191,14 +191,14 @@ async def list_users(
 ) -> UserListResponse:
     """
     List all users with pagination and filters
-    
+
     Args:
         page: Page number (1-based)
         limit: Items per page
         role: Filter by role
         is_active: Filter by active status
         search: Search in username/email
-        
+
     Returns:
         Paginated list of users
     """
@@ -222,22 +222,22 @@ async def list_users(
     try:
         is_pg = await is_postgres_backend()
         offset = (page - 1) * limit
-        
+
         # Build query conditions
         conditions = []
         params = []
         param_count = 0
-        
+
         if role:
             param_count += 1
             conditions.append(f"role = ${param_count}" if is_pg else "role = ?")
             params.append(role)
-        
+
         if is_active is not None:
             param_count += 1
             conditions.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
             params.append(is_active)
-        
+
         if search:
             param_count += 1
             search_pattern = f"%{search}%"
@@ -247,15 +247,15 @@ async def list_users(
                 conditions.append("(username LIKE ? OR email LIKE ?)")
                 params.append(search_pattern)  # Add twice for SQLite
             params.append(search_pattern)
-        
+
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-        
+
         # Get total count
         if is_pg:
             # PostgreSQL
             count_query = f"SELECT COUNT(*) FROM users{where_clause}"
             total = await db.fetchval(count_query, *params)
-            
+
             # Get users
             query = f"""
                 SELECT id, uuid, username, email, role, is_active, is_verified,
@@ -271,7 +271,7 @@ async def list_users(
             count_query = f"SELECT COUNT(*) FROM users{where_clause}"
             cursor = await db.execute(count_query, params)
             total = (await cursor.fetchone())[0]
-            
+
             # Get users
             query = f"""
                 SELECT id, uuid, username, email, role, is_active, is_verified,
@@ -283,7 +283,7 @@ async def list_users(
             params.extend([limit, offset])
             cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
-        
+
         # Normalize rows into Pydantic-friendly dicts (works for Postgres and SQLite)
         users = []
         for row in rows:
@@ -318,7 +318,7 @@ async def list_users(
                     "storage_used_mb": float(row[10] or 0.0),
                 }
                 users.append(user_dict)
-        
+
         result = UserListResponse(
             users=users,
             total=total,
@@ -327,7 +327,7 @@ async def list_users(
             pages=(total + limit - 1) // limit
         )
         return result
-        
+
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
         try:
@@ -1043,10 +1043,10 @@ async def get_user_details(
 ) -> Dict[str, Any]:
     """
     Get detailed information about a specific user
-    
+
     Args:
         user_id: User ID
-        
+
     Returns:
         User details including all fields
     """
@@ -1065,10 +1065,10 @@ async def get_user_details(
                 (user_id,)
             )
             user = await cursor.fetchone()
-        
+
         if not user:
             raise UserNotFoundError(f"User {user_id}")
-        
+
         # Convert to dict
         if not isinstance(user, dict):
             columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role',
@@ -1077,16 +1077,16 @@ async def get_user_details(
                       'last_login', 'email_verified_at', 'password_changed_at',
                       'preferences', 'storage_quota_mb', 'storage_used_mb']
             user = dict(zip(columns[:len(user)], user))
-        
+
         # Remove sensitive fields
         user.pop('password_hash', None)
-        
+
         # Convert UUID to string if needed
         if 'uuid' in user and user['uuid'] and not isinstance(user['uuid'], str):
             user['uuid'] = str(user['uuid'])
-        
+
         return user
-        
+
     except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1108,11 +1108,11 @@ async def update_user(
 ) -> Dict[str, str]:
     """
     Update user information
-    
+
     Args:
         user_id: User ID
         request: Update request with fields to modify
-        
+
     Returns:
         Success message
     """
@@ -1122,50 +1122,50 @@ async def update_user(
         updates = []
         params = []
         param_count = 0
-        
+
         if request.email is not None:
             param_count += 1
             updates.append(f"email = ${param_count}" if is_pg else "email = ?")
             params.append(request.email)
-        
+
         if request.role is not None:
             param_count += 1
             updates.append(f"role = ${param_count}" if is_pg else "role = ?")
             params.append(request.role)
-        
+
         if request.is_active is not None:
             param_count += 1
             updates.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
             params.append(request.is_active)
-        
+
         if request.is_verified is not None:
             param_count += 1
             updates.append(f"is_verified = ${param_count}" if is_pg else "is_verified = ?")
             params.append(request.is_verified)
-        
+
         if request.is_locked is not None:
             param_count += 1
             updates.append(f"is_locked = ${param_count}" if is_pg else "is_locked = ?")
             params.append(request.is_locked)
-            
+
             if not request.is_locked:
                 # Unlock user - reset failed attempts
                 param_count += 1
                 updates.append(f"failed_login_attempts = ${param_count}" if is_pg else "failed_login_attempts = ?")
                 params.append(0)
                 updates.append("locked_until = NULL")
-        
+
         if request.storage_quota_mb is not None:
             param_count += 1
             updates.append(f"storage_quota_mb = ${param_count}" if is_pg else "storage_quota_mb = ?")
             params.append(request.storage_quota_mb)
-        
+
         if not updates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No fields to update"
             )
-        
+
         # Add updated_at
         param_count += 1
         if is_pg:
@@ -1176,18 +1176,18 @@ async def update_user(
             updates.append("updated_at = datetime('now')")
             params.append(user_id)
             query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
-        
+
         # Execute update
         if is_pg:
             await db.execute(query, *params)
         else:
             await db.execute(query, params)
             await db.commit()
-        
+
         logger.info(f"Admin updated user {user_id}")
-        
+
         return {"message": f"User {user_id} updated successfully"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2249,7 +2249,7 @@ async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transac
 # Rate Limit Administration
 
 @router.post(
-    
+
     "/rate-limits/reset",
     response_model=RateLimitResetResponse,
     openapi_extra={
@@ -2579,10 +2579,10 @@ async def delete_user(
 ) -> Dict[str, str]:
     """
     Delete a user (soft delete by default)
-    
+
     Args:
         user_id: User ID to delete
-        
+
     Returns:
         Success message
     """
@@ -2593,7 +2593,7 @@ async def delete_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete your own account"
             )
-        
+
         # Soft delete - just mark as inactive
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -2609,11 +2609,11 @@ async def delete_user(
                 (user_id,)
             )
             await db.commit()
-        
+
         logger.info(f"Admin soft-deleted user {user_id}")
-        
+
         return {"message": f"User {user_id} has been deactivated"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2636,25 +2636,25 @@ async def create_registration_code(
 ) -> RegistrationCodeResponse:
     """
     Create a new registration code
-    
+
     Args:
         request: Registration code configuration
-        
+
     Returns:
         Created registration code details
     """
     try:
         # Generate secure code
         code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(24))
-        
+
         # Calculate expiration
         expires_at = datetime.utcnow() + timedelta(days=request.expiry_days)
-        
+
         is_pg = await is_postgres_backend()
         if is_pg:
             # PostgreSQL
             result = await db.fetchrow("""
-                INSERT INTO registration_codes 
+                INSERT INTO registration_codes
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant
@@ -2663,24 +2663,24 @@ async def create_registration_code(
         else:
             # SQLite
             cursor = await db.execute("""
-                INSERT INTO registration_codes 
+                INSERT INTO registration_codes
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (code, request.max_uses, expires_at.isoformat(), current_user["id"],
                   request.role_to_grant, __import__('json').dumps(request.metadata or {})))
-            
+
             code_id = cursor.lastrowid
             await db.commit()
-            
+
             # Fetch the created code
             cursor = await db.execute(
                 "SELECT * FROM registration_codes WHERE id = ?",
                 (code_id,)
             )
             result = await cursor.fetchone()
-        
+
         logger.info(f"Admin created registration code: {code[:8]}...")
-        
+
         return RegistrationCodeResponse(
             id=result[0] if isinstance(result, tuple) else result['id'],
             code=code,
@@ -2690,7 +2690,7 @@ async def create_registration_code(
             created_at=datetime.utcnow(),
             role_to_grant=request.role_to_grant
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to create registration code: {e}")
         raise HTTPException(
@@ -2706,10 +2706,10 @@ async def list_registration_codes(
 ) -> RegistrationCodeListResponse:
     """
     List all registration codes
-    
+
     Args:
         include_expired: Include expired codes in the list
-        
+
     Returns:
         List of registration codes
     """
@@ -2719,7 +2719,7 @@ async def list_registration_codes(
             # PostgreSQL
             if include_expired:
                 query = """
-                    SELECT id, code, max_uses, times_used, expires_at, 
+                    SELECT id, code, max_uses, times_used, expires_at,
                            created_at, created_by, role_to_grant
                     FROM registration_codes
                     ORDER BY created_at DESC
@@ -2752,7 +2752,7 @@ async def list_registration_codes(
                 """
             cursor = await db.execute(query)
             rows = await cursor.fetchall()
-        
+
         codes = []
         for row in rows:
             if isinstance(row, dict):
@@ -2773,9 +2773,9 @@ async def list_registration_codes(
                     )
                 }
                 codes.append(code_dict)
-        
+
         return RegistrationCodeListResponse(codes=codes)
-        
+
     except Exception as e:
         logger.error(f"Failed to list registration codes: {e}")
         raise HTTPException(
@@ -2791,10 +2791,10 @@ async def delete_registration_code(
 ) -> Dict[str, str]:
     """
     Delete a registration code
-    
+
     Args:
         code_id: Registration code ID
-        
+
     Returns:
         Success message
     """
@@ -2813,11 +2813,11 @@ async def delete_registration_code(
                 (code_id,)
             )
             await db.commit()
-        
+
         logger.info(f"Admin deleted registration code {code_id}")
-        
+
         return {"message": f"Registration code {code_id} deleted"}
-        
+
     except Exception as e:
         logger.error(f"Failed to delete registration code {code_id}: {e}")
         raise HTTPException(
@@ -2891,19 +2891,19 @@ async def get_system_stats(
 ) -> SystemStatsResponse:
     """
     Get system statistics
-    
+
     Returns:
         System-wide statistics including user counts, storage usage, etc.
     """
     try:
         stats = {}
-        
+
         is_pg = await is_postgres_backend()
         if is_pg:
             # PostgreSQL
             # User stats
             user_stats = await db.fetchrow("""
-                SELECT 
+                SELECT
                     COUNT(*) as total_users,
                     COUNT(*) FILTER (WHERE is_active = TRUE) as active_users,
                     COUNT(*) FILTER (WHERE is_verified = TRUE) as verified_users,
@@ -2911,10 +2911,10 @@ async def get_system_stats(
                     COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days') as new_users_30d
                 FROM users
             """)
-            
+
             # Storage stats
             storage_stats = await db.fetchrow("""
-                SELECT 
+                SELECT
                     SUM(storage_used_mb) as total_used_mb,
                     SUM(storage_quota_mb) as total_quota_mb,
                     AVG(storage_used_mb) as avg_used_mb,
@@ -2922,20 +2922,20 @@ async def get_system_stats(
                 FROM users
                 WHERE is_active = TRUE
             """)
-            
+
             # Session stats
             session_stats = await db.fetchrow("""
-                SELECT 
+                SELECT
                     COUNT(*) as active_sessions,
                     COUNT(DISTINCT user_id) as unique_users
                 FROM sessions
                 WHERE is_active = TRUE AND expires_at > CURRENT_TIMESTAMP
             """)
-            
+
         else:
             # SQLite
             cursor = await db.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) as total_users,
                     SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_users,
                     SUM(CASE WHEN is_verified = 1 THEN 1 ELSE 0 END) as verified_users,
@@ -2944,9 +2944,9 @@ async def get_system_stats(
                 FROM users
             """)
             user_stats = await cursor.fetchone()
-            
+
             cursor = await db.execute("""
-                SELECT 
+                SELECT
                     SUM(storage_used_mb) as total_used_mb,
                     SUM(storage_quota_mb) as total_quota_mb,
                     AVG(storage_used_mb) as avg_used_mb,
@@ -2955,9 +2955,9 @@ async def get_system_stats(
                 WHERE is_active = 1
             """)
             storage_stats = await cursor.fetchone()
-            
+
             cursor = await db.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) as active_sessions,
                     COUNT(DISTINCT user_id) as unique_users
                 FROM sessions
@@ -2988,9 +2988,9 @@ async def get_system_stats(
                     "unique_users": int(se.get("unique_users") or 0),
                 },
             )
-        
+
         # SQLite fallback path already returns tuples; keep existing casting
-        
+
         # Convert to response model
         return SystemStatsResponse(
             users={
@@ -3011,7 +3011,7 @@ async def get_system_stats(
                 "unique_users": session_stats[1] or 0
             }
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to get system stats: {e}")
         # In test environments or if non-critical, return a safe default instead of 500
@@ -3041,13 +3041,13 @@ async def get_audit_log(
 ) -> AuditLogResponse:
     """
     Get audit log entries
-    
+
     Args:
         user_id: Filter by user ID
         action: Filter by action type
         days: Number of days to look back
         limit: Maximum entries to return
-        
+
     Returns:
         Audit log entries
     """
@@ -3056,26 +3056,26 @@ async def get_audit_log(
         conditions = []
         params = []
         param_count = 0
-        
+
         if user_id:
             param_count += 1
             conditions.append(f"user_id = ${param_count}" if is_pg else "user_id = ?")
             params.append(user_id)
-        
+
         if action:
             param_count += 1
             conditions.append(f"action = ${param_count}" if is_pg else "action = ?")
             params.append(action)
-        
+
         # Date filter
         if is_pg:
             conditions.append(f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{days} days'")
         else:
             conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
             params.append(f"-{days}")
-        
+
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-        
+
         if is_pg:
             # PostgreSQL
             query = f"""
@@ -3103,7 +3103,7 @@ async def get_audit_log(
             params.append(limit)
             cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
-        
+
         entries = []
         for row in rows:
             if isinstance(row, dict):
@@ -3119,9 +3119,9 @@ async def get_audit_log(
                     "created_at": row[6]
                 }
                 entries.append(entry)
-        
+
         return AuditLogResponse(entries=entries)
-        
+
     except Exception as e:
         logger.error(f"Failed to get audit log: {e}")
         raise HTTPException(

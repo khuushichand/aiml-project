@@ -554,14 +554,14 @@ async def create_optimization(
 ) -> StandardResponse:
     """
     Create and start a new optimization.
-    
+
     Args:
         optimization_data: Optimization configuration
         background_tasks: Background task manager
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         Created optimization details
     """
@@ -767,14 +767,14 @@ async def list_optimizations(
 ) -> ListResponse:
     """
     List optimizations for a project.
-    
+
     Args:
         project_id: Project ID
         page: Page number
         per_page: Items per page
         status: Optional status filter
         db: Database instance
-        
+
     Returns:
         Paginated list of optimizations
     """
@@ -817,11 +817,11 @@ async def get_optimization(
 ) -> StandardResponse:
     """
     Get optimization details.
-    
+
     Args:
         optimization_id: Optimization ID
         db: Database instance
-        
+
     Returns:
         Optimization details
     """
@@ -880,13 +880,13 @@ async def cancel_optimization(
 ) -> StandardResponse:
     """
     Cancel a running optimization.
-    
+
     Args:
         optimization_id: Optimization ID
         reason: Optional cancellation reason
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Success response
     """
@@ -971,7 +971,7 @@ async def cancel_optimization(
 async def get_optimization_strategies() -> StandardResponse:
     """
     Get available optimization strategies.
-    
+
     Returns:
         List of available strategies with descriptions
     """
@@ -1032,7 +1032,7 @@ async def get_optimization_strategies() -> StandardResponse:
             }
         }
     ]
-    
+
     return StandardResponse(
         success=True,
         data=strategies
@@ -1074,7 +1074,7 @@ async def get_optimization_history(
 ) -> StandardResponse:
     """
     Fetch optimization status and recent job history for UI progress.
-    
+
     Returns the optimization row, latest job entry (if any), and
     lightweight progress fields.
     """
@@ -1317,7 +1317,7 @@ async def compare_strategies(
 ) -> StandardResponse:
     """
     Compare multiple optimization strategies.
-    
+
     Returns:
         Comparison job details
     """
@@ -1425,7 +1425,7 @@ from datetime import datetime
 async def run_optimization_async(optimization_id: int, db: PromptStudioDatabase):
     """
     Run optimization asynchronously.
-    
+
     Args:
         optimization_id: Optimization ID
         db: Database instance
@@ -1435,7 +1435,7 @@ async def run_optimization_async(optimization_id: int, db: PromptStudioDatabase)
         await engine.optimize(optimization_id)
     except Exception as e:
         logger.error(f"Async optimization failed: {e}")
-        
+
         db.set_optimization_status(
             optimization_id,
             "failed",

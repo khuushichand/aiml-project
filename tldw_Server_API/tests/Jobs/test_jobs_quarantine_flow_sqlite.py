@@ -59,4 +59,3 @@ def test_quarantine_and_requeue_updates_counters(monkeypatch, tmp_path):
             pass
     rows2 = jm.get_queue_stats(domain="chatbooks", queue="default", job_type="export")
     assert rows2 and rows2[0]["queued"] >= 1 and rows2[0]["quarantined"] == 0
-

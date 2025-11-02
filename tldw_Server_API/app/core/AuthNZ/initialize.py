@@ -51,13 +51,13 @@ def print_banner():
 def check_environment():
     """Check and validate environment configuration"""
     print("📋 Checking environment configuration...")
-    
+
     # Check if .env file exists
     env_file = Path(".env")
     if not env_file.exists():
         print("❌ No .env file found!")
         print("   Creating from template...")
-        
+
         template_file = Path(".env.authnz.template")
         if template_file.exists():
             env_file.write_text(template_file.read_text())
@@ -67,81 +67,81 @@ def check_environment():
         else:
             print("❌ Template file not found!")
             return False
-    
+
     # Load settings
     settings = get_settings()
-    
+
     # Validate critical settings
     issues = []
-    
+
     if settings.AUTH_MODE == "multi_user":
         if not settings.JWT_SECRET_KEY or len(settings.JWT_SECRET_KEY) < 32:
             issues.append("JWT_SECRET_KEY must be set and at least 32 characters")
-        
+
         if settings.JWT_SECRET_KEY == "CHANGE_ME_TO_SECURE_RANDOM_KEY_MIN_32_CHARS":
             issues.append("JWT_SECRET_KEY still has default value - must be changed!")
-    
+
     if settings.AUTH_MODE == "single_user":
         if settings.SINGLE_USER_API_KEY == "CHANGE_ME_TO_SECURE_API_KEY":
             issues.append("SINGLE_USER_API_KEY still has default value - must be changed!")
-    
+
     if issues:
         print("\n❌ Configuration issues found:")
         for issue in issues:
             print(f"   - {issue}")
         return False
-    
+
     print("✅ Environment configuration valid")
     print(f"   Mode: {settings.AUTH_MODE}")
     print(f"   Database: {settings.DATABASE_URL[:30]}...")
-    
+
     return True
 
 def generate_secure_keys():
     """Generate secure keys for configuration"""
     print("\n🔑 Generating secure keys...")
-    
+
     keys = {
         'JWT_SECRET_KEY': secrets.token_urlsafe(32),
         'SINGLE_USER_API_KEY': secrets.token_urlsafe(32),
         'API_KEY_PEPPER': secrets.token_hex(32)
     }
-    
+
     # Generate Fernet key for session encryption
     from cryptography.fernet import Fernet
     keys['SESSION_ENCRYPTION_KEY'] = Fernet.generate_key().decode()
-    
+
     print("\n📝 Generated keys (save these in your .env file):")
     print("-" * 50)
     for key, value in keys.items():
         print(f"{key}={value}")
     print("-" * 50)
-    
+
     return keys
 
 async def setup_database():
     """Setup database and run migrations"""
     print("\n🗄️  Setting up database...")
-    
+
     settings = get_settings()
-    
+
     # Extract database path
     db_url = settings.DATABASE_URL
     if db_url.startswith("sqlite:///"):
         db_path = Path(db_url.replace("sqlite:///", ""))
-        
+
         # Ensure directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)
         print(f"   Database path: {db_path}")
-        
+
         # Check migration status
         status = check_migration_status(db_path)
         print(f"   Current version: {status['current_version']}")
         print(f"   Latest version: {status['latest_version']}")
-        
+
         if not status['is_up_to_date']:
             print(f"   Pending migrations: {len(status['pending_migrations'])}")
-            
+
             # Apply migrations
             ensure_authnz_tables(db_path)
             print("✅ Database migrations applied")
@@ -524,7 +524,7 @@ async def setup_database():
             print(f"❌ Failed to bootstrap Postgres schema: {e}")
             logger.exception("Postgres schema bootstrap error")
             return False
-    
+
     return True
 
 
@@ -807,26 +807,26 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""
     settings = get_settings()
-    
+
     if settings.AUTH_MODE != "multi_user":
         print("\n📝 Single-user mode - skipping admin user creation")
         return True
-    
+
     print("\n👤 Creating admin user...")
-    
+
     # Get user input
     while True:
         username = input("   Admin username (default: admin): ").strip() or "admin"
         if len(username) >= 3:
             break
         print("   Username must be at least 3 characters")
-    
+
     while True:
         email = input("   Admin email: ").strip()
         if "@" in email and "." in email:
             break
         print("   Please enter a valid email address")
-    
+
     while True:
         password = getpass("   Admin password (min 10 chars): ")
         if len(password) >= 10:
@@ -837,12 +837,12 @@ async def create_admin_user():
                 print("   Passwords don't match!")
         else:
             print("   Password must be at least 10 characters")
-    
+
     try:
         # Hash password
         password_service = PasswordService()
         password_hash = password_service.hash_password(password)
-        
+
         # Create user
         users_db = await get_users_db()
         admin_user = await users_db.create_user(
@@ -852,7 +852,7 @@ async def create_admin_user():
             role="admin",
             is_superuser=True
         )
-        
+
         # Create initial API key for admin
         api_manager = await get_api_key_manager()
         api_key_result = await api_manager.create_api_key(
@@ -862,18 +862,18 @@ async def create_admin_user():
             scope="admin",
             expires_in_days=365
         )
-        
+
         print(f"\n✅ Admin user created successfully!")
         print(f"   User ID: {admin_user['id']}")
         print(f"   Username: {admin_user['username']}")
         print(f"\n🔑 Admin API Key (save this - won't be shown again):")
         print(f"   {api_key_result['key']}")
-        
+
         # Ensure user directories exist
         await ensure_user_directories(admin_user['id'])
-        
+
         return True
-        
+
     except Exception as e:
         print(f"❌ Failed to create admin user: {e}")
         return False
@@ -881,9 +881,9 @@ async def create_admin_user():
 async def test_authentication():
     """Test authentication system"""
     print("\n🧪 Testing authentication system...")
-    
+
     settings = get_settings()
-    
+
     try:
         if settings.AUTH_MODE == "single_user":
             # Test API key validation
@@ -913,9 +913,9 @@ async def test_authentication():
             else:
                 print("❌ JWT validation failed")
                 return False
-                
+
         return True
-        
+
     except Exception as e:
         print(f"❌ Authentication test failed: {e}")
         return False
@@ -923,22 +923,22 @@ async def test_authentication():
 async def start_services():
     """Start background services"""
     print("\n🚀 Starting background services...")
-    
+
     try:
         # Start scheduler
         await start_authnz_scheduler()
         print("✅ Scheduler started")
-        
+
         # Initialize monitor
         monitor = await get_authnz_monitor()
         print("✅ Monitoring system initialized")
-        
+
         # Get initial metrics
         metrics = await monitor.get_metrics_summary(60)
         print(f"   Health status: {monitor._calculate_health_status(metrics)}")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"❌ Failed to start services: {e}")
         return False
@@ -946,26 +946,26 @@ async def start_services():
 async def main():
     """Main initialization function"""
     print_banner()
-    
+
     # Step 1: Check environment
     if not check_environment():
         print("\n⚠️  Please configure your environment and run again.")
         print("   1. Edit .env file with secure values")
         print("   2. Run: python -m tldw_Server_API.app.core.AuthNZ.initialize")
         sys.exit(1)
-    
+
     # Step 2: Offer to generate keys if needed
     response = input("\n📝 Generate new secure keys? (y/N): ").strip().lower()
     if response == 'y':
         generate_secure_keys()
         print("\n⚠️  Update your .env file with these keys and run again.")
         sys.exit(0)
-    
+
     # Step 3: Setup database
     if not await setup_database():
         print("\n❌ Database setup failed")
         sys.exit(1)
-    
+
     # Step 4: Create admin user (multi-user mode)
     settings = get_settings()
     if settings.AUTH_MODE == "multi_user":
@@ -973,7 +973,7 @@ async def main():
         try:
             users_db = await get_users_db()
             existing_users = await users_db.list_users(limit=1)
-            
+
             if not existing_users:
                 response = input("\n📝 No users found. Create admin user? (Y/n): ").strip().lower()
                 if response != 'n':
@@ -986,16 +986,16 @@ async def main():
             response = input("\n📝 Create admin user? (Y/n): ").strip().lower()
             if response != 'n':
                 await create_admin_user()
-    
+
     # Step 5: Test authentication
     if not await test_authentication():
         print("\n⚠️  Authentication test failed")
-    
+
     # Step 6: Start services (optional)
     response = input("\n🚀 Start background services? (y/N): ").strip().lower()
     if response == 'y':
         await start_services()
-    
+
     # Summary
     print("\n" + "=" * 60)
     print("✅ AuthNZ Initialization Complete!")

@@ -28,7 +28,7 @@ async def get_scraping_service_status(
 ) -> Dict[str, Any]:
     """
     Get the status of the web scraping service including queue statistics.
-    
+
     Returns:
         Service status including:
         - Initialization status
@@ -50,10 +50,10 @@ async def get_scraping_job_status(
 ) -> Dict[str, Any]:
     """
     Get the status of a specific scraping job.
-    
+
     Args:
         job_id: The ID of the scraping job
-        
+
     Returns:
         Job details including status, progress, and results
     """
@@ -72,10 +72,10 @@ async def cancel_scraping_job(
 ) -> Dict[str, Any]:
     """
     Cancel a pending or active scraping job.
-    
+
     Args:
         job_id: The ID of the scraping job to cancel
-        
+
     Returns:
         Cancellation status
     """
@@ -93,7 +93,7 @@ async def initialize_scraping_service(
 ) -> Dict[str, Any]:
     """
     Initialize the web scraping service if not already initialized.
-    
+
     This starts the worker pool and prepares the service for scraping.
     """
     try:
@@ -115,14 +115,14 @@ async def shutdown_scraping_service(
 ) -> Dict[str, Any]:
     """
     Shutdown the web scraping service gracefully.
-    
+
     This stops all workers and cleans up resources.
     Admin only endpoint.
     """
     # Check if user is admin (add your admin check logic)
     # if not current_user.is_admin:
     #     raise HTTPException(status_code=403, detail="Admin access required")
-    
+
     try:
         service = get_web_scraping_service()
         await service.shutdown()
@@ -142,12 +142,12 @@ async def get_scraping_progress(
 ) -> Dict[str, Any]:
     """
     Get progress information for a scraping task.
-    
+
     Useful for long-running recursive or sitemap scraping tasks.
-    
+
     Args:
         task_id: The task identifier
-        
+
     Returns:
         Progress information including pages scraped, remaining, current URL, etc.
     """
@@ -155,11 +155,11 @@ async def get_scraping_progress(
         service = get_web_scraping_service()
         if not service._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
-        
+
         progress = service.scraper.get_progress(task_id)
         if not progress:
             raise HTTPException(status_code=404, detail="Task not found or no progress available")
-        
+
         return {
             "task_id": task_id,
             "progress": progress,
@@ -179,10 +179,10 @@ async def get_cookies_for_domain(
 ) -> Dict[str, Any]:
     """
     Get stored cookies for a specific domain.
-    
+
     Args:
         domain: The domain to get cookies for
-        
+
     Returns:
         List of cookies for the domain
     """
@@ -190,9 +190,9 @@ async def get_cookies_for_domain(
         service = get_web_scraping_service()
         if not service._initialized:
             await service.initialize()
-        
+
         cookies = service.scraper.cookie_manager.get_cookies(f"https://{domain}")
-        
+
         return {
             "domain": domain,
             "cookies": cookies or [],
@@ -211,13 +211,13 @@ async def set_cookies_for_domain(
 ) -> Dict[str, Any]:
     """
     Set cookies for a specific domain.
-    
+
     Useful for handling authentication or paywalled content.
-    
+
     Args:
         domain: The domain to set cookies for
         cookies: List of cookie dictionaries
-        
+
     Returns:
         Success status
     """
@@ -225,9 +225,9 @@ async def set_cookies_for_domain(
         service = get_web_scraping_service()
         if not service._initialized:
             await service.initialize()
-        
+
         service.scraper.cookie_manager.add_cookies(domain, cookies)
-        
+
         return {
             "status": "success",
             "message": f"Added {len(cookies)} cookies for {domain}",
@@ -245,10 +245,10 @@ async def check_url_duplicate(
 ) -> Dict[str, Any]:
     """
     Check if a URL's content has already been scraped (duplicate detection).
-    
+
     Args:
         url: The URL to check
-        
+
     Returns:
         Duplicate status and information about the original if found
     """
@@ -263,11 +263,11 @@ async def check_url_duplicate(
         service = get_web_scraping_service()
         if not service._initialized:
             await service.initialize()
-        
+
         # For checking, we'd need to get the content first
         # This is a simplified check - in production you might want to
         # check against URL patterns or pre-fetch headers
-        
+
         return {
             "url": url,
             "is_duplicate": False,  # Placeholder

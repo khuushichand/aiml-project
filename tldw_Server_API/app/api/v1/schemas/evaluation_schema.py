@@ -48,24 +48,24 @@ def sanitize_html_text(value: Optional[str]) -> Optional[str]:
     else:
         # Fallback: remove dangerous tags and all HTML, then escape
         # Strategy: Remove script/style content blocks, then remove all HTML tags
-        
+
         # Remove script tags with their content - handle multiple cases:
         # 1. Well-formed script tags with closing tag
-        v = re.sub(r'<\s*script(?:\s+[^>]*)?>.*?<\s*/\s*script\s*>', '', v, 
+        v = re.sub(r'<\s*script(?:\s+[^>]*)?>.*?<\s*/\s*script\s*>', '', v,
                    flags=re.IGNORECASE | re.DOTALL)
-        
+
         # 2. Style tags with their content
-        v = re.sub(r'<\s*style(?:\s+[^>]*)?>.*?<\s*/\s*style\s*>', '', v, 
+        v = re.sub(r'<\s*style(?:\s+[^>]*)?>.*?<\s*/\s*style\s*>', '', v,
                    flags=re.IGNORECASE | re.DOTALL)
-        
+
         # 3. For orphaned opening script/style tags (no closing), we can't just remove
         # everything after them, so we'll remove the tag itself and let content remain
         # This is safer than potentially removing legitimate content
-        
+
         # 4. Remove all HTML tags (including any remaining script/style tags)
         # This catches malformed tags, orphaned tags, and all other HTML
         v = re.sub(r'<[^>]*>', '', v)
-        
+
         # 5. Escape the result for safe output
         v = html.escape(v)
 
@@ -92,13 +92,13 @@ class EvaluationMetric(BaseModel):
 class GEvalRequest(BaseModel):
     """Request for G-Eval summarization evaluation"""
     source_text: str = Field(
-        ..., 
+        ...,
         description="Original source text",
         min_length=10,
         max_length=100000  # ~100KB limit
     )
     summary: str = Field(
-        ..., 
+        ...,
         description="Summary to evaluate",
         min_length=10,
         max_length=50000  # ~50KB limit
@@ -110,7 +110,7 @@ class GEvalRequest(BaseModel):
     api_name: Optional[str] = Field("openai", description="LLM API to use for evaluation")
     api_key: Optional[str] = Field(None, description="API key (if not in config)")
     save_results: bool = Field(False, description="Save results to file")
-    
+
     @field_validator('source_text', 'summary')
     @classmethod
     def sanitize_text(cls, v: str) -> str:
@@ -121,13 +121,13 @@ class GEvalRequest(BaseModel):
         if not sanitized:
             raise ValueError("Text cannot be empty after sanitization")
         return sanitized
-    
+
     @field_validator('api_name')
     @classmethod
     def validate_api_name(cls, v: str) -> str:
         """Validate API name against allowed providers"""
         allowed_providers = [
-            "openai", "anthropic", "google", "cohere", "mistral", 
+            "openai", "anthropic", "google", "cohere", "mistral",
             "groq", "openrouter", "deepseek", "local-llm"
         ]
         if v and v.lower() not in allowed_providers:
@@ -174,7 +174,7 @@ class RAGEvaluationRequest(BaseModel):
         description="Metrics to evaluate"
     )
     api_name: Optional[str] = Field("openai", description="LLM API to use for evaluation")
-    
+
     @field_validator('query', 'generated_response', 'ground_truth')
     @classmethod
     def sanitize_text(cls, v: Optional[str]) -> Optional[str]:
@@ -182,14 +182,14 @@ class RAGEvaluationRequest(BaseModel):
         if v is None:
             return None
         return sanitize_html_text(v)
-    
+
     @field_validator('retrieved_contexts')
     @classmethod
     def validate_contexts(cls, v: List[str]) -> List[str]:
         """Validate and sanitize context chunks"""
         if not v:
             raise ValueError("At least one context is required")
-        
+
         sanitized = []
         for context in v:
             if len(context) > 20000:  # 20KB per context limit
@@ -197,10 +197,10 @@ class RAGEvaluationRequest(BaseModel):
             cleaned = sanitize_html_text(context)
             if cleaned:
                 sanitized.append(cleaned)
-        
+
         if not sanitized:
             raise ValueError("No valid contexts after sanitization")
-            
+
         return sanitized
 
 
@@ -238,7 +238,7 @@ class ResponseQualityRequest(BaseModel):
         description="Custom evaluation criteria"
     )
     api_name: Optional[str] = Field("openai", description="LLM API to use for evaluation")
-    
+
     @field_validator('prompt', 'response', 'expected_format')
     @classmethod
     def sanitize_text(cls, v: Optional[str]) -> Optional[str]:
@@ -246,24 +246,24 @@ class ResponseQualityRequest(BaseModel):
         if v is None:
             return None
         return sanitize_html_text(v)
-    
+
     @field_validator('evaluation_criteria')
     @classmethod
     def validate_criteria(cls, v: Dict[str, str]) -> Dict[str, str]:
         """Validate evaluation criteria"""
         if len(v) > 20:
             raise ValueError("Too many evaluation criteria (max 20)")
-            
+
         sanitized = {}
         for key, value in v.items():
             # Sanitize both keys and values
             key = re.sub(r'[^a-zA-Z0-9_-]', '', key)[:50]  # Limit key length
             value_str = sanitize_html_text(str(value)) or ''
             value_str = value_str[:500]  # Limit value length
-            
+
             if key and value_str:
                 sanitized[key] = value_str
-                
+
         return sanitized
 
 
@@ -288,7 +288,7 @@ class BatchEvaluationRequest(BaseModel):
     metrics: Optional[List[str]] = Field(None, description="Metrics to compute")
     api_name: Optional[str] = Field("openai", description="LLM API to use")
     parallel_workers: int = Field(4, ge=1, le=16, description="Number of parallel workers")
-    
+
     @model_validator(mode='after')
     def validate_batch_size(self) -> 'BatchEvaluationRequest':
         """Validate total batch size doesn't exceed limits"""
@@ -298,11 +298,11 @@ class BatchEvaluationRequest(BaseModel):
             # Estimate size of each item
             item_str = str(item)
             total_size += len(item_str)
-            
+
         # 10MB total limit for batch
         if total_size > 10 * 1024 * 1024:
             raise ValueError(f"Batch too large: ~{total_size / (1024*1024):.1f}MB (max 10MB)")
-            
+
         return self
 
 

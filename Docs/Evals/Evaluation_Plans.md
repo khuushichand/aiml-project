@@ -240,13 +240,13 @@ Benchmarking with distilabel
     https://distilabel.argilla.io/latest/sections/pipeline_samples/examples/benchmarking_with_distilabel/
 
 General Research
-    Greedy Sampling 
+    Greedy Sampling
         https://arxiv.org/abs/2407.10457
             * `Our study addresses this issue by exploring key questions about the performance differences between greedy decoding and sampling, identifying benchmarks' consistency regarding non-determinism, and examining unique model behaviors. Through extensive experiments, we observe that greedy decoding generally outperforms sampling methods for most evaluated tasks. We also observe consistent performance across different LLM sizes and alignment methods, noting that alignment can reduce sampling variance. Moreover, our best-of-N sampling approach demonstrates that smaller LLMs can match or surpass larger models such as GPT-4-Turbo, highlighting the untapped potential of smaller LLMs. `
     Stats
         https://arxiv.org/pdf/2410.01392
         https://arxiv.org/abs/2411.00640
-    
+
 Chat arena
     Building one
         https://github.com/lm-sys/FastChat
@@ -278,8 +278,8 @@ Summarization
         https://arxiv.org/abs/2412.04254
 
 Creating Datasets
-    
-    
+
+
     https://github.com/argilla-io/argilla
         https://www.youtube.com/watch?v=ZsCqrAhzkFU
         https://www.youtube.com/watch?v=jWrtgf2w4VU
@@ -305,7 +305,7 @@ Finetuning
 Links:
     https://www.juriopitz.com/2024/10/17/evaluation-pitfalls-metric-overview-tips.html
 
-    
+
 ----------------------------------------------------------------------------------------------------------------
 
 
@@ -341,7 +341,7 @@ Links:
 ----------------------------------------------------------------------------------------------------------------
 ### <a name="model-evaluation"></a> Model Evaluation
 - https://github.com/openai/simple-evals/blob/main/simpleqa_eval.py
-- 
+-
 - **101**
     - https://github.com/huggingface/evaluation-guidebook
 - **Metrics**
@@ -495,7 +495,7 @@ Links:
 - **Role Play**
     - **Conversation Relevancy**
         - DeepEval
-            * `assesses whether your LLM chatbot is able to generate relevant responses throughout a conversation. It is calculated by looping through each turn individually and adopts a sliding window approach to take the last min(0, current turn number - window size) turns into account to determine whether it is relevant or not. The final conversation relevancy metric score is simply the number of turn responses that is relevant divided by the total number of turns in a conversational test case.` 
+            * `assesses whether your LLM chatbot is able to generate relevant responses throughout a conversation. It is calculated by looping through each turn individually and adopts a sliding window approach to take the last min(0, current turn number - window size) turns into account to determine whether it is relevant or not. The final conversation relevancy metric score is simply the number of turn responses that is relevant divided by the total number of turns in a conversational test case.`
             * https://docs.confident-ai.com/docs/metrics-conversation-relevancy
     - **Debating**
         - https://huggingface.co/blog/debate
@@ -520,7 +520,7 @@ Links:
             - https://arxiv.org/html/2406.00627v1
             - https://mp.weixin.qq.com/s/H2KNDGRNHktHiQc3sayFsA
             - https://mp.weixin.qq.com/s/2lbCMo64-nU5yRz1cLQxYA
-            - https://mp.weixin.qq.com/s/E5qp5YPYPVaLM07OumDTRw 
+            - https://mp.weixin.qq.com/s/E5qp5YPYPVaLM07OumDTRw
             - https://mp.weixin.qq.com/s/yoM-srJYGGfyd1VXirg_Hg
         - RP-Bench
             - https://boson.ai/rpbench-blog/
@@ -614,7 +614,7 @@ Links:
 
 
 ----------------------------------------------------------------------------------------------------------------
- 
+
 
 
 ----------------------------------------------------------------------------------------------------------------
@@ -639,9 +639,9 @@ Links:
 ### <a name="abstract-summ-evals"></a> Abstractive Summarization Evaluations
 - **101**
     - Basic Measures:
-    - `Fluency`: Are sentences in the summary well-formed and easy to read? We want to avoid grammatical errors, random capitalization, etc. 
-    - `Coherence`: Does the summary as a whole make sense? It should be well-structured and logically organized, and not just a jumble of information. 
-    - `Consistency`: Does the summary accurately reflect the content of the source document? We want to ensure there’s no new or contradictory information added. 
+    - `Fluency`: Are sentences in the summary well-formed and easy to read? We want to avoid grammatical errors, random capitalization, etc.
+    - `Coherence`: Does the summary as a whole make sense? It should be well-structured and logically organized, and not just a jumble of information.
+    - `Consistency`: Does the summary accurately reflect the content of the source document? We want to ensure there’s no new or contradictory information added.
     - `Relevance`: Does the summary focus on the most important aspects of the source document? It should include key points and exclude less relevant details
 - **Benchmarks**
   - https://github.com/r-three/fib
@@ -700,7 +700,7 @@ https://huggingface.co/learn/cookbook/en/rag_evaluation
 - **RAG Eval Plan:**
     - The generic idea however: you take a (full, unchunked) document and ask an LLM to generate a question with that document as well as give the factual answer to it. Enforce via prompts to make it use the document only and make it as hard as you want (eg. maybe sometimes you want it to consider 2 documents and make a question that uses bits of both). This gives you a ground truth dataset.
         * You then kick off your RAG pipeline on your documents. They will be chunked, indexed and stored. Then you fire all the questions of your ground truth set at your RAG pipeline and check 1. If it found chunks of the correct document and 2. Ask an LLM various evaluation questions about the generated answer vs. the ground truth answer ( like: how related are they, is there content in the answer that is not in the doc chunks, etc).
-        * This gives you a good idea how well your retrieval (and with that, indexing) works, and how well your full pipeline works. As a bonus you could also keep track of which chunk(s) the ground truth answer was based on and use that for retrieval evaluation too. 
+        * This gives you a good idea how well your retrieval (and with that, indexing) works, and how well your full pipeline works. As a bonus you could also keep track of which chunk(s) the ground truth answer was based on and use that for retrieval evaluation too.
     - **When to move on from Primarily Synthetic Data to Real User Data**
         - 80% recall on synthetic tests
         - Good understanding of failure cases
@@ -716,7 +716,7 @@ https://huggingface.co/learn/cookbook/en/rag_evaluation
             - Accuracy
                 * `the proportion of correct predictions (both true positives and true negatives) among the total number of cases examined.`
             - Precision
-                * `measures the proportion of retrieved documents that are relevant to the user query. It answers the question, “Of all the documents that were retrieved, how many were actually relevant?”` 
+                * `measures the proportion of retrieved documents that are relevant to the user query. It answers the question, “Of all the documents that were retrieved, how many were actually relevant?”`
             - Precision@k
                 * `Precision@k is a variation of precision that measures the proportion of relevant documents amongst the top ‘k’ retrieved results. It is particularly important because it focusses on the top results rather than all the retrieved documents. For RAG it is important because only the top results are most likely to be used for augmentation. For example, if our RAG system considers top 5 documents for augmentation, then Precision@5 becomes important.`
             - Recall
@@ -726,8 +726,8 @@ https://huggingface.co/learn/cookbook/en/rag_evaluation
               - `F1-score = 2 x (Precision x Recall) / (Precision + Recall)`
               - `The equation is such that F1-score penalizes either variable having a low score; a High F1 score is only possible when both recall and precision values are high. This means that the score cannot be positively skewed by a single variable`
               - `F1-score provides and single, balanced measure that can be used to easily compare different systems. However, it does not take ranking into account and gives equal weightage to precision and recall which might not always be ideal.`
-            - 
-            - 
+            -
+            -
             - Ranking Metrics(lol copilot)
                 - MRR Mean Reciprocal Rank
                     - `It measures the reciprocal of the ranks of the first relevant document in the list of results. MRR is calculated over a set of queries.`
@@ -831,7 +831,7 @@ Below we are importing both traditional metrics and LLM as a judge metric from t
     - KITE
         - https://github.com/D-Star-AI/KITE
     - https://arxiv.org/abs/2411.09213
-    
+
 
 Evaluating RAG Cohere
     https://docs.cohere.com/page/rag-evaluation-deep-dive#generation-evaluation
@@ -1047,4 +1047,3 @@ https://github.com/illuin-tech/vidore-benchmark
 https://arxiv.org/abs/2411.15296
 https://arxiv.org/abs/2411.06284
 ----------------------------------------------------------------------------------------------------------------
-

@@ -19,7 +19,7 @@ Python FastAPI Best Practices for Web Apps (mid-2025 Edition by Jeffrey Emanuel)
 	POSTGRES_URL = decouple_config("DATABASE_URL")
 	```
 
-* fastapi for backend; automatic generation of openapi.json file so we can do automatic client/model generation for the separate frontend (a different project entirely using nextjs 15). Fastapi routes must be fully documented and use response models (using sqlmodel library) 
+* fastapi for backend; automatic generation of openapi.json file so we can do automatic client/model generation for the separate frontend (a different project entirely using nextjs 15). Fastapi routes must be fully documented and use response models (using sqlmodel library)
 
 * sqlmodel/sqlalchemy for database connecting to postgres; alembic for db migrations. Database operations should be as efficient as possible; batch operations should use batch insertions where possible (same with reads); we should create all relevant database indexes to optimize the access patterns we care about, and create views where it simplifies the code and improves performance.
 
@@ -35,7 +35,7 @@ Python FastAPI Best Practices for Web Apps (mid-2025 Edition by Jeffrey Emanuel)
 
 * Async for absolutely everything: all network activity (use httpx); all file access (use aiofiles); all database operations (sqlmodel/sqlalchemy/psycopg2); etc.
 
-* No unit tests or mocks; no fake/generated data; always REAL data, REAL API calls, and REAL, REALISTIC, ACTUAL END TO END INTEGRATION TESTS. All integration tests should feature super detailed and informative logging using the rich library. 
+* No unit tests or mocks; no fake/generated data; always REAL data, REAL API calls, and REAL, REALISTIC, ACTUAL END TO END INTEGRATION TESTS. All integration tests should feature super detailed and informative logging using the rich library.
 
 * Aside from the allowed ruff exceptions specified in the pyproject.toml file, we must always strive for ZERO ruff linter warnings/errors in the entire project, as well as ZERO mypy warnings/errors!
 
@@ -244,12 +244,12 @@ packages = ["smartedgar"]
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.venv",
-    "/.vscode", 
+    "/.vscode",
     "/.git",
     "/.github",
     "/__pycache__",
     "/*.pyc",
-    "/*.pyo", 
+    "/*.pyo",
     "/*.pyd",
     "*.db",
     "*.db-journal",
@@ -257,7 +257,7 @@ exclude = [
     "*.db-shm",
     ".env",
     "tests/*",
-    "docs/*", 
+    "docs/*",
     "*.log",
     "sec_filings/*",  # Exclude downloaded filings
     "logs/*",         # Exclude logs
@@ -278,7 +278,7 @@ target-version = "py313"
 [tool.ruff.lint]
 select = [
     "E",     # pycodestyle errors
-    "W",     # pycodestyle warnings  
+    "W",     # pycodestyle warnings
     "F",     # pyflakes
     "I",     # isort
     "C4",    # flake8-comprehensions
@@ -294,7 +294,7 @@ select = [
 ]
 extend-select = [
     "A005",   # stdlib-module-shadowing
-    "A006",   # builtin-lambda-argument-shadowing  
+    "A006",   # builtin-lambda-argument-shadowing
     "FURB188", # slice-to-remove-prefix-or-suffix
     "PLR1716", # boolean-chained-comparison
     "RUF032",  # decimal-from-float-literal
@@ -369,7 +369,7 @@ omit = ["tests/*", "*/conftest.py", "old_code/*"]
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
-    "raise AssertionError", 
+    "raise AssertionError",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
@@ -406,7 +406,7 @@ dev = [
 # 4. Install the project:
 #    uv sync                    # Basic install
 #    uv sync --extra interactive # Add Streamlit/IPython
-#    uv sync --extra ml         # Add ML dependencies  
+#    uv sync --extra ml         # Add ML dependencies
 #    uv sync --all-extras       # Install everything
 #
 #    # Run tools without installing in .venv:
@@ -431,7 +431,7 @@ dev = [
 #    smartedgar dashboard       # Start Streamlit dashboard
 # ---------------------------------------------------------------
 
-``` 
+```
 
 ## Advanced uv Features
 
@@ -517,7 +517,7 @@ app = FastAPI(default_response_class=ORJSONResponse)
 **Optimize response models** to reduce serialization overhead:
 
 ```python
-@router.get("/items", 
+@router.get("/items",
     response_model_exclude_unset=True,
     response_model_by_alias=False  # For internal APIs
 )
@@ -536,7 +536,7 @@ async def chat_stream(request: ChatRequest):
             stream_options={"include_usage": True}
         ):
             yield f"data: {json.dumps(chunk)}\n\n"
-    
+
     return StreamingResponse(generate(), media_type="text/event-stream")
 ```
 
@@ -594,11 +594,11 @@ engine = create_async_engine(
 async def bulk_insert_with_copy(df: pd.DataFrame, table_name: str):
     from io import StringIO
     import csv
-    
+
     buffer = StringIO()
     df.to_csv(buffer, index=False, header=False, quoting=csv.QUOTE_MINIMAL)
     buffer.seek(0)
-    
+
     async with engine.raw_connection() as conn:
         async with conn.cursor() as cursor:
             await cursor.copy_expert(
@@ -622,7 +622,7 @@ async def bulk_update_filings(updates: list[dict]):
         ) AS updates
         WHERE filings.id = updates.id
     """)
-    
+
     await session.execute(stmt, {
         "ids": [u["id"] for u in updates],
         "statuses": [u["status"] for u in updates]
@@ -687,11 +687,11 @@ class RedisClient:
             failure_threshold=5,
             recovery_timeout=60
         )
-    
+
     async def get(self, key: str):
         if not self.circuit_breaker.is_closed:
             return None  # Fail gracefully
-            
+
         try:
             async with redis.Redis(connection_pool=self.pool) as r:
                 return await r.get(key)
@@ -794,7 +794,7 @@ with console.pager():
 def stream_json_pretty(data: dict):
     for line in json.dumps(data, indent=2).splitlines():
         yield Text(line, style="json")
-        
+
 console.print(stream_json_pretty(large_json))
 ```
 
@@ -869,30 +869,30 @@ class AIRequestCoalescer:
     def __init__(self, wait_time: float = 0.1):
         self.pending = defaultdict(list)
         self.wait_time = wait_time
-    
+
     async def request(self, prompt: str, callback):
         prompt_hash = hash(prompt)
-        
+
         # Add to pending requests
         future = asyncio.Future()
         self.pending[prompt_hash].append(future)
-        
+
         # If first request for this prompt, process after wait_time
         if len(self.pending[prompt_hash]) == 1:
             asyncio.create_task(self._process_batch(prompt_hash, prompt))
-        
+
         return await future
-    
+
     async def _process_batch(self, prompt_hash: str, prompt: str):
         await asyncio.sleep(self.wait_time)
-        
+
         # Make single API call
         response = await ai_client.complete(prompt)
-        
+
         # Resolve all waiting futures
         for future in self.pending[prompt_hash]:
             future.set_result(response)
-        
+
         del self.pending[prompt_hash]
 ```
 
@@ -944,7 +944,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # Wait for ongoing requests to complete
     await asyncio.sleep(0.5)
-    
+
     # Close connections gracefully
     await redis_pool.disconnect()
     await engine.dispose()
@@ -976,21 +976,21 @@ async def readiness(
         "redis": "unknown",
         "external_api": "unknown"
     }
-    
+
     # Check database
     try:
         await db.execute(text("SELECT 1"))
         checks["database"] = "healthy"
     except Exception:
         checks["database"] = "unhealthy"
-    
+
     # Check Redis
     try:
         await redis_client.ping()
         checks["redis"] = "healthy"
     except Exception:
         checks["redis"] = "unhealthy"
-    
+
     # Check external API
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -998,7 +998,7 @@ async def readiness(
             checks["external_api"] = "healthy" if resp.status_code == 200 else "degraded"
     except Exception:
         checks["external_api"] = "unhealthy"
-    
+
     all_healthy = all(v == "healthy" for v in checks.values())
     return {
         "status": "ready" if all_healthy else "degraded",
@@ -1084,7 +1084,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.13", "3.14-dev"]  # Pre-test Python 3.14 beta (Oct 2025)
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -1186,19 +1186,19 @@ active_connections = Gauge(
 @app.middleware("http")
 async def track_metrics(request: Request, call_next):
     active_connections.inc()
-    
+
     with http_request_duration.labels(
         method=request.method,
         endpoint=request.url.path
     ).time():
         response = await call_next(request)
-    
+
     http_requests_total.labels(
         method=request.method,
         endpoint=request.url.path,
         status=response.status_code
     ).inc()
-    
+
     active_connections.dec()
     return response
 
@@ -1324,7 +1324,7 @@ assert condition, (
 [tool.ruff.lint]
 extend-select = [
     "A005",   # stdlib-module-shadowing
-    "A006",   # builtin-lambda-argument-shadowing  
+    "A006",   # builtin-lambda-argument-shadowing
     "FURB188", # slice-to-remove-prefix-or-suffix
     "PLR1716", # boolean-chained-comparison
     "RUF032",  # decimal-from-float-literal
@@ -1364,21 +1364,21 @@ class FilingService:
         self.db = db
         self.redis = redis
         self.repository = FilingRepository(db)
-    
+
     async def process_filing(self, filing_id: int) -> Filing:
         # Orchestrate complex business logic
         filing = await self.repository.get(filing_id)
-        
+
         # Check cache first
         cached = await self.redis.get(f"filing:{filing_id}:processed")
         if cached:
             return Filing.parse_raw(cached)
-        
+
         # Process with multiple steps
         filing = await self._validate_filing(filing)
         filing = await self._enrich_filing(filing)
         filing = await self._calculate_metrics(filing)
-        
+
         # Update database and cache
         await self.repository.update(filing)
         await self.redis.setex(
@@ -1410,7 +1410,7 @@ import asyncio
 async def process_many_items(items: list) -> list:
     async with asyncio.TaskGroup() as tg:
         tasks = [tg.create_task(process_item(item)) for item in items]
-    
+
     # All tasks complete successfully or TaskGroup cancels all on first failure
     return [task.result() for task in tasks]
 
@@ -1466,19 +1466,19 @@ results = await asyncio.gather(*[
 ```python
 async def process_batch_with_failures(items: list):
     tasks = [process_item(item) for item in items]
-    
+
     # Don't fail everything if one task fails
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     successful = []
     failed = []
-    
+
     for item, result in zip(items, results):
         if isinstance(result, Exception):
             failed.append((item, str(result)))
         else:
             successful.append(result)
-    
+
     logger.info(f"Processed {len(successful)} successfully, {len(failed)} failed")
     return successful, failed
 ```
@@ -1494,14 +1494,14 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 async def process_pdf(pdf_path: str):
     loop = asyncio.get_event_loop()
-    
+
     # Run blocking PDF processing in thread pool
     result = await loop.run_in_executor(
         executor,
         extract_text_from_pdf,  # Blocking function
         pdf_path
     )
-    
+
     return result
 ```
 
@@ -1527,13 +1527,13 @@ async def send_email(ctx, user_id: int, subject: str, body: str):
 async def generate_report(ctx, report_id: int):
     """Long-running report generation"""
     redis: Redis = ctx["redis"]
-    
+
     # Update progress in Redis
     await redis.set(f"report:{report_id}:status", "processing")
-    
+
     # Generate report...
     result = await create_complex_report(report_id)
-    
+
     await redis.set(f"report:{report_id}:status", "completed")
     return result
 
@@ -1550,14 +1550,14 @@ from arq import create_pool
 @router.post("/reports")
 async def create_report(request: ReportRequest):
     pool = await create_pool(RedisSettings())
-    
+
     # Enqueue job and return immediately
     job = await pool.enqueue_job(
         "generate_report",
         report_id=request.id,
         _job_try=3  # Retry up to 3 times
     )
-    
+
     return {
         "job_id": job.job_id,
         "status": "queued"
@@ -1596,17 +1596,17 @@ app = FastAPI(lifespan=lifespan)
 @app.websocket("/ws/{channel}")
 async def websocket_endpoint(websocket: WebSocket, channel: str):
     await websocket.accept()
-    
+
     async def receive_broadcasts():
         async with broadcast.subscribe(channel) as subscriber:
             async for event in subscriber:
                 await websocket.send_json(event.message)
-    
+
     async def receive_websocket():
         async for data in websocket.iter_json():
             # Broadcast to all subscribers
             await broadcast.publish(channel, data)
-    
+
     # Run both concurrently
     await asyncio.gather(
         receive_broadcasts(),
@@ -1643,13 +1643,13 @@ def setup_telemetry(app: FastAPI):
         endpoint="http://localhost:4317",
         insecure=True
     )
-    
+
     # Configure tracer
     provider = TracerProvider()
     processor = BatchSpanProcessor(otlp_exporter)
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
-    
+
     # Auto-instrument libraries with zero LOC overhead (2025 pattern)
     FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
     SQLAlchemyInstrumentor().instrument(engine=engine)
@@ -1663,15 +1663,15 @@ async def process_complex_operation(data: dict):
     with tracer.start_as_current_span("process_operation") as span:
         span.set_attribute("operation.type", data["type"])
         span.set_attribute("operation.size", len(data["items"]))
-        
+
         # Nested span for sub-operation
         with tracer.start_as_current_span("validate_data"):
             validated = await validate(data)
-        
+
         with tracer.start_as_current_span("save_to_database"):
             result = await save(validated)
             span.set_attribute("db.rows_affected", result.rowcount)
-        
+
         return result
 ```
 
@@ -1734,27 +1734,27 @@ server {
     listen 80;
     listen 443 ssl http2;  # HTTP/2 support with Uvicorn 0.35.0+
     server_name api.example.com;
-    
+
     # Security headers
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
-    
+
     # Optimize for API traffic
     client_max_body_size 50M;
     client_body_timeout 60s;
-    
+
     # Compression
     gzip on;
     gzip_types application/json;
     gzip_min_length 1000;
-    
+
     location / {
         proxy_pass http://app_servers;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # Timeouts for long-running requests
         proxy_read_timeout 300s;
         proxy_connect_timeout 75s;
@@ -1778,7 +1778,7 @@ Environment="PATH=/opt/smartedgar/.venv/bin"
 ExecStart=/opt/smartedgar/.venv/bin/gunicorn \
     -c /opt/smartedgar/gunicorn.conf.py \
     smartedgar.api.main:app
-    
+
 # Restart policy
 Restart=always
 RestartSec=10
@@ -1798,11 +1798,11 @@ WantedBy=multi-user.target
 ```python
 class LLMContext:
     """Manage context window efficiently"""
-    
+
     def __init__(self, max_tokens: int = 8000):
         self.max_tokens = max_tokens
         self.encoder = tiktoken.encoding_for_model("gpt-4")
-    
+
     def build_context(
         self,
         task: str,
@@ -1811,23 +1811,23 @@ class LLMContext:
         examples: list[dict] = None
     ) -> str:
         """Build optimal context within token limits"""
-        
+
         sections = []
-        
+
         # Always include task
         sections.append(f"TASK: {task}")
-        
+
         # Add code context
         if relevant_code:
             sections.append("RELEVANT CODE:")
             for code in relevant_code:
                 sections.append(f"```python\n{code}\n```")
-        
+
         # Add errors if present
         if error_messages:
             sections.append("ERRORS TO FIX:")
             sections.extend(error_messages)
-        
+
         # Add examples if space allows
         if examples:
             sections.append("EXAMPLES:")
@@ -1837,9 +1837,9 @@ class LLMContext:
                     sections.append(str(ex))
                 else:
                     break
-        
+
         return "\n\n".join(sections)
-    
+
     def count_tokens(self, text: str) -> int:
         return len(self.encoder.encode(text))
 ```
@@ -1864,7 +1864,7 @@ class MultiModelOrchestrator:
             model="gpt-4",
             temperature=0
         )
-    
+
     async def process(self, task: str) -> str:
         # Route to appropriate model based on task
         if "debug" in task or "fix" in task:

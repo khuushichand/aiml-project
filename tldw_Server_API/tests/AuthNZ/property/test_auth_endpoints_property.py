@@ -97,4 +97,3 @@ class TestAuthEndpointsProperty:
         assert response.status_code == 401
 
         app.dependency_overrides.clear()
-

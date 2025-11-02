@@ -33,4 +33,3 @@ docker run -d --name tldw-caddy \
 ```
 
 Update `Caddyfile` with your domain/email. Ensure the app is reachable as `localhost:8000` or adjust the upstream.
-

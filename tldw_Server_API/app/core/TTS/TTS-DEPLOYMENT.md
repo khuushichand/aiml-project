@@ -7,13 +7,13 @@ This guide provides comprehensive instructions for deploying and configuring the
 
 ### Minimum Requirements
 - **CPU**: 4 cores (8 recommended)
-- **RAM**: 
+- **RAM**:
   - 4GB for API-only providers
   - 8GB for Kokoro (ONNX)
   - 16GB for Higgs/Chatterbox/Dia
   - 32GB for VibeVoice-7B
   - 12GB+ for IndexTTS2 (emotion + codec pipelines)
-- **Storage**: 
+- **Storage**:
   - 1GB for code + dependencies
   - 1GB per local model (Kokoro)
   - 3-14GB per PyTorch model
@@ -159,7 +159,7 @@ providers:
     timeout: 30
     max_retries: 3
     base_url: https://api.openai.com/v1
-    
+
   elevenlabs:
     enabled: true
     api_key: ${ELEVENLABS_API_KEY}
@@ -167,7 +167,7 @@ providers:
     stability: 0.5
     similarity_boost: 0.5
     use_speaker_boost: true
-    
+
   kokoro:
     enabled: true
     use_onnx: true
@@ -175,7 +175,7 @@ providers:
     voices_json: ./models/kokoro/voices.json
     device: cpu  # or cuda
     phonemizer_backend: espeak
-    
+
   higgs:
     enabled: true
     model_path: bosonai/higgs-audio-v2-generation-3B-base
@@ -187,7 +187,7 @@ providers:
     enable_voice_cloning: true
     min_reference_duration: 3.0
     max_reference_duration: 10.0
-    
+
   chatterbox:
     enabled: true
     model_path: resemble-ai/chatterbox
@@ -199,7 +199,7 @@ providers:
     enable_voice_cloning: true
     min_reference_duration: 5.0
     max_reference_duration: 20.0
-    
+
   dia:
     enabled: true
     model_path: nari-labs/dia
@@ -220,7 +220,7 @@ providers:
     max_text_tokens_per_segment: 120
     quick_streaming_tokens: 0
     # Requires voice_reference audio; see voice_mappings.clone_required
-     
+
   vibevoice:
     enabled: true
     variant: 1.5B  # or 7B
@@ -663,7 +663,7 @@ for model in ["higgs", "chatterbox", "vibevoice"]:
             "response_format": "mp3"
         }
     )
-    
+
     with open(f"clone_{model}.mp3", "wb") as f:
         f.write(response.content)
 ```
@@ -712,17 +712,17 @@ server {
     location /api/v1/audio/ {
         proxy_pass http://tts_backend;
         proxy_http_version 1.1;
-        
+
         # Headers
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # WebSocket support (for future)
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        
+
         # Streaming support
         proxy_buffering off;
         proxy_cache off;
@@ -730,12 +730,12 @@ server {
         tcp_nodelay on;
         tcp_nopush off;
         proxy_set_header X-Accel-Buffering no;
-        
+
         # Timeouts for long generation
         proxy_connect_timeout 75s;
         proxy_send_timeout 300s;
         proxy_read_timeout 300s;
-        
+
         # File upload limits (for voice references and transcription)
         client_max_body_size 25M;
         client_body_buffer_size 128k;
@@ -896,7 +896,7 @@ from locust import HttpUser, task, between
 
 class TTSUser(HttpUser):
     wait_time = between(1, 3)
-    
+
     @task
     def generate_speech(self):
         self.client.post("/api/v1/audio/speech", json={
@@ -904,7 +904,7 @@ class TTSUser(HttpUser):
             "input": "Load test message.",
             "voice": "af_bella"
         })
-    
+
     @task
     def health_check(self):
         self.client.get("/api/v1/audio/health")
@@ -927,7 +927,7 @@ async def test_voice_cloning_workflow():
         # Upload voice reference
         with open("test_voice.wav", "rb") as f:
             voice_ref = base64.b64encode(f.read()).decode()
-        
+
         # Test with each provider
         for model in ["higgs", "chatterbox", "vibevoice"]:
             response = await client.post(

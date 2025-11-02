@@ -54,4 +54,3 @@ Status
   - endpoints/media.py (failed/empty upload cleanup)
   - main.py (trace headers middleware; embeddings dimension check; logging wrapper)
 - Smoketests green: Chat_NEW, Embeddings v5 unit, RAG health.
-

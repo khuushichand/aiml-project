@@ -8,4 +8,3 @@ one-sentence justification and list any missing critical details.
 
 Changelog:
 - v1.0: Initial generic evaluation rubric.
-

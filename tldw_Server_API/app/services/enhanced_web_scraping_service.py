@@ -37,12 +37,12 @@ from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
 
 class WebScrapingService:
     """Enhanced web scraping service with production features"""
-    
+
     def __init__(self):
         self.scraper: Optional[EnhancedWebScraper] = None
         self._initialized = False
         self._active_jobs: Dict[str, ScrapingJob] = {}
-    
+
     async def initialize(self):
         """Initialize the scraping service"""
         if not self._initialized:
@@ -59,14 +59,14 @@ class WebScrapingService:
                 import traceback
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 raise
-    
+
     async def shutdown(self):
         """Shutdown the scraping service"""
         if self.scraper:
             await self.scraper.stop()
             self._initialized = False
             logger.info("Web scraping service shutdown")
-    
+
     async def process_web_scraping_task(
         self,
         scrape_method: str,
@@ -95,7 +95,7 @@ class WebScrapingService:
     ) -> Dict[str, Any]:
         """
         Process web scraping task with enhanced features.
-        
+
         This replaces the placeholder implementation with production features:
         - Concurrent scraping with rate limiting
         - Job queue management
@@ -106,7 +106,7 @@ class WebScrapingService:
         # Ensure service is initialized
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Read crawl feature flags (env > config.txt); keep behavior unchanged if params provided
             cfg = load_and_log_configs() or {}
@@ -151,10 +151,10 @@ class WebScrapingService:
                 "critical": JobPriority.CRITICAL
             }
             job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
-            
+
             # Create task ID
             task_id = f"scrape_{uuid.uuid4().hex[:8]}"
-            
+
             # Process based on scraping method
             if scrape_method == "Individual URLs":
                 result = await self._scrape_individual_urls(
@@ -195,10 +195,10 @@ class WebScrapingService:
                     score_threshold=eff_score_threshold,
                     crawl_strategy=eff_strategy,
                 )
-                
+
             else:
                 raise ValueError(f"Unknown scrape method: {scrape_method}")
-            
+
             # Attach crawl configuration used (observable but non-breaking)
             if isinstance(result, dict):
                 result.setdefault('crawl_config', {})
@@ -217,11 +217,11 @@ class WebScrapingService:
                 return await self._store_ephemeral(result, task_id, user_id)
             else:
                 return await self._store_persistent(result, keywords, user_id)
-                
+
         except Exception as e:
             logger.error(f"Web scraping task failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     async def _scrape_individual_urls(
         self, url_input: str, custom_titles: Optional[str],
         summarize: bool, custom_prompt: Optional[str],
@@ -236,16 +236,16 @@ class WebScrapingService:
         # Parse URLs and titles
         urls = [url.strip() for url in url_input.split('\n') if url.strip()]
         titles = custom_titles.split('\n') if custom_titles else []
-        
+
         # Check if scraper is available
         if self.scraper is None:
             logger.warning("Enhanced scraper not available, falling back to basic scraping")
             # Return empty results or raise to trigger fallback
             raise RuntimeError("Enhanced scraper not initialized - Playwright may not be available")
-        
+
         logger.info(f"Starting to scrape {len(urls)} URLs with enhanced scraper")
         logger.debug(f"URLs to scrape: {urls}")
-        
+
         # Scrape with enhanced scraper
         results = await self.scraper.scrape_multiple(
             urls,
@@ -261,25 +261,25 @@ class WebScrapingService:
             user_agent=user_agent,
             custom_headers=custom_headers
         )
-        
+
         logger.info(f"Scraping completed, got {len(results)} results")
         for i, result in enumerate(results):
             logger.debug(f"Result {i}: extraction_successful={result.get('extraction_successful')}, "
                         f"has_content={bool(result.get('content'))}, "
                         f"error={result.get('error')}")
-        
+
         # Apply custom titles if provided
         for i, result in enumerate(results):
             if i < len(titles) and titles[i]:
                 result['title'] = titles[i]
-        
+
         return {
             "method": "Individual URLs",
             "total_articles": len(results),
             "articles": results,
             "keywords": keywords
         }
-    
+
     async def _scrape_sitemap(
         self, sitemap_url: str, max_pages: int,
         summarize: bool, custom_prompt: Optional[str],
@@ -295,7 +295,7 @@ class WebScrapingService:
         if self.scraper is None:
             logger.warning("Enhanced scraper not available for sitemap scraping")
             raise RuntimeError("Enhanced scraper not initialized - Playwright may not be available")
-        
+
         # Scrape sitemap with content page filter
         results = await self.scraper.scrape_sitemap(
             sitemap_url,
@@ -305,7 +305,7 @@ class WebScrapingService:
             user_agent=user_agent,
             custom_headers=custom_headers
         )
-        
+
         # Add summarization if requested
         if summarize:
             for result in results:
@@ -316,7 +316,7 @@ class WebScrapingService:
                         system_prompt, temperature
                     )
                     result['summary'] = summary
-        
+
         return {
             "method": "Sitemap",
             "total_articles": len(results),
@@ -324,7 +324,7 @@ class WebScrapingService:
             "keywords": keywords,
             "sitemap_url": sitemap_url
         }
-    
+
     async def _scrape_by_url_level(
         self, base_url: str, url_level: int, max_pages: int,
         summarize: bool, custom_prompt: Optional[str],
@@ -345,7 +345,7 @@ class WebScrapingService:
             from urllib.parse import urlparse
             path_parts = urlparse(url).path.strip('/').split('/')
             return len(path_parts) <= url_level and is_content_page(url)
-        
+
         # Recursive scrape with level filter
         results = await self.scraper.recursive_scrape(
             base_url,
@@ -359,7 +359,7 @@ class WebScrapingService:
             score_threshold_override=score_threshold,
             crawl_strategy=crawl_strategy,
         )
-        
+
         # Add summarization if requested
         if summarize:
             for result in results:
@@ -370,7 +370,7 @@ class WebScrapingService:
                         system_prompt, temperature
                     )
                     result['summary'] = summary
-        
+
         return {
             "method": "URL Level",
             "total_articles": len(results),
@@ -378,7 +378,7 @@ class WebScrapingService:
             "keywords": keywords,
             "url_level": url_level
         }
-    
+
     async def _scrape_recursive(
         self, base_url: str, max_pages: int, max_depth: int,
         summarize: bool, custom_prompt: Optional[str],
@@ -396,7 +396,7 @@ class WebScrapingService:
         """Recursive scraping with progress tracking"""
         # Create progress file for resumability
         progress_file = Path(f"./scrape_progress_{uuid.uuid4().hex[:8]}.json")
-        
+
         try:
             # Perform recursive scrape
             results = await self.scraper.recursive_scrape(
@@ -411,7 +411,7 @@ class WebScrapingService:
                 score_threshold_override=score_threshold,
                 crawl_strategy=crawl_strategy,
             )
-            
+
             # Add summarization if requested
             if summarize:
                 for result in results:
@@ -422,10 +422,10 @@ class WebScrapingService:
                             system_prompt, temperature
                         )
                         result['summary'] = summary
-            
+
             # Save final progress
             await self.scraper.save_progress('recursive_scrape', progress_file)
-            
+
             return {
                 "method": "Recursive Scraping",
                 "total_articles": len(results),
@@ -434,12 +434,12 @@ class WebScrapingService:
                 "max_depth": max_depth,
                 "progress_file": str(progress_file)
             }
-            
+
         except Exception as e:
             # Save progress on error for resumability
             await self.scraper.save_progress('recursive_scrape', progress_file)
             raise
-    
+
     async def _summarize_content(
         self, content: str, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
@@ -462,7 +462,7 @@ class WebScrapingService:
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             return "Summary generation failed"
-    
+
     async def _store_ephemeral(
         self, result: Dict[str, Any], task_id: str, user_id: Optional[int]
     ) -> Dict[str, Any]:
@@ -473,9 +473,9 @@ class WebScrapingService:
             "timestamp": datetime.now().isoformat(),
             "result": result
         }
-        
+
         ephemeral_id = ephemeral_storage.store_data(ephemeral_data)
-        
+
         return {
             "status": "ephemeral-ok",
             "ephemeral_id": ephemeral_id,
@@ -487,16 +487,16 @@ class WebScrapingService:
                 "first_article": result.get("articles", [{}])[0].get("title", "N/A") if result.get("articles") else None
             }
         }
-    
+
     async def _store_persistent(
         self, result: Dict[str, Any], keywords: str, user_id: Optional[int]
     ) -> Dict[str, Any]:
         """Store results in database"""
         media_ids = []
         errors = []
-        
+
         logger.info(f"Storing {len(result.get('articles', []))} articles to database")
-        
+
         # Get the database path and create instance
         # Default to user_id 1 if not provided (single-user mode)
         effective_user_id = user_id if user_id is not None else 1
@@ -505,7 +505,7 @@ class WebScrapingService:
             client_id=f"webscraping_service_{effective_user_id}",
             db_path=db_path,
         )
-        
+
         try:
             # Metrics
             try:
@@ -522,7 +522,7 @@ class WebScrapingService:
                     logger.warning(error_msg)
                     errors.append(error_msg)
                     continue
-                
+
                 try:
                     # Prepare data for database
                     info_dict = {
@@ -532,7 +532,7 @@ class WebScrapingService:
                         "scrape_method": result.get("method", "Unknown"),
                         "extraction_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
-                    
+
                     # Format content with metadata
                     # Include crawl metadata (depth, parent_url, score) if present
                     md = article.get("metadata") or {}
@@ -553,13 +553,13 @@ class WebScrapingService:
                             "crawl_score": crawl_score,
                         }
                     )
-                    
+
                     # Prepare segments
                     segments = [{"Text": content_with_metadata}]
-                    
+
                     # Use summary if available
                     summary = article.get("summary", "No summary available")
-                    
+
                     # Add to database using the instance method
                     # Build safe metadata
                     safe_meta = {
@@ -639,7 +639,7 @@ class WebScrapingService:
                             reg.observe("webscraping.persist.article_duration_seconds", _dt, {"method": str(result.get("method", "unknown"))})
                     except Exception as me:
                         logger.debug(f"webscraping.persist: metric observe failed: {me}")
-                    
+
                     if media_id:
                         media_ids.append(media_id)
                         logger.info(f"Stored article with media_id: {media_id}, uuid: {media_uuid}")
@@ -655,7 +655,7 @@ class WebScrapingService:
                                 reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
                         except Exception as me:
                             logger.debug(f"webscraping.persist: metric increment failed: {me}")
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to store article: {e}")
                     errors.append(f"Storage failed for {article.get('url')}: {str(e)}")
@@ -674,7 +674,7 @@ class WebScrapingService:
         finally:
             # Close database connection
             db.close_connection()
-        
+
         return {
             "status": "persist-ok",
             "media_ids": media_ids,
@@ -683,31 +683,31 @@ class WebScrapingService:
             "method": result.get("method"),
             "errors": errors if errors else None
         }
-    
+
     async def get_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get status of a scraping job"""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
-        
+
         # Check active jobs
         if job_id in self._active_jobs:
             job = self._active_jobs[job_id]
             return job.to_dict()
-        
+
         # Check queue status
         queue_status = self.scraper.job_queue.get_status()
-        
+
         return {
             "job_id": job_id,
             "status": "unknown",
             "queue_status": queue_status
         }
-    
+
     async def cancel_job(self, job_id: str) -> Dict[str, Any]:
         """Cancel a scraping job"""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
-        
+
         # Implementation would cancel the job if it's in queue
         # For now, return mock response
         return {
@@ -715,7 +715,7 @@ class WebScrapingService:
             "status": "cancelled",
             "message": "Job cancellation requested"
         }
-    
+
     def get_service_status(self) -> Dict[str, Any]:
         """Get service status and statistics"""
         if not self._initialized:
@@ -723,9 +723,9 @@ class WebScrapingService:
                 "status": "not_initialized",
                 "initialized": False
             }
-        
+
         queue_status = self.scraper.job_queue.get_status()
-        
+
         return {
             "status": "operational",
             "initialized": True,
@@ -755,7 +755,7 @@ def get_web_scraping_service() -> WebScrapingService:
 async def process_web_scraping_task(**kwargs) -> Dict[str, Any]:
     """
     Process web scraping task - drop-in replacement for the placeholder function.
-    
+
     This function maintains the same interface as the original but uses
     the enhanced scraping service.
     """

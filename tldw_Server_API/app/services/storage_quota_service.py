@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 class StorageQuotaService:
     """Service for managing user storage quotas and tracking usage"""
-    
+
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
@@ -37,26 +37,26 @@ class StorageQuotaService:
         """Initialize storage quota service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
-        
+
         # TTL cache for quota checks (5 minutes)
         self.quota_cache = TTLCache(maxsize=1000, ttl=300)
-        
+
         # TTL cache for storage calculations (10 minutes)
         self.storage_cache = TTLCache(maxsize=1000, ttl=600)
-        
+
         self._initialized = False
-        
+
     async def initialize(self):
         """Initialize the storage quota service"""
         if self._initialized:
             return
-        
+
         if not self.db_pool:
             self.db_pool = await get_db_pool()
-        
+
         self._initialized = True
         logger.info("StorageQuotaService initialized")
-    
+
     async def calculate_user_storage(
         self,
         user_id: int,
@@ -67,19 +67,19 @@ class StorageQuotaService:
         """
         if not self._initialized:
             await self.initialize()
-        
+
         # Check cache first
         cache_key = f"storage_calc:{user_id}"
         if cache_key in self.storage_cache and not update_database:
             return self.storage_cache[cache_key]
-        
+
         # Calculate storage in thread pool
         user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
         size_bytes = await asyncio.to_thread(
             self._calculate_directory_size,
             str(user_dir)
         )
-        
+
         # Also calculate ChromaDB if configured
         chroma_bytes = 0
         if self.settings.CHROMADB_BASE_PATH:
@@ -88,16 +88,16 @@ class StorageQuotaService:
                 self._calculate_directory_size,
                 str(chroma_dir)
             )
-        
+
         total_bytes = size_bytes + chroma_bytes
         total_mb = total_bytes / (1024 * 1024)
-        
+
         # Get quota from database
         user_info = await self._get_user_storage_info(user_id)
         if not user_info:
             raise UserNotFoundError(f"User {user_id}")
         quota_mb = user_info['storage_quota_mb']
-        
+
         # Update database if requested
         if update_database:
             async with self.db_pool.transaction() as conn:
@@ -114,13 +114,13 @@ class StorageQuotaService:
                         (total_mb, user_id)
                     )
                     await conn.commit()
-            
+
             # Invalidate quota cache
             self.quota_cache.pop(f"quota:{user_id}", None)
             logger.info(
                 f"Recalculated storage for user {user_id}: {total_mb:.2f}MB / {quota_mb}MB"
             )
-        
+
         result = {
             "user_id": user_id,
             "user_data_bytes": size_bytes,
@@ -134,11 +134,11 @@ class StorageQuotaService:
             "usage_percentage": round((total_mb / quota_mb * 100) if quota_mb > 0 else 0, 1),
             "calculated_at": datetime.utcnow().isoformat()
         }
-        
+
         # Update cache
         self.storage_cache[cache_key] = result
         return result
-    
+
     async def check_quota(
         self,
         user_id: int,
@@ -147,21 +147,21 @@ class StorageQuotaService:
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Check if user has quota for new content
-        
+
         Args:
             user_id: User's database ID
             new_bytes: Size of new content in bytes
             raise_on_exceed: Raise exception if quota exceeded
-            
+
         Returns:
             Tuple of (has_quota, quota_info)
-            
+
         Raises:
             QuotaExceededError: If quota exceeded and raise_on_exceed is True
         """
         if not self._initialized:
             await self.initialize()
-        
+
         # Check cache first
         cache_key = f"quota:{user_id}"
         if cache_key in self.quota_cache:
@@ -171,13 +171,13 @@ class StorageQuotaService:
             user_info = await self._get_user_storage_info(user_id)
             if not user_info:
                 raise UserNotFoundError(f"User {user_id}")
-            
+
             current_mb = float(user_info['storage_used_mb'])
             quota_mb = user_info['storage_quota_mb']
-            
+
             # Update cache
             self.quota_cache[cache_key] = (current_mb, quota_mb)
-        
+
         # Emit gauges for current values
         try:
             reg = get_metrics_registry()
@@ -197,7 +197,7 @@ class StorageQuotaService:
         new_mb = new_bytes / (1024 * 1024)
         projected_mb = current_mb + new_mb
         has_quota = projected_mb <= quota_mb
-        
+
         quota_info = {
             "user_id": user_id,
             "current_usage_mb": round(current_mb, 2),
@@ -208,12 +208,12 @@ class StorageQuotaService:
             "usage_percentage": round((current_mb / quota_mb * 100) if quota_mb > 0 else 0, 1),
             "has_quota": has_quota
         }
-        
+
         if not has_quota and raise_on_exceed:
             raise QuotaExceededError(projected_mb, quota_mb)
-        
+
         return has_quota, quota_info
-    
+
     async def update_usage(
         self,
         user_id: int,
@@ -222,77 +222,77 @@ class StorageQuotaService:
     ) -> Dict[str, Any]:
         """
         Update storage usage for a user
-        
+
         Args:
             user_id: User's database ID
             bytes_delta: Bytes to add or remove
             operation: 'add' or 'remove'
-            
+
         Returns:
             Updated storage information
         """
         if not self._initialized:
             await self.initialize()
-        
+
         mb_delta = bytes_delta / (1024 * 1024)
         if operation == "remove":
             mb_delta = -mb_delta
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     result = await conn.fetchrow(
                         """
-                        UPDATE users 
+                        UPDATE users
                         SET storage_used_mb = GREATEST(0, storage_used_mb + $1)
                         WHERE id = $2
                         RETURNING storage_used_mb, storage_quota_mb
                         """,
                         mb_delta, user_id
                     )
-                    
+
                     if not result:
                         raise UserNotFoundError(f"User {user_id}")
-                    
+
                     new_usage = float(result['storage_used_mb'])
                     quota = result['storage_quota_mb']
-                    
+
                 else:
                     # SQLite
                     await conn.execute(
                         """
-                        UPDATE users 
+                        UPDATE users
                         SET storage_used_mb = MAX(0, storage_used_mb + ?)
                         WHERE id = ?
                         """,
                         (mb_delta, user_id)
                     )
-                    
+
                     cursor = await conn.execute(
                         "SELECT storage_used_mb, storage_quota_mb FROM users WHERE id = ?",
                         (user_id,)
                     )
                     result = await cursor.fetchone()
-                    
+
                     if not result:
                         raise UserNotFoundError(f"User {user_id}")
-                    
+
                     new_usage = float(result[0])
                     quota = result[1]
-                    
+
                     await conn.commit()
-                
+
                 # Check if over quota
                 if new_usage > quota:
                     logger.warning(
                         f"User {user_id} exceeded quota: {new_usage:.2f}MB / {quota}MB"
                     )
-                
+
                 # Invalidate cache
                 cache_key = f"quota:{user_id}"
                 self.quota_cache.pop(cache_key, None)
-                
+
                 # Log significant changes
                 if abs(mb_delta) > 10:  # Log changes over 10MB
                     logger.info(
@@ -300,7 +300,7 @@ class StorageQuotaService:
                         f"{operation} {abs(mb_delta):.2f}MB "
                         f"(new total: {new_usage:.2f}MB / {quota}MB)"
                     )
-                
+
                 # Update gauges
                 try:
                     reg = get_metrics_registry()
@@ -323,7 +323,7 @@ class StorageQuotaService:
                     "available_mb": round(max(0, quota - new_usage), 2),
                     "usage_percentage": round((new_usage / quota * 100) if quota > 0 else 0, 1)
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to update storage usage: {e}")
             raise StorageError(f"Failed to update storage usage: {e}")
@@ -408,7 +408,7 @@ class StorageQuotaService:
                 if hasattr(conn, 'fetchrow'):
                     result = await conn.fetchrow(
                         """
-                        UPDATE users 
+                        UPDATE users
                         SET storage_quota_mb = $1
                         WHERE id = $2
                         RETURNING storage_used_mb, storage_quota_mb

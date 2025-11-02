@@ -6,7 +6,7 @@
             <span class="endpoint-path">/api/v1/prompts - List All Prompts</span>
         </h2>
         <p>List all prompts with pagination support.</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -21,14 +21,14 @@
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" id="btnPromptsList">
             List Prompts
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsList_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsList_response">---</pre>
     </div>
@@ -39,41 +39,41 @@
             <span class="endpoint-path">/api/v1/prompts/search - Search Prompts</span>
         </h2>
         <p>Search prompts with query parameters and optional field filtering.</p>
-        
+
         <div class="form-group">
             <label for="promptsSearch_search_query">Search Query <span class="required">*</span>:</label>
             <input type="text" id="promptsSearch_search_query" name="search_query" placeholder="Enter search terms..." value="summarization" required>
         </div>
-        
+
         <div class="form-group">
             <label for="promptsSearch_search_fields">Search Fields (comma-separated, optional):</label>
             <input type="text" id="promptsSearch_search_fields" name="search_fields" placeholder="name,author,details,system_prompt,user_prompt,keywords">
             <small>Leave empty to search all fields. Options: name, author, details, system_prompt, user_prompt, keywords</small>
         </div>
-        
+
         <div class="form-group">
             <label for="promptsSearch_page">Page:</label>
             <input type="number" id="promptsSearch_page" name="page" value="1" min="1">
         </div>
-        
+
         <div class="form-group">
             <label for="promptsSearch_results_per_page">Results Per Page:</label>
             <input type="number" id="promptsSearch_results_per_page" name="results_per_page" value="20" min="1" max="100">
         </div>
-        
+
         <div class="form-group">
             <label>
                 <input type="checkbox" id="promptsSearch_include_deleted" name="include_deleted"> Include Deleted Prompts
             </label>
         </div>
-        
+
         <button class="api-button" id="btnPromptsSearch">
             Search Prompts
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsSearch_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsSearch_response">---</pre>
     </div>
@@ -84,19 +84,19 @@
             <span class="endpoint-path">/api/v1/prompts/{prompt_identifier} - Get Prompt</span>
         </h2>
         <p>Get a specific prompt by ID, UUID, or Name.</p>
-        
+
         <div class="form-group">
             <label for="promptsGet_prompt_identifier">Prompt Identifier (ID/UUID/Name) <span class="required">*</span>:</label>
             <input type="text" id="promptsGet_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
-        
+
         <button class="api-button" id="btnPromptsGet">
             Get Prompt
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsGet_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsGet_response">---</pre>
     </div>
@@ -107,7 +107,7 @@
             <span class="endpoint-path">/api/v1/prompts/export - Export Prompts</span>
         </h2>
         <p>Export prompts to CSV or Markdown format (returns base64 content).</p>
-        
+
         <div class="form-group">
             <label for="promptsExport_format">Export Format:</label>
             <select id="promptsExport_format">
@@ -115,14 +115,14 @@
                 <option value="markdown">Markdown</option>
             </select>
         </div>
-        
+
         <button class="api-button" id="btnPromptsExport">
             Export Prompts
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsExport_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsExport_response">---</pre>
     </div>
@@ -136,27 +136,27 @@
             <span class="endpoint-path">/api/v1/prompts - Create Prompt</span>
         </h2>
         <p>Create a new prompt with system and user components.</p>
-        
+
         <div class="form-group">
             <label for="promptsCreate_name">Name <span class="required">*</span>:</label>
             <input type="text" id="promptsCreate_name" name="name" placeholder="My Custom Prompt" required>
         </div>
-        
+
         <div class="form-group">
             <label for="promptsCreate_system_prompt">System Prompt (optional):</label>
             <textarea id="promptsCreate_system_prompt" name="system_prompt" rows="5" placeholder="You are a helpful assistant that...">You are a helpful assistant that provides clear and concise summaries of technical documentation.</textarea>
         </div>
-        
+
         <div class="form-group">
             <label for="promptsCreate_user_prompt">User Prompt (optional):</label>
             <textarea id="promptsCreate_user_prompt" name="user_prompt" rows="5" placeholder="Please summarize the following text..."></textarea>
         </div>
-        
+
         <div class="form-group">
             <label for="promptsCreate_details">Details/Description (optional):</label>
             <textarea id="promptsCreate_details" name="details" rows="3" placeholder="Describe what this prompt does...">This prompt helps create summaries of technical content.</textarea>
         </div>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -171,14 +171,14 @@
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" id="btnPromptsCreate">
             Create Prompt
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsCreate_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsCreate_response">---</pre>
     </div>
@@ -190,12 +190,12 @@
             <span class="endpoint-path">/api/v1/prompts/{prompt_identifier} - Update Prompt</span>
         </h2>
         <p>Update an existing prompt.</p>
-        
+
         <div class="form-group">
             <label for="promptsUpdate_prompt_identifier">Prompt Identifier <span class="required">*</span>:</label>
             <input type="text" id="promptsUpdate_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
-        
+
         <div class="form-group">
             <label for="promptsUpdate_payload">Update Payload (JSON):</label>
             <textarea id="promptsUpdate_payload" class="code-input" rows="12">{
@@ -207,14 +207,14 @@
   "keywords": ["updated", "keywords"]
 }</textarea>
         </div>
-        
+
         <button class="api-button" id="btnPromptsUpdate">
             Update Prompt
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsUpdate_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsUpdate_response">---</pre>
     </div>
@@ -225,26 +225,26 @@
             <span class="endpoint-path">/api/v1/prompts/{prompt_identifier} - Delete Prompt</span>
         </h2>
         <p>Soft delete a prompt.</p>
-        
+
         <div class="form-group">
             <label for="promptsDelete_prompt_identifier">Prompt Identifier <span class="required">*</span>:</label>
             <input type="text" id="promptsDelete_prompt_identifier" placeholder="1 or uuid or prompt-name">
         </div>
-        
+
         <button class="api-button btn-danger" id="btnPromptsDelete">
             Delete Prompt
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="promptsDelete_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="promptsDelete_response">---</pre>
     </div>
 
     <div class="endpoint-section" id="promptsKeywords">
         <h2>Keywords Management</h2>
-        
+
         <div class="form-group">
             <h3>Add Keyword</h3>
             <label for="promptsKeyword_text">Keyword Text <span class="required">*</span>:</label>
@@ -253,14 +253,14 @@
                 Add Keyword
             </button>
         </div>
-        
+
         <div class="form-group mt-3">
             <h3>List Keywords</h3>
             <button class="api-button" id="btnPromptKeywordList">
                 List All Keywords
             </button>
         </div>
-        
+
         <div class="form-group mt-3">
             <h3>Delete Keyword</h3>
             <label for="promptsKeyword_delete">Keyword to Delete:</label>
@@ -269,7 +269,7 @@
                 Delete Keyword
             </button>
         </div>
-        
+
         <h3>Response:</h3>
         <pre id="promptsKeywords_response">---</pre>
     </div>

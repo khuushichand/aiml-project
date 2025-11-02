@@ -36,4 +36,3 @@ def test_exemplar_labels_propagate_postgres(monkeypatch):
     assert ql and dur
     assert ("trace_id" in ql[-1].labels) or ("request_id" in ql[-1].labels)
     assert ("trace_id" in dur[-1].labels) or ("request_id" in dur[-1].labels)
-

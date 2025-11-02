@@ -79,4 +79,3 @@ def test_events_pagination_with_next_cursor_header(client_with_wf: TestClient):
     # If we got another event, its seq should be greater than the first
     if ev2:
         assert int(ev2[0]["event_seq"]) > int(ev1[0]["event_seq"])  # stable ASC ordering
-

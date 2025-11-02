@@ -80,7 +80,7 @@ if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
     # Check if Python is available for JSON merging
     if command -v python3 &> /dev/null; then
         print_info "Merging with existing settings.json..."
-        
+
         # Create a Python script to merge JSON
         cat > /tmp/merge_settings.py << 'EOF'
 import json
@@ -90,11 +90,11 @@ def merge_hooks(existing, new):
     """Merge hooks from new settings into existing settings."""
     if "hooks" not in existing:
         existing["hooks"] = {}
-    
+
     for hook_type, hook_list in new.get("hooks", {}).items():
         if hook_type not in existing["hooks"]:
             existing["hooks"][hook_type] = []
-        
+
         # Check if similar hooks already exist
         for new_hook in hook_list:
             hook_exists = False
@@ -102,18 +102,18 @@ def merge_hooks(existing, new):
                 if existing_hook.get("matcher") == new_hook.get("matcher"):
                     hook_exists = True
                     break
-            
+
             if not hook_exists:
                 existing["hooks"][hook_type].append(new_hook)
-    
+
     # Add audit configuration if not present
     if "audit" not in existing:
         existing["audit"] = new.get("audit", {})
-    
+
     # Add tools configuration if not present
     if "tools" not in existing:
         existing["tools"] = new.get("tools", {})
-    
+
     return existing
 
 # Read existing settings
@@ -133,7 +133,7 @@ with open(sys.argv[1], 'w') as f:
 
 print("Settings merged successfully")
 EOF
-        
+
         python3 /tmp/merge_settings.py "$CLAUDE_DIR/settings.json" "$SCRIPT_DIR/global_settings.json"
         rm /tmp/merge_settings.py
         print_status "Merged audit hooks into existing settings.json"
@@ -159,7 +159,7 @@ if [[ -d "$PROJECT_CLAUDE_DIR" ]]; then
         print_warning "Project settings.json already exists. Skipping to avoid overwriting."
         print_info "You can manually merge from: $SCRIPT_DIR/project_settings.json"
     fi
-    
+
     if [[ ! -f "$PROJECT_CLAUDE_DIR/audit_config.json" ]]; then
         cp "$SCRIPT_DIR/audit_config.json" "$PROJECT_CLAUDE_DIR/audit_config.json"
         print_status "Installed audit_config.json"

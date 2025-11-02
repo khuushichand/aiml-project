@@ -114,4 +114,3 @@ def test_beam_search_diversity_rate(prompt_studio_dual_backend_client):
     good["name"] = "beam-div-ok"
     r_ok = client.post("/api/v1/prompt-studio/optimizations/create", json=good)
     assert r_ok.status_code in (200, 201), r_ok.text
-

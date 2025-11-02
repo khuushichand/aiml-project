@@ -231,4 +231,3 @@ Each step ships behind feature flags/environment toggles. Migrations for DB chan
 
 ## Summary
 Most of the requested capabilities are partially present today (hard citations per sentence, claims/NLI, OTEL/metrics, hierarchical offsets in chunker, chunk-level FTS). The plan above focuses on making them first-class, persistent, and consistent across both standard and agentic strategies with minimal disruption and clear rollout guards.
-

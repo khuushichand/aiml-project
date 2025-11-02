@@ -41,4 +41,3 @@ class TesseractCLIBackend(OCRBackend):
             except subprocess.CalledProcessError as e:
                 # Return stderr content as hint; ingestion layer will treat as empty text
                 return e.stdout or ""
-

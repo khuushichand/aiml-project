@@ -21,7 +21,7 @@ Non-goals: switch primary programming model or API surface; introduce external m
 
 ## 3) Current State (Brief)
 
-- SQLite is used for media/notes DBs; FTS5 powers search; Chroma stores embeddings per user. 
+- SQLite is used for media/notes DBs; FTS5 powers search; Chroma stores embeddings per user.
 - RAG has a pluggable vector store with adapters for Chroma and pgvector (`rag_service/vector_stores/*`).
 - Separate work exists for a database backend abstraction (see PG-Support-Plan.md) but it is not yet integrated into Media_DB_v2 and other modules.
 

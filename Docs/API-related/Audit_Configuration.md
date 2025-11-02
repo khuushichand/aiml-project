@@ -95,4 +95,3 @@ AUDIT_HIGH_RISK_OPERATIONS=purge,wipe
 AUDIT_SUSPICIOUS_THRESHOLDS={"data_export":50,"failed_auth":2,"after_hours":false}
 AUDIT_HIGH_RISK_SCORE=80
 ```
-

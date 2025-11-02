@@ -41,15 +41,15 @@ def _default_allowed_ips() -> list[str]:
 class MCPConfig(BaseSettings):
     """
     MCP configuration with secure defaults and environment variable support.
-    
+
     All sensitive values MUST come from environment variables or secure storage.
     """
-    
+
     # Server Configuration
     server_name: str = Field(default="tldw-mcp-unified", env="MCP_SERVER_NAME")
     server_version: str = Field(default="3.0.0", env="MCP_SERVER_VERSION")
     debug_mode: bool = Field(default=False, env="MCP_DEBUG")
-    
+
     # Security Configuration - CRITICAL: No hardcoded secrets!
     jwt_secret_key: Optional[SecretStr] = Field(default=None, env="MCP_JWT_SECRET")
     jwt_algorithm: str = Field(default="HS256", env="MCP_JWT_ALGORITHM")
@@ -62,11 +62,11 @@ class MCPConfig(BaseSettings):
     # Idempotency (protocol-level) for write tools
     idempotency_ttl_seconds: int = Field(default=300, env="MCP_IDEMPOTENCY_TTL_SECONDS")
     idempotency_cache_size: int = Field(default=512, env="MCP_IDEMPOTENCY_CACHE_SIZE")
-    
+
     # API Key Configuration
     api_key_salt: Optional[SecretStr] = Field(default=None, env="MCP_API_KEY_SALT")
     api_key_iterations: int = Field(default=100000, env="MCP_API_KEY_ITERATIONS")
-    
+
     # Database Configuration
     database_url: str = Field(
         default="sqlite+aiosqlite:///./Databases/mcp_unified.db",
@@ -76,19 +76,19 @@ class MCPConfig(BaseSettings):
     database_pool_timeout: int = Field(default=30, env="MCP_DATABASE_POOL_TIMEOUT")
     database_pool_recycle: int = Field(default=3600, env="MCP_DATABASE_POOL_RECYCLE")
     database_echo: bool = Field(default=False, env="MCP_DATABASE_ECHO")
-    
+
     # Redis Configuration (Optional - for distributed deployments)
     redis_url: Optional[str] = Field(default=None, env="MCP_REDIS_URL")
     redis_password: Optional[SecretStr] = Field(default=None, env="MCP_REDIS_PASSWORD")
     redis_ssl: bool = Field(default=False, env="MCP_REDIS_SSL")
     redis_pool_size: int = Field(default=10, env="MCP_REDIS_POOL_SIZE")
-    
+
     # Rate Limiting Configuration
     rate_limit_enabled: bool = Field(default=True, env="MCP_RATE_LIMIT_ENABLED")
     rate_limit_requests_per_minute: int = Field(default=60, env="MCP_RATE_LIMIT_RPM")
     rate_limit_burst_size: int = Field(default=10, env="MCP_RATE_LIMIT_BURST")
     rate_limit_use_redis: bool = Field(default=False, env="MCP_RATE_LIMIT_USE_REDIS")
-    
+
     # WebSocket Configuration
     ws_max_connections: int = Field(default=1000, env="MCP_WS_MAX_CONNECTIONS")
     ws_max_connections_per_ip: int = Field(default=10, env="MCP_WS_MAX_CONNECTIONS_PER_IP")
@@ -104,7 +104,7 @@ class MCPConfig(BaseSettings):
     ws_idle_timeout_seconds: int = Field(default=300, env="MCP_WS_IDLE_TIMEOUT_SECONDS")
     ws_session_rate_limit_count: int = Field(default=120, env="MCP_WS_SESSION_RATE_COUNT")
     ws_session_rate_limit_window_seconds: int = Field(default=60, env="MCP_WS_SESSION_RATE_WINDOW_SECONDS")
-    
+
     # Network access controls
     # Default to loopback-only to avoid accidental exposure
     allowed_client_ips: List[str] = Field(default_factory=_default_allowed_ips, env="MCP_ALLOWED_IPS")
@@ -112,10 +112,10 @@ class MCPConfig(BaseSettings):
     trust_x_forwarded_for: bool = Field(default=False, env="MCP_TRUST_X_FORWARDED")
     trusted_proxy_depth: int = Field(default=1, ge=0, env="MCP_TRUSTED_PROXY_DEPTH")
     trusted_proxy_ips: List[str] = Field(default_factory=list, env="MCP_TRUSTED_PROXY_IPS")
-    
+
     # HTTP request limits
     http_max_body_bytes: int = Field(default=524288, env="MCP_HTTP_MAX_BODY_BYTES")  # 512 KiB default
-    
+
     # Client certificate / mTLS hooks
     client_cert_required: bool = Field(default=False, env="MCP_CLIENT_CERT_REQUIRED")
     client_cert_header: Optional[str] = Field(default=None, env="MCP_CLIENT_CERT_HEADER")
@@ -137,7 +137,7 @@ class MCPConfig(BaseSettings):
         default=["*"],
         env="MCP_CORS_HEADERS"
     )
-    
+
     # Security Headers
     security_headers_enabled: bool = Field(default=True, env="MCP_SECURITY_HEADERS")
     csp_policy: str = Field(
@@ -145,12 +145,12 @@ class MCPConfig(BaseSettings):
         env="MCP_CSP_POLICY"
     )
     hsts_max_age: int = Field(default=31536000, env="MCP_HSTS_MAX_AGE")  # 1 year
-    
+
     # Module Configuration
     module_timeout: int = Field(default=30, env="MCP_MODULE_TIMEOUT")
     module_max_retries: int = Field(default=3, env="MCP_MODULE_MAX_RETRIES")
     module_health_check_interval: int = Field(default=60, env="MCP_MODULE_HEALTH_INTERVAL")
-    
+
     # Monitoring Configuration
     metrics_enabled: bool = Field(default=True, env="MCP_METRICS_ENABLED")
     metrics_port: int = Field(default=9090, env="MCP_METRICS_PORT")
@@ -160,7 +160,7 @@ class MCPConfig(BaseSettings):
     session_ttl_minutes: int = Field(default=30, env="MCP_SESSION_TTL_MINUTES")
     max_sessions: int = Field(default=100, env="MCP_MAX_SESSIONS")
     max_session_uris: int = Field(default=500, env="MCP_MAX_SESSION_URIS")
-    
+
     # Logging Configuration
     log_level: str = Field(default="INFO", env="MCP_LOG_LEVEL")
     log_format: str = Field(
@@ -170,7 +170,7 @@ class MCPConfig(BaseSettings):
     log_file: Optional[str] = Field(default=None, env="MCP_LOG_FILE")
     log_rotation: str = Field(default="100 MB", env="MCP_LOG_ROTATION")
     log_retention: str = Field(default="30 days", env="MCP_LOG_RETENTION")
-    
+
     # Audit Logging
     audit_enabled: bool = Field(default=True, env="MCP_AUDIT_ENABLED")
     audit_log_file: str = Field(default="audit.log", env="MCP_AUDIT_LOG_FILE")
@@ -179,14 +179,14 @@ class MCPConfig(BaseSettings):
     # Provide either JSON via MCP_TOOL_CATEGORY_MAP or file path via MCP_TOOL_CATEGORY_MAP_FILE
     tool_category_map: Dict[str, str] = Field(default_factory=dict, env="MCP_TOOL_CATEGORY_MAP")
     tool_category_map_file: Optional[str] = Field(default=None, env="MCP_TOOL_CATEGORY_MAP_FILE")
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
-    
+
     @field_validator("jwt_secret_key", mode="before")
     @classmethod
     def validate_jwt_secret(cls, v):
@@ -195,18 +195,18 @@ class MCPConfig(BaseSettings):
             # Generate a secure random secret if not provided
             logger.warning("JWT secret not provided, generating a random one (not suitable for production)")
             return SecretStr(secrets.token_urlsafe(32))
-        
+
         if isinstance(v, str):
             if len(v) < 32:
                 raise ValueError("JWT secret must be at least 32 characters long")
-            
+
             if v == "your-secret-key-change-this-in-production":
                 raise ValueError("Default JWT secret detected! Please set MCP_JWT_SECRET environment variable")
-            
+
             return SecretStr(v)
-        
+
         return v
-    
+
     @field_validator("api_key_salt", mode="before")
     @classmethod
     def validate_api_key_salt(cls, v):
@@ -214,15 +214,15 @@ class MCPConfig(BaseSettings):
         if not v:
             logger.warning("API key salt not provided, generating a random one")
             return SecretStr(secrets.token_urlsafe(32))
-        
+
         if isinstance(v, str):
             if len(v) < 32:
                 raise ValueError("API key salt must be at least 32 characters long")
-            
+
             return SecretStr(v)
-        
+
         return v
-    
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v):
@@ -238,7 +238,7 @@ class MCPConfig(BaseSettings):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
-    
+
     @field_validator("allowed_client_ips", "blocked_client_ips", "trusted_proxy_ips", mode="before")
     @classmethod
     def parse_ip_lists(cls, v):
@@ -246,7 +246,7 @@ class MCPConfig(BaseSettings):
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
-    
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, v):
@@ -270,28 +270,28 @@ class MCPConfig(BaseSettings):
             except Exception:
                 return {}
         return v
-    
+
     def get_redis_connection_params(self) -> Optional[Dict[str, Any]]:
         """Get Redis connection parameters if Redis is configured"""
         if not self.redis_url:
             return None
-        
+
         params = {
             "url": self.redis_url,
             "encoding": "utf-8",
             "decode_responses": True,
             "max_connections": self.redis_pool_size,
         }
-        
+
         if self.redis_password:
             params["password"] = self.redis_password.get_secret_value()
-        
+
         if self.redis_ssl:
             params["ssl"] = True
             params["ssl_cert_reqs"] = "required"
-        
+
         return params
-    
+
     def get_database_connection_params(self) -> Dict[str, Any]:
         """Get database connection parameters"""
         return {
@@ -302,7 +302,7 @@ class MCPConfig(BaseSettings):
             "pool_recycle": self.database_pool_recycle,
             "echo": self.database_echo,
         }
-    
+
     def configure_logging(self):
         """Configure logging using a safe, non-colorized formatter.
 
@@ -392,21 +392,21 @@ def validate_config() -> bool:
     """Validate configuration on startup"""
     try:
         config = get_config()
-        
+
         # Check critical security settings
         if not config.jwt_secret_key:
             logger.error("JWT secret key not configured!")
             return False
-        
+
         if not config.api_key_salt:
             logger.error("API key salt not configured!")
             return False
-        
+
         # Validate database connection
         if not config.database_url:
             logger.error("Database URL not configured!")
             return False
-        
+
         # Harden WebSocket + mTLS settings for production
         if not config.debug_mode:
             # WS must require auth
@@ -427,10 +427,10 @@ def validate_config() -> bool:
                 logger.warning("Localhost or wildcard in CORS origins - not recommended for production")
             if config.database_echo:
                 logger.warning("Database echo enabled - not recommended for production")
-        
+
         logger.info("Configuration validation passed")
         return True
-    
+
     except Exception as e:
         logger.error(f"Configuration validation failed: {e}")
         return False

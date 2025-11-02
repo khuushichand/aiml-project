@@ -251,7 +251,7 @@ async def test_org_team_scoped_catalog_management():
     team_name = f"Team-Cats-{robert_id}"
     r_team = client.post(f"/api/v1/admin/orgs/{org_id}/teams", headers=admin_headers, json={"name": team_name})
     assert r_team.status_code == 200, r_team.text
-    team_id = int(r_team.json()["id"]) 
+    team_id = int(r_team.json()["id"])
 
     # Add org/team memberships: Robert as lead, Sally as member
     r_add_org_robert = client.post(

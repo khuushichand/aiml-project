@@ -147,4 +147,3 @@ def test_svg_treated_as_xml_and_allowed(tmp_path):
     assert res, res.issues
     # Expect MIME either detected as image/svg+xml or via fallback
     assert (res.detected_mime_type or "").lower() in ("image/svg+xml", "text/xml", "application/xml")
-

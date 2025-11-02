@@ -32,7 +32,7 @@ class CitationType(Enum):
 class Citation:
     """
     Represents a citation to a source document.
-    
+
     Attributes:
         document_id: Unique identifier of the source document
         document_title: Human-readable title of the document
@@ -57,7 +57,7 @@ class Citation:
     metadata: Dict[str, Any] = field(default_factory=dict)
     location: Optional[str] = None  # "Chapter 3, Page 45" or "Section 2.1"
     formatted_citation: Optional[str] = None  # Pre-formatted academic citation
-    
+
     def __post_init__(self):
         """Validate citation data."""
         if self.confidence < 0 or self.confidence > 1:
@@ -66,7 +66,7 @@ class Citation:
             raise ValueError(f"start_char must be non-negative, got {self.start_char}")
         if self.end_char < self.start_char:
             raise ValueError(f"end_char must be >= start_char, got start={self.start_char}, end={self.end_char}")
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
         return {
@@ -86,7 +86,7 @@ class Citation:
 class Document:
     """
     Represents a document in the RAG system.
-    
+
     This is a unified representation for all types of content
     (media transcripts, chat messages, notes, etc.)
     """
@@ -96,52 +96,52 @@ class Document:
     source: DataSource = DataSource.MEDIA_DB  # Default for compatibility with tests
     score: float = 0.0  # Relevance score (set during retrieval)
     embedding: Optional[np.ndarray] = None  # Vector embedding if available
-    
+
     # Citation support
     citations: List[Citation] = field(default_factory=list)
-    
+
     # Enhanced chunk lineage tracking
     source_document_id: Optional[str] = None  # Original document this chunk came from
     source_document_metadata: Dict[str, Any] = field(default_factory=dict)  # Title, author, date, URL, etc.
-    
+
     # Parent document support (for hierarchical chunking)
     parent_id: Optional[str] = None  # ID of parent document if this is a chunk
     children_ids: List[str] = field(default_factory=list)  # IDs of child chunks
     chunk_index: Optional[int] = None  # Position in parent document (1-based)
     total_chunks: Optional[int] = None  # Total number of chunks in source document
-    
+
     # Character positions for citation tracking
     start_char: Optional[int] = None  # Start position in original document
     end_char: Optional[int] = None  # End position in original document
-    
+
     # Location information for academic citations
     page_number: Optional[int] = None  # Page number in source document
     section_title: Optional[str] = None  # Section/chapter title
     paragraph_number: Optional[int] = None  # Paragraph number within section
-    
+
     def __hash__(self):
         return hash(self.id)
-    
+
     def __eq__(self, other):
         if not isinstance(other, Document):
             return False
         return self.id == other.id
-    
+
     def add_citation(self, citation: Citation) -> None:
         """Add a citation to this document."""
         self.citations.append(citation)
-    
+
     def get_citations_by_type(self, citation_type: CitationType) -> List[Citation]:
         """Get citations of a specific type."""
         return [c for c in self.citations if c.match_type == citation_type]
-    
+
     def get_source_info(self) -> Dict[str, Any]:
         """Get source document information for citation generation."""
         if self.source_document_metadata:
             return self.source_document_metadata
         # Fallback to regular metadata
         return self.metadata
-    
+
     def get_location_string(self) -> str:
         """Get human-readable location within source document."""
         parts = []
@@ -163,7 +163,7 @@ class SearchResult:
     query: str
     search_type: str  # "vector", "fts", "hybrid"
     metadata: Dict[str, Any] = None  # Additional search metadata
-    
+
     # Enhanced features
     citations: List[Citation] = field(default_factory=list)
     expanded_context: Optional[str] = None  # Context expanded with parent documents
@@ -185,7 +185,7 @@ class RAGContext:
     combined_text: str
     total_tokens: int
     metadata: Dict[str, Any]
-    
+
     # Enhanced features
     citations: List[Citation] = field(default_factory=list)
     parent_context: Optional[str] = None  # Expanded context from parent documents
@@ -219,7 +219,7 @@ class RAGResponse:
     context: RAGContext
     sources: List[Document]
     metadata: Dict[str, Any]  # Timing, model used, etc.
-    
+
     # Enhanced features
     citations: List[Citation] = field(default_factory=list)
     confidence_score: float = 0.0  # Overall confidence in the response
@@ -232,7 +232,7 @@ class Embedder(Protocol):
     def embed(self, text: str) -> np.ndarray:
         """Generate embedding for text."""
         ...
-    
+
     def embed_batch(self, texts: List[str]) -> List[np.ndarray]:
         """Generate embeddings for multiple texts."""
         ...
@@ -261,15 +261,15 @@ class Cache(Protocol, Generic[T]):
     def get(self, key: str) -> Optional[T]:
         """Get item from cache."""
         ...
-    
+
     def set(self, key: str, value: T, ttl: Optional[int] = None) -> None:
         """Set item in cache with optional TTL."""
         ...
-    
+
     def delete(self, key: str) -> None:
         """Delete item from cache."""
         ...
-    
+
     def clear(self) -> None:
         """Clear all items from cache."""
         ...
@@ -279,27 +279,27 @@ class Cache(Protocol, Generic[T]):
 
 class RetrieverStrategy(ABC):
     """Base class for retrieval strategies."""
-    
+
     @abstractmethod
     async def retrieve(
-        self, 
-        query: str, 
+        self,
+        query: str,
         filters: Optional[Dict[str, Any]] = None,
         top_k: int = 10
     ) -> SearchResult:
         """
         Retrieve relevant documents for the query.
-        
+
         Args:
             query: The search query
             filters: Optional filters to apply
             top_k: Number of results to return
-            
+
         Returns:
             SearchResult containing relevant documents
         """
         pass
-    
+
     @property
     @abstractmethod
     def source_type(self) -> DataSource:
@@ -309,7 +309,7 @@ class RetrieverStrategy(ABC):
 
 class ProcessingStrategy(ABC):
     """Base class for document processing strategies."""
-    
+
     @abstractmethod
     def process(
         self,
@@ -319,12 +319,12 @@ class ProcessingStrategy(ABC):
     ) -> RAGContext:
         """
         Process search results into a context for generation.
-        
+
         Args:
             search_results: Results from various retrievers
             query: The original query
             max_context_length: Maximum context length in tokens
-            
+
         Returns:
             Processed context ready for generation
         """
@@ -333,7 +333,7 @@ class ProcessingStrategy(ABC):
 
 class GenerationStrategy(ABC):
     """Base class for generation strategies."""
-    
+
     @abstractmethod
     async def generate(
         self,
@@ -343,12 +343,12 @@ class GenerationStrategy(ABC):
     ) -> str:
         """
         Generate response using the context.
-        
+
         Args:
             context: The prepared context
             query: The original query
             **kwargs: Additional generation parameters
-            
+
         Returns:
             Generated response
         """

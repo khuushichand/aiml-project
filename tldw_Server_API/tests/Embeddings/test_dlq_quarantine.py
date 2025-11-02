@@ -120,4 +120,3 @@ def test_dlq_quarantine_blocks_requeue_then_approve(monkeypatch):
     assert len(live) == 1
 
     app.dependency_overrides.pop(get_request_user, None)
-

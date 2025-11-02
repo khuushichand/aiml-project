@@ -23,7 +23,7 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
-    OpenAISpeechRequest, 
+    OpenAISpeechRequest,
     OpenAITranscriptionRequest,
     OpenAITranscriptionResponse,
     OpenAITranslationRequest,
@@ -275,28 +275,28 @@ async def create_speech(
       -d '{"model": "tts-1", "input": "Hello world", "voice": "alloy", "response_format": "mp3", "stream": true}'
     ```
     """
-    
+
     # Authentication is enforced by dependency injection via get_request_user
     # current_user is available for audit/logging if needed
-    
+
     # Input validation using the new validation system
     try:
         # Create validator instance
         validator = TTSInputValidator()
-        
+
         # Validate and sanitize input text
         sanitized_text = validator.sanitize_text(request_data.input)
-        
+
         # Check for empty input after sanitization
         if not sanitized_text or len(sanitized_text.strip()) == 0:
             raise TTSValidationError(
                 "Input text cannot be empty after sanitization",
                 details={"original_length": len(request_data.input)}
             )
-        
+
         # Update request with sanitized text
         request_data.input = sanitized_text
-        
+
     except TTSValidationError as e:
         logger.warning(f"TTS validation error: {e}")
         raise HTTPException(
@@ -491,7 +491,7 @@ async def create_transcription(
     - parakeet: NVIDIA Parakeet model (efficient)
     - canary: NVIDIA Canary model (multilingual)
     - qwen2audio: Qwen2 Audio model
-    
+
     Rate limited to 20 requests per minute per IP address.
 
     Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
@@ -504,9 +504,9 @@ async def create_transcription(
       -F "file=@/abs/audio.wav" -F "model=whisper-1" -F "language=en" -F "response_format=json"
     ```
     """
-    
+
     # Authentication is enforced by dependency injection via get_request_user
-    
+
     # Validate file presence
     if not file:
         raise HTTPException(
@@ -533,7 +533,7 @@ async def create_transcription(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported media type: {file.content_type}"
         )
-    
+
     # Resolve per-tier file size limit
     rid = None
     try:
@@ -590,7 +590,7 @@ async def create_transcription(
         with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp_file:
             tmp_file.write(contents)
             temp_audio_path = tmp_file.name
-        
+
         # Convert to canonical 16k mono WAV for consistent processing
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav as _convert_to_wav
@@ -607,7 +607,7 @@ async def create_transcription(
         except Exception as e:
             logger.debug(f"Failed to compute audio duration; defaulting to 0: error={e}")
             duration_seconds = 0.0
-        
+
         # Parse timestamp granularities (flexible: CSV or JSON array)
         granularity_tokens = set()
         try:
@@ -637,9 +637,9 @@ async def create_transcription(
             "qwen2audio": "qwen2audio",
             "qwen": "qwen2audio"
         }
-        
+
         provider = provider_map.get(model.lower(), "faster-whisper")
-        
+
         # Import transcription functions
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             transcribe_audio,
@@ -649,7 +649,7 @@ async def create_transcription(
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
-        
+
         # Prepare quotas and transcription now that we hold the slot
 
         # Enforce daily minutes cap by estimated duration
@@ -752,7 +752,7 @@ async def create_transcription(
             transcribed_text = _cv_post(transcribed_text)
         except Exception:
             pass
-        
+
         # On success, record minutes used
         try:
             await add_daily_minutes(current_user.id, minutes_est)
@@ -764,17 +764,17 @@ async def create_transcription(
         # Format response based on requested format
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
-        
+
         elif response_format == "srt":
             # Simple SRT format (would need proper timing for real implementation)
             srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
             return Response(content=srt_content, media_type="text/plain")
-        
+
         elif response_format == "vtt":
             # Simple VTT format
             vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
             return Response(content=vtt_content, media_type="text/vtt")
-        
+
         else:  # json or verbose_json
             response_data: Dict[str, Any] = {"text": transcribed_text}
 
@@ -815,7 +815,7 @@ async def create_transcription(
                         "end": duration,
                         "text": transcribed_text,
                     }]
-            
+
             # Optional: auto-run segmentation in JSON responses
             if segment:
                 try:
@@ -856,9 +856,9 @@ async def create_transcription(
             if response_format == "verbose_json":
                 response_data["task"] = "transcribe"
                 response_data["duration"] = duration
-            
+
             return JSONResponse(content=response_data)
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -918,7 +918,7 @@ async def create_translation(
     # For translation, we'll use the transcription endpoint with language detection
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model
-    
+
     # Call transcription with English as target
     return await create_transcription(
         request=request,
@@ -1004,7 +1004,7 @@ async def get_tts_health(
 ):
     """
     Get health status of TTS providers.
-    
+
     Returns comprehensive health information including:
     - Provider availability
     - Circuit breaker status
@@ -1012,7 +1012,7 @@ async def get_tts_health(
     - Active requests
     """
     from datetime import datetime
-    
+
     try:
         # Get service status
         status_data = tts_service.get_status()
@@ -1021,16 +1021,16 @@ async def get_tts_health(
             status = {}
         else:
             status = status_data
-        
+
         # Get capabilities
         capabilities = await tts_service.get_capabilities()
-        
+
         # Determine overall health
         available_providers = status.get("available", 0)
         total_providers = status.get("total_providers", 0)
-        
+
         health_status = "healthy" if available_providers > 0 else "unhealthy"
-        
+
         health = {
             "status": health_status,
             "providers": {
@@ -1078,11 +1078,11 @@ async def list_tts_providers(
     List all available TTS providers and their capabilities.
     """
     from datetime import datetime
-    
+
     try:
         capabilities = await tts_service.get_capabilities()
         voices = await tts_service.list_voices()
-        
+
         return {
             "providers": capabilities,
             "voices": voices,
@@ -1106,7 +1106,7 @@ async def list_tts_voices(
 
     - If `provider` is specified, returns voices only for that provider.
     - Otherwise returns a mapping of provider name to voice lists.
-    
+
     For ElevenLabs, this uses the adapter's cached user voices (plus defaults)
     loaded during adapter initialization.
     """
@@ -1130,7 +1130,7 @@ async def reset_tts_metrics(
 ):
     """
     Reset TTS metrics.
-    
+
     Args:
         provider: Optional provider name to reset metrics for. If not provided, resets all metrics.
     """
@@ -1168,7 +1168,7 @@ async def websocket_transcribe(
 ):
     """
     Handle a WebSocket connection to perform real-time streaming audio transcription.
-    
+
     Accepts a WebSocket and an optional query token. Authentication is supported via:
     - Multi-user: X-API-KEY header, Authorization: Bearer <JWT>, or an initial auth message.
     - Single-user: API key via header, query token, or an initial auth message; an IP allowlist may be enforced.
@@ -1489,7 +1489,7 @@ async def websocket_transcribe(
         await websocket.send_json({"type": "error", "message": "Authentication required"})
         await websocket.close(code=4401)
         return
-    
+
     try:
         # Default configuration - prefer server config for variant/model
         # This ensures alignment with configured STT defaults even if the
@@ -1514,9 +1514,9 @@ async def websocket_transcribe(
             partial_interval=0.5,
             language='en'  # Default language for Canary
         )
-        
+
         logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
-        
+
         # Enforce per-user streaming quotas and daily minutes during streaming
         # Resolve user id for quotas (JWT in multi-user; fixed id in single-user)
         if is_multi_user_mode() and jwt_user_id is not None:
@@ -1553,14 +1553,14 @@ async def websocket_transcribe(
             async def _on_audio_quota(seconds: float, sr: int) -> None:
                 """
                 Handle a chunk of audio for daily-minute quota accounting and enforcement.
-                
+
                 Parameters:
                     seconds (float): Duration of the audio chunk in seconds.
                     sr (int): Sample rate of the audio chunk in Hz (unused by this function but provided for callback compatibility).
-                
+
                 Raises:
                     _QuotaExceeded: If adding this chunk would exceed the user's daily minutes quota.
-                
+
                 Notes:
                     - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
                       `used_minutes` counter and records the minutes via `add_daily_minutes`.
@@ -1626,7 +1626,7 @@ async def websocket_transcribe(
                 async def _on_heartbeat() -> None:
                     """
                     Send a heartbeat to update streaming quota/timestamp for the current user.
-                    
+
                     Invokes the module-level `heartbeat_stream` callback with `user_id_for_usage` to record activity; any exceptions raised by the callback are suppressed.
                     """
                     try:
@@ -1657,7 +1657,7 @@ async def websocket_transcribe(
                     logger.debug(f"WebSocket close (quota case) failed: error={e}")
         finally:
             await finish_stream(user_id_for_usage)
-        
+
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
@@ -1710,7 +1710,7 @@ async def websocket_transcribe(
 async def streaming_status():
     """
     Report availability and capabilities of the streaming transcription WebSocket endpoint.
-    
+
     Returns:
         A JSON object with the following keys:
           - `status` (str): "available" if at least one streaming model is present, "unavailable" otherwise, or "error" on failure.
@@ -1721,7 +1721,7 @@ async def streaming_status():
     try:
         # Check available models
         available_models = []
-        
+
         # Check for MLX variant
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
@@ -1749,7 +1749,7 @@ async def streaming_status():
             available_models.append("parakeet-onnx")
         except ImportError:
             pass
-        
+
         return JSONResponse({
             "status": "available" if available_models else "unavailable",
             "available_models": available_models,
@@ -1765,7 +1765,7 @@ async def streaming_status():
                 "audio_persistence": True
             }
         })
-        
+
     except Exception as e:
         logger.error(f"Error checking streaming status: {e}")
         return JSONResponse(
@@ -1784,7 +1784,7 @@ async def streaming_limits(
 ):
     """
     Return the current user's streaming quota and usage summary.
-    
+
     Returns:
         JSONResponse: A JSON object with the following keys:
             - user_id (str): The user's identifier.
@@ -1864,9 +1864,9 @@ async def streaming_limits(
 async def test_streaming():
     """
     Run a lightweight end-to-end check of the streaming transcription pipeline using a short generated audio sample.
-    
+
     Performs a minimal initialization of the Parakeet streaming transcriber, sends a short synthetic audio chunk, and returns the transcriber's immediate response or a buffering status.
-    
+
     Returns:
         JSONResponse: On success, a JSON object with keys:
             - "status": "success"
@@ -1884,28 +1884,28 @@ async def test_streaming():
             StreamingConfig
         )
         import base64
-        
+
         # Try to initialize transcriber
         config = StreamingConfig(model_variant='mlx')
         transcriber = ParakeetStreamingTranscriber(config)
-        
+
         # Generate test audio
         sample_rate = 16000
         duration = 0.5
         t = np.linspace(0, duration, int(sample_rate * duration))
         audio = (0.5 * np.sin(440 * 2 * np.pi * t)).astype(np.float32)
         encoded = base64.b64encode(audio.tobytes()).decode('utf-8')
-        
+
         # Try processing
         result = await transcriber.process_audio_chunk(encoded)
-        
+
         return JSONResponse({
             "status": "success",
             "test_passed": True,
             "message": "Streaming transcription is working",
             "test_result": result if result else "Buffer accumulating"
         })
-        
+
     except Exception as e:
         logger.error(f"Streaming test failed: {e}")
         return JSONResponse(
@@ -1934,12 +1934,12 @@ async def upload_voice(
 ):
     """
     Upload a custom voice sample for use with TTS.
-    
+
     Supports voice cloning for compatible providers:
     - VibeVoice: Any duration (1-shot cloning)
     - Higgs: 3-10 seconds recommended
     - Chatterbox: 5-20 seconds recommended
-    
+
     The voice will be processed and optimized for the specified provider.
     """
     try:
@@ -1951,17 +1951,17 @@ async def upload_voice(
         )
         # Get voice manager
         voice_manager = get_voice_manager()
-        
+
         # Read file content
         file_content = await file.read()
-        
+
         # Create upload request
         upload_request = VoiceUploadRequest(
             name=name,
             description=description,
             provider=provider
         )
-        
+
         # Process upload
         result = await voice_manager.upload_voice(
             user_id=current_user.id,
@@ -1969,9 +1969,9 @@ async def upload_voice(
             filename=file.filename,
             request=upload_request
         )
-        
+
         return result.model_dump()
-        
+
     except ImportError as e:
         # Placeholder response when voice management is not available
         raise HTTPException(
@@ -2003,7 +2003,7 @@ async def list_voices(
 ):
     """
     List all custom voice samples uploaded by the user.
-    
+
     Returns voice metadata including:
     - Voice ID for use in TTS requests
     - Name and description
@@ -2014,12 +2014,12 @@ async def list_voices(
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         voices = await voice_manager.list_user_voices(current_user.id)
-        
+
         return {
             "voices": [voice.model_dump() for voice in voices],
             "count": len(voices)
         }
-        
+
     except ImportError:
         # Placeholder response when voice management is not available
         return {"voices": [], "count": 0}
@@ -2044,15 +2044,15 @@ async def get_voice_details(
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
-        
+
         if not voice:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found"
             )
-        
+
         return voice.model_dump()
-        
+
     except HTTPException:
         raise
     except ImportError:
@@ -2076,22 +2076,22 @@ async def delete_voice(
 ):
     """
     Delete a custom voice sample.
-    
+
     This will remove the voice files and prevent it from being used in future TTS requests.
     """
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         deleted = await voice_manager.delete_voice(current_user.id, voice_id)
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found"
             )
-        
+
         return {"message": "Voice deleted successfully", "voice_id": voice_id}
-        
+
     except HTTPException:
         raise
     except ImportError:
@@ -2118,7 +2118,7 @@ async def preview_voice(
 ):
     """
     Generate a short preview of a custom voice.
-    
+
     This endpoint generates a short audio sample using the specified voice
     to help users preview how it sounds before using it in full TTS requests.
     """
@@ -2127,17 +2127,17 @@ async def preview_voice(
         # Validate voice exists
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
-        
+
         if not voice:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found"
             )
-        
+
         # Limit preview text length
         if len(text) > 100:
             text = text[:100]
-        
+
         # Create TTS request with custom voice and stream generator directly
         preview_request = OpenAISpeechRequest(
             model=voice.provider,
@@ -2157,7 +2157,7 @@ async def preview_voice(
                 "X-Voice-Name": voice.name
             }
         )
-        
+
     except HTTPException:
         raise
     except ImportError:

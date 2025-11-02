@@ -62,7 +62,7 @@ OPML (usable when OPML endpoints ship):
     <outline text="AI Research" title="AI Research" type="rss" xmlUrl="https://example.com/feed.xml" htmlUrl="https://example.com"/>
     <outline text="Tech News" title="Tech News" type="rss" xmlUrl="https://news.example.com/rss" htmlUrl="https://news.example.com"/>
   </body>
-  
+
 </opml>
 ```
 

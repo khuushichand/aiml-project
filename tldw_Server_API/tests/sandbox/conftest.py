@@ -28,7 +28,7 @@ def patch_sandbox_heartbeat_sleep(monkeypatch: pytest.MonkeyPatch):
 def set_ws_poll_timeout_for_tests():
     """
     Configure environment variables to make sandbox WebSocket behavior test-friendly.
-    
+
     Sets sensible defaults only if not already present:
     - Sets SANDBOX_WS_POLL_TIMEOUT_SEC to "1" so the WebSocket loop notices disconnects quickly.
     - Enables SANDBOX_ENABLE_EXECUTION and SANDBOX_BACKGROUND_EXECUTION to allow execution and background mode during tests.

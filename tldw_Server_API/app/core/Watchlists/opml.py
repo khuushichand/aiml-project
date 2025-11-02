@@ -72,4 +72,3 @@ def generate_opml(sources: Iterable[Dict[str, Any]]) -> str:
     body = "\n".join(["  <body>"] + items + ["  </body>"])
     head = "  <head>\n    <title>Watchlists Export</title>\n  </head>"
     return f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<opml version=\"2.0\">\n{head}\n{body}\n</opml>\n"
-

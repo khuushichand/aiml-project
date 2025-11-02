@@ -13,4 +13,3 @@ def test_schema_version_and_name_in_sync():
     assert messages.CURRENT_SCHEMA == qs.EmbeddingJobMessage.model_fields["msg_schema"].default
     # Compare version integer
     assert messages.CURRENT_VERSION == qs.EmbeddingJobMessage.model_fields["msg_version"].default
-

@@ -55,4 +55,3 @@ def test_composite_scorer_normalized():
     a = comp.score("https://ex.com/a")
     b = comp.score("https://ex.com/a/b.pdf")
     assert a > b
-

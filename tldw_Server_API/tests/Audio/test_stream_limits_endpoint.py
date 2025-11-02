@@ -29,4 +29,3 @@ def test_stream_limits_shape(client_user_only):
     assert isinstance(limits["concurrent_streams"], int)
     assert isinstance(limits["concurrent_jobs"], int)
     assert isinstance(limits["max_file_size_mb"], int)
-

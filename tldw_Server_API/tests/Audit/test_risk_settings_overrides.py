@@ -55,4 +55,3 @@ async def test_suspicious_thresholds_override(monkeypatch):
     score2 = scorer.calculate_risk_score(event2)
     # 30 (type) + 20 (failure) + 20 (consecutive_failures) = 70
     assert score2 >= 70
-

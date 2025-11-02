@@ -14,4 +14,3 @@ def test_build_hard_citations_offsets_golden():
         assert cites, "Expected at least one citation per sentence"
         st, en = cites[0].get("start", 0), cites[0].get("end", 0)
         assert text[int(st):int(en)].strip() in {s.strip(), s.strip()[: len(text[int(st):int(en)].strip())]}
-

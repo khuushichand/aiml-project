@@ -24,11 +24,11 @@ except Exception:
 
 class JobProcessor:
     """Processes different types of Prompt Studio jobs."""
-    
+
     def __init__(self, db: PromptStudioDatabase, job_manager: JobManager):
         """
         Initialize JobProcessor.
-        
+
         Args:
             db: Database instance
             job_manager: Job manager instance
@@ -37,7 +37,7 @@ class JobProcessor:
         self.job_manager = job_manager
         self.test_manager = TestCaseManager(db)
         self.test_generator = TestCaseGenerator(self.test_manager)
-        
+
         # Register handlers
         self._register_handlers()
 
@@ -47,7 +47,7 @@ class JobProcessor:
         Ensures compatibility with tests that call JobProcessor.process_job directly.
         """
         return await self.job_manager.process_job(job)
-    
+
     def _register_handlers(self):
         """Register job handlers with the job manager."""
         self.job_manager.register_handler(JobType.GENERATION, self.process_generation_job)
@@ -77,18 +77,18 @@ class JobProcessor:
                 project_id,
                 exc,
             )
-    
+
     ####################################################################################################################
     # Generation Jobs
-    
+
     async def process_generation_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
         """
         Process a test case generation job.
-        
+
         Args:
             payload: Job payload with generation parameters
             entity_id: Project ID
-            
+
         Returns:
             Generation results
         """
@@ -146,15 +146,15 @@ class JobProcessor:
                 e,
             )
             raise
-    
+
     async def _generate_diverse_cases(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate diverse test cases."""
         signature_id = payload.get("signature_id")
         num_cases = payload.get("num_cases", 5)
-        
+
         if not signature_id:
             raise ValueError("signature_id required for diverse generation")
-        
+
         # Run in executor to avoid blocking
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
@@ -162,17 +162,17 @@ class JobProcessor:
             self.test_generator.generate_diverse_cases,
             project_id, signature_id, num_cases
         )
-    
+
     async def _generate_from_description(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate test cases from description."""
         description = payload.get("description")
         num_cases = payload.get("num_cases", 5)
         signature_id = payload.get("signature_id")
         prompt_id = payload.get("prompt_id")
-        
+
         if not description:
             raise ValueError("description required for description-based generation")
-        
+
         # Run in executor to avoid blocking
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
@@ -180,15 +180,15 @@ class JobProcessor:
             self.test_generator.generate_from_description,
             project_id, description, num_cases, signature_id, prompt_id
         )
-    
+
     async def _generate_from_data(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Generate test cases from existing data."""
         source_data = payload.get("source_data", [])
         signature_id = payload.get("signature_id")
-        
+
         if not source_data:
             raise ValueError("source_data required for data-based generation")
-        
+
         # Run in executor to avoid blocking
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
@@ -196,18 +196,18 @@ class JobProcessor:
             self.test_generator.generate_from_existing_data,
             project_id, source_data, signature_id
         )
-    
+
     ####################################################################################################################
     # Evaluation Jobs
-    
+
     async def process_evaluation_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
         """
         Process an evaluation job.
-        
+
         Args:
             payload: Job payload with evaluation parameters
             entity_id: Evaluation ID
-            
+
         Returns:
             Evaluation results
         """
@@ -324,23 +324,23 @@ class JobProcessor:
             )
 
             raise
-    
-    async def _execute_test_case(self, prompt_id: int, test_case_id: int, 
+
+    async def _execute_test_case(self, prompt_id: int, test_case_id: int,
                                  model_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a single test case (simulation).
-        
+
         In production, this would call the actual LLM API.
         """
         import random
         import uuid
-        
+
         # Simulate execution delay
         await asyncio.sleep(random.uniform(0.5, 1.5))
-        
+
         # Get test case
         test_case = self.test_manager.get_test_case(test_case_id)
-        
+
         # Simulate test run result
         test_run = {
             "id": random.randint(1000, 9999),
@@ -361,7 +361,7 @@ class JobProcessor:
             "tokens_used": random.randint(50, 500),
             "cost_estimate": random.uniform(0.001, 0.01)
         }
-        
+
         # Store test run in database
         tc_project_id = test_case.get("project_id")
         self._ensure_ps_prompt_exists(prompt_id, tc_project_id)
@@ -386,16 +386,16 @@ class JobProcessor:
         test_run["uuid"] = persisted.get("uuid", test_run.get("uuid"))
 
         return test_run
-    
+
     def _calculate_aggregate_metrics(self, test_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate aggregate metrics from test runs."""
         if not test_runs:
             return {}
-        
+
         # Calculate averages
         total_accuracy = sum(tr.get("scores", {}).get("accuracy", 0) for tr in test_runs)
         total_relevance = sum(tr.get("scores", {}).get("relevance", 0) for tr in test_runs)
-        
+
         metrics = {
             "total_runs": len(test_runs),
             "avg_accuracy": total_accuracy / len(test_runs),
@@ -404,12 +404,12 @@ class JobProcessor:
             "total_tokens": sum(tr.get("tokens_used", 0) for tr in test_runs),
             "total_cost": sum(tr.get("cost_estimate", 0) for tr in test_runs)
         }
-        
+
         return metrics
-    
+
     ####################################################################################################################
     # Optimization Jobs
-    
+
     async def process_optimization_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
         """
         Process an optimization job.
@@ -587,23 +587,23 @@ class JobProcessor:
                 )
 
             raise
-    
-    async def _run_optimization_iteration(self, optimization_id: int, 
+
+    async def _run_optimization_iteration(self, optimization_id: int,
                                          prompt_id: int, iteration: int) -> Dict[str, Any]:
         """
         Run a single optimization iteration (simulation).
-        
+
         In production, this would implement actual optimization logic.
         """
         import random
-        
+
         # Simulate iteration processing
         await asyncio.sleep(random.uniform(1, 2))
-        
+
         # Simulate metric improvement
         metric = 0.5 + (iteration * 0.1) + random.uniform(-0.05, 0.1)
         metric = min(1.0, max(0.0, metric))  # Clamp to [0, 1]
-        
+
         return {
             "iteration": iteration,
             "prompt_id": prompt_id,

@@ -22,7 +22,3 @@ https://github.com/kruskal-labs/toolfront
 https://vercel.com/blog/the-second-wave-of-mcp-building-for-llms-not-developers
 
 https://thealliance.ai/blog/building-a-deep-research-agent-using-mcp-agent
-
-
-
-

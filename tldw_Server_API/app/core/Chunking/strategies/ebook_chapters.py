@@ -23,7 +23,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
     """
     Strategy for chunking text by eBook chapters.
     """
-    
+
     # Default chapter patterns for various languages
     CHAPTER_PATTERNS = {
         'en': r'(?:Chapter|CHAPTER|Section|SECTION|Part|PART)\s+(?:[0-9]+|[IVXLCDM]+)(?:\.|:|\s|$)',
@@ -34,7 +34,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         'pt': r'(?:Capítulo|CAPÍTULO|Seção|SEÇÃO|Parte|PARTE)\s+(?:[0-9]+|[IVXLCDM]+)(?:\.|:|\s|$)',
         'default': r'(?:Chapter|CHAPTER|Section|SECTION|Part|PART)\s+(?:[0-9]+|[IVXLCDM]+)(?:\.|:|\s|$)'
     }
-    
+
     # Regex complexity limits for security
     MAX_REGEX_LENGTH = 500  # Maximum length of custom regex pattern
     REGEX_TIMEOUT = 2  # Seconds before regex timeout
@@ -53,11 +53,11 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         r'\([^)]*\|[^)]*[+*]\)[+*]',  # (a|b+)+
         r'\(\([^)]+\)[+*]\)[+*]',  # ((a)+)+
     ]
-    
+
     def __init__(self, language: str = 'en'):
         """
         Initialize the ebook chapter chunking strategy.
-        
+
         Args:
             language: Language code for text processing
         """
@@ -93,7 +93,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             # Default values above remain in effect if config unavailable
             pass
         logger.debug(f"EbookChapterChunkingStrategy initialized for language: {language}")
-    
+
     @contextmanager
     def _regex_timeout(self, seconds):
         """
@@ -101,7 +101,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         Uses threading instead of signals for Windows compatibility.
         """
         result = {'completed': False, 'error': None}
-        
+
         def target_func(func, args, kwargs):
             try:
                 result['value'] = func(*args, **kwargs)
@@ -109,44 +109,44 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             except Exception as e:
                 result['error'] = e
                 result['completed'] = True
-        
+
         # For cross-platform compatibility, we'll use a different approach
         # This wraps the regex operation in a way that can be interrupted
         class RegexTimeout:
             def __init__(self, timeout_seconds):
                 self.timeout_seconds = timeout_seconds
                 self.timed_out = False
-                
+
             def __enter__(self):
                 return self
-                
+
             def __exit__(self, exc_type, exc_val, exc_tb):
                 pass
-                
+
             def run_with_timeout(self, func, *args, **kwargs):
                 """Run a function with a timeout."""
                 result_container = {'value': None, 'error': None}
-                
+
                 def wrapper():
                     try:
                         result_container['value'] = func(*args, **kwargs)
                     except Exception as e:
                         result_container['error'] = e
-                
+
                 thread = threading.Thread(target=wrapper, daemon=True)
                 thread.start()
                 thread.join(timeout=self.timeout_seconds)
-                
+
                 if thread.is_alive():
                     # Thread is still running after timeout
                     self.timed_out = True
                     raise ProcessingError("Regex operation timed out - possible ReDoS attack")
-                
+
                 if result_container['error']:
                     raise result_container['error']
-                    
+
                 return result_container['value']
-        
+
         yield RegexTimeout(seconds)
 
     @staticmethod
@@ -317,17 +317,17 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         if status == "ok":
             return payload  # type: ignore[return-value]
         raise ProcessingError(f"Regex execution failed: {payload}")
-    
+
     def _validate_regex_pattern(self, pattern: str) -> bool:
         """
         Validate a regex pattern for security issues.
-        
+
         Args:
             pattern: Regex pattern to validate
-            
+
         Returns:
             True if pattern is safe, False otherwise
-            
+
         Raises:
             InvalidInputError: If pattern is dangerous
         """
@@ -337,7 +337,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 f"Regex pattern too long ({len(pattern)} chars). "
                 f"Maximum allowed: {self.MAX_REGEX_LENGTH}"
             )
-        
+
         # Check for dangerous patterns
         for dangerous in self.DANGEROUS_PATTERNS:
             if re.search(dangerous, pattern):
@@ -348,40 +348,40 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         # Enforce simple-only mode if configured
         if getattr(self, "_force_simple_only", False) and not self._is_simple_safe_pattern(pattern):
             raise InvalidInputError("Only simple regex patterns are allowed by policy")
-        
+
         # Test pattern compilation
         try:
             re.compile(pattern)
         except re.error as e:
             raise InvalidInputError(f"Invalid regex pattern: {e}")
-        
+
         # Don't actually test the regex execution - the DANGEROUS_PATTERNS check above
         # should catch problematic patterns. Testing them would cause the very problem
         # we're trying to prevent (ReDoS during validation).
-        
+
         return True
-    
-    def chunk(self, 
-              text: str, 
+
+    def chunk(self,
+              text: str,
               max_size: int = 5000,
               overlap: int = 0,
               **options) -> List[str]:
         """
         Chunk text by chapters.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum words per chunk (if chapter exceeds this, it will be split)
             overlap: Number of words to overlap (only applies when splitting large chapters)
             **options: Additional options including:
                 - custom_chapter_pattern: Custom regex pattern for chapter detection
-            
+
         Returns:
             List of text chunks
         """
         if not text:
             raise InvalidInputError("Cannot chunk empty text")
-        
+
         try:
             # Get custom pattern or use language-specific default
             custom_pattern = options.get('custom_chapter_pattern')
@@ -392,11 +392,11 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 logger.debug(f"Using validated custom chapter pattern: {custom_pattern}")
             else:
                 chapter_pattern = self.CHAPTER_PATTERNS.get(
-                    self.language, 
+                    self.language,
                     self.CHAPTER_PATTERNS['default']
                 )
                 logger.debug(f"Using {self.language} chapter pattern")
-            
+
             # Find all chapter markers; prefer direct search for simple safe patterns
             try:
                 if self._is_simple_safe_pattern(chapter_pattern):
@@ -419,11 +419,11 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             if isinstance(chapter_markers, list) and len(chapter_markers) > self.MAX_CHAPTER_MARKERS:
                 logger.warning("Too many chapter markers detected; applying size-based split to avoid overload")
                 return self._split_by_size(text, max_size, overlap)
-            
+
             logger.debug(f"Found {len(chapter_markers)} chapter markers")
-            
+
             chunks = []
-            
+
             # Process each chapter
             for i, marker in enumerate(chapter_markers):
                 # Determine chapter boundaries
@@ -433,12 +433,12 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     chapter_end = next_start
                 else:
                     chapter_end = len(text)
-                
+
                 chapter_text = text[chapter_start:chapter_end].strip()
-                
+
                 # Count words in chapter
                 word_count = len(chapter_text.split())
-                
+
                 # Check if chapter needs to be split due to size
                 if word_count > max_size:
                     logger.debug(f"Chapter has {word_count} words, splitting...")
@@ -447,23 +447,23 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     chunks.extend(chapter_chunks)
                 else:
                     chunks.append(chapter_text)
-            
+
             logger.debug(f"Created {len(chunks)} chapter-based chunks")
             return chunks
-            
+
         except Exception as e:
             logger.error(f"Error during chapter chunking: {e}")
             raise ProcessingError(f"Failed to chunk by chapters: {str(e)}")
-    
+
     def _split_by_size(self, text: str, max_size: int, overlap: int) -> List[str]:
         """
         Split text by word count when no chapters or chapter is too large.
-        
+
         Args:
             text: Text to split
             max_size: Maximum words per chunk
             overlap: Number of words to overlap
-            
+
         Returns:
             List of text chunks
         """
@@ -487,27 +487,27 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             chunks.append(chunk_text)
 
         return chunks
-    
-    def chunk_with_metadata(self, 
-                           text: str, 
+
+    def chunk_with_metadata(self,
+                           text: str,
                            max_size: int = 5000,
                            overlap: int = 0,
                            **options) -> List[ChunkResult]:
         """
         Chunk text by chapters and return with metadata.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum words per chunk
             overlap: Number of words to overlap
             **options: Additional options
-            
+
         Returns:
             List of ChunkResult objects with metadata
         """
         if not text:
             raise InvalidInputError("Cannot chunk empty text")
-        
+
         try:
             # Get custom pattern or use language-specific default
             custom_pattern = options.get('custom_chapter_pattern')
@@ -517,10 +517,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 chapter_pattern = custom_pattern
             else:
                 chapter_pattern = self.CHAPTER_PATTERNS.get(
-                    self.language, 
+                    self.language,
                     self.CHAPTER_PATTERNS['default']
                 )
-            
+
             # Find all chapter markers; prefer direct search for simple safe patterns
             try:
                 if self._is_simple_safe_pattern(chapter_pattern):
@@ -559,10 +559,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
                     chunk_index += 1
                 return chunks
-            
+
             chunks = []
             chunk_index = 0
-            
+
             if not chapter_markers:
                 # No chapters found, treat as single chunk
                 words = text.split()
@@ -571,7 +571,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     end_idx = min(i + max_size, len(words))
                     chunk_words = words[i:end_idx]
                     chunk_text = ' '.join(chunk_words)
-                    
+
                     metadata = ChunkMetadata(
                         index=chunk_index,
                         start_char=0,  # Simplified
@@ -581,13 +581,13 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                         method='ebook_chapters',
                         options={'no_chapters': True}
                     )
-                    
+
                     chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
                     chunk_index += 1
                     i += max_size - overlap if overlap > 0 else max_size
-                
+
                 return chunks
-            
+
             # Process each chapter
             for i, marker in enumerate(chapter_markers):
                 chapter_start = marker[0] if isinstance(marker, tuple) else marker.start()
@@ -600,7 +600,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 chapter_text = text[chapter_start:chapter_end].strip()
                 chapter_title = (marker[2] if isinstance(marker, tuple) else marker.group()).strip()
                 word_count = len(chapter_text.split())
-                
+
                 # Check if chapter needs to be split
                 if word_count > max_size:
                     # Split large chapter
@@ -611,7 +611,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                         end_idx = min(j + max_size, len(words))
                         chunk_words = words[j:end_idx]
                         chunk_text = ' '.join(chunk_words)
-                        
+
                         try:
                             end_adj = self._expand_end_to_grapheme_boundary(text, chapter_start + len(chunk_text))
                         except Exception:
@@ -629,7 +629,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                                 'is_split': True
                             }
                         )
-                        
+
                         chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
                         chunk_index += 1
                         part += 1
@@ -653,29 +653,29 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                             'total_chapters': len(chapter_markers)
                         }
                     )
-                    
+
                     chunks.append(ChunkResult(text=chapter_text, metadata=metadata))
                     chunk_index += 1
-            
+
             logger.debug(f"Created {len(chunks)} chapter-based chunks with metadata")
             return chunks
-            
+
         except Exception as e:
             logger.error(f"Error during chapter chunking: {e}")
             raise ProcessingError(f"Failed to chunk by chapters: {str(e)}")
-    
+
     def validate_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate and normalize options for chapter chunking.
-        
+
         Args:
             options: Options dictionary
-            
+
         Returns:
             Validated options
         """
         validated = super().validate_options(options)
-        
+
         # Validate custom pattern if provided
         if 'custom_chapter_pattern' in validated:
             pattern = validated['custom_chapter_pattern']
@@ -683,5 +683,5 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 re.compile(pattern)
             except re.error as e:
                 raise InvalidInputError(f"Invalid chapter pattern: {e}")
-        
+
         return validated

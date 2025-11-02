@@ -78,4 +78,3 @@ def test_idempotency_concurrency_hits(prompt_studio_dual_backend_client, monkeyp
     hit = sum(1 for (n, _, _) in stub.metrics_manager.increments if n == "prompt_studio.idempotency.hit_total")
     assert miss >= 1
     assert hit >= (len(threads) - 1)
-

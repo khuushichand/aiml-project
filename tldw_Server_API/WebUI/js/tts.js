@@ -15,7 +15,7 @@ const TTS = {
     // When custom voice management is not available (501),
     // fallback to showing provider catalog voices
     _catalogFallback: false,
-    
+
     // Get API token from api-client or localStorage
     getApiToken() {
         // First try to get from api-client if available
@@ -25,7 +25,7 @@ const TTS = {
         // Fallback to localStorage
         return localStorage.getItem('apiToken') || '';
     },
-    
+
     // Provider configurations
     providers: {
         vibevoice: {
@@ -246,7 +246,7 @@ const TTS = {
         if (caret) caret.textContent = show ? '▾' : '▸';
         try { localStorage.setItem(`rec_settings_open_${provider}`, show ? '1' : '0'); } catch(_) {}
     },
-    
+
     // Set up event listeners
     setupEventListeners() {
         // Speed sliders
@@ -258,7 +258,7 @@ const TTS = {
                 });
             }
         });
-        
+
         // Intensity/stability sliders
         const intensitySlider = document.getElementById('chatterbox-intensity');
         if (intensitySlider) {
@@ -266,14 +266,14 @@ const TTS = {
                 document.getElementById('chatterbox-intensity-value').textContent = `${e.target.value}%`;
             });
         }
-        
+
         const stabilitySlider = document.getElementById('elevenlabs-stability');
         if (stabilitySlider) {
             stabilitySlider.addEventListener('input', (e) => {
                 document.getElementById('elevenlabs-stability-value').textContent = `${e.target.value}%`;
             });
         }
-        
+
         const claritySlider = document.getElementById('elevenlabs-clarity');
         if (claritySlider) {
             claritySlider.addEventListener('input', (e) => {
@@ -281,23 +281,23 @@ const TTS = {
             });
         }
     },
-    
+
     // Switch to a different provider
     switchProvider(provider) {
         console.log(`Switching to provider: ${provider}`);
-        
+
         // Update current provider
         this.currentProvider = provider;
-        
+
         // Update UI tabs
         document.querySelectorAll('.sub-tab-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.provider === provider);
         });
-        
+
         document.querySelectorAll('.provider-content').forEach(content => {
             content.classList.toggle('active', content.id === `provider-${provider}`);
         });
-        
+
         // Update max length based on provider
         const maxLength = this.providers[provider].maxLength || 5000;
         const textInput = document.getElementById('tts-text-input');
@@ -305,27 +305,27 @@ const TTS = {
             textInput.maxLength = maxLength;
             this.updateCharCounter();
         }
-        
+
         // Load custom voices for this provider
         this.loadCustomVoicesForProvider(provider);
     },
-    
+
     // Check provider status
     async checkProviderStatus() {
         try {
             const apiToken = this.getApiToken();
             const headers = {};
-            
+
             // Add authorization header if token exists
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
             }
-            
+
             const response = await fetch('/api/v1/audio/health', {
                 headers: headers
             });
             const data = await response.json();
-            
+
             if (data.status === 'healthy' && data.providers) {
                 // Update status indicators
                 Object.keys(this.providers).forEach(provider => {
@@ -346,7 +346,7 @@ const TTS = {
             console.error('Error checking provider status:', error);
         }
     },
-    
+
     // Update character counter
     updateCharCounter() {
         const textInput = document.getElementById('tts-text-input');
@@ -356,7 +356,7 @@ const TTS = {
             counter.textContent = `${textInput.value.length} / ${maxLength}`;
         }
     },
-    
+
     // Load sample text
     loadSampleText() {
         const samples = {
@@ -367,14 +367,14 @@ const TTS = {
             openai: "This is OpenAI's text-to-speech system. We provide consistent, high-quality voices suitable for a wide range of applications.",
             elevenlabs: "Welcome to ElevenLabs! We specialize in ultra-realistic voice synthesis with fine control over voice characteristics."
         };
-        
+
         const textInput = document.getElementById('tts-text-input');
         if (textInput) {
             textInput.value = samples[this.currentProvider] || samples.vibevoice;
             this.updateCharCounter();
         }
     },
-    
+
     // Clear text
     clearText() {
         const textInput = document.getElementById('tts-text-input');
@@ -383,28 +383,28 @@ const TTS = {
             this.updateCharCounter();
         }
     },
-    
+
     // Generate speech
     async generate() {
         if (this.isGenerating) {
             this.showStatus('Generation already in progress', 'info');
             return;
         }
-        
+
         const textInput = document.getElementById('tts-text-input');
         if (!textInput || !textInput.value.trim()) {
             this.showStatus('Please enter some text', 'error');
             return;
         }
-        
+
         this.isGenerating = true;
         this.abortController = new AbortController();
-        
+
         // Update UI
         document.getElementById('tts-generate-btn').style.display = 'none';
         document.getElementById('tts-stop-btn').style.display = 'inline-block';
         this.showStatus('Generating speech...', 'info');
-        
+
         try {
         // Build request based on provider
         let request;
@@ -413,7 +413,7 @@ const TTS = {
         } else {
             request = await this.buildRequest();
         }
-            
+
             // Make API call via apiClient (auth + CSRF handled)
             let result;
             try {
@@ -428,21 +428,21 @@ const TTS = {
             }
             const response = result.response;
             this.abortController = result.controller;
-            
+
             if (!response.ok) {
                 const error = await response.text();
                 throw new Error(error || `HTTP ${response.status}`);
             }
-            
+
             // Handle streaming or non-streaming response
             if (request.stream) {
                 await this.handleStreamingResponse(response);
             } else {
                 await this.handleNonStreamingResponse(response);
             }
-            
+
             this.showStatus('Speech generated successfully!', 'success');
-            
+
             // Add to history
             this.addToHistory({
                 text: textInput.value.substring(0, 100) + (textInput.value.length > 100 ? '...' : ''),
@@ -450,7 +450,7 @@ const TTS = {
                 voice: this.getSelectedVoice(),
                 timestamp: new Date().toISOString()
             });
-            
+
         } catch (error) {
             if (error.name === 'AbortError') {
                 this.showStatus('Generation cancelled', 'info');
@@ -464,20 +464,20 @@ const TTS = {
             document.getElementById('tts-stop-btn').style.display = 'none';
         }
     },
-    
+
     // Build request based on current provider
     async buildRequest() {
         const text = document.getElementById('tts-text-input').value;
         const format = document.getElementById('tts-format').value;
         const streaming = document.getElementById('tts-streaming').checked;
-        
+
         let request = {
             input: text,
             response_format: format,
             stream: streaming,
             extra_params: {}
         };
-        
+
         // Provider-specific settings
         switch (this.currentProvider) {
             case 'vibevoice':
@@ -485,7 +485,7 @@ const TTS = {
                 request.model = document.getElementById('vibevoice-model').value;
                 request.voice = customVoice || document.getElementById('vibevoice-voice').value;
                 request.provider = 'vibevoice';
-                
+
                 // Add advanced generation parameters under extra_params
                 request.extra_params = {
                     cfg_scale: parseFloat(document.getElementById('vibevoice-cfg').value),
@@ -494,13 +494,13 @@ const TTS = {
                     top_p: parseFloat(document.getElementById('vibevoice-topp').value),
                     attention_type: document.getElementById('vibevoice-attention').value,
                 };
-                
+
                 // Add seed if provided
                 const seed = document.getElementById('vibevoice-seed').value;
                 if (seed) {
                     request.extra_params.seed = parseInt(seed);
                 }
-                
+
                 // Add features
                 request.extra_params.background_music = document.getElementById('vibevoice-music').checked;
                 request.extra_params.enable_singing = document.getElementById('vibevoice-singing').checked;
@@ -515,14 +515,14 @@ const TTS = {
                     }
                 } catch (_) {}
                 break;
-                
+
             case 'kokoro':
                 const voiceMix = document.getElementById('kokoro-voice-mix').value;
                 request.model = 'kokoro';
                 request.voice = voiceMix || document.getElementById('kokoro-voice').value;
                 request.speed = parseFloat(document.getElementById('kokoro-speed').value);
                 break;
-                
+
             case 'higgs':
                 request.model = 'higgs';
                 request.voice = document.getElementById('higgs-voice').value;
@@ -537,7 +537,7 @@ const TTS = {
                     }
                 } catch (_) {}
                 break;
-                
+
             case 'chatterbox':
                 request.model = 'chatterbox';
                 request.voice = document.getElementById('chatterbox-voice').value;
@@ -555,13 +555,13 @@ const TTS = {
                     }
                 } catch (_) {}
                 break;
-                
+
             case 'openai':
                 request.model = document.getElementById('openai-model').value;
                 request.voice = document.getElementById('openai-voice').value;
                 request.speed = parseFloat(document.getElementById('openai-speed').value);
                 break;
-                
+
             case 'elevenlabs':
                 request.model = 'elevenlabs';
                 request.voice = document.getElementById('elevenlabs-voice').value;
@@ -574,7 +574,7 @@ const TTS = {
                 // handled in buildNeuTTSRequest (async)
                 break;
         }
-        
+
         return request;
     },
 
@@ -585,7 +585,7 @@ const TTS = {
         const model = document.getElementById('neutts-model').value;
         const refFileInput = document.getElementById('neutts-ref-audio');
         const refText = (document.getElementById('neutts-ref-text').value || '').trim();
-        
+
         // Prefer recorded blob if available; otherwise use file input
         const recNeutts = this._recorders['neutts'];
         let refBlob = (recNeutts && recNeutts.blob) ? recNeutts.blob : null;
@@ -601,7 +601,7 @@ const TTS = {
         // Convert to WAV for maximum compatibility
         const wavBlob = await this._ensureWav(refBlob);
         const b64 = await this._blobToBase64(wavBlob);
-        
+
         return {
             input: text,
             response_format: format,
@@ -931,15 +931,15 @@ const TTS = {
         }
         return btoa(binary);
     },
-    
+
     // Get selected voice name
     getSelectedVoice() {
         switch (this.currentProvider) {
             case 'vibevoice':
-                return document.getElementById('vibevoice-custom-voice').value || 
+                return document.getElementById('vibevoice-custom-voice').value ||
                        document.getElementById('vibevoice-voice').value;
             case 'kokoro':
-                return document.getElementById('kokoro-voice-mix').value || 
+                return document.getElementById('kokoro-voice-mix').value ||
                        document.getElementById('kokoro-voice').value;
             case 'higgs':
                 return document.getElementById('higgs-voice').value;
@@ -955,7 +955,7 @@ const TTS = {
                 return 'default';
         }
     },
-    
+
     // Handle streaming response with real-time playback (MSE where supported)
     async handleStreamingResponse(response) {
         const format = document.getElementById('tts-format').value;
@@ -1036,12 +1036,12 @@ const TTS = {
 
         document.getElementById('tts-download-btn').disabled = false;
     },
-    
+
     // Handle non-streaming response
     async handleNonStreamingResponse(response) {
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
-        
+
         // Update audio player
         const audioPlayer = document.getElementById('tts-audio-player');
         if (audioPlayer) {
@@ -1052,11 +1052,11 @@ const TTS = {
             audioPlayer.src = url;
             audioPlayer.play();
         }
-        
+
         // Enable download button
         document.getElementById('tts-download-btn').disabled = false;
     },
-    
+
     // Stop generation
     stop() {
         if (this.abortController) {
@@ -1064,11 +1064,11 @@ const TTS = {
             this.abortController = null;
         }
     },
-    
+
     // Download audio
     downloadAudio() {
         if (!this.currentAudioUrl) return;
-        
+
         const a = document.createElement('a');
         a.href = this.currentAudioUrl;
         a.download = `tts_${this.currentProvider}_${Date.now()}.${document.getElementById('tts-format').value}`;
@@ -1076,7 +1076,7 @@ const TTS = {
         a.click();
         document.body.removeChild(a);
     },
-    
+
     // Open voice upload modal
     openVoiceUpload(provider) {
         const modal = document.getElementById('voice-upload-modal');
@@ -1085,7 +1085,7 @@ const TTS = {
             modal.dataset.provider = provider;
         }
     },
-    
+
     // Close voice upload modal
     closeVoiceUpload() {
         const modal = document.getElementById('voice-upload-modal');
@@ -1093,42 +1093,42 @@ const TTS = {
             modal.style.display = 'none';
         }
     },
-    
+
     // Upload voice
     async uploadVoice() {
         const modal = document.getElementById('voice-upload-modal');
         const provider = modal.dataset.provider || this.currentProvider;
-        
+
         const name = document.getElementById('voice-upload-name').value;
         const description = document.getElementById('voice-upload-description').value;
         const fileInput = document.getElementById('voice-upload-file');
-        
+
         if (!name || !fileInput.files[0]) {
             this.showStatus('Please provide a name and select a file', 'error');
             return;
         }
-        
+
         const formData = new FormData();
         formData.append('name', name);
         formData.append('description', description);
         formData.append('provider', provider);
         formData.append('file', fileInput.files[0]);
-        
+
         try {
             const apiToken = this.getApiToken();
             const headers = {};
-            
+
             // Add authorization header if token exists
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
             }
-            
+
             const response = await fetch('/api/v1/audio/voices/upload', {
                 method: 'POST',
                 headers: headers,
                 body: formData
             });
-            
+
             if (response.status === 501) {
                 this.showStatus('Custom voice upload is not available for this provider or build.', 'warning');
                 return;
@@ -1136,19 +1136,19 @@ const TTS = {
             if (!response.ok) {
                 throw new Error(`Upload failed: ${response.statusText}`);
             }
-            
+
             const result = await response.json();
             this.showStatus('Voice uploaded successfully!', 'success');
             this.closeVoiceUpload();
             this.refreshVoiceList();
             this.loadCustomVoicesForProvider(provider);
-            
+
         } catch (error) {
             console.error('Voice upload error:', error);
             this.showStatus(`Upload failed: ${error.message}`, 'error');
         }
     },
-    
+
     // Upload voice clone for specific providers
     async uploadVoiceClone(provider) {
         const fileInput = document.getElementById(`${provider}-voice-upload`);
@@ -1156,17 +1156,17 @@ const TTS = {
             this.showStatus('Please select an audio file', 'error');
             return;
         }
-        
+
         // This would trigger the voice upload with provider-specific settings
         this.openVoiceUpload(provider);
     },
-    
+
     // Refresh voice list (both custom and catalog)
     async refreshVoiceList() {
         try {
             const apiToken = this.getApiToken();
             const headers = {};
-            
+
             // Add authorization header if token exists
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
@@ -1205,7 +1205,7 @@ const TTS = {
             if (customUnavailable) {
                 this.showStatus('Custom voice management is not available in this build; showing provider catalog voices.', 'warning');
             }
-            
+
         } catch (error) {
             console.error('Error fetching voices:', error);
         }
@@ -1235,7 +1235,7 @@ const TTS = {
         }
         return out;
     },
-    
+
     // Display voice list
     displayVoiceList() {
         const voiceList = document.getElementById('voice-list');
@@ -1442,21 +1442,21 @@ const TTS = {
             console.error('useCustomVoiceFromEl error:', e);
         }
     },
-    
+
     // Load custom voices for current provider
     loadCustomVoicesForProvider(provider) {
         const providerVoices = this.customVoices.filter(v => v.provider === provider);
-        
+
         // Update custom voice dropdown for VibeVoice
         if (provider === 'vibevoice') {
             const select = document.getElementById('vibevoice-custom-voice');
             if (select) {
-                select.innerHTML = '<option value="">None</option>' + 
+                select.innerHTML = '<option value="">None</option>' +
                     providerVoices.map(v => `<option value="custom:${v.voice_id}">${v.name}</option>`).join('');
             }
         }
     },
-    
+
     // Preview voice
     async previewVoice(voiceId) {
         try {
@@ -1464,12 +1464,12 @@ const TTS = {
             const headers = {
                 'Content-Type': 'application/json'
             };
-            
+
             // Add authorization header if token exists
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
             }
-            
+
             const response = await fetch(`/api/v1/audio/voices/${voiceId}/preview`, {
                 method: 'POST',
                 headers: headers,
@@ -1477,7 +1477,7 @@ const TTS = {
                     text: 'This is a preview of your custom voice.'
                 })
             });
-            
+
             if (response.status === 501) {
                 this.showStatus('Voice preview is not available for this provider or build.', 'warning');
                 return;
@@ -1485,37 +1485,37 @@ const TTS = {
             if (!response.ok) {
                 throw new Error('Preview failed');
             }
-            
+
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
-            
+
             const audio = new Audio(url);
             audio.play();
-            
+
         } catch (error) {
             console.error('Preview error:', error);
             this.showStatus('Failed to preview voice', 'error');
         }
     },
-    
+
     // Delete voice
     async deleteVoice(voiceId) {
         if (!confirm('Are you sure you want to delete this voice?')) return;
-        
+
         try {
             const apiToken = this.getApiToken();
             const headers = {};
-            
+
             // Add authorization header if token exists
             if (apiToken) {
                 headers['Authorization'] = `Bearer ${apiToken}`;
             }
-            
+
             const response = await fetch(`/api/v1/audio/voices/${voiceId}`, {
                 method: 'DELETE',
                 headers: headers
             });
-            
+
             if (response.status === 501) {
                 this.showStatus('Deleting custom voices is not available for this provider or build.', 'warning');
                 return;
@@ -1523,16 +1523,16 @@ const TTS = {
             if (!response.ok) {
                 throw new Error('Delete failed');
             }
-            
+
             this.showStatus('Voice deleted successfully', 'success');
             this.refreshVoiceList();
-            
+
         } catch (error) {
             console.error('Delete error:', error);
             this.showStatus('Failed to delete voice', 'error');
         }
     },
-    
+
     // Add to history
     addToHistory(item) {
         this.history.unshift(item);
@@ -1542,17 +1542,17 @@ const TTS = {
         this.saveHistory();
         this.displayHistory();
     },
-    
+
     // Display history
     displayHistory() {
         const historyList = document.getElementById('tts-history');
         if (!historyList) return;
-        
+
         if (this.history.length === 0) {
             historyList.innerHTML = '<p class="text-muted">No generation history yet</p>';
             return;
         }
-        
+
         historyList.innerHTML = this.history.map((item, index) => `
             <div class="history-item">
                 <div>
@@ -1566,28 +1566,28 @@ const TTS = {
             </div>
         `).join('');
     },
-    
+
     // Replay from history
     replayHistory(index) {
         const item = this.history[index];
         if (!item) return;
-        
+
         // Set provider
         this.switchProvider(item.provider);
-        
+
         // Set text
         document.getElementById('tts-text-input').value = item.text;
         this.updateCharCounter();
-        
+
         // Could also restore voice settings if stored
     },
-    
+
     // Save to history
     saveToHistory() {
         // Already saved in addToHistory
         this.showStatus('Saved to history', 'success');
     },
-    
+
     // Clear history
     clearHistory() {
         if (confirm('Are you sure you want to clear the history?')) {
@@ -1597,7 +1597,7 @@ const TTS = {
             this.showStatus('History cleared', 'success');
         }
     },
-    
+
     // Save history to localStorage
     saveHistory() {
         try {
@@ -1606,7 +1606,7 @@ const TTS = {
             console.error('Error saving history:', error);
         }
     },
-    
+
     // Load history from localStorage
     loadHistory() {
         try {
@@ -1620,14 +1620,14 @@ const TTS = {
             this.history = [];
         }
     },
-    
+
     // Show status message
     showStatus(message, type = 'info') {
         const statusEl = document.getElementById('tts-status');
         if (statusEl) {
             statusEl.textContent = message;
             statusEl.className = `status-message ${type}`;
-            
+
             // Auto-hide after 5 seconds for non-error messages
             if (type !== 'error') {
                 setTimeout(() => {

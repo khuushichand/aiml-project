@@ -65,4 +65,3 @@ def test_job_filters_crud(client_with_user):
     job = r.json()
     jf = job.get("job_filters") or {}
     assert isinstance(jf.get("filters"), list) and len(jf.get("filters")) == 2
-

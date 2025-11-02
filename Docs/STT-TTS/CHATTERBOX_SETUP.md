@@ -211,4 +211,3 @@ The WebUI uses the same `/api/v1/audio/speech` endpoint under the hood and will 
 - The adapter lazily loads English vs Multilingual models based on `language` in the request and `use_multilingual` in config. See `chatterbox_adapter.py:193` and `_get_model`.
 - Provider model name mapping includes `"chatterbox"` and `"chatterbox-emotion"`. See `adapter_registry.py:560`.
 - Streaming uses `waveform_streamer.stream_encoded_waveform(...)` with ~0.2s chunks.
-

@@ -310,7 +310,7 @@ The service uses Loguru and Prometheus instrumentation. Tune `LOG_LEVEL`, and sc
 ## Troubleshooting
 
 ### 1) Circuit Breaker Open
-Symptom: 503 Service Unavailable.  
+Symptom: 503 Service Unavailable.
 Check and reset (admin-only in single-user):
 ```bash
 curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -321,14 +321,14 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 ```
 
 ### 2) High Memory Usage
-Symptom: OOM or slow responses.  
+Symptom: OOM or slow responses.
 Actions:
 - Prefer smaller models (e.g., `text-embedding-3-small`, `all-MiniLM-L6-v2`)
 - Reduce concurrent load; scale out using orchestrator
 - For HF models, unload inactive models sooner (see `model_unload_timeout` in YAML)
 
 ### 3) Slow Embeddings
-Symptom: High latency.  
+Symptom: High latency.
 Actions:
 - Verify GPU availability: `nvidia-smi`
 - Warm up models (admin-only):
@@ -340,7 +340,7 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 ```
 
 ### 4) Rate Limiting
-Symptom: 429 Too Many Requests.  
+Symptom: 429 Too Many Requests.
 To enable the built-in limiter for the embeddings endpoint:
 ```bash
 export EMBEDDINGS_RATE_LIMIT=on

@@ -58,4 +58,3 @@ async def test_fifo_order_when_strategy_default(monkeypatch):
 
     urls = [r.get("url") for r in res]
     assert urls == [base, b1, b2]
-

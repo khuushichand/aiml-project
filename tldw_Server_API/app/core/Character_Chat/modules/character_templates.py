@@ -59,10 +59,10 @@ CHARACTER_TEMPLATES = {
 
 def get_character_template(template_name: str) -> Optional[Dict[str, Any]]:
     """Get a character template by name.
-    
+
     Args:
         template_name: The name of the template
-        
+
     Returns:
         Template data dictionary, or None if not found
     """
@@ -77,7 +77,7 @@ def get_character_template(template_name: str) -> Optional[Dict[str, Any]]:
 
 def list_character_templates() -> List[str]:
     """List all available character template names.
-    
+
     Returns:
         List of template names
     """
@@ -91,13 +91,13 @@ def create_character_from_template(
     custom_first_message: Optional[str] = None
 ) -> Optional[int]:
     """Create a new character from a template.
-    
+
     Args:
         db: Database instance
         template_name: The template to use
         custom_name: Optional custom name to override template
         custom_first_message: Optional custom first message
-        
+
     Returns:
         The new character ID, or None on error
     """
@@ -106,25 +106,25 @@ def create_character_from_template(
         if not template:
             logger.error(f"Template '{template_name}' not found")
             return None
-        
+
         # Apply customizations
         if custom_name:
             template['name'] = custom_name
         if custom_first_message:
             template['first_message'] = custom_first_message
-        
+
         # Add metadata about template origin
         if 'extensions' not in template:
             template['extensions'] = {}
         template['extensions']['template_origin'] = template_name
-        
+
         # Create the character
         from .character_db import create_new_character_from_data
         character_id = create_new_character_from_data(db, template)
-        
+
         if character_id:
             logger.info(f"Created character {character_id} from template '{template_name}'")
-        
+
         return character_id
     except Exception as e:
         logger.error(f"Error creating character from template '{template_name}': {e}", exc_info=True)

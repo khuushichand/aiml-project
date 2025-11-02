@@ -39,11 +39,11 @@ EMAIL_TEMPLATES = {
         .container { max-width: 600px; margin: 0 auto; padding: 20px; }
         .header { background-color: #007bff; color: white; padding: 20px; text-align: center; }
         .content { background-color: #f8f9fa; padding: 30px; margin-top: 20px; }
-        .button { display: inline-block; padding: 12px 30px; background-color: #007bff; 
+        .button { display: inline-block; padding: 12px 30px; background-color: #007bff;
                   color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; 
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;
                   font-size: 0.9em; color: #6c757d; }
-        .warning { background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px; 
+        .warning { background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px;
                    margin: 20px 0; border-radius: 5px; }
     </style>
 </head>
@@ -110,9 +110,9 @@ This is an automated message from {{ app_name }}.
         .container { max-width: 600px; margin: 0 auto; padding: 20px; }
         .header { background-color: #28a745; color: white; padding: 20px; text-align: center; }
         .content { background-color: #f8f9fa; padding: 30px; margin-top: 20px; }
-        .button { display: inline-block; padding: 12px 30px; background-color: #28a745; 
+        .button { display: inline-block; padding: 12px 30px; background-color: #28a745;
                   color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; 
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;
                   font-size: 0.9em; color: #6c757d; }
     </style>
 </head>
@@ -166,9 +166,9 @@ If you didn't create an account, please ignore this email.
         .container { max-width: 600px; margin: 0 auto; padding: 20px; }
         .header { background-color: #17a2b8; color: white; padding: 20px; text-align: center; }
         .content { background-color: #f8f9fa; padding: 30px; margin-top: 20px; }
-        .code-box { background: #fff; border: 2px solid #17a2b8; padding: 15px; 
+        .code-box { background: #fff; border: 2px solid #17a2b8; padding: 15px;
                     margin: 20px 0; border-radius: 5px; font-family: monospace; }
-        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6; 
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;
                   font-size: 0.9em; color: #6c757d; }
     </style>
 </head>
@@ -181,7 +181,7 @@ If you didn't create an account, please ignore this email.
             <h2>Your Account is Now More Secure!</h2>
             <p>Hello {{ username }},</p>
             <p>Two-factor authentication has been successfully enabled on your account.</p>
-            
+
             <h3>Your Backup Codes</h3>
             <p>Save these backup codes in a safe place. Each code can be used once if you lose access to your authenticator app:</p>
             <div class="code-box">
@@ -189,7 +189,7 @@ If you didn't create an account, please ignore this email.
                 {{ code }}<br>
                 {% endfor %}
             </div>
-            
+
             <p><strong>⚠️ Important:</strong> Store these codes securely. You won't be able to see them again.</p>
         </div>
         <div class="footer">
@@ -229,11 +229,11 @@ class EmailService:
     """
     Email service with support for multiple providers including mock for development
     """
-    
+
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize email service"""
         self.settings = settings or get_settings()
-        
+
         # Email configuration
         self.provider = os.getenv("EMAIL_PROVIDER", "mock")  # mock, smtp, sendgrid, etc.
         self.mock_output = os.getenv("EMAIL_MOCK_OUTPUT", "console")  # console, file, both
@@ -248,24 +248,24 @@ class EmailService:
             if not raw_mock.is_absolute():
                 raw_mock = Path(__file__).resolve().parents[4] / raw_mock
         self.mock_file_path = raw_mock
-        
+
         # SMTP configuration (if using SMTP)
         self.smtp_host = os.getenv("SMTP_HOST", "localhost")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.smtp_username = os.getenv("SMTP_USERNAME", "")
         self.smtp_password = os.getenv("SMTP_PASSWORD", "")
         self.smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
-        
+
         # Default sender
         self.default_sender = os.getenv("EMAIL_FROM", "noreply@example.com")
         self.app_name = os.getenv("APP_NAME", "TLDW Server")
-        
+
         # Create mock email directory if needed
         if self.provider == "mock" and self.mock_output in ["file", "both"]:
             self.mock_file_path.mkdir(parents=True, exist_ok=True)
-        
+
         logger.info(f"EmailService initialized with provider: {self.provider}")
-    
+
     async def send_email(
         self,
         to_email: str,
@@ -277,7 +277,7 @@ class EmailService:
     ) -> bool:
         """
         Send an email
-        
+
         Args:
             to_email: Recipient email address
             subject: Email subject
@@ -285,12 +285,12 @@ class EmailService:
             text_body: Plain text version (optional)
             from_email: Sender email (uses default if not provided)
             attachments: List of attachments
-            
+
         Returns:
             True if email was sent successfully
         """
         from_email = from_email or self.default_sender
-        
+
         if self.provider == "mock":
             return await self._send_mock_email(
                 to_email, subject, html_body, text_body, from_email, attachments
@@ -302,7 +302,7 @@ class EmailService:
         else:
             logger.error(f"Unsupported email provider: {self.provider}")
             return False
-    
+
     async def _send_mock_email(
         self,
         to_email: str,
@@ -313,10 +313,10 @@ class EmailService:
         attachments: Optional[List[Dict[str, Any]]]
     ) -> bool:
         """Send mock email for development/testing"""
-        
+
         timestamp = datetime.utcnow().isoformat()
         email_id = f"{timestamp}_{to_email.replace('@', '_at_')}"
-        
+
         # Create email data structure
         email_data = {
             "id": email_id,
@@ -329,7 +329,7 @@ class EmailService:
             "attachments": len(attachments) if attachments else 0,
             "provider": "mock"
         }
-        
+
         # Output to console
         if self.mock_output in ["console", "both"]:
             logger.info("=" * 80)
@@ -347,25 +347,25 @@ class EmailService:
             if attachments:
                 logger.info(f"Attachments: {len(attachments)}")
             logger.info("=" * 80)
-        
+
         # Save to file
         if self.mock_output in ["file", "both"]:
             file_path = self.mock_file_path / f"{email_id}.json"
             with open(file_path, "w") as f:
                 json.dump(email_data, f, indent=2)
-            
+
             # Also save HTML for viewing
             html_path = self.mock_file_path / f"{email_id}.html"
             with open(html_path, "w") as f:
                 f.write(html_body)
-            
+
             logger.debug(f"Mock email saved to: {file_path}")
-        
+
         # Simulate small delay
         await asyncio.sleep(0.1)
-        
+
         return True
-    
+
     async def _send_smtp_email(
         self,
         to_email: str,
@@ -418,7 +418,7 @@ class EmailService:
                 server.login(self.smtp_username, self.smtp_password)
 
             server.send_message(message)
-    
+
     async def send_password_reset_email(
         self,
         to_email: str,
@@ -429,20 +429,20 @@ class EmailService:
     ) -> bool:
         """
         Send password reset email
-        
+
         Args:
             to_email: Recipient email
             username: User's username
             reset_token: Password reset token
             ip_address: IP address of request
             base_url: Base URL for reset link
-            
+
         Returns:
             True if sent successfully
         """
         base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
         reset_link = f"{base_url}/auth/reset-password?token={reset_token}"
-        
+
         template_data = {
             "app_name": self.app_name,
             "username": username,
@@ -451,17 +451,17 @@ class EmailService:
             "ip_address": ip_address,
             "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         }
-        
+
         # Render templates
         html_template = Template(EMAIL_TEMPLATES["password_reset"]["html"])
         text_template = Template(EMAIL_TEMPLATES["password_reset"]["text"])
-        
+
         html_body = html_template.render(**template_data)
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["password_reset"]["subject"]).render(**template_data)
-        
+
         return await self.send_email(to_email, subject, html_body, text_body)
-    
+
     async def send_verification_email(
         self,
         to_email: str,
@@ -470,27 +470,27 @@ class EmailService:
         base_url: Optional[str] = None
     ) -> bool:
         """Send email verification email"""
-        
+
         base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
         verification_link = f"{base_url}/auth/verify-email?token={verification_token}"
-        
+
         template_data = {
             "app_name": self.app_name,
             "username": username,
             "verification_link": verification_link,
             "expiry_hours": 24
         }
-        
+
         # Render templates
         html_template = Template(EMAIL_TEMPLATES["email_verification"]["html"])
         text_template = Template(EMAIL_TEMPLATES["email_verification"]["text"])
-        
+
         html_body = html_template.render(**template_data)
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["email_verification"]["subject"]).render(**template_data)
-        
+
         return await self.send_email(to_email, subject, html_body, text_body)
-    
+
     async def send_mfa_enabled_email(
         self,
         to_email: str,
@@ -499,7 +499,7 @@ class EmailService:
         ip_address: str = "Unknown"
     ) -> bool:
         """Send MFA enabled notification with backup codes"""
-        
+
         template_data = {
             "app_name": self.app_name,
             "username": username,
@@ -507,15 +507,15 @@ class EmailService:
             "ip_address": ip_address,
             "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         }
-        
+
         # Render templates
         html_template = Template(EMAIL_TEMPLATES["mfa_enabled"]["html"])
         text_template = Template(EMAIL_TEMPLATES["mfa_enabled"]["text"])
-        
+
         html_body = html_template.render(**template_data)
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["mfa_enabled"]["subject"]).render(**template_data)
-        
+
         return await self.send_email(to_email, subject, html_body, text_body)
 
 

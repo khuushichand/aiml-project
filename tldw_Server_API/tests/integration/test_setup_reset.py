@@ -31,4 +31,3 @@ def test_admin_reset_calls_reset_flags(mocker):
     body = resp.json()
     assert body.get('success') is True
     assert body.get('requires_restart') is True
-

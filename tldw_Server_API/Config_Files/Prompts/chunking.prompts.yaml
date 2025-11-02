@@ -16,4 +16,3 @@ proposition_gemma_aps: |
 proposition_generic: |
   Extract the minimal factual propositions from the text below. Return ONLY a JSON array of strings
   (no commentary). Each string should be a single, self-contained claim without pronouns if possible.
-

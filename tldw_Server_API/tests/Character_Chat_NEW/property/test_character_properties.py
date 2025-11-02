@@ -67,7 +67,7 @@ pattern_strategy = st.one_of(
 
 class TestCharacterCardProperties:
     """Test properties of character cards."""
-    
+
     @pytest.mark.property
     @given(
         name=character_name_strategy,
@@ -82,7 +82,7 @@ class TestCharacterCardProperties:
     ):
         """Creating and getting a character preserves all data."""
         unique_name = f"{name}_{uuid4()}"
-        
+
         # Create character
         char_id = character_db.add_character_card({
             'name': unique_name,
@@ -92,24 +92,24 @@ class TestCharacterCardProperties:
             'creator': "test_user",
             'tags': tags
         })
-        
+
         # Get character
         character = character_db.get_character_card_by_id(char_id)
-        
+
         assert character is not None
         assert character['name'] == unique_name  # Compare against unique_name
         assert character['description'] == description
         assert character['personality'] == personality
         assert character['first_message'] == first_message
         assert set(character.get('tags', [])) == set(tags)
-    
+
     @pytest.mark.property
     @given(name=character_name_strategy)
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_character_name_uniqueness(self, name, character_db):
         """Character names should be unique within a creator."""
         unique_name = f"{name}_{uuid4()}"
-        
+
         # Create first character
         char_id1 = character_db.add_character_card({
             'name': unique_name,
@@ -118,7 +118,7 @@ class TestCharacterCardProperties:
             'first_message': "Hi",
             'creator': "test_user"
         })
-        
+
         # Try to create duplicate
         try:
             char_id2 = character_db.add_character_card({
@@ -133,7 +133,7 @@ class TestCharacterCardProperties:
         except Exception:
             # Duplicate rejection is also valid
             pass
-    
+
     @pytest.mark.property
     @given(
         updates=st.lists(
@@ -159,17 +159,17 @@ class TestCharacterCardProperties:
             'first_message': "Hi",
             'creator': "test"
         })
-        
+
         # Get initial version
         character = character_db.get_character_card_by_id(char_id)
         current_version = character.get('version', 1)
-        
+
         # Apply updates with version tracking
         for update in updates:
             success = character_db.update_character_card(char_id, update, current_version)
             if success:
                 current_version += 1  # Increment version after successful update
-        
+
         # Name should be unchanged
         character = character_db.get_character_card_by_id(char_id)
         assert character['name'] == original_name
@@ -180,7 +180,7 @@ class TestCharacterCardProperties:
 
 class TestChatSessionProperties:
     """Test properties of chat sessions."""
-    
+
     @pytest.mark.property
     @given(messages=st.lists(message_strategy, min_size=1, max_size=20))
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -208,7 +208,7 @@ class TestChatSessionProperties:
             'client_id': 'test_client',
             'version': 1
         })
-        
+
         # Add messages
         import uuid
         for i, msg in enumerate(messages):
@@ -224,14 +224,14 @@ class TestChatSessionProperties:
                 'client_id': 'test_client',
                 'version': 1
             })
-        
+
         # Get messages
         retrieved = character_db.get_messages_for_conversation(chat_id)
-        
+
         # Order should be preserved
         for i, msg in enumerate(messages):
             assert retrieved[i]['content'] == msg
-    
+
     @pytest.mark.property
     @given(
         num_chats=st.integers(min_value=1, max_value=10),
@@ -248,7 +248,7 @@ class TestChatSessionProperties:
             'first_message': "Hi",
             'creator': "test"
         })
-        
+
         # Create multiple chats with unique messages
         import uuid
         chat_data = {}
@@ -265,7 +265,7 @@ class TestChatSessionProperties:
                 'client_id': 'test_client',
                 'version': 1
             })
-            
+
             chat_messages = []
             for j in range(messages_per_chat):
                 msg = f"Chat{i}_Message{j}"
@@ -281,14 +281,14 @@ class TestChatSessionProperties:
                     'version': 1
                 })
                 chat_messages.append(msg)
-            
+
             chat_data[chat_id] = chat_messages
-        
+
         # Verify isolation
         for chat_id, expected_messages in chat_data.items():
             retrieved = character_db.get_messages_for_conversation(chat_id)
             retrieved_contents = [m['content'] for m in retrieved]
-            
+
             # Should only contain this chat's messages
             assert set(retrieved_contents) == set(expected_messages)
 
@@ -298,7 +298,7 @@ class TestChatSessionProperties:
 
 class TestWorldBookProperties:
     """Test properties of world books."""
-    
+
     @pytest.mark.property
     @given(
         keywords=keywords_strategy,
@@ -309,7 +309,7 @@ class TestWorldBookProperties:
     def test_entry_keyword_matching(self, keywords, content, priority, world_book_service):
         """Entries should activate when keywords match."""
         service = world_book_service
-        
+
         # Create world book with unique name
         wb_id = service.create_world_book(name=f"Match Test_{uuid4()}")
         service.add_entry(
@@ -319,15 +319,15 @@ class TestWorldBookProperties:
             priority=priority,
             whole_word_match=False  # Disable word boundary matching for special characters
         )
-        
+
         # Test with context containing keywords
         for keyword in keywords:
             context = f"This text contains {keyword} in it."
             activated = service.process_context(context, [wb_id])  # Pass as list
-            
+
             assert activated['entries_matched'] > 0
             assert content in activated['processed_context']
-    
+
     @pytest.mark.property
     @given(
         entries=st.lists(
@@ -344,9 +344,9 @@ class TestWorldBookProperties:
     def test_priority_ordering_invariant(self, entries, world_book_service):
         """Activated entries should be ordered by priority."""
         service = world_book_service
-        
+
         wb_id = service.create_world_book(name=f"Priority Test_{uuid4()}")
-        
+
         # Add entries
         all_keywords = []
         for keywords, content, priority in entries:
@@ -357,17 +357,17 @@ class TestWorldBookProperties:
                 priority=priority
             )
             all_keywords.extend(keywords)
-        
+
         # Create context with all keywords
         context = ' '.join(all_keywords)
         activated = service.process_context(context, [wb_id])  # Pass as list
-        
+
         # Simply verify that processing works when keywords are present
         # The actual ordering is handled internally
         assert activated is not None
         if all_keywords:
             assert activated['entries_matched'] >= 0  # May be 0 if no exact matches
-    
+
     @pytest.mark.property
     @given(
         keyword=st.text(alphabet=st.characters(whitelist_categories=['L', 'N'], min_codepoint=32, max_codepoint=127), min_size=1, max_size=30).filter(lambda x: x.strip())
@@ -376,7 +376,7 @@ class TestWorldBookProperties:
     def test_keyword_case_insensitive(self, keyword, world_book_service):
         """Keywords should match case-insensitively."""
         service = world_book_service
-        
+
         wb_id = service.create_world_book(name=f"Case Test_{uuid4()}")
         service.add_entry(
             world_book_id=wb_id,
@@ -385,7 +385,7 @@ class TestWorldBookProperties:
             whole_word_match=False,  # Disable word boundary matching
             case_sensitive=False  # Ensure case insensitive matching
         )
-        
+
         # Test different cases
         contexts = [
             keyword.lower(),
@@ -393,7 +393,7 @@ class TestWorldBookProperties:
             keyword.swapcase(),
             keyword.capitalize()
         ]
-        
+
         for context in contexts:
             activated = service.process_context(context, [wb_id])  # Pass as list
             assert activated['entries_matched'] > 0
@@ -404,7 +404,7 @@ class TestWorldBookProperties:
 
 class TestDictionaryProperties:
     """Test properties of chat dictionaries."""
-    
+
     @pytest.mark.property
     @given(
         pattern=st.text(min_size=1, max_size=50).filter(lambda x: x.strip()),
@@ -421,12 +421,12 @@ class TestDictionaryProperties:
             key=pattern,
             content=replacement
         )
-        
+
         # Test text with multiple occurrences
         text = f"{pattern} and {pattern} plus {pattern}"
         result = service.process_text(text, dictionary_id=dict_id)
         processed = result['processed_text']
-        
+
         # Check that replacement occurred (unless pattern equals replacement)
         if pattern != replacement:
             # We can't simply check that pattern is not in processed,
@@ -436,7 +436,7 @@ class TestDictionaryProperties:
             # If replacement is not empty and doesn't equal pattern, it should appear
             if replacement and replacement != pattern:
                 assert replacement in processed
-    
+
     @pytest.mark.property
     @given(
         entries=st.lists(
@@ -455,7 +455,7 @@ class TestDictionaryProperties:
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name=f"Multi Test_{uuid4()}")
-        
+
         # Add all entries, tracking which ones are added successfully
         added_entries = []
         for pattern, replacement in entries:
@@ -466,14 +466,14 @@ class TestDictionaryProperties:
             )
             if entry_id:
                 added_entries.append((pattern, replacement))
-        
+
         assume(len(added_entries) >= 1)  # Need at least one entry added
-        
+
         # Create text with all patterns
         text = ' '.join([pattern for pattern, _ in added_entries])
         result = service.process_text(text, dictionary_id=dict_id)
         processed = result['processed_text']
-        
+
         # Verify processing occurred
         assert processed is not None
         # At least check that some replacements occurred if pattern != replacement
@@ -481,7 +481,7 @@ class TestDictionaryProperties:
             if pattern != replacement and replacement:
                 # The replacement might appear (depends on implementation)
                 pass  # Don't assert, as behavior varies
-    
+
     @pytest.mark.property
     @given(probability=st.floats(min_value=0.0, max_value=1.0))
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -525,7 +525,7 @@ class TestDictionaryProperties:
 
 class CharacterChatStateMachine(RuleBasedStateMachine):
     """Stateful testing for character chat operations."""
-    
+
     def __init__(self):
         super().__init__()
         self.manager = None
@@ -533,10 +533,10 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
         self.chat_ids = set()
         self.character_data = {}
         self.chat_data = {}
-        
+
     characters = Bundle('characters')
     chats = Bundle('chats')
-    
+
     @rule()
     def initialize_manager(self):
         """Initialize the manager if not already done."""
@@ -544,7 +544,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
             import tempfile
             self.db_path = tempfile.mktemp(suffix='.db')
             self.manager = CharacterChatManager(db_path=self.db_path)
-    
+
     @rule(
         target=characters,
         name=character_name_strategy,
@@ -556,10 +556,10 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
         """Create a new character."""
         if self.manager is None:
             self.initialize_manager()
-        
+
         # Make name unique to avoid conflicts
         unique_name = f"{name}_{uuid4()}"
-        
+
         char_id = self.manager.create_character_card(
             name=unique_name,
             description=description,
@@ -567,7 +567,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
             first_message=first_message,
             creator="test"
         )
-        
+
         self.character_ids.add(char_id)
         self.character_data[char_id] = {
             'name': unique_name,
@@ -575,9 +575,9 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
             'personality': personality,
             'first_message': first_message
         }
-        
+
         return char_id
-    
+
     @rule(
         target=chats,
         character_id=characters
@@ -590,15 +590,15 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
                 user_id="test_user",
                 title=f"Chat for {character_id}"
             )
-            
+
             self.chat_ids.add(chat_id)
             self.chat_data[chat_id] = {
                 'character_id': character_id,
                 'messages': []
             }
-            
+
             return chat_id
-    
+
     @rule(
         chat_id=chats,
         message=message_strategy
@@ -608,20 +608,20 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
         if chat_id in self.chat_ids:
             self.manager.add_message(chat_id, "user", message)
             self.chat_data[chat_id]['messages'].append(message)
-    
+
     @rule(character_id=characters)
     def delete_character(self, character_id):
         """Delete a character."""
         if character_id in self.character_ids:
             self.manager.delete_character_card(character_id)
             self.character_ids.remove(character_id)
-            
+
             # Remove associated chats
             for chat_id, data in list(self.chat_data.items()):
                 if data['character_id'] == character_id:
                     self.chat_ids.discard(chat_id)
                     del self.chat_data[chat_id]
-    
+
     @invariant()
     def characters_are_retrievable(self):
         """All created characters should be retrievable."""
@@ -630,7 +630,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
                 character = self.manager.get_character_card(char_id)
                 assert character is not None
                 assert character['id'] == char_id
-    
+
     @invariant()
     def chats_belong_to_characters(self):
         """All chats should belong to existing characters."""
@@ -640,7 +640,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
                     chat = self.manager.get_chat_session(chat_id)
                     if chat:
                         assert chat['character_id'] in self.character_ids
-    
+
     @invariant()
     def message_count_matches(self):
         """Message count should match what was added."""
@@ -651,12 +651,12 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
                     # Count user messages only
                     user_messages = [m for m in messages if m['role'] == 'user']
                     assert len(user_messages) == len(data['messages'])
-    
+
     def teardown(self):
         """Clean up after test."""
         if self.manager:
             self.manager.close()
-        
+
         if hasattr(self, 'db_path'):
             import os
             try:
@@ -683,7 +683,7 @@ def test_character_chat_state_machine():
 
 class TestMessageProcessingProperties:
     """Test properties of message processing."""
-    
+
     @pytest.mark.property
     @given(
         messages=st.lists(
@@ -700,24 +700,24 @@ class TestMessageProcessingProperties:
     def test_context_truncation_preserves_recent(self, messages, max_tokens, mock_chat_manager):
         """Context truncation should preserve most recent messages."""
         manager = mock_chat_manager
-        
+
         # Prepare messages in correct format
         formatted_messages = [{'role': r, 'content': c} for r, c in messages]
-        
+
         # Call truncate_context directly without mocking
         truncated = manager.truncate_context(
             messages=formatted_messages,
             max_tokens=max_tokens
         )
-        
+
         if truncated:
             # Last message should always be included
             assert truncated[-1]['content'] == messages[-1][1]
-            
+
             # Should not exceed token limit (with some tolerance)
             total_tokens = sum(len(m['content'].split()) for m in truncated)
             assert total_tokens <= max_tokens * 1.2
-    
+
     @pytest.mark.property
     @given(
         message_length=st.integers(min_value=1, max_value=10000),
@@ -727,17 +727,17 @@ class TestMessageProcessingProperties:
     def test_message_chunking(self, message_length, chunk_size, mock_chat_manager):
         """Long messages should be properly chunked."""
         manager = mock_chat_manager
-        
+
         # Create a long message
         long_message = 'word ' * message_length
-        
+
         # Chunk the message
         chunks = manager.chunk_message(long_message, chunk_size)
-        
+
         # All chunks should be within size limit
         for chunk in chunks:
             assert len(chunk.split()) <= chunk_size
-        
+
         # Reconstruction should preserve content
         reconstructed = ' '.join(chunks)
         assert reconstructed.strip() == long_message.strip()
@@ -748,7 +748,7 @@ class TestMessageProcessingProperties:
 
 class TestImportExportProperties:
     """Test properties of import/export functionality."""
-    
+
     @pytest.mark.property
     @pytest.mark.skip(reason="Mock returns hardcoded values, not suitable for roundtrip testing")
     @given(
@@ -765,22 +765,22 @@ class TestImportExportProperties:
     def test_export_import_roundtrip(self, character_data, mock_chat_manager):
         """Exporting and importing should preserve all data."""
         manager = mock_chat_manager
-        
+
         # Make name unique
         character_data['name'] = f"{character_data['name']}_{uuid4()}"
-        
+
         # Create character
         char_id = manager.create_character_card(**character_data, creator="test")
-        
+
         # Export
         exported = manager.export_character_card(char_id)
-        
+
         # Delete original
         manager.delete_character_card(char_id)
-        
+
         # Import
         new_id = manager.import_character_card(exported)
-        
+
         # Verify data preserved
         imported = manager.get_character_card(new_id)
         # Name might have _imported suffix due to soft delete conflict, check it starts with original
@@ -796,7 +796,7 @@ class TestImportExportProperties:
 
 class TestTagProperties:
     """Test properties of tag management."""
-    
+
     @pytest.mark.property
     @given(
         tags=st.lists(
@@ -820,14 +820,14 @@ class TestTagProperties:
             'creator': "test",
             'tags': tags
         })
-        
+
         # Get character
         character = character_db.get_character_card_by_id(char_id)
         retrieved_tags = character.get('tags', [])
-        
+
         # All tags should be preserved (possibly normalized)
         assert len(retrieved_tags) == len(tags)
-        
+
         # Normalization should be consistent
         for original in tags:
             normalized = original.lower().strip()

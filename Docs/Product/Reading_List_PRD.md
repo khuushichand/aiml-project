@@ -274,4 +274,3 @@ Migration: Provide DB migration helpers in `Config_Files/` and `DB_Management` u
 ---
 
 Implementation Note: Follow project conventions - PEP 8, type hints, docstrings, Loguru, FastAPI Pydantic models, dependency injection, and rate limiters. Use `MediaDatabase` abstractions or add a dedicated module under `DB_Management` if that yields a simpler design.
-

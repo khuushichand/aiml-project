@@ -53,7 +53,7 @@ class FeedbackEntry:
     value: Any
     timestamp: datetime = field(default_factory=datetime.now)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
@@ -78,12 +78,12 @@ class QueryPerformance:
     helpful_count: int = 0
     unhelpful_count: int = 0
     avg_dwell_time: float = 0.0
-    
+
     @property
     def click_through_rate(self) -> float:
         """Calculate click-through rate."""
         return self.clicked_results / self.total_results if self.total_results > 0 else 0.0
-    
+
     @property
     def helpfulness_score(self) -> float:
         """Calculate helpfulness score."""
@@ -93,17 +93,17 @@ class QueryPerformance:
 
 class FeedbackStore:
     """SQLite-based storage for feedback data."""
-    
+
     def __init__(self, db_path: str = "feedback.db"):
         """
         Initialize feedback store.
-        
+
         Args:
             db_path: Path to SQLite database
         """
         self.db_path = db_path
         self._init_database()
-    
+
     def _init_database(self):
         """Initialize database schema."""
         with sqlite3.connect(self.db_path) as conn:
@@ -120,23 +120,23 @@ class FeedbackStore:
                     created_at REAL DEFAULT (unixepoch())
                 )
             """)
-            
+
             # Create indexes for efficient queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_query ON feedback(query)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_document ON feedback(document_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_user ON feedback(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON feedback(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_type ON feedback(feedback_type)")
-            
+
             conn.commit()
-    
+
     def add_feedback(self, entry: FeedbackEntry) -> bool:
         """
         Add feedback entry to store.
-        
+
         Args:
             entry: Feedback entry to store
-            
+
         Returns:
             Success status
         """
@@ -145,7 +145,7 @@ class FeedbackStore:
                 data = entry.to_dict()
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO feedback 
+                    INSERT OR REPLACE INTO feedback
                     (id, query, document_id, user_id, feedback_type, value, timestamp, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -162,11 +162,11 @@ class FeedbackStore:
                 )
                 conn.commit()
                 return True
-                
+
         except Exception as e:
             logger.error(f"Failed to store feedback: {e}")
             return False
-    
+
     def get_feedback_for_query(
         self,
         query: str,
@@ -176,11 +176,11 @@ class FeedbackStore:
         """Get feedback entries for a specific query."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            
+
             if feedback_type:
                 cursor = conn.execute(
                     """
-                    SELECT * FROM feedback 
+                    SELECT * FROM feedback
                     WHERE query = ? AND feedback_type = ?
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -190,16 +190,16 @@ class FeedbackStore:
             else:
                 cursor = conn.execute(
                     """
-                    SELECT * FROM feedback 
+                    SELECT * FROM feedback
                     WHERE query = ?
                     ORDER BY timestamp DESC
                     LIMIT ?
                     """,
                     (query, limit)
                 )
-            
+
             return [dict(row) for row in cursor.fetchall()]
-    
+
     def get_document_feedback(
         self,
         document_id: str,
@@ -210,7 +210,7 @@ class FeedbackStore:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 """
-                SELECT * FROM feedback 
+                SELECT * FROM feedback
                 WHERE document_id = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -218,7 +218,7 @@ class FeedbackStore:
                 (document_id, limit)
             )
             return [dict(row) for row in cursor.fetchall()]
-    
+
     def get_aggregated_stats(
         self,
         start_time: Optional[datetime] = None,
@@ -229,22 +229,22 @@ class FeedbackStore:
             # Build time filter
             time_filter = ""
             params = []
-            
+
             if start_time:
                 time_filter = "WHERE timestamp >= ?"
                 params.append(start_time.isoformat())
-            
+
             if end_time:
                 if time_filter:
                     time_filter += " AND timestamp <= ?"
                 else:
                     time_filter = "WHERE timestamp <= ?"
                 params.append(end_time.isoformat())
-            
+
             # Get overall stats
             cursor = conn.execute(
                 f"""
-                SELECT 
+                SELECT
                     COUNT(*) as total_feedback,
                     COUNT(DISTINCT query) as unique_queries,
                     COUNT(DISTINCT document_id) as unique_documents,
@@ -255,11 +255,11 @@ class FeedbackStore:
                 params
             )
             overall = dict(cursor.fetchone())
-            
+
             # Get feedback type breakdown
             cursor = conn.execute(
                 f"""
-                SELECT 
+                SELECT
                     feedback_type,
                     COUNT(*) as count
                 FROM feedback
@@ -269,7 +269,7 @@ class FeedbackStore:
                 params
             )
             by_type = {row[0]: row[1] for row in cursor.fetchall()}
-            
+
             # Get average relevance scores
             cursor = conn.execute(
                 f"""
@@ -280,7 +280,7 @@ class FeedbackStore:
                 params if time_filter else []
             )
             avg_relevance = cursor.fetchone()[0] or 0.0
-            
+
             return {
                 "overall": overall,
                 "by_type": by_type,
@@ -290,41 +290,41 @@ class FeedbackStore:
 
 class FeedbackAnalyzer:
     """Analyzes feedback to improve search quality."""
-    
+
     def __init__(self, store: FeedbackStore):
         """
         Initialize feedback analyzer.
-        
+
         Args:
             store: Feedback storage backend
         """
         self.store = store
         self.reranking_weights = {}
         self.document_scores = {}
-        
+
     def calculate_document_score(self, document_id: str) -> float:
         """
         Calculate quality score for a document based on feedback.
-        
+
         Args:
             document_id: Document identifier
-            
+
         Returns:
             Quality score (0-1)
         """
         feedback = self.store.get_document_feedback(document_id)
-        
+
         if not feedback:
             return 0.5  # Neutral score for no feedback
-        
+
         # Calculate weighted score
         score = 0.0
         weight_sum = 0.0
-        
+
         for entry in feedback:
             feedback_type = entry["feedback_type"]
             value = entry["value"]
-            
+
             if feedback_type == "relevance":
                 # Relevance scores (1-5) have high weight
                 try:
@@ -341,7 +341,7 @@ class FeedbackAnalyzer:
                         )
                     except Exception:
                         logger.debug("metrics increment failed for rag feedback_parse_relevance_failed")
-                    
+
             elif feedback_type == "helpful":
                 # Helpful yes/no
                 try:
@@ -357,12 +357,12 @@ class FeedbackAnalyzer:
                         )
                     except Exception:
                         logger.debug("metrics increment failed for rag feedback_parse_helpful_failed")
-                    
+
             elif feedback_type == "click":
                 # Click indicates interest
                 score += 0.7 * 1.0  # Weight of 1
                 weight_sum += 1.0
-                
+
             elif feedback_type == "dwell_time":
                 # Longer dwell time is better
                 try:
@@ -380,38 +380,38 @@ class FeedbackAnalyzer:
                         )
                     except Exception:
                         logger.debug("metrics increment failed for rag feedback_parse_dwell_failed")
-        
+
         return score / weight_sum if weight_sum > 0 else 0.5
-    
+
     def get_query_performance(self, query: str) -> QueryPerformance:
         """
         Analyze performance metrics for a query.
-        
+
         Args:
             query: Query string
-            
+
         Returns:
             Performance metrics
         """
         feedback = self.store.get_feedback_for_query(query)
-        
+
         perf = QueryPerformance(query=query)
         relevance_scores = []
         dwell_times = []
         unique_docs = set()
-        
+
         for entry in feedback:
             unique_docs.add(entry["document_id"])
             feedback_type = entry["feedback_type"]
             value = entry["value"]
-            
+
             if feedback_type == "relevance":
                 try:
                     score = float(json.loads(value) if isinstance(value, str) else value)
                     relevance_scores.append(score)
                 except Exception as e:
                     logger.debug(f"Failed to parse relevance score for query document: error={e}")
-                    
+
             elif feedback_type == "helpful":
                 try:
                     helpful = json.loads(value) if isinstance(value, str) else value
@@ -421,23 +421,23 @@ class FeedbackAnalyzer:
                         perf.unhelpful_count += 1
                 except Exception as e:
                     logger.debug(f"Failed to parse helpful feedback value: error={e}")
-                    
+
             elif feedback_type == "click":
                 perf.clicked_results += 1
-                
+
             elif feedback_type == "dwell_time":
                 try:
                     dwell = float(json.loads(value) if isinstance(value, str) else value)
                     dwell_times.append(dwell)
                 except Exception as e:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
-        
+
         perf.total_results = len(unique_docs)
         perf.avg_relevance = np.mean(relevance_scores) if relevance_scores else 0.0
         perf.avg_dwell_time = np.mean(dwell_times) if dwell_times else 0.0
-        
+
         return perf
-    
+
     def get_reranking_weights(
         self,
         query: str,
@@ -445,24 +445,24 @@ class FeedbackAnalyzer:
     ) -> Dict[str, float]:
         """
         Get reranking weights for documents based on feedback.
-        
+
         Args:
             query: Query string
             document_ids: List of document IDs to rerank
-            
+
         Returns:
             Dictionary of document_id -> weight multiplier
         """
         weights = {}
-        
+
         for doc_id in document_ids:
             # Get document quality score
             doc_score = self.calculate_document_score(doc_id)
-            
+
             # Get query-specific feedback
             query_feedback = self.store.get_feedback_for_query(query)
             query_doc_score = 0.5  # Default
-            
+
             for entry in query_feedback:
                 if entry["document_id"] == doc_id:
                     if entry["feedback_type"] == "relevance":
@@ -472,15 +472,15 @@ class FeedbackAnalyzer:
                             break
                         except Exception as e:
                             logger.debug(f"Failed to parse relevance score for query document: error={e}")
-            
+
             # Combine document and query-specific scores
             combined_score = 0.7 * doc_score + 0.3 * query_doc_score
-            
+
             # Convert to weight multiplier (0.5 to 1.5)
             weights[doc_id] = 0.5 + combined_score
-        
+
         return weights
-    
+
     def identify_poor_performers(
         self,
         threshold: float = 0.3,
@@ -488,11 +488,11 @@ class FeedbackAnalyzer:
     ) -> List[str]:
         """
         Identify documents with poor feedback scores.
-        
+
         Args:
             threshold: Score threshold below which documents are considered poor
             min_feedback: Minimum feedback entries required
-            
+
         Returns:
             List of poor-performing document IDs
         """
@@ -507,38 +507,38 @@ class FeedbackAnalyzer:
                 """,
                 (min_feedback,)
             )
-            
+
             poor_performers = []
-            
+
             for row in cursor.fetchall():
                 doc_id = row[0]
                 score = self.calculate_document_score(doc_id)
-                
+
                 if score < threshold:
                     poor_performers.append(doc_id)
-        
+
         return poor_performers
 
 
 class FeedbackSystem:
     """Main feedback system coordinating collection and analysis."""
-    
+
     def __init__(self, db_path: str = "feedback.db"):
         """
         Initialize feedback system.
-        
+
         Args:
             db_path: Path to feedback database
         """
         self.store = FeedbackStore(db_path)
         self.analyzer = FeedbackAnalyzer(self.store)
         self.active_sessions = {}
-        
+
     def generate_feedback_id(self, query: str, document_id: str, user_id: str) -> str:
         """Generate unique feedback ID."""
         content = f"{query}:{document_id}:{user_id}:{time.time()}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
-    
+
     async def submit_feedback(
         self,
         query: str,
@@ -550,7 +550,7 @@ class FeedbackSystem:
     ) -> bool:
         """
         Submit feedback entry.
-        
+
         Args:
             query: Query that generated the result
             document_id: ID of the document being rated
@@ -558,7 +558,7 @@ class FeedbackSystem:
             feedback_type: Type of feedback
             value: Feedback value
             metadata: Additional metadata
-            
+
         Returns:
             Success status
         """
@@ -572,17 +572,17 @@ class FeedbackSystem:
                 value=value,
                 metadata=metadata or {}
             )
-            
+
             success = self.store.add_feedback(entry)
-            
+
             if success:
                 logger.info(
                     f"Feedback submitted: {feedback_type.value} for doc {document_id} "
                     f"by user {user_id}"
                 )
-            
+
             return success
-            
+
         except Exception as e:
             logger.error(f"Failed to submit feedback: {e}")
             try:
@@ -593,7 +593,7 @@ class FeedbackSystem:
             except Exception:
                 logger.debug("metrics increment failed for rag feedback_submit_failed")
             return False
-    
+
     async def submit_relevance_score(
         self,
         query: str,
@@ -605,7 +605,7 @@ class FeedbackSystem:
         """Submit relevance score (1-5)."""
         if not 1 <= score <= 5:
             raise ValueError("Relevance score must be between 1 and 5")
-        
+
         return await self.submit_feedback(
             query=query,
             document_id=document_id,
@@ -614,7 +614,7 @@ class FeedbackSystem:
             value=score,
             metadata=metadata
         )
-    
+
     async def submit_helpful_vote(
         self,
         query: str,
@@ -632,7 +632,7 @@ class FeedbackSystem:
             value=helpful,
             metadata=metadata
         )
-    
+
     async def track_click(
         self,
         query: str,
@@ -644,7 +644,7 @@ class FeedbackSystem:
         """Track document click."""
         meta = metadata or {}
         meta["position"] = position
-        
+
         return await self.submit_feedback(
             query=query,
             document_id=document_id,
@@ -653,7 +653,7 @@ class FeedbackSystem:
             value=True,
             metadata=meta
         )
-    
+
     async def track_dwell_time(
         self,
         query: str,
@@ -671,7 +671,7 @@ class FeedbackSystem:
             value=dwell_seconds,
             metadata=metadata
         )
-    
+
     def get_statistics(
         self,
         start_time: Optional[datetime] = None,
@@ -679,16 +679,16 @@ class FeedbackSystem:
     ) -> Dict[str, Any]:
         """
         Get feedback statistics.
-        
+
         Args:
             start_time: Start of time range
             end_time: End of time range
-            
+
         Returns:
             Statistics dictionary
         """
         stats = self.store.get_aggregated_stats(start_time, end_time)
-        
+
         # Add performance insights
         if stats["overall"]["unique_queries"] > 0:
             # Get top performing queries
@@ -707,9 +707,9 @@ class FeedbackSystem:
                     {"query": row[0], "avg_score": row[1]}
                     for row in cursor.fetchall()
                 ]
-        
+
         return stats
-    
+
     def apply_feedback_reranking(
         self,
         query: str,
@@ -718,35 +718,35 @@ class FeedbackSystem:
     ) -> List[Dict[str, Any]]:
         """
         Apply feedback-based reranking to search results.
-        
+
         Args:
             query: Query string
             documents: List of documents with scores
             score_field: Name of the score field in documents
-            
+
         Returns:
             Reranked documents
         """
         # Get document IDs
         doc_ids = [doc.get("id", str(i)) for i, doc in enumerate(documents)]
-        
+
         # Get reranking weights
         weights = self.analyzer.get_reranking_weights(query, doc_ids)
-        
+
         # Apply weights to scores
         for i, doc in enumerate(documents):
             doc_id = doc.get("id", str(i))
             original_score = doc.get(score_field, 0.0)
             weight = weights.get(doc_id, 1.0)
-            
+
             # Apply weight and store both scores
             doc[score_field] = original_score * weight
             doc["original_score"] = original_score
             doc["feedback_weight"] = weight
-        
+
         # Resort by new scores
         documents.sort(key=lambda x: x[score_field], reverse=True)
-        
+
         return documents
 
 
@@ -768,13 +768,13 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
     """Collect feedback in RAG pipeline."""
     if not context.config.get("feedback", {}).get("enabled", False):
         return context
-    
+
     feedback = get_feedback_system()
-    
+
     # Check if we have feedback data in context
     if "feedback" in context.metadata:
         feedback_data = context.metadata["feedback"]
-        
+
         # Submit feedback
         await feedback.submit_feedback(
             query=context.query,
@@ -784,7 +784,7 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
             value=feedback_data.get("value"),
             metadata=feedback_data.get("metadata", {})
         )
-    
+
     return context
 
 
@@ -792,16 +792,16 @@ async def apply_feedback_scores(context: Any, **kwargs) -> Any:
     """Apply feedback-based reranking in pipeline."""
     if not context.config.get("feedback", {}).get("reranking", False):
         return context
-    
+
     feedback = get_feedback_system()
-    
+
     # Apply reranking if we have documents
     if hasattr(context, "documents") and context.documents:
         context.documents = feedback.apply_feedback_reranking(
             query=context.query,
             documents=context.documents
         )
-        
+
         logger.debug(f"Applied feedback reranking to {len(context.documents)} documents")
-    
+
     return context

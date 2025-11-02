@@ -2448,7 +2448,7 @@ class JobManager:
         *,
         error: str,
         retryable: bool = True,
-        backoff_seconds: int = 0,
+        backoff_seconds: int = 1,
         worker_id: Optional[str] = None,
         lease_id: Optional[str] = None,
         enforce: Optional[bool] = None,
@@ -2718,7 +2718,7 @@ class JobManager:
                                         )
                                     except Exception:
                                         pass
-                                    
+
                                     with job_span("job.fail", job=d, attrs={"retryable": False, "error_code": error_code}):
                                         pass
                                 except Exception:
@@ -2780,8 +2780,12 @@ class JobManager:
                                 if _outbox and delay < 3:
                                     delay = 3
                             base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "3") or "3")
-                            if test_mode and int(backoff_seconds) <= 0 and str(os.getenv("JOBS_DISABLE_QUARANTINE_DURING_TESTS", "")).lower() in {"1","true","yes","y","on"}:
-                                thresh = max(base_thresh, 10**9)
+                            if test_mode and int(backoff_seconds) <= 0:
+                                # Respect explicit threshold in tests; otherwise, avoid quarantining to allow timeline growth
+                                if os.getenv("JOBS_QUARANTINE_THRESHOLD") is None:
+                                    thresh = max(base_thresh, 10**9)
+                                else:
+                                    thresh = base_thresh
                             else:
                                 thresh = base_thresh
                         # SQLite retry path with failure streak bookkeeping

@@ -97,4 +97,3 @@ async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:
             pass
 
     logger.info("Workflows DB maintenance worker stopped")
-

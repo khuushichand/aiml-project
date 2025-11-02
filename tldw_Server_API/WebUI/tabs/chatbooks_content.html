@@ -6,7 +6,7 @@
             <span class="endpoint-path">/api/v1/chatbooks/export - Export Chatbook</span>
         </h2>
         <p>Export conversations and character data to a chatbook file.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksExport_payload">Export Configuration (JSON):</label>
             <textarea id="chatbooksExport_payload" class="code-input" rows="15">{
@@ -22,14 +22,14 @@
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksExport', 'POST', '/api/v1/chatbooks/export', 'json')">
             Export Chatbook
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksExport_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksExport_response">---</pre>
     </div>
@@ -40,12 +40,12 @@
             <span class="endpoint-path">/api/v1/chatbooks/import - Import Chatbook</span>
         </h2>
         <p>Import conversations and character data from a chatbook file.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksImport_file">Chatbook File:</label>
             <input type="file" id="chatbooksImport_file" accept=".json,.jsonl,.cbk">
         </div>
-        
+
         <div class="form-group">
             <label for="chatbooksImport_options">Import Options (JSON):</label>
             <textarea id="chatbooksImport_options" class="code-input" rows="8">{
@@ -55,14 +55,14 @@
   "import_conversations": true
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksImport', 'POST', '/api/v1/chatbooks/import', 'form')">
             Import Chatbook
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksImport_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksImport_response">---</pre>
     </div>
@@ -73,7 +73,7 @@
             <span class="endpoint-path">/api/v1/chatbooks/preview - Preview Export</span>
         </h2>
         <p>Preview what will be exported without creating the file.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksPreview_payload">Preview Request (JSON):</label>
             <textarea id="chatbooksPreview_payload" class="code-input" rows="10">{
@@ -83,14 +83,14 @@
   "summary_only": true
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksPreview', 'POST', '/api/v1/chatbooks/preview', 'json')">
             Preview Export
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksPreview_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksPreview_response">---</pre>
     </div>
@@ -104,7 +104,7 @@
             <span class="endpoint-path">/api/v1/chatbooks/export/jobs - List Export Jobs</span>
         </h2>
         <p>List all export jobs with their status.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksExportJobs_status">Filter by Status:</label>
             <select id="chatbooksExportJobs_status">
@@ -115,14 +115,14 @@
                 <option value="failed">Failed</option>
             </select>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksExportJobs', 'GET', '/api/v1/chatbooks/export/jobs', 'query')">
             List Export Jobs
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksExportJobs_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksExportJobs_response">---</pre>
     </div>
@@ -133,19 +133,19 @@
             <span class="endpoint-path">/api/v1/chatbooks/export/jobs/{job_id} - Get Export Job</span>
         </h2>
         <p>Get details of a specific export job.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksExportJob_id">Job ID <span class="required">*</span>:</label>
             <input type="text" id="chatbooksExportJob_id" placeholder="job_123">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksExportJob', 'GET', '/api/v1/chatbooks/export/jobs/{id}', 'path')">
             Get Job Details
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksExportJob_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksExportJob_response">---</pre>
     </div>
@@ -156,19 +156,19 @@
             <span class="endpoint-path">/api/v1/chatbooks/download/{job_id} - Download Chatbook</span>
         </h2>
         <p>Download the exported chatbook file.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksDownload_id">Job ID <span class="required">*</span>:</label>
             <input type="text" id="chatbooksDownload_id" placeholder="job_123">
         </div>
-        
+
         <button class="api-button" onclick="downloadFile('/api/v1/chatbooks/download/{id}', 'chatbooksDownload_id')">
             Download Chatbook
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksDownload_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksDownload_response">File will be downloaded to your browser</pre>
     </div>
@@ -179,7 +179,7 @@
             <span class="endpoint-path">/api/v1/chatbooks/import/jobs - List Import Jobs</span>
         </h2>
         <p>List all import jobs with their status.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksImportJobs_status">Filter by Status:</label>
             <select id="chatbooksImportJobs_status">
@@ -190,14 +190,14 @@
                 <option value="failed">Failed</option>
             </select>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksImportJobs', 'GET', '/api/v1/chatbooks/import/jobs', 'query')">
             List Import Jobs
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksImportJobs_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksImportJobs_response">---</pre>
     </div>
@@ -208,19 +208,19 @@
             <span class="endpoint-path">/api/v1/chatbooks/cleanup - Cleanup Expired Exports</span>
         </h2>
         <p>Remove expired export files and job records.</p>
-        
+
         <div class="form-group">
             <label for="chatbooksCleanup_days">Days to Keep:</label>
             <input type="number" id="chatbooksCleanup_days" value="7" min="1" max="30">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('chatbooksCleanup', 'POST', '/api/v1/chatbooks/cleanup', 'json')">
             Run Cleanup
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="chatbooksCleanup_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="chatbooksCleanup_response">---</pre>
     </div>

@@ -109,23 +109,23 @@ config = {
         "notes_db_path": "/path/to/notes.db",
     },
     "sources": ["media_db", "notes"],  # Which to search
-    
+
     # Retrieval settings
     "top_k": 10,                       # Max results
     "min_score": 0.0,                  # Min relevance score
     "use_fts": True,                   # Full-text search
     "use_vector": False,                # Vector search
-    
+
     # Query expansion
     "expansion_strategies": ["acronym", "synonym"],
-    
+
     # Caching
     "enable_cache": True,
     "cache_threshold": 0.85,           # Similarity threshold
-    
+
     # Reranking
     "reranking_strategy": "hybrid",    # flashrank, cross_encoder, hybrid
-    
+
     # Performance
     "enable_monitoring": True,
 }
@@ -137,7 +137,7 @@ config = {
 config = {
     # Enable resilience features
     "enable_resilience": True,
-    
+
     # Resilience configuration
     "resilience": {
         "retry": {
@@ -151,7 +151,7 @@ config = {
             "timeout": 60
         }
     },
-    
+
     # Other settings...
 }
 ```

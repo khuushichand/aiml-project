@@ -27,15 +27,15 @@ def create_test_audio(duration=1.0, sample_rate=16000):
 async def test_transcription_endpoint():
     """Test the /v1/audio/transcriptions endpoint."""
     from tldw_Server_API.app.main import app
-    
+
     # Create test audio
     audio_data, sample_rate = create_test_audio()
-    
+
     # Save to temporary file
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
         sf.write(tmp_file.name, audio_data, sample_rate)
         tmp_path = tmp_file.name
-    
+
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -54,12 +54,12 @@ async def test_transcription_endpoint():
                     files=files,
                     data=data
                 )
-            
+
             assert response.status_code == 200
             result = response.json()
             assert 'text' in result
             print(f"Transcription result: {result}")
-    
+
     finally:
         # Clean up
         if os.path.exists(tmp_path):
@@ -70,15 +70,15 @@ async def test_transcription_endpoint():
 async def test_transcription_with_parakeet():
     """Test transcription using Parakeet model."""
     from tldw_Server_API.app.main import app
-    
+
     # Create test audio
     audio_data, sample_rate = create_test_audio(duration=2.0)
-    
+
     # Save to temporary file
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
         sf.write(tmp_file.name, audio_data, sample_rate)
         tmp_path = tmp_file.name
-    
+
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -97,7 +97,7 @@ async def test_transcription_with_parakeet():
                     files=files,
                     data=data
                 )
-            
+
             # Parakeet might not be available in test environment
             if response.status_code == 200:
                 result = response.json()
@@ -105,7 +105,7 @@ async def test_transcription_with_parakeet():
                 print(f"Parakeet transcription: {result}")
             else:
                 print(f"Parakeet not available: {response.status_code}")
-    
+
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -115,21 +115,21 @@ async def test_transcription_with_parakeet():
 async def test_transcription_formats():
     """Test different response formats."""
     from tldw_Server_API.app.main import app
-    
+
     # Create test audio
     audio_data, sample_rate = create_test_audio()
-    
+
     # Save to temporary file
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
         sf.write(tmp_file.name, audio_data, sample_rate)
         tmp_path = tmp_file.name
-    
+
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Test different formats
             formats = ['json', 'text', 'srt', 'vtt', 'verbose_json']
-            
+
             for fmt in formats:
                 with open(tmp_path, 'rb') as f:
                     files = {'file': ('test.wav', f, 'audio/wav')}
@@ -145,9 +145,9 @@ async def test_transcription_formats():
                         files=files,
                         data=data
                     )
-                
+
                 assert response.status_code == 200
-                
+
                 if fmt == 'json' or fmt == 'verbose_json':
                     result = response.json()
                     assert 'text' in result
@@ -160,9 +160,9 @@ async def test_transcription_formats():
                     assert '00:00:00,000' in response.text
                 elif fmt == 'vtt':
                     assert 'WEBVTT' in response.text
-                
+
                 print(f"Format {fmt} test passed")
-    
+
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -172,15 +172,15 @@ async def test_transcription_formats():
 async def test_translation_endpoint():
     """Test the /v1/audio/translations endpoint."""
     from tldw_Server_API.app.main import app
-    
+
     # Create test audio
     audio_data, sample_rate = create_test_audio()
-    
+
     # Save to temporary file
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
         sf.write(tmp_file.name, audio_data, sample_rate)
         tmp_path = tmp_file.name
-    
+
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -198,12 +198,12 @@ async def test_translation_endpoint():
                     files=files,
                     data=data
                 )
-            
+
             assert response.status_code == 200
             result = response.json()
             assert 'text' in result
             print(f"Translation result: {result}")
-    
+
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -212,7 +212,7 @@ async def test_translation_endpoint():
 def test_sync_transcription():
     """Test synchronous transcription using TestClient."""
     from tldw_Server_API.app.main import app
-    
+
     with TestClient(app) as client:
         # Create test audio
         audio_data, sample_rate = create_test_audio()
@@ -250,14 +250,14 @@ def print_curl_examples():
     """Print example curl commands for testing the API."""
     print("""
     # Example curl commands for testing the transcription API:
-    
+
     # 1. Basic transcription with Whisper
     curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \\
       -H "Authorization: Bearer YOUR_API_TOKEN" \\
       -F "file=@audio.wav" \\
       -F "model=whisper-1" \\
       -F "response_format=json"
-    
+
     # 2. Transcription with Parakeet
     curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \\
       -H "Authorization: Bearer YOUR_API_TOKEN" \\
@@ -265,7 +265,7 @@ def print_curl_examples():
       -F "model=parakeet" \\
       -F "response_format=json" \\
       -F "language=en"
-    
+
     # 3. Transcription with Canary (multilingual)
     curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \\
       -H "Authorization: Bearer YOUR_API_TOKEN" \\
@@ -273,29 +273,29 @@ def print_curl_examples():
       -F "model=canary" \\
       -F "response_format=json" \\
       -F "language=es"  # Spanish
-    
+
     # 4. Get transcription in SRT format
     curl -X POST "http://localhost:8000/api/v1/audio/transcriptions" \\
       -H "Authorization: Bearer YOUR_API_TOKEN" \\
       -F "file=@audio.wav" \\
       -F "model=whisper-1" \\
       -F "response_format=srt"
-    
+
     # 5. Translation to English
     curl -X POST "http://localhost:8000/api/v1/audio/translations" \\
       -H "Authorization: Bearer YOUR_API_TOKEN" \\
       -F "file=@foreign_audio.wav" \\
       -F "model=whisper-1" \\
       -F "response_format=json"
-    
+
     # Using with OpenAI Python client:
     from openai import OpenAI
-    
+
     client = OpenAI(
         base_url="http://localhost:8000/api/v1",
         api_key="YOUR_API_TOKEN"
     )
-    
+
     # Transcription
     with open("audio.wav", "rb") as audio_file:
         transcript = client.audio.transcriptions.create(
@@ -304,7 +304,7 @@ def print_curl_examples():
             response_format="json"
         )
         print(transcript.text)
-    
+
     # Translation
     with open("foreign_audio.wav", "rb") as audio_file:
         translation = client.audio.translations.create(
@@ -318,10 +318,10 @@ def print_curl_examples():
 if __name__ == "__main__":
     # Print examples
     print_curl_examples()
-    
+
     # Run basic test
     test_sync_transcription()
-    
+
     # Run async tests
     asyncio.run(test_transcription_endpoint())
     asyncio.run(test_transcription_formats())

@@ -32,12 +32,12 @@ def export_group():
 def export_evaluations(ctx, output_file, output_format, limit, days):
     """Export evaluation history."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-        
+
         eval_manager = EvaluationManager()
 
         # Get evaluation history (async API)
@@ -63,10 +63,10 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
                         e[key] = e[key].isoformat()
                     except Exception:
                         e[key] = str(e[key])
-        
+
         # Ensure output directory exists
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Export data
         if output_format == 'json':
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -76,14 +76,14 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
                 fieldnames = set()
                 for eval_data in evaluations:
                     fieldnames.update(eval_data.keys())
-                
+
                 with open(output_file, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.DictWriter(f, fieldnames=list(fieldnames))
                     writer.writeheader()
                     writer.writerows(evaluations)
-        
+
         print_success(f"Exported {len(evaluations)} evaluations to {output_file}")
-        
+
     except Exception as e:
         logger.exception("Evaluation export failed")
         print_error(f"Evaluation export failed: {e}")
@@ -96,19 +96,19 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
 def export_config(ctx, output_file):
     """Export current configuration."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Ensure output directory exists
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Export configuration
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(cli_context.config, f, indent=2, default=str)
-        
+
         print_success(f"Configuration exported to {output_file}")
-        
+
     except Exception as e:
         logger.exception("Configuration export failed")
         print_error(f"Configuration export failed: {e}")
@@ -121,29 +121,29 @@ def export_config(ctx, output_file):
 def export_metrics(ctx, output_file):
     """Export current metrics data."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
-        
+
         metrics = get_metrics()
-        
+
         if metrics.enabled:
             metrics_data = metrics.get_metrics()
-            
+
             # Ensure output directory exists
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Write metrics data
             with open(output_file, 'wb') as f:
                 f.write(metrics_data)
-            
+
             print_success(f"Metrics exported to {output_file}")
         else:
             print_error("Metrics collection is not enabled")
             sys.exit(1)
-        
+
     except Exception as e:
         logger.exception("Metrics export failed")
         print_error(f"Metrics export failed: {e}")
@@ -158,22 +158,22 @@ def export_metrics(ctx, output_file):
 def import_data(ctx, input_file, import_type, dry_run):
     """Import evaluation data or configuration."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Load data from file
         with open(input_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
         if dry_run:
             print_info(f"DRY RUN: Would import {len(data) if isinstance(data, list) else 1} {import_type} record(s)")
             return
-        
+
         if import_type == 'evaluations':
             from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
             eval_manager = EvaluationManager()
-            
+
             # Import evaluations
             imported_count = 0
             for eval_data in data if isinstance(data, list) else [data]:
@@ -183,18 +183,18 @@ def import_data(ctx, input_file, import_type, dry_run):
                     imported_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to import evaluation: {e}")
-            
+
             print_success(f"Imported {imported_count} evaluations")
-            
+
         elif import_type == 'config':
             from tldw_Server_API.cli.utils.config import save_config
-            
+
             # Merge with existing config
             cli_context.config.update(data)
             save_config(cli_context.config)
-            
+
             print_success("Configuration imported and saved")
-        
+
     except Exception as e:
         logger.exception("Data import failed")
         print_error(f"Data import failed: {e}")

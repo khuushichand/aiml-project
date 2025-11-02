@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
 from tldw_Server_API.app.core.Evaluations.cli.api_utils import (
     get_available_apis,
-    validate_api_config, 
+    validate_api_config,
     get_api_model,
     get_configured_apis,
     get_default_api,
@@ -39,7 +39,7 @@ DEPRECATION_MSG = (
 
 @click.group(context_settings={'help_option_names': ['-h', '--help']})
 @click.option('--config', type=click.Path(exists=True), help='Config file path')
-@click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR']), 
+@click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR']),
               default='INFO', help='Logging level')
 @click.pass_context
 def cli(ctx, config, log_level):
@@ -57,7 +57,7 @@ def cli(ctx, config, log_level):
     # Configure logging
     logger.remove()
     logger.add(sys.stderr, level=log_level)
-    
+
     # Store context
     ctx.ensure_object(dict)
     ctx.obj['config'] = config
@@ -66,29 +66,29 @@ def cli(ctx, config, log_level):
 
 
 @cli.command()
-@click.option('--category', '-c', type=click.Choice(['all', 'commercial', 'self-hosted', 'custom']), 
+@click.option('--category', '-c', type=click.Choice(['all', 'commercial', 'self-hosted', 'custom']),
               default='all', help='Filter by API category')
 @click.option('--show-config', '-s', is_flag=True, help='Show detailed configuration')
 def list_apis(category, show_config):
     """List all available LLM APIs and their configuration status."""
     apis = get_available_apis()
-    
+
     if not apis:
         click.echo("No APIs found in configuration")
         return
-    
+
     # Group APIs by category
     grouped = defaultdict(list)
     for api_name, info in apis.items():
         if category == 'all' or info['category'].lower() == category:
             grouped[info['category']].append((api_name, info))
-    
+
     # Display APIs
     for cat in ['Commercial', 'Self-Hosted', 'Custom']:
         if cat in grouped:
             click.echo(f"\n{cat} APIs:")
             click.echo("-" * 60)
-            
+
             table_data = []
             for api_name, info in sorted(grouped[cat]):
                 status_symbol = "✓" if info['configured'] else "✗"
@@ -98,10 +98,10 @@ def list_apis(category, show_config):
                     info['status']
                 ]
                 table_data.append(row)
-            
+
             headers = ["API", "Model", "Configuration"]
             click.echo(tabulate(table_data, headers=headers, tablefmt="simple"))
-            
+
             if show_config:
                 click.echo("\nDetailed Configuration:")
                 for api_name, info in sorted(grouped[cat]):
@@ -115,11 +115,11 @@ def list_benchmarks(detailed):
     """List available benchmarks."""
     registry = get_registry()
     benchmarks = registry.list_benchmarks()
-    
+
     if not benchmarks:
         click.echo("No benchmarks available")
         return
-    
+
     click.echo(f"Available benchmarks ({len(benchmarks)}):")
     for name in sorted(benchmarks):
         if detailed:
@@ -147,14 +147,14 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
     """Run a benchmark evaluation using specified API."""
     registry = ctx.obj['registry']
     manager = ctx.obj['manager']
-    
+
     # Check if benchmark exists
     config = registry.get(benchmark)
     if not config:
         click.echo(f"Error: Benchmark '{benchmark}' not found", err=True)
         click.echo("Use 'list-benchmarks' to see available benchmarks")
         sys.exit(1)
-    
+
     # Determine which API to use
     if not api:
         api = get_default_api()
@@ -165,30 +165,30 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                 click.echo(f"  - {name}")
             sys.exit(1)
         click.echo(f"No API specified, using default: {api}")
-    
+
     # Validate API configuration
     is_valid, error_msg = validate_api_config(api)
     if not is_valid:
         click.echo(f"Error: {error_msg}", err=True)
         sys.exit(1)
-    
+
     # Get model
     model_to_use = get_api_model(api, model)
-    
+
     # Default system prompt if not provided
     if not system_prompt:
         system_prompt = "You are an evaluation system. Provide accurate scores. Return only a numeric score between 0 and 1."
-    
+
     click.echo(f"Running benchmark: {benchmark}")
     click.echo(f"Evaluation type: {config.evaluation_type}")
     click.echo(f"Using API: {api}")
     click.echo(f"Using model: {model_to_use}")
     click.echo(f"System prompt: {system_prompt[:100]}..." if len(system_prompt) > 100 else f"System prompt: {system_prompt}")
-    
+
     if dry_run:
         click.echo("\nDry run - configuration validated successfully")
         return
-    
+
     # Load dataset
     try:
         dataset = load_benchmark_dataset(benchmark, limit=limit)
@@ -196,39 +196,39 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
     except Exception as e:
         click.echo(f"Error loading dataset: {e}", err=True)
         sys.exit(1)
-    
+
     # Create evaluator
     evaluator = registry.create_evaluator(benchmark)
     if not evaluator:
         click.echo(f"Error: Could not create evaluator for {config.evaluation_type}", err=True)
         sys.exit(1)
-    
+
     # Get API configuration for actual evaluation
     apis = get_available_apis()
     api_config = apis.get(api, {}).get('config', {})
     api_key = api_config.get('api_key', None)
-    
+
     results = []
     errors = 0
-    
+
     # Process samples with actual LLM calls
     with click.progressbar(dataset, label='Evaluating') as samples:
         for i, sample in enumerate(samples):
             try:
                 # Format for evaluation
                 eval_data = evaluator.format_for_custom_metric(sample)
-                
+
                 # Prepare the evaluation prompt
-                eval_prompt = config.get('prompt_template', 
+                eval_prompt = config.get('prompt_template',
                     "Evaluate the following: {input}\n\nProvide a score from 0 to 1.")
-                
+
                 if 'input' in sample:
                     input_text = json.dumps(sample['input']) if isinstance(sample['input'], dict) else str(sample['input'])
                 else:
                     input_text = json.dumps(sample)
-                
+
                 prompt = eval_prompt.format(input=input_text)
-                
+
                 # Prepare messages for chat API
                 messages_payload = [
                     {
@@ -240,7 +240,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                         "content": prompt
                     }
                 ]
-                
+
                 # Call the chat API
                 response = chat_api_call(
                     api_endpoint=api,
@@ -251,13 +251,13 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                     streaming=False,
                     max_tokens=100  # We only need a short response with the score
                 )
-                
+
                 # Handle response (could be a generator even with streaming=False for some providers)
                 if hasattr(response, '__iter__') and not isinstance(response, str):
                     response_text = ''.join(str(chunk) for chunk in response)
                 else:
                     response_text = str(response)
-                
+
                 # Parse the response to extract score
                 try:
                     import re
@@ -267,7 +267,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                 except Exception as e:
                     logger.debug(f"Failed to parse score from LLM response; defaulting to 0.5. error={e}")
                     score = 0.5  # Default score if parsing fails
-                
+
                 result = {
                     "sample_id": sample.get("id", i),
                     "score": score,
@@ -279,7 +279,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                     }
                 }
                 results.append(result)
-                
+
             except Exception as e:
                 logger.error(f"Error evaluating sample {i}: {e}")
                 results.append({
@@ -292,18 +292,18 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                     }
                 })
                 errors += 1
-    
+
     # Calculate summary statistics
     scores = [r['score'] for r in results if 'score' in r and not r.get('error')]
     errors_count = len([r for r in results if r.get('error')])
-    
+
     if scores:
         avg_score = sum(scores) / len(scores)
         min_score = min(scores)
         max_score = max(scores)
     else:
         avg_score = min_score = max_score = 0.0
-    
+
     click.echo(f"\nResults:")
     click.echo(f"  Total samples: {len(results)}")
     click.echo(f"  Successful: {len(scores)}")
@@ -312,7 +312,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
         click.echo(f"  Average score: {avg_score:.3f}")
         click.echo(f"  Min score: {min_score:.3f}")
         click.echo(f"  Max score: {max_score:.3f}")
-    
+
     # Save results if requested
     if output:
         output_data = {
@@ -330,7 +330,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                 "max_score": max_score if scores else None
             }
         }
-        
+
         with open(output, 'w') as f:
             json.dump(output_data, f, indent=2)
         click.echo(f"Results saved to {output}")
@@ -342,19 +342,19 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
 def register(name, config_file):
     """Register a custom benchmark from config file."""
     registry = get_registry()
-    
+
     try:
         config = registry.load_config(config_file)
         if not config:
             click.echo(f"Error: Could not load config from {config_file}", err=True)
             sys.exit(1)
-        
+
         # Override name if provided
         config.name = name
-        
+
         registry.register(config)
         click.echo(f"Registered benchmark: {name}")
-        
+
     except Exception as e:
         click.echo(f"Error registering benchmark: {e}", err=True)
         sys.exit(1)
@@ -366,21 +366,21 @@ def register(name, config_file):
 def validate(benchmark, samples):
     """Validate a benchmark by loading sample data."""
     registry = get_registry()
-    
+
     config = registry.get(benchmark)
     if not config:
         click.echo(f"Error: Benchmark '{benchmark}' not found", err=True)
         sys.exit(1)
-    
+
     click.echo(f"Validating benchmark: {benchmark}")
     click.echo(f"Type: {config.evaluation_type}")
     click.echo(f"Source: {config.dataset_source}")
-    
+
     try:
         # Load sample data
         dataset = load_benchmark_dataset(benchmark, limit=samples)
         click.echo(f"\nLoaded {len(dataset)} samples successfully")
-        
+
         # Show sample structure
         if dataset:
             click.echo("\nSample structure:")
@@ -392,12 +392,12 @@ def validate(benchmark, samples):
                     elif isinstance(value, list):
                         value = f"[list with {len(value)} items]"
                     click.echo(f"  {key}: {value}")
-        
+
         # Try to create evaluator
         evaluator = registry.create_evaluator(benchmark)
         if evaluator:
             click.echo("\nEvaluator created successfully")
-            
+
             # Try formatting a sample
             if dataset:
                 try:
@@ -407,7 +407,7 @@ def validate(benchmark, samples):
                     click.echo(f"Warning: Could not format sample: {e}", err=True)
         else:
             click.echo("Warning: Evaluator not available for this type", err=True)
-            
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -415,10 +415,10 @@ def validate(benchmark, samples):
 
 @cli.command()
 @click.argument('api_name')
-@click.option('--test-prompt', '-t', default="Hello, please respond with 'OK'", 
+@click.option('--test-prompt', '-t', default="Hello, please respond with 'OK'",
               help='Test prompt to send')
 @click.option('--model', '-m', help='Model to use (overrides config default)')
-@click.option('--system-prompt', '-s', default="You are a helpful assistant.", 
+@click.option('--system-prompt', '-s', default="You are a helpful assistant.",
               help='System prompt to use')
 def test_api(api_name, test_prompt, model, system_prompt):
     """Test connectivity and configuration for a specific API."""
@@ -427,19 +427,19 @@ def test_api(api_name, test_prompt, model, system_prompt):
     if not is_valid:
         click.echo(f"Error: {error_msg}", err=True)
         sys.exit(1)
-    
+
     # Get API configuration
     apis = get_available_apis()
     api_config = apis.get(api_name, {}).get('config', {})
     api_key = api_config.get('api_key', None)
     model_to_use = get_api_model(api_name, model)
-    
+
     click.echo(f"Testing API: {api_name}")
     click.echo(f"Model: {model_to_use}")
     click.echo(f"Test prompt: {test_prompt}")
     click.echo(f"System prompt: {system_prompt}")
     click.echo("-" * 50)
-    
+
     try:
         # Prepare messages for chat API
         messages_payload = [
@@ -452,7 +452,7 @@ def test_api(api_name, test_prompt, model, system_prompt):
                 "content": test_prompt
             }
         ]
-        
+
         # Send test request via chat API
         response = chat_api_call(
             api_endpoint=api_name,
@@ -462,16 +462,16 @@ def test_api(api_name, test_prompt, model, system_prompt):
             streaming=False,
             max_tokens=200
         )
-        
+
         # Handle response
         if hasattr(response, '__iter__') and not isinstance(response, str):
             response_text = ''.join(str(chunk) for chunk in response)
         else:
             response_text = str(response)
-        
+
         click.echo(f"✓ API responded successfully")
         click.echo(f"Response: {response_text[:500]}..." if len(response_text) > 500 else f"Response: {response_text}")
-        
+
     except Exception as e:
         click.echo(f"✗ API test failed: {e}", err=True)
         sys.exit(1)
@@ -483,23 +483,23 @@ def health():
     try:
         manager = EvaluationManager()
         click.echo("✓ Evaluation manager initialized")
-        
+
         registry = get_registry()
         benchmarks = registry.list_benchmarks()
         click.echo(f"✓ Registry loaded with {len(benchmarks)} benchmarks")
-        
+
         # Test database connection
         import sqlite3
         with sqlite3.connect(manager.db_path) as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
             table_count = cursor.fetchone()[0]
             click.echo(f"✓ Database connected ({table_count} tables)")
-        
+
         # Check API configurations
         apis = get_available_apis()
         configured_count = sum(1 for api in apis.values() if api['configured'])
         click.echo(f"✓ APIs: {configured_count}/{len(apis)} configured")
-        
+
         if configured_count == 0:
             click.echo("\n⚠ Warning: No APIs are configured")
             click.echo("  Configure at least one API in Config_Files/config.txt")
@@ -508,9 +508,9 @@ def health():
             for api_name, info in apis.items():
                 if info['configured']:
                     click.echo(f"  - {api_name} ({info['category']})")
-        
+
         click.echo("\nSystem health: OK")
-        
+
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

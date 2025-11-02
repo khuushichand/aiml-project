@@ -24,4 +24,3 @@ Sizing and tuning guidance for SQLite and PostgreSQL. See the full guide at `../
 
 - Track p95 step durations, queue depth, and webhook outcomes per host.
 - Watch DB metrics: lock waits, autovacuum, connection saturation, row churn.
-

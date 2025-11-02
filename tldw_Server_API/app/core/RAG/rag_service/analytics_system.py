@@ -59,7 +59,7 @@ class AnalyticsEvent:
     timestamp: datetime = field(default_factory=datetime.now)
     query_hash: Optional[str] = None  # Hashed for privacy
     metrics: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
@@ -82,7 +82,7 @@ class UserFeedback:
     helpful: Optional[bool]
     user_notes: Optional[str]
     created_at: datetime = field(default_factory=datetime.now)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
@@ -104,23 +104,23 @@ class AnalyticsStore:
     No PII is stored - only anonymized metrics.
     Uses the new AnalyticsDatabase for storage.
     """
-    
+
     def __init__(self, db_path: str = "Analytics.db"):
         """
         Initialize analytics store.
-        
+
         Args:
             db_path: Path to Analytics database
         """
         self.db = get_analytics_db(db_path)
-    
+
     async def record_search(self, search_data: Dict[str, Any]) -> bool:
         """
         Record search analytics.
-        
+
         Args:
             search_data: Dictionary containing search metrics
-            
+
         Returns:
             Success status
         """
@@ -133,14 +133,14 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to record search analytics: {e}")
             return False
-    
+
     async def record_feedback(self, feedback_data: Dict[str, Any]) -> bool:
         """
         Record anonymized feedback analytics.
-        
+
         Args:
             feedback_data: Dictionary containing feedback data
-            
+
         Returns:
             Success status
         """
@@ -152,14 +152,14 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to record feedback: {e}")
             return False
-    
+
     async def record_document_performance(self, doc_data: Dict[str, Any]) -> bool:
         """
         Record document performance metrics.
-        
+
         Args:
             doc_data: Dictionary containing document metrics
-            
+
         Returns:
             Success status
         """
@@ -171,14 +171,14 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to record document performance: {e}")
             return False
-    
+
     async def record_error(self, error_data: Dict[str, Any]) -> bool:
         """
         Record error tracking information.
-        
+
         Args:
             error_data: Dictionary containing error information
-            
+
         Returns:
             Success status
         """
@@ -190,14 +190,14 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to record error: {e}")
             return False
-    
+
     async def record_feature_usage(self, feature_data: Dict[str, Any]) -> bool:
         """
         Record feature usage statistics.
-        
+
         Args:
             feature_data: Dictionary containing feature usage data
-            
+
         Returns:
             Success status
         """
@@ -209,14 +209,14 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to record feature usage: {e}")
             return False
-    
+
     async def get_analytics_summary(self, days: int = 7) -> Dict[str, Any]:
         """
         Get analytics summary for the specified period.
-        
+
         Args:
             days: Number of days to include in summary
-            
+
         Returns:
             Dictionary containing analytics summary
         """
@@ -228,14 +228,14 @@ class AnalyticsStore:
         except Exception as e:
             logger.error(f"Failed to get analytics summary: {e}")
             return {}
-    
+
     async def cleanup_old_data(self, days_to_keep: int = 90) -> int:
         """
         Clean up old analytics data.
-        
+
         Args:
             days_to_keep: Number of days of data to retain
-            
+
         Returns:
             Number of records deleted
         """
@@ -254,17 +254,17 @@ class UserFeedbackStore:
     Stores user-specific feedback in ChaChaNotes_DB.
     Links feedback to conversations for context.
     """
-    
+
     def __init__(self, chacha_db):
         """
         Initialize user feedback store.
-        
+
         Args:
             chacha_db: ChaChaNotes database instance
         """
         self.db = chacha_db
         self._init_schema()
-    
+
     def _init_schema(self):
         """Ensure feedback tables exist in ChaChaNotes_DB."""
         statements_sqlite = (
@@ -318,7 +318,7 @@ class UserFeedbackStore:
                     conn.execute(statement)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Failed to initialize feedback schema: {exc}", exc_info=True)
-    
+
     async def add_feedback(
         self,
         conversation_id: str,
@@ -332,12 +332,12 @@ class UserFeedbackStore:
     ) -> str:
         """
         Add feedback for a conversation.
-        
+
         Returns:
             Feedback ID
         """
         feedback_id = f"fb_{int(time.time() * 1000)}_{hashlib.md5(query.encode()).hexdigest()[:8]}"
-        
+
         helpful_value: Optional[bool]
         if helpful is None:
             helpful_value = None
@@ -345,7 +345,7 @@ class UserFeedbackStore:
             helpful_value = bool(helpful)
 
         insert_sql = """
-            INSERT INTO conversation_feedback 
+            INSERT INTO conversation_feedback
                 (id, conversation_id, message_id, query, document_ids, chunk_ids,
                  relevance_score, helpful, user_notes)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -375,7 +375,7 @@ class UserFeedbackStore:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Failed to add feedback: {exc}")
             raise
-    
+
     async def get_conversation_feedback(
         self,
         conversation_id: str
@@ -412,7 +412,7 @@ class UnifiedFeedbackSystem:
     1. Analytics.db for server-side QA
     2. ChaChaNotes_DB for user-specific feedback
     """
-    
+
     def __init__(
         self,
         analytics_db_path: str = "Analytics.db",
@@ -421,28 +421,28 @@ class UnifiedFeedbackSystem:
     ):
         """
         Initialize unified feedback system.
-        
+
         Args:
             analytics_db_path: Path to analytics database
             chacha_db: ChaChaNotes database instance
             enable_analytics: Whether to enable server-side analytics
         """
         self.enable_analytics = enable_analytics
-        
+
         if enable_analytics:
             self.analytics = AnalyticsStore(analytics_db_path)
         else:
             self.analytics = None
-        
+
         if chacha_db:
             self.user_feedback = UserFeedbackStore(chacha_db)
         else:
             self.user_feedback = None
-        
+
         # Performance tracking
         self._performance_buffer = deque(maxlen=100)
         self._error_buffer = deque(maxlen=50)
-    
+
     async def submit_feedback(
         self,
         conversation_id: str,
@@ -456,12 +456,12 @@ class UnifiedFeedbackSystem:
     ) -> Dict[str, Any]:
         """
         Submit feedback to both stores.
-        
+
         Returns:
             Result with feedback ID and status
         """
         result = {"success": False, "feedback_id": None, "errors": []}
-        
+
         # Store in user's conversation DB
         if self.user_feedback and conversation_id:
             try:
@@ -476,16 +476,16 @@ class UnifiedFeedbackSystem:
                 )
                 result["feedback_id"] = feedback_id
                 result["success"] = True
-                
+
             except Exception as e:
                 result["errors"].append(f"User feedback error: {str(e)}")
-        
+
         # Store anonymized metrics in Analytics DB
         if self.enable_analytics and self.analytics:
             try:
                 # Hash query for privacy
                 query_hash = hashlib.sha256(query.encode()).hexdigest()
-                
+
                 # Record search quality
                 if relevance_score:
                     await self.analytics.record_search_quality(
@@ -493,7 +493,7 @@ class UnifiedFeedbackSystem:
                         relevance_score=relevance_score / 5.0,  # Normalize to 0-1
                         clicked=len(chunk_ids) > 0
                     )
-                
+
                 # Record document performance
                 for doc_id in document_ids:
                     await self.analytics.record_document_performance(
@@ -502,7 +502,7 @@ class UnifiedFeedbackSystem:
                         positive_feedback=helpful is True,
                         negative_feedback=helpful is False
                     )
-                
+
                 # Record feedback event
                 event = AnalyticsEvent(
                     event_type=AnalyticsEventType.FEEDBACK,
@@ -515,10 +515,10 @@ class UnifiedFeedbackSystem:
                     }
                 )
                 await self.analytics.record_event(event)
-                
+
             except Exception as e:
                 result["errors"].append(f"Analytics error: {str(e)}")
-        
+
         return result
 
     async def record_implicit_interaction(
@@ -564,7 +564,7 @@ class UnifiedFeedbackSystem:
                 await self.analytics.record_event(evt)
         except Exception as e:
             logger.debug(f"Implicit interaction recording failed: {e}")
-    
+
     async def record_search(
         self,
         query: str,
@@ -575,7 +575,7 @@ class UnifiedFeedbackSystem:
         """Record a search event."""
         if self.enable_analytics and self.analytics:
             query_hash = hashlib.sha256(query.encode()).hexdigest()
-            
+
             event = AnalyticsEvent(
                 event_type=AnalyticsEventType.SEARCH,
                 query_hash=query_hash,
@@ -586,14 +586,14 @@ class UnifiedFeedbackSystem:
                 }
             )
             await self.analytics.record_event(event)
-            
+
             # Record performance metric
             await self.analytics.record_performance_metric(
                 metric_type="search_latency",
                 value=latency_ms,
                 metadata={"cache_hit": cache_hit}
             )
-    
+
     async def record_citation_usage(
         self,
         document_ids: List[str],
@@ -612,14 +612,14 @@ class UnifiedFeedbackSystem:
                 }
             )
             await self.analytics.record_event(event)
-            
+
             # Update document performance
             for doc_id in document_ids:
                 await self.analytics.record_document_performance(
                     document_id=doc_id,
                     cited=True
                 )
-    
+
     async def record_error(
         self,
         error_type: str,
@@ -633,14 +633,14 @@ class UnifiedFeedbackSystem:
                 error_message=error_message,
                 metadata=context
             )
-    
+
     async def get_analytics_dashboard(self) -> Dict[str, Any]:
         """Get analytics dashboard data."""
         if not self.enable_analytics or not self.analytics:
             return {"error": "Analytics not enabled"}
-        
+
         return await self.analytics.get_analytics_summary()
-    
+
     async def get_conversation_insights(
         self,
         conversation_id: str
@@ -652,21 +652,21 @@ class UnifiedFeedbackSystem:
             "helpful_percentage": 0,
             "feedback_history": []
         }
-        
+
         if self.user_feedback:
             feedback = await self.user_feedback.get_conversation_feedback(conversation_id)
             insights["feedback_count"] = len(feedback)
             insights["feedback_history"] = feedback
-            
+
             if feedback:
                 relevance_scores = [f["relevance_score"] for f in feedback if f["relevance_score"]]
                 if relevance_scores:
                     insights["average_relevance"] = statistics.mean(relevance_scores)
-                
+
                 helpful_votes = [f["helpful"] for f in feedback if f["helpful"] is not None]
                 if helpful_votes:
                     insights["helpful_percentage"] = sum(helpful_votes) / len(helpful_votes) * 100
-        
+
         return insights
 
 
@@ -696,16 +696,16 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
     """Collect feedback in RAG pipeline."""
     if not context.config.get("feedback", {}).get("enabled", False):
         return context
-    
+
     feedback_system = get_feedback_system(
         chacha_db=context.config.get("chacha_db"),
         enable_analytics=context.config.get("enable_analytics", True)
     )
-    
+
     # Submit feedback if provided
     if "feedback_data" in context.metadata:
         fb = context.metadata["feedback_data"]
-        
+
         result = await feedback_system.submit_feedback(
             conversation_id=fb.get("conversation_id", ""),
             query=context.query,
@@ -716,9 +716,9 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
             user_notes=fb.get("user_notes"),
             user_id=fb.get("user_id")
         )
-        
+
         context.metadata["feedback_result"] = result
-    
+
     # Record search metrics
     await feedback_system.record_search(
         query=context.query,
@@ -726,7 +726,7 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
         cache_hit=context.cache_hit,
         latency_ms=context.timings.get("total", 0) * 1000
     )
-    
+
     return context
 
 

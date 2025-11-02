@@ -22,4 +22,3 @@ class ItemsListResponse(BaseModel):
     total: int
     page: int
     size: int
-

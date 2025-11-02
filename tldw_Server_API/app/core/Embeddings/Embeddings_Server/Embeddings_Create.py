@@ -380,38 +380,38 @@ def exponential_backoff(max_retries: int = 3, base_delay: int = 1):
 def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
     """
     Evict least recently used models to maintain resource limits.
-    
+
     Args:
         keep_model_id: Model ID to keep regardless of LRU status
     """
     global embedding_models, model_last_used, model_memory_usage
-    
+
     with embedding_models_lock:
         current_time = time.time()
-        
+
         # Remove models that haven't been used within TTL
         models_to_remove = []
         for model_id, last_used in model_last_used.items():
             if model_id != keep_model_id and (current_time - last_used) > MODEL_LRU_TTL_SECONDS:
                 models_to_remove.append(model_id)
-        
+
         for model_id in models_to_remove:
             _remove_model(model_id)
-        
+
         # If still over limit, remove LRU models
         while len(embedding_models) >= MAX_MODELS_IN_MEMORY:
             if len(embedding_models) == 0:
                 break
-            
+
             # Find LRU model (excluding keep_model_id)
             lru_model_id = None
             oldest_time = current_time
-            
+
             for model_id, last_used in model_last_used.items():
                 if model_id != keep_model_id and last_used < oldest_time:
                     oldest_time = last_used
                     lru_model_id = model_id
-            
+
             if lru_model_id:
                 logging.info(f"Evicting LRU model: {lru_model_id}")
                 # Unified audit (non-blocking)
@@ -442,7 +442,7 @@ def _remove_model(model_id: str) -> None:
                 model.session = None
         except Exception as e:
             logging.warning(f"Error cleaning up model {model_id}: {e}")
-        
+
         del embedding_models[model_id]
         model_last_used.pop(model_id, None)
         model_memory_usage.pop(model_id, None)
@@ -453,10 +453,10 @@ def _remove_model(model_id: str) -> None:
 def check_memory_limit(estimated_size_gb: float = 1.0) -> bool:
     """
     Check if loading a new model would exceed memory limits.
-    
+
     Args:
         estimated_size_gb: Estimated size of the new model in GB
-        
+
     Returns:
         True if within limits, False otherwise
     """
@@ -467,10 +467,10 @@ def check_memory_limit(estimated_size_gb: float = 1.0) -> bool:
 def get_directory_size(path: str) -> float:
     """
     Calculate the size of a directory in GB.
-    
+
     Args:
         path: Path to the directory
-        
+
     Returns:
         Size in GB
     """
@@ -485,18 +485,18 @@ def get_directory_size(path: str) -> float:
                     pass
     except (OSError, IOError):
         pass
-    
+
     return total_size / (1024 ** 3)  # Convert bytes to GB
 
 
 def estimate_model_size(model_name: str, model_path: Optional[str] = None) -> float:
     """
     Estimate model size, preferring actual disk size when available.
-    
+
     Args:
         model_name: Name of the model
         model_path: Optional path to the model directory
-        
+
     Returns:
         Estimated or actual size in GB
     """
@@ -506,11 +506,11 @@ def estimate_model_size(model_name: str, model_path: Optional[str] = None) -> fl
         if actual_size > 0:
             logging.debug(f"Model {model_name} actual size: {actual_size:.2f} GB")
             return actual_size
-    
+
     # Check if model is already loaded and we know its size
     if model_name in model_memory_usage:
         return model_memory_usage[model_name]
-    
+
     # Fallback to name-based estimation
     if 'large' in model_name.lower() or 'xl' in model_name.lower():
         return 2.0
@@ -1126,17 +1126,17 @@ def create_embeddings_batch(
             with embedding_models_lock:  # Protect access to the global embedding_models cache
                 if model_id_to_use not in embedding_models:
                     logging.info(f"HuggingFace model ID {model_id_to_use} not in cache. Initializing.")
-                    
+
                     # Setup cache directory
                     hf_cache_dir = os.path.join(base_dir, model_spec.hf_cache_dir_subpath)
                     os.makedirs(hf_cache_dir, exist_ok=True)
 
                     cache_subdir = _model_cache_subdir_name(model_id_to_use)
                     model_cache_dir = os.path.join(hf_cache_dir, cache_subdir)
-                    
+
                     # Check resource limits before loading - use actual path if available
                     estimated_size = estimate_model_size(model_id_to_use, model_cache_dir)
-                    
+
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
                         try:
@@ -1149,12 +1149,12 @@ def create_embeddings_batch(
                         except Exception:
                             pass
                         evict_lru_models(keep_model_id=model_id_to_use)
-                    
+
                     # Evict LRU models if at capacity
                     if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
                         logging.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
-                    
+
                     os.makedirs(model_cache_dir, exist_ok=True)
                     embedding_models[model_id_to_use] = HuggingFaceEmbedder(
                         model_id_to_use,
@@ -1180,15 +1180,15 @@ def create_embeddings_batch(
             with embedding_models_lock:
                 if model_id_to_use not in embedding_models:
                     logging.info(f"ONNX model ID {model_id_to_use} not in cache. Initializing.")
-                    
+
                     onnx_root_dir = os.path.join(base_dir, model_spec.onnx_storage_dir_subpath)
                     os.makedirs(onnx_root_dir, exist_ok=True)
                     cache_subdir = _model_cache_subdir_name(model_id_to_use)
                     onnx_model_path = os.path.join(onnx_root_dir, cache_subdir)
-                    
+
                     # Check resource limits before loading - use actual path if available
                     estimated_size = estimate_model_size(model_id_to_use, onnx_model_path)
-                    
+
                     if not check_memory_limit(estimated_size):
                         logging.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
                         try:
@@ -1201,12 +1201,12 @@ def create_embeddings_batch(
                         except Exception:
                             pass
                         evict_lru_models(keep_model_id=model_id_to_use)
-                    
+
                     # Evict LRU models if at capacity
                     if len(embedding_models) >= MAX_MODELS_IN_MEMORY:
                         logging.info(f"At model capacity ({MAX_MODELS_IN_MEMORY}), evicting LRU models")
                         evict_lru_models(keep_model_id=model_id_to_use)
-                    
+
                     embedding_models[model_id_to_use] = ONNXEmbedder(
                         model_id_to_use,
                         model_spec,
@@ -1317,17 +1317,17 @@ async def create_embeddings_batch_async(
     """
     Async wrapper for create_embeddings_batch.
     Creates embeddings for multiple texts asynchronously.
-    
+
     Args:
         texts: List of texts to embed
         user_app_config: Configuration dictionary containing 'embedding_config'
         model_id_override: Optional model ID to override the default
-        
+
     Returns:
         List of embedding vectors (list of floats for each text)
     """
     import asyncio
-    
+
     # Run the synchronous function in a thread pool to avoid blocking
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
@@ -1399,10 +1399,10 @@ def get_embedding_config() -> Dict[str, Any]:
     Returns a configuration dictionary for use with embedding functions.
     """
     from tldw_Server_API.app.core.config import settings
-    
+
     # Get embedding settings from config
     embedding_settings = settings.get("EMBEDDING_CONFIG", {})
-    
+
     # Build the configuration in the expected format
     config = {
         "embedding_config": {
@@ -1412,12 +1412,12 @@ def get_embedding_config() -> Dict[str, Any]:
             "model_storage_base_dir": resolve_model_storage_base_dir(embedding_settings),
         }
     }
-    
+
     # Add model configurations based on provider
     provider = embedding_settings.get('embedding_provider', 'huggingface')
     model = embedding_settings.get('embedding_model', 'sentence-transformers/all-MiniLM-L6-v2')
     model_id_key = f"{provider}:{model}"
-    
+
     # Add default configurations for common models - create proper instances
     if provider == 'openai':
         config["embedding_config"]["models"][model_id_key] = OpenAIModelCfg(
@@ -1456,7 +1456,7 @@ def get_embedding_config() -> Dict[str, Any]:
         "BAAI/bge-large-en-v1.5",
         "BAAI/bge-small-en-v1.5",
     ]
-    
+
     for hf_model in common_hf_models:
         hf_key = f"huggingface:{hf_model}"
         if hf_key not in config["embedding_config"]["models"]:

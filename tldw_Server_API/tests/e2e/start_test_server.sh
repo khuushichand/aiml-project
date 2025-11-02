@@ -61,7 +61,7 @@ while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
         else
             echo "✅ Server is ready (but TEST_MODE may not be active - API key won't be exposed)"
         fi
-        
+
         echo ""
         echo "Test server is running with PID: $SERVER_PID"
         echo "API Key: $SINGLE_USER_API_KEY"
@@ -72,12 +72,12 @@ while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
         echo ""
         echo "Press Ctrl+C to stop the server"
         echo ""
-        
+
         # Keep the script running and wait for the server process
         wait $SERVER_PID
         exit 0
     fi
-    
+
     # Check if process is still alive
     if ! ps -p $SERVER_PID > /dev/null; then
         echo ""
@@ -85,7 +85,7 @@ while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
         echo "Check if port 8000 is already in use: lsof -i :8000"
         exit 1
     fi
-    
+
     echo -n "."
     sleep 1
     ATTEMPTS=$((ATTEMPTS + 1))

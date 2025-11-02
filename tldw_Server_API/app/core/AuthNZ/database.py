@@ -40,7 +40,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 
 class DatabasePool:
     """Database connection pool manager supporting both PostgreSQL and SQLite"""
-    
+
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize database pool manager"""
         self.settings = settings or get_settings()
@@ -52,21 +52,21 @@ class DatabasePool:
         self._lock = asyncio.Lock()
         # Track the event loop this pool is attached to (Postgres only)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        
+
     async def initialize(self):
         """Initialize database connection pool"""
         if self._initialized:
             return
-            
+
         async with self._lock:
             if self._initialized:
                 return
-                
+
             try:
                 if self._should_use_postgres():
                     # PostgreSQL with connection pooling
                     logger.info("Initializing PostgreSQL connection pool...")
-                    
+
                     self.pool = await asyncpg.create_pool(
                         self.settings.DATABASE_URL,
                         min_size=self.settings.DATABASE_POOL_MIN_SIZE,
@@ -81,36 +81,36 @@ class DatabasePool:
                     except RuntimeError:
                         # Fallback for contexts without a running loop
                         self._loop = None
-                    
+
                     # Test connection
                     async with self.pool.acquire() as conn:
                         version = await conn.fetchval("SELECT version()")
                         logger.info(f"PostgreSQL connected: {version[:50]}...")
-                    
+
                     # Create schema if needed
                     await self._create_postgresql_schema()
-                    
+
                 else:
                     # SQLite for single-user mode or fallback
                     self.db_path, self._sqlite_uri, self._sqlite_fs_path = self._resolve_sqlite_paths(self.settings.DATABASE_URL)
-                    
+
                     # Ensure directory exists
                     if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
                         db_dir = Path(self._sqlite_fs_path).parent
                         db_dir.mkdir(parents=True, exist_ok=True)
-                    
+
                     logger.info(f"Using SQLite database: {self._sqlite_fs_path or self.db_path}")
-                    
+
                     # Initialize SQLite schema
                     await self._create_sqlite_schema()
-                
+
                 self._initialized = True
                 logger.info("Database pool initialized successfully")
-                
+
             except Exception as e:
                 logger.error(f"Failed to initialize database pool: {e}")
                 raise DatabaseError(f"Database initialization failed: {e}")
-    
+
     def _should_use_postgres(self) -> bool:
         """Return True if the configured DATABASE_URL resolves to PostgreSQL."""
         if self.settings.AUTH_MODE != "multi_user":
@@ -169,7 +169,7 @@ class DatabasePool:
     async def _create_postgresql_schema(self):
         """Create PostgreSQL schema if it doesn't exist"""
         schema_file = Path(__file__).parent.parent.parent.parent / "Databases" / "Postgres" / "Schema" / "postgresql_users.sql"
-        
+
         if not schema_file.exists():
             # This path is expected in current builds: schema is provisioned by initialize.py/migrations.
             logger.warning(
@@ -177,14 +177,14 @@ class DatabasePool:
                 schema_file,
             )
             return
-        
+
         try:
             async with self.pool.acquire() as conn:
                 # Check if users table exists
                 exists = await conn.fetchval(
                     "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users')"
                 )
-                
+
                 if not exists:
                     logger.info("Creating PostgreSQL schema...")
                     schema_sql = schema_file.read_text()
@@ -192,15 +192,15 @@ class DatabasePool:
                     logger.info("PostgreSQL schema created successfully")
                 else:
                     logger.debug("PostgreSQL schema already exists")
-                    
+
         except Exception as e:
             logger.error(f"Failed to create PostgreSQL schema: {e}")
             # Don't raise - schema might already exist
-    
+
     async def _create_sqlite_schema(self):
         """Create SQLite schema if it doesn't exist"""
         schema_file = Path(__file__).parent.parent.parent.parent / "Databases" / "SQLite" / "Schema" / "sqlite_users.sql"
-        
+
         schema_available = schema_file.exists()
         if not schema_available:
             logger.warning(f"SQLite schema file not found: {schema_file}")
@@ -210,13 +210,13 @@ class DatabasePool:
                 # Enable WAL mode for better concurrency
                 await conn.execute("PRAGMA journal_mode=WAL")
                 await conn.execute("PRAGMA busy_timeout=5000")
-                
+
                 # Check if users table exists
                 cursor = await conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
                 )
                 exists = await cursor.fetchone()
-                
+
                 if not exists and schema_available:
                     logger.info("Creating SQLite schema...")
                     schema_sql = schema_file.read_text()
@@ -232,17 +232,17 @@ class DatabasePool:
                     await asyncio.to_thread(ensure_authnz_tables, Path(self._sqlite_fs_path))
             except Exception as migration_error:
                 logger.debug(f"SQLite migration harmonization skipped: {migration_error}")
-                    
+
         except Exception as e:
             logger.error(f"Failed to create SQLite schema: {e}")
             # Don't raise - schema might already exist
-    
+
     @asynccontextmanager
     async def transaction(self):
         """Database transaction context manager"""
         if not self._initialized:
             await self.initialize()
-        
+
         if self.pool:
             # PostgreSQL transaction
             try:
@@ -269,7 +269,7 @@ class DatabasePool:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute("PRAGMA foreign_keys = ON")
                 await conn.execute("BEGIN")
-                
+
                 try:
                     # Yield a shim that normalizes execute() parameter passing for SQLite
                     class _SQLiteConnShim:
@@ -292,7 +292,7 @@ class DatabasePool:
                 except Exception:
                     await conn.rollback()
                     raise
-                    
+
             except aiosqlite.OperationalError as e:
                 if "database is locked" in str(e):
                     raise DatabaseLockError()
@@ -309,13 +309,13 @@ class DatabasePool:
             finally:
                 if conn:
                     await conn.close()
-    
+
     @asynccontextmanager
     async def acquire(self):
         """Acquire a database connection (for queries without transaction)"""
         if not self._initialized:
             await self.initialize()
-        
+
         if self.pool:
             # PostgreSQL connection
             conn = None
@@ -354,7 +354,7 @@ class DatabasePool:
             finally:
                 if conn:
                     await conn.close()
-    
+
     async def execute(self, query: str, *args) -> Any:
         """Execute a query without returning results"""
         async with self.acquire() as conn:
@@ -371,7 +371,7 @@ class DatabasePool:
                 cursor = await conn.execute(q, tuple(params))
                 await conn.commit()
                 return cursor
-    
+
     async def fetchone(self, query: str, *args) -> Optional[Dict[str, Any]]:
         """Fetch a single row"""
         async with self.acquire() as conn:
@@ -440,7 +440,7 @@ class DatabasePool:
                 cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 return row[0] if row else None
-    
+
     async def close(self):
         """Close database connections"""
         if self.pool:
@@ -454,7 +454,7 @@ class DatabasePool:
                 self._loop = None
         self._initialized = False
         logger.info("Database pool closed")
-    
+
     async def health_check(self) -> Dict[str, Any]:
         """Perform database health check"""
         try:
@@ -464,7 +464,7 @@ class DatabasePool:
                     result = await conn.fetchval("SELECT 1")
                     pool_size = self.pool.get_size()
                     idle_size = self.pool.get_idle_size()
-                    
+
                     return {
                         "status": "healthy",
                         "type": "postgresql",
@@ -476,19 +476,19 @@ class DatabasePool:
                 # SQLite health check
                 async with aiosqlite.connect(self.db_path, uri=self._sqlite_uri) as conn:
                     await conn.execute("SELECT 1")
-                    
+
                     # Get database file size
                     fs_path = self._sqlite_fs_path
                     db_size = 0
                     if fs_path and fs_path != ":memory:" and os.path.exists(fs_path):
                         db_size = os.path.getsize(fs_path)
-                    
+
                     return {
                         "status": "healthy",
                         "type": "sqlite",
                         "database_size_mb": round(db_size / (1024 * 1024), 2)
                     }
-                    
+
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return {
@@ -589,7 +589,7 @@ async def reset_db_pool():
     except Exception:
         pass
     try:
-        
+
         from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server as _reset_mcp_server
         await _reset_mcp_server()
     except Exception:

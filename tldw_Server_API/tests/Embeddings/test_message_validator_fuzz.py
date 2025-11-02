@@ -52,4 +52,3 @@ def test_validate_schema_uses_jsonschema_when_present(monkeypatch):
     assert calls["count"] == 1
     with pytest.raises(ValueError):
         messages.validate_schema("embedding", {"user_id": "u", "media_id": 2})
-

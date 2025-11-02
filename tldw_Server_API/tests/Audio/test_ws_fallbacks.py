@@ -9,7 +9,7 @@ class _DummyWebSocket:
     def __init__(self, frames):
         """
         Construct a dummy WebSocket preloaded with incoming frames for tests.
-        
+
         Parameters:
             frames (iterable): An iterable of frames (typically strings) that will be copied into an internal queue and returned one-by-one by receive_text().
         """
@@ -21,12 +21,12 @@ class _DummyWebSocket:
     async def receive_text(self):
         """
         Return the next queued text frame from the mock WebSocket.
-        
+
         If no frames remain, simulates a client timeout by raising asyncio.TimeoutError.
-        
+
         Returns:
             str: The next text frame.
-        
+
         Raises:
             asyncio.TimeoutError: When there are no queued frames to deliver.
         """
@@ -39,7 +39,7 @@ class _DummyWebSocket:
     async def send_json(self, payload):
         """
         Record an outgoing JSON payload for the mock WebSocket.
-        
+
         Parameters:
             payload: The JSON-serializable object to record; appended to the mock's `sent` list.
         """
@@ -48,7 +48,7 @@ class _DummyWebSocket:
     async def close(self, code: int | None = None, reason: str | None = None):
         """
         Mark the websocket as closed and record the close code and reason.
-        
+
         Parameters:
             code (int | None): Optional numeric close code.
             reason (str | None): Optional human-readable reason for the close.
@@ -60,10 +60,10 @@ class _DummyWebSocket:
 def _make_cfg(fallback: bool) -> ConfigParser:
     """
     Create a ConfigParser with the "STT-Settings" section and the streaming_fallback_to_whisper flag.
-    
+
     Parameters:
         fallback (bool): If True, sets "streaming_fallback_to_whisper" to 'true'; otherwise sets it to 'false'.
-    
+
     Returns:
         ConfigParser: A parser containing the "STT-Settings" section with the configured "streaming_fallback_to_whisper" value.
     """
@@ -78,7 +78,7 @@ class _FakeWhisperModel:
         def __init__(self, t: str):
             """
             Initialize the segment with its transcribed text.
-            
+
             Parameters:
                 t (str): The transcribed text to store on the segment as `text`.
             """
@@ -92,11 +92,11 @@ class _FakeWhisperModel:
         # Return shape compatible with code: (segments, info)
         """
         Provide a minimal, test-only transcription result compatible with the expected (segments, info) shape.
-        
+
         Parameters:
             path (str): Path to the audio file to transcribe (ignored by this fake implementation).
             **opts: Additional transcription options accepted for API compatibility (ignored).
-        
+
         Returns:
             tuple: A pair (segments, info) where `segments` is a list containing a single object with a `text` attribute equal to `"ok"`, and `info` is an object with `language` set to `'en'` and `language_probability` set to `1.0`.
         """
@@ -108,7 +108,7 @@ async def test_model_unavailable_triggers_fallback_warning(monkeypatch):
     # Force Parakeet core variant builder to return None so adapter initialize fails
     """
     Verify that when the primary transcription model is unavailable and fallback to Whisper is enabled, the websocket handler emits at least one warning frame indicating a fallback.
-    
+
     Sets up the environment so the primary model initialization fails, enables Whisper fallback, provides a fake Whisper model, and sends a config then stop frame to the handler; asserts that at least one sent message has type "warning" and that a warning with "fallback" == True is present.
     """
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber as core_tx
@@ -143,7 +143,7 @@ async def test_model_unavailable_without_fallback_emits_error(monkeypatch):
     # Force Parakeet core variant builder to return None so adapter initialize fails
     """
     Verify that when the primary transcription model is unavailable and Whisper fallback is disabled, the websocket handler emits an error frame indicating `model_unavailable`.
-    
+
     This test patches the core variant decoder to force adapter initialization failure, disables streaming fallback to Whisper, sends a config and stop message via a dummy websocket, runs the unified websocket handler, and asserts that at least one sent frame has `"type": "error"` and an `"error_type"` equal to `"model_unavailable"`.
     """
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.transcriber as core_tx

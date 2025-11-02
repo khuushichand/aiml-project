@@ -55,4 +55,3 @@ describe('Utils', () => {
     expect(fn).toHaveBeenCalledTimes(3);
   });
 });
-

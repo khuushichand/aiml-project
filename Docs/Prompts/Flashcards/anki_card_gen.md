@@ -27,13 +27,12 @@ Card Style:
     Definitions: Use "What is [Term]?" or "Define [Term]."
     Lists: Use "What are the [topic]?" or "List the [topic]."
     Comparisons: Use "Compare X and Y."
-    Specific Data: Formulate direct questions to capture percentages, timeframes, and other specific values. 
+    Specific Data: Formulate direct questions to capture percentages, timeframes, and other specific values.
     translate the handwritten Arabic notes that provide medical context and incorporate them.
-    Images/Charts: interpret the visual data and create text-based flashcards describing their meaning as presented. 
+    Images/Charts: interpret the visual data and create text-based flashcards describing their meaning as presented.
 
 ### USER ###
 This is where you place the user prompt text
 
 ### KEYWORDS ###
 anki,flashcards
-

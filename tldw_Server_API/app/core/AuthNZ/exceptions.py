@@ -34,7 +34,7 @@ class AccountLockedException(AuthenticationError):
     def __init__(self, locked_until: datetime, username: Optional[str] = None):
         self.locked_until = locked_until
         self.username = username
-        
+
         # Calculate remaining lock time
         remaining = (locked_until - datetime.utcnow()).total_seconds()
         if remaining > 0:
@@ -42,7 +42,7 @@ class AccountLockedException(AuthenticationError):
             message = f"Account locked for {minutes} more minutes"
         else:
             message = "Account lock expired, please try again"
-        
+
         super().__init__(message)
 
 

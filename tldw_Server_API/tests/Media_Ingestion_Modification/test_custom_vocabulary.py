@@ -177,4 +177,3 @@ def test_whisper_streaming_postprocess_applied(monkeypatch):
     out = transcriber._transcribe_audio(np.zeros(1600, dtype=np.float32))
     assert 'misspell' in out
     assert 'IoT' in out
-

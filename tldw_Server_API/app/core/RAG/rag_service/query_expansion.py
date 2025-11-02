@@ -52,15 +52,15 @@ class ExpandedQuery:
 
 class QueryExpansionStrategy(ABC):
     """Base class for query expansion strategies."""
-    
+
     @abstractmethod
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Expand a query into variations.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             ExpandedQuery with variations
         """
@@ -70,20 +70,20 @@ class QueryExpansionStrategy(ABC):
 class SynonymExpansion(QueryExpansionStrategy):
     """
     Expands queries using synonyms and related terms.
-    
+
     This implementation uses a simple dictionary for demonstration.
     In production, you'd use WordNet, ConceptNet, or a custom thesaurus.
     """
-    
+
     def __init__(self, synonym_dict: Optional[Dict[str, List[str]]] = None):
         """
         Initialize synonym expansion.
-        
+
         Args:
             synonym_dict: Dictionary mapping words to synonyms
         """
         self.synonym_dict = synonym_dict or self._get_default_synonyms()
-    
+
     def _get_default_synonyms(self) -> Dict[str, List[str]]:
         """Get default synonym dictionary for common terms."""
         return {
@@ -96,13 +96,13 @@ class SynonymExpansion(QueryExpansionStrategy):
             "update": ["modify", "change", "edit", "revise"],
             "error": ["bug", "issue", "problem", "fault"],
             "fix": ["repair", "resolve", "patch", "correct"],
-            
+
             # Machine learning terms
             "model": ["algorithm", "network", "system"],
             "train": ["fit", "learn", "optimize"],
             "predict": ["forecast", "estimate", "infer"],
             "accuracy": ["precision", "performance", "score"],
-            
+
             # General terms
             "fast": ["quick", "rapid", "speedy", "swift"],
             "slow": ["sluggish", "delayed", "lagging"],
@@ -111,32 +111,32 @@ class SynonymExpansion(QueryExpansionStrategy):
             "good": ["excellent", "great", "positive", "beneficial"],
             "bad": ["poor", "negative", "problematic", "inferior"],
         }
-    
+
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Expand query using synonyms.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             ExpandedQuery with synonym variations
         """
         words = query.lower().split()
         found_synonyms = {}
         variations = set()
-        
+
         # Find synonyms for each word
         for word in words:
             if word in self.synonym_dict:
                 found_synonyms[word] = self.synonym_dict[word]
-                
+
                 # Create variations by replacing the word with each synonym
                 for synonym in self.synonym_dict[word]:
                     variation = query.lower().replace(word, synonym)
                     if variation != query.lower():
                         variations.add(variation)
-        
+
         # Also create a variation with all synonyms combined
         if found_synonyms:
             expanded_words = []
@@ -147,7 +147,7 @@ class SynonymExpansion(QueryExpansionStrategy):
                 else:
                     expanded_words.append(word)
             variations.add(" ".join(expanded_words))
-        
+
         return ExpandedQuery(
             original_query=query,
             variations=list(variations)[:5],  # Limit variations
@@ -161,19 +161,19 @@ class SynonymExpansion(QueryExpansionStrategy):
 class MultiQueryGeneration(QueryExpansionStrategy):
     """
     Generates multiple query variations using different perspectives.
-    
+
     This simulates what an LLM might do to rephrase queries.
     """
-    
+
     def __init__(self, generation_templates: Optional[List[str]] = None):
         """
         Initialize multi-query generation.
-        
+
         Args:
             generation_templates: Templates for query generation
         """
         self.templates = generation_templates or self._get_default_templates()
-    
+
     def _get_default_templates(self) -> List[str]:
         """Get default query generation templates."""
         return [
@@ -188,26 +188,26 @@ class MultiQueryGeneration(QueryExpansionStrategy):
             "Common issues with {query}",
             "Troubleshooting {query}"
         ]
-    
+
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Generate multiple query variations.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             ExpandedQuery with generated variations
         """
         variations = []
-        
+
         # Apply templates that make sense for the query
         query_lower = query.lower()
-        
+
         # Determine query type
         is_question = any(query_lower.startswith(q) for q in ["what", "how", "why", "when", "where", "who"])
         is_action = any(word in query_lower for word in ["create", "make", "build", "fix", "solve", "implement"])
-        
+
         if is_question:
             # For questions, rephrase differently
             variations.append(query.replace("?", ""))
@@ -225,10 +225,10 @@ class MultiQueryGeneration(QueryExpansionStrategy):
             for template in self.templates[:3]:
                 if "{query}" in template:
                     variations.append(template.format(query=query))
-        
+
         # Extract key phrases
         keywords = self._extract_key_phrases(query)
-        
+
         return ExpandedQuery(
             original_query=query,
             variations=variations[:5],  # Limit variations
@@ -237,32 +237,32 @@ class MultiQueryGeneration(QueryExpansionStrategy):
             entities=self._extract_entities(query),
             metadata={"strategy": "multi_query_generation"}
         )
-    
+
     def _extract_key_phrases(self, query: str) -> List[str]:
         """Extract key phrases from query."""
         # Simple implementation - in production, use NLP
         phrases = []
         words = query.split()
-        
+
         # Extract 2-grams and 3-grams
         for i in range(len(words) - 1):
             phrases.append(f"{words[i]} {words[i+1]}")
         for i in range(len(words) - 2):
             phrases.append(f"{words[i]} {words[i+1]} {words[i+2]}")
-        
+
         return phrases[:5]
-    
+
     def _extract_entities(self, query: str) -> List[str]:
         """Extract named entities from query."""
         # Simple pattern matching - in production, use NER
         entities = []
-        
+
         # Look for capitalized words (potential entities)
         words = query.split()
         for word in words:
             if word[0].isupper() and word.lower() not in ["what", "how", "why", "when", "where", "who"]:
                 entities.append(word)
-        
+
         return entities
 
 
@@ -270,7 +270,7 @@ class AcronymExpansion(QueryExpansionStrategy):
     """
     Expands or contracts acronyms in queries.
     """
-    
+
     # Common acronyms and their expansions
     ACRONYM_DB = {
         "ai": ["artificial intelligence"],
@@ -314,38 +314,38 @@ class AcronymExpansion(QueryExpansionStrategy):
         "paas": ["platform as a service"],
         "iaas": ["infrastructure as a service"],
     }
-    
+
     def __init__(self, custom_acronyms: Optional[Dict[str, List[str]]] = None):
         """
         Initialize acronym expansion.
-        
+
         Args:
             custom_acronyms: Additional acronyms to add
         """
         self.acronyms = self.ACRONYM_DB.copy()
         if custom_acronyms:
             self.acronyms.update(custom_acronyms)
-        
+
         # Build reverse mapping for contraction
         self.reverse_acronyms = {}
         for acronym, expansions in self.acronyms.items():
             for expansion in expansions:
                 self.reverse_acronyms[expansion] = acronym
-    
+
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Expand or contract acronyms in the query.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             ExpandedQuery with acronym variations
         """
         variations = []
         acronym_expansions = {}
         words = query.lower().split()
-        
+
         # Check each word for acronym expansion
         for i, word in enumerate(words):
             if word in self.acronyms:
@@ -355,7 +355,7 @@ class AcronymExpansion(QueryExpansionStrategy):
                     new_words = words.copy()
                     new_words[i] = expansion
                     variations.append(" ".join(new_words))
-        
+
         # Check for contractable phrases
         query_lower = query.lower()
         for full_form, acronym in self.reverse_acronyms.items():
@@ -365,7 +365,7 @@ class AcronymExpansion(QueryExpansionStrategy):
                     variations.append(contracted)
                     if acronym not in acronym_expansions:
                         acronym_expansions[acronym] = [full_form]
-        
+
         return ExpandedQuery(
             original_query=query,
             variations=variations[:5],
@@ -381,7 +381,7 @@ class DomainExpansion(QueryExpansionStrategy):
     """
     Expands queries using domain-specific vocabulary.
     """
-    
+
     # Domain-specific term relationships
     DOMAIN_TERMS = {
         "transcription": ["speech to text", "audio to text", "voice recognition"],
@@ -400,32 +400,32 @@ class DomainExpansion(QueryExpansionStrategy):
         "transformer": ["model", "architecture", "network"],
         "fine-tuning": ["adaptation", "customization", "specialization"],
     }
-    
+
     def __init__(self, custom_terms: Optional[Dict[str, List[str]]] = None):
         """
         Initialize domain expansion.
-        
+
         Args:
             custom_terms: Additional domain-specific terms
         """
         self.domain_terms = self.DOMAIN_TERMS.copy()
         if custom_terms:
             self.domain_terms.update(custom_terms)
-    
+
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Expand query using domain-specific terms.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             ExpandedQuery with domain variations
         """
         variations = []
         found_domain_terms = {}
         query_lower = query.lower()
-        
+
         # Check for domain terms in query
         for term, related_terms in self.domain_terms.items():
             if term in query_lower:
@@ -434,7 +434,7 @@ class DomainExpansion(QueryExpansionStrategy):
                     expanded = query_lower.replace(term, related)
                     if expanded != query_lower:
                         variations.append(expanded)
-        
+
         return ExpandedQuery(
             original_query=query,
             variations=variations[:5],
@@ -450,7 +450,7 @@ class EntityExpansion(QueryExpansionStrategy):
     """
     Expands queries based on recognized entities.
     """
-    
+
     def __init__(self):
         """Initialize entity expansion."""
         # Entity patterns for recognition
@@ -462,26 +462,26 @@ class EntityExpansion(QueryExpansionStrategy):
             "number": r'\b\d+\.?\d*\b',
             "version": r'\bv?\d+\.\d+(?:\.\d+)?\b',
         }
-    
+
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Expand query based on recognized entities.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             ExpandedQuery with entity-based variations
         """
         variations = []
         entities = []
-        
+
         # Check for entities and create targeted expansions
         for entity_type, pattern in self.patterns.items():
             matches = re.findall(pattern, query)
             if matches:
                 entities.extend(matches)
-                
+
                 if entity_type == "date":
                     variations.append(query + " events")
                     variations.append(query + " timeline")
@@ -491,13 +491,13 @@ class EntityExpansion(QueryExpansionStrategy):
                 elif entity_type == "email":
                     variations.append(query + " sender")
                     variations.append(query + " conversation")
-        
+
         # Look for capitalized words (potential named entities)
         words = query.split()
         for word in words:
             if len(word) > 2 and word[0].isupper() and word not in ["What", "How", "Why", "When", "Where", "Who"]:
                 entities.append(word)
-        
+
         return ExpandedQuery(
             original_query=query,
             variations=variations[:5],
@@ -603,11 +603,11 @@ class HybridQueryExpansion(QueryExpansionStrategy):
     """
     Combines multiple expansion strategies for comprehensive query expansion.
     """
-    
+
     def __init__(self, strategies: Optional[List[QueryExpansionStrategy]] = None):
         """
         Initialize hybrid expansion.
-        
+
         Args:
             strategies: List of expansion strategies to combine
         """
@@ -618,33 +618,33 @@ class HybridQueryExpansion(QueryExpansionStrategy):
             DomainExpansion(),
             EntityExpansion()
         ]
-    
+
     async def expand(self, query: str) -> ExpandedQuery:
         """
         Expand query using multiple strategies.
-        
+
         Args:
             query: Original query string
-            
+
         Returns:
             Combined ExpandedQuery from all strategies
         """
         # Run all strategies in parallel
         expansion_tasks = [strategy.expand(query) for strategy in self.strategies]
         expansions = await asyncio.gather(*expansion_tasks)
-        
+
         # Combine results
         all_variations = []
         all_synonyms = {}
         all_keywords = []
         all_entities = []
-        
+
         for expansion in expansions:
             all_variations.extend(expansion.variations)
             all_synonyms.update(expansion.synonyms)
             all_keywords.extend(expansion.keywords)
             all_entities.extend(expansion.entities)
-        
+
         # Deduplicate while preserving order
         seen = set()
         unique_variations = []
@@ -652,17 +652,17 @@ class HybridQueryExpansion(QueryExpansionStrategy):
             if v not in seen:
                 seen.add(v)
                 unique_variations.append(v)
-        
+
         # Merge additional fields
         all_acronyms = {}
         all_domain_terms = {}
-        
+
         for expansion in expansions:
             if hasattr(expansion, 'acronym_expansions'):
                 all_acronyms.update(expansion.acronym_expansions)
             if hasattr(expansion, 'domain_terms'):
                 all_domain_terms.update(expansion.domain_terms)
-        
+
         return ExpandedQuery(
             original_query=query,
             variations=unique_variations[:10],  # Limit total variations
@@ -681,14 +681,14 @@ class HybridQueryExpansion(QueryExpansionStrategy):
 class QueryExpansionRetriever(RetrieverStrategy):
     """
     Retriever wrapper that applies query expansion before search.
-    
+
     This wrapper:
     - Expands the query using configured strategies
     - Performs retrieval with original and expanded queries
     - Merges and deduplicates results
     - Preserves query variations in metadata
     """
-    
+
     def __init__(
         self,
         base_retriever: RetrieverStrategy,
@@ -698,7 +698,7 @@ class QueryExpansionRetriever(RetrieverStrategy):
     ):
         """
         Initialize query expansion retriever.
-        
+
         Args:
             base_retriever: The underlying retriever
             expansion_strategy: Strategy for query expansion
@@ -709,14 +709,14 @@ class QueryExpansionRetriever(RetrieverStrategy):
         self.expansion_strategy = expansion_strategy or HybridQueryExpansion()
         self.max_variations = max_variations
         self.merge_strategy = merge_strategy
-        
+
         logger.info(f"Initialized QueryExpansionRetriever with {type(expansion_strategy).__name__}")
-    
+
     @property
     def source_type(self) -> DataSource:
         """Delegate to base retriever."""
         return self.base_retriever.source_type
-    
+
     async def retrieve(
         self,
         query: str,
@@ -725,31 +725,31 @@ class QueryExpansionRetriever(RetrieverStrategy):
     ) -> SearchResult:
         """
         Retrieve with query expansion.
-        
+
         Args:
             query: The search query
             filters: Optional filters to apply
             top_k: Number of results to return
-            
+
         Returns:
             SearchResult with expanded query results
         """
         # Expand the query
         expanded = await self.expansion_strategy.expand(query)
-        
+
         # Select variations to use
         queries_to_search = [query] + expanded.variations[:self.max_variations]
-        
+
         # Perform parallel retrieval for all query variations
         retrieval_tasks = [
             self.base_retriever.retrieve(q, filters, top_k)
             for q in queries_to_search
         ]
         results = await asyncio.gather(*retrieval_tasks)
-        
+
         # Merge results
         merged_result = self._merge_results(results, query, expanded)
-        
+
         # Add expansion metadata
         merged_result.query_variations = queries_to_search
         if not merged_result.metadata:
@@ -759,11 +759,11 @@ class QueryExpansionRetriever(RetrieverStrategy):
             "synonyms_found": len(expanded.synonyms),
             "keywords_extracted": len(expanded.keywords)
         }
-        
+
         logger.debug(f"Query expansion: {len(queries_to_search)} variations, {len(merged_result.documents)} results")
-        
+
         return merged_result
-    
+
     def _merge_results(
         self,
         results: List[SearchResult],
@@ -772,12 +772,12 @@ class QueryExpansionRetriever(RetrieverStrategy):
     ) -> SearchResult:
         """
         Merge results from multiple query variations.
-        
+
         Args:
             results: List of search results from variations
             original_query: The original query
             expanded: The expanded query information
-            
+
         Returns:
             Merged SearchResult
         """
@@ -787,7 +787,7 @@ class QueryExpansionRetriever(RetrieverStrategy):
             for result in results:
                 for doc in result.documents:
                     doc_counts[doc.id] = doc_counts.get(doc.id, 0) + 1
-            
+
             # Filter documents that appear in at least 2 results
             merged_docs = []
             seen_ids = set()
@@ -800,21 +800,21 @@ class QueryExpansionRetriever(RetrieverStrategy):
             # Keep all unique documents
             merged_docs = []
             seen_ids = set()
-            
+
             for result in results:
                 for doc in result.documents:
                     if doc.id not in seen_ids:
                         merged_docs.append(doc)
                         seen_ids.add(doc.id)
-        
+
         # Re-score based on appearance frequency
         for doc in merged_docs:
             appearances = sum(1 for r in results if any(d.id == doc.id for d in r.documents))
             doc.score = doc.score * (1 + 0.1 * (appearances - 1))  # Boost score for multiple appearances
-        
+
         # Sort by score
         merged_docs.sort(key=lambda d: d.score, reverse=True)
-        
+
         return SearchResult(
             documents=merged_docs,
             query=original_query,

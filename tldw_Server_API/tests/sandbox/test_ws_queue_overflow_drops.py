@@ -40,4 +40,3 @@ def test_ws_queue_overflow_drops_and_metrics() -> None:
     vals = reg.values.get("sandbox_ws_queue_drops_total")
     # There should be at least one increment recorded
     assert vals and sum(v.value for v in vals) >= 1
-

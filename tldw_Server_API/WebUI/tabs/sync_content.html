@@ -6,7 +6,7 @@
             <span class="endpoint-path">/api/v1/sync/send - Send Changes</span>
         </h2>
         <p>Receive changes from a client and apply to server database.</p>
-        
+
         <div class="form-group">
             <label for="syncSend_payload">Sync Changes Payload (JSON):</label>
             <textarea id="syncSend_payload" class="code-input" rows="15">{
@@ -35,14 +35,14 @@
   "last_sync_timestamp": "2024-01-15T10:30:00Z"
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('syncSend', 'POST', '/api/v1/sync/send', 'json')">
             Send Changes
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="syncSend_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="syncSend_response">---</pre>
     </div>
@@ -56,17 +56,17 @@
             <span class="endpoint-path">/api/v1/sync/get - Receive Changes</span>
         </h2>
         <p>Get changes from server with filtering to avoid echo.</p>
-        
+
         <div class="form-group">
             <label for="syncReceive_client_id">Client ID <span class="required">*</span>:</label>
             <input type="text" id="syncReceive_client_id" placeholder="client_device_123">
         </div>
-        
+
         <div class="form-group">
             <label for="syncReceive_since">Since Timestamp:</label>
             <input type="text" id="syncReceive_since" placeholder="2024-01-15T10:30:00Z">
         </div>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -74,7 +74,7 @@
                     <input type="text" id="syncReceive_tables" placeholder="media,notes,prompts">
                 </div>
             </div>
-            
+
             <div class="column">
                 <div class="form-group">
                     <label for="syncReceive_limit">Limit:</label>
@@ -82,34 +82,34 @@
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('syncReceive', 'GET', '/api/v1/sync/get', 'query')">
             Get Changes
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="syncReceive_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="syncReceive_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="syncStatus">
         <h2>Sync Status</h2>
         <p>View synchronization status and statistics.</p>
-        
+
         <div class="form-group">
             <label for="syncStatus_client_id">Client ID:</label>
             <input type="text" id="syncStatus_client_id" placeholder="client_device_123">
         </div>
-        
+
         <button class="api-button" onclick="(function(){
             const cid = document.getElementById('syncStatus_client_id').value.trim();
             if(!cid){ alert('Enter Client ID'); return; }
             const url = `/api/v1/sync/get?client_id=${encodeURIComponent(cid)}&since_change_id=0`;
             makeRequest('syncStatus', 'GET', url, 'none');
         })()">Check Sync Status</button>
-        
+
         <h3>Response:</h3>
         <pre id="syncStatus_response">---</pre>
     </div>

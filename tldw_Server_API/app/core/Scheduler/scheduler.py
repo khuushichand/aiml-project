@@ -23,112 +23,112 @@ from .authorization import TaskAuthorizer, get_authorizer, AuthContext
 class Scheduler:
     """
     Main scheduler that orchestrates task queuing and execution.
-    
+
     This is the primary interface for the scheduler system, providing:
     - Task submission and management
     - Worker pool management
     - Leader election for distributed deployments
     - Monitoring and health checks
     """
-    
+
     def __init__(self, config: Optional[SchedulerConfig] = None):
         """
         Initialize scheduler.
-        
+
         Args:
             config: Scheduler configuration (uses global if not provided)
         """
         self.config = config or get_config()
         self.registry = get_registry()
         self.authorizer = get_authorizer()
-        
+
         # Core components (initialized in start())
         self.backend_manager = BackendManager(self.config)
         self.backend = None
         self.write_buffer: Optional[SafeWriteBuffer] = None
         self.worker_pool: Optional[WorkerPool] = None
         self.leader_election: Optional[LeaderElection] = None
-        
+
         # Services
         self.lease_service: Optional[LeaseService] = None
         self.dependency_service: Optional[DependencyService] = None
         self.payload_service: Optional[PayloadService] = None
-        
+
         # Background tasks
         self._cleanup_task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
-        
+
         # State
         self._started = False
         self._stopping = False
-        
+
         logger.info(f"Scheduler initialized with backend: {self.config.database_url}")
-    
+
     async def start(self, start_workers: bool = True) -> None:
         """
         Start the scheduler.
-        
+
         Args:
             start_workers: Whether to start worker pool
         """
         if self._started:
             logger.warning("Scheduler already started")
             return
-        
+
         logger.info("Starting scheduler...")
-        
+
         try:
             # Connect to backend
             self.backend = await self.backend_manager.connect()
-            
+
             # Initialize write buffer
             self.write_buffer = SafeWriteBuffer(self.backend, self.config)
-            
+
             # Check for and recover from any emergency backups
             await self._recover_from_backups()
-            
+
             # Initialize services
             self.lease_service = LeaseService(self.backend, self.config.lease_duration_seconds)
             self.dependency_service = DependencyService(self.backend)
             self.payload_service = PayloadService(self.backend, self.config)
-            
+
             # Start lease reaper
             await self.lease_service.start_reaper(self.config.lease_reaper_interval)
-            
+
             # Initialize leader election
             self.leader_election = LeaderElection(self.backend, self.config)
-            
+
             # Start worker pool if requested
             if start_workers:
                 self.worker_pool = WorkerPool(self.backend, self.registry, self.config)
                 await self.worker_pool.start()
-            
+
             # Start background tasks
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
             self._monitor_task = asyncio.create_task(self._monitor_loop())
-            
+
             # Try to become leader for cleanup tasks
             await self.leader_election.maintain_leadership(
                 "scheduler:cleanup",
                 callback=self._on_become_cleanup_leader
             )
-            
+
             self._started = True
             logger.info("Scheduler started successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to start scheduler: {e}")
             await self.stop()
             raise SchedulerError(f"Scheduler start failed: {e}")
-    
+
     async def stop(self) -> None:
         """Stop the scheduler gracefully."""
         if self._stopping:
             return
-        
+
         self._stopping = True
         logger.info("Stopping scheduler...")
-        
+
         # Stop background tasks
         for task in [self._cleanup_task, self._monitor_task]:
             if task:
@@ -137,31 +137,31 @@ class Scheduler:
                     await task
                 except asyncio.CancelledError:
                     pass
-        
+
         # Stop worker pool
         if self.worker_pool:
             await self.worker_pool.stop()
-        
+
         # Stop leader election
         if self.leader_election:
             await self.leader_election.stop_all()
-        
+
         # Stop lease reaper
         if self.lease_service:
             await self.lease_service.stop_reaper()
-        
+
         # Flush write buffer
         if self.write_buffer:
             await self.write_buffer.close()
-        
+
         # Disconnect backend
         await self.backend_manager.disconnect()
-        
+
         self._started = False
         self._stopping = False
         logger.info("Scheduler stopped")
-    
-    async def submit(self, 
+
+    async def submit(self,
                      handler: str,
                      payload: Optional[Any] = None,
                      priority: int = TaskPriority.NORMAL.value,
@@ -172,7 +172,7 @@ class Scheduler:
                      auth_context: Optional[AuthContext] = None) -> str:
         """
         Submit a task to the scheduler.
-        
+
         Args:
             handler: Task handler name (must be registered)
             payload: Task payload
@@ -182,13 +182,13 @@ class Scheduler:
             idempotency_key: Idempotency key for deduplication
             metadata: Additional metadata
             auth_context: Authorization context for the request
-            
+
         Returns:
             Task ID
         """
         if not self._started:
             raise SchedulerError("Scheduler not started")
-        
+
         task, existing_task_id = await self._prepare_task_for_submission(
             handler=handler,
             payload=payload,
@@ -235,34 +235,34 @@ class Scheduler:
             except Exception:
                 # If detection can't be completed (e.g., due to buffered tasks), skip here
                 pass
-        
+
         logger.debug(f"Task {task_id} submitted to queue {task.queue_name}")
         return task_id
-    
+
     async def submit_batch(self, tasks: List[Dict[str, Any]], auth_context: Optional[AuthContext] = None) -> List[str]:
         """
         Submit multiple tasks atomically.
-        
+
         All tasks are validated first, then submitted as a batch.
         If any validation fails, no tasks are submitted.
-        
+
         Args:
             tasks: List of task specifications
             auth_context: Optional authorization context applied to every task in the batch
-            
+
         Returns:
             List of task IDs
-            
+
         Raises:
             ValueError: If any task validation fails
             SchedulerError: If batch submission fails
         """
         if not self._started:
             raise SchedulerError("Scheduler not started")
-        
+
         if not tasks:
             return []
-        
+
         pending_idempotency: Dict[str, str] = {}
         prepared_tasks: List[tuple[int, Task]] = []
         result_ids: List[str] = []
@@ -351,42 +351,42 @@ class Scheduler:
             logger.info("Batch submission contained only idempotent tasks; nothing enqueued")
 
         return result_ids
-    
+
     async def get_task(self, task_id: str) -> Optional[Task]:
         """
         Get task by ID.
-        
+
         Args:
             task_id: Task ID
-            
+
         Returns:
             Task if found
         """
         if not self._started:
             raise SchedulerError("Scheduler not started")
-        
+
         return await self.backend.get_task(task_id)
-    
+
     async def cancel_task(self, task_id: str, reason: str = "User requested cancellation", auth_context: Optional[AuthContext] = None) -> bool:
         """
         Cancel a pending or running task.
-        
+
         Args:
             task_id: Task ID
             reason: Cancellation reason
             auth_context: Authorization context for the request
-            
+
         Returns:
             True if cancelled
         """
         if not self._started:
             raise SchedulerError("Scheduler not started")
-        
+
         task = await self.backend.get_task(task_id)
         if not task:
             logger.warning(f"Task {task_id} not found for cancellation")
             return False
-        
+
         # Authorization check
         if auth_context:
             # Get task owner from metadata if available
@@ -395,108 +395,108 @@ class Scheduler:
             if not can_cancel:
                 logger.warning(f"Task cancellation denied for task {task_id}: {reason_denied}")
                 raise PermissionError(f"Not authorized to cancel task: {reason_denied}")
-        
+
         # Can only cancel tasks that haven't completed
         if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.DEAD]:
             logger.info(f"Task {task_id} already in terminal state: {task.status}")
             return False
-        
+
         # Update task status to cancelled
         task.status = TaskStatus.CANCELLED
         task.error = reason
         task.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        
+
         # Update in backend
         success = await self.backend.update_task(task)
-        
+
         if success:
             # If task was running, release its lease
             if task.lease_id:
                 await self.backend.delete_lease(task.lease_id)
-            
+
             logger.info(f"Task {task_id} cancelled successfully: {reason}")
         else:
             logger.error(f"Failed to cancel task {task_id}")
-        
+
         return success
-    
+
     async def wait_for_task(self, task_id: str, timeout: Optional[float] = None) -> Optional[Task]:
         """
         Wait for a task to complete.
-        
+
         Args:
             task_id: Task ID
             timeout: Maximum wait time in seconds
-            
+
         Returns:
             Completed task or None if timeout
         """
         start = datetime.now(timezone.utc).replace(tzinfo=None)
-        
+
         while True:
             task = await self.backend.get_task(task_id)
-            
+
             if not task:
                 return None
-            
+
             if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.DEAD]:
                 return task
-            
+
             # Check timeout
             if timeout:
                 elapsed = (datetime.now(timezone.utc).replace(tzinfo=None) - start).total_seconds()
                 if elapsed >= timeout:
                     return None
-            
+
             # Wait before checking again
             await asyncio.sleep(1)
-    
+
     async def get_queue_status(self, queue_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Get queue status.
-        
+
         Args:
             queue_name: Queue name (all queues if None)
-            
+
         Returns:
             Status dictionary
         """
         if not self._started:
             raise SchedulerError("Scheduler not started")
-        
+
         if queue_name:
             size = await self.backend.get_queue_size(queue_name)
             return {
                 'queue': queue_name,
                 'size': size
             }
-        
+
         # Get all queue statuses
         # This would need backend support for listing queues
         return {
             'default': await self.backend.get_queue_size('default')
         }
-    
+
     async def scale_workers(self, target: int, queue_name: str = "default") -> int:
         """
         Scale workers for a queue.
-        
+
         Args:
             target: Target worker count
             queue_name: Queue name
-            
+
         Returns:
             Actual worker count
         """
         if not self._started or not self.worker_pool:
             raise SchedulerError("Worker pool not available")
-        
+
         return await self.worker_pool.scale_to(target, queue_name)
-    
+
     def get_status(self) -> Dict[str, Any]:
         """
         Get scheduler status.
-        
+
         Returns:
             Status dictionary
         """
@@ -511,7 +511,7 @@ class Scheduler:
                 'handler_names': self.registry.list_handlers()
             }
         }
-        
+
         return status
 
     async def _prepare_task_for_submission(
@@ -653,50 +653,50 @@ class Scheduler:
         sanitized['user_id'] = user_id.strip()
 
         return sanitized
-    
+
     async def _cleanup_loop(self) -> None:
         """Background task for cleanup operations."""
         while self._started and not self._stopping:
             try:
                 await asyncio.sleep(self.config.cleanup_interval_seconds)
-                
+
                 # Only run if we're the leader
                 if self.leader_election and await self.leader_election.is_leader("scheduler:cleanup"):
                     # Reclaim expired leases
                     reclaimed = await self.backend.reclaim_expired_leases()
                     if reclaimed > 0:
                         logger.info(f"Reclaimed {reclaimed} expired leases")
-                    
+
                     # Clean up old payloads
                     if self.payload_service:
                         deleted = await self.payload_service.cleanup_old_payloads()
                         if deleted > 0:
                             logger.info(f"Cleaned up {deleted} old payloads")
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Cleanup loop error: {e}")
-    
+
     async def _monitor_loop(self) -> None:
         """Background task for monitoring."""
         while self._started and not self._stopping:
             try:
                 await asyncio.sleep(self.config.health_check_interval)
-                
+
                 # Log status periodically
                 status = self.get_status()
                 logger.debug(f"Scheduler status: {status}")
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}")
-    
+
     async def _on_become_cleanup_leader(self) -> None:
         """Callback when becoming cleanup leader."""
         logger.info("This instance is now the cleanup leader")
-    
+
     async def _recover_from_backups(self) -> None:
         """
         Check for and recover from any emergency backup files.
@@ -704,18 +704,18 @@ class Scheduler:
         """
         try:
             backup_dir = self.config.emergency_backup_path.parent if hasattr(self.config, 'emergency_backup_path') else Path('./backups')
-            
+
             if not backup_dir.exists():
                 return
-            
+
             # Look for backup files
             backup_files = list(backup_dir.glob('buffer_backup_*.json'))
-            
+
             if not backup_files:
                 return
-            
+
             logger.warning(f"Found {len(backup_files)} emergency backup files")
-            
+
             total_recovered = 0
             for backup_file in backup_files:
                 try:
@@ -724,36 +724,36 @@ class Scheduler:
                     logger.info(f"Recovered {recovered} tasks from {backup_file}")
                 except Exception as e:
                     logger.error(f"Failed to recover from backup {backup_file}: {e}")
-            
+
             if total_recovered > 0:
                 logger.warning(f"RECOVERY COMPLETE: Restored {total_recovered} tasks from emergency backups")
-                
+
         except Exception as e:
             logger.error(f"Error during backup recovery: {e}")
             # Don't fail startup if recovery fails
-    
+
     async def __aenter__(self):
         """Async context manager entry."""
         await self.start()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         await self.stop()
-    
+
     def _sanitize_payload(self, payload: Any) -> Any:
         """
         Sanitize payload to remove potentially dangerous content.
-        
+
         Args:
             payload: Input payload
-            
+
         Returns:
             Sanitized payload
         """
         if payload is None:
             return None
-        
+
         if isinstance(payload, dict):
             # Recursively sanitize dictionary
             sanitized = {}
@@ -769,11 +769,11 @@ class Scheduler:
                         continue
                 sanitized[key] = self._sanitize_payload(value)
             return sanitized
-        
+
         elif isinstance(payload, list):
             # Recursively sanitize list
             return [self._sanitize_payload(item) for item in payload[:1000]]  # Limit list size
-        
+
         elif isinstance(payload, str):
             # Sanitize string content
             # Remove null bytes
@@ -793,22 +793,22 @@ class Scheduler:
                     payload = payload.replace(pattern.lower(), '')
                     payload = payload.replace(pattern.upper(), '')
             return payload
-        
+
         elif isinstance(payload, (int, float, bool)):
             # Numeric and boolean types are safe
             return payload
-        
+
         else:
             # Convert other types to string and sanitize
             return self._sanitize_payload(str(payload))
-    
+
     def _contains_suspicious_content(self, content: str) -> bool:
         """
         Check if content contains suspicious patterns that might indicate an attack.
-        
+
         Args:
             content: JSON string to check
-            
+
         Returns:
             True if suspicious content detected
         """
@@ -817,7 +817,7 @@ class Scheduler:
             '__import__', 'eval(', 'exec(', 'compile(', 'globals(', 'locals(',
             # File system access
             'open(', 'file(', 'input(', 'raw_input(',
-            # Network attempts  
+            # Network attempts
             'urllib', 'requests.', 'socket.',
             # Command injection
             '; rm ', '&& rm ', '| rm ', '`rm ',
@@ -826,12 +826,12 @@ class Scheduler:
             # SQL injection (already checked but double-check)
             '; DROP ', 'UNION SELECT', 'OR 1=1'
         ]
-        
+
         content_lower = content.lower()
         for pattern in suspicious_patterns:
             if pattern.lower() in content_lower:
                 return True
-        
+
         return False
 
     def _has_code_injection(self, obj: Any) -> bool:
@@ -869,11 +869,11 @@ async def create_scheduler(config: Optional[SchedulerConfig] = None,
                           start_workers: bool = True) -> Scheduler:
     """
     Create and start a scheduler.
-    
+
     Args:
         config: Scheduler configuration
         start_workers: Whether to start workers
-        
+
     Returns:
         Started scheduler instance
     """

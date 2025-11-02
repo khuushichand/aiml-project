@@ -12,4 +12,3 @@ def test_xml_allows_urls_in_text_nodes():
     chunks = strategy.chunk(xml, max_size=50)
     assert isinstance(chunks, list)
     assert len(chunks) > 0
-

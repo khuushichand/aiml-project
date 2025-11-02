@@ -50,7 +50,7 @@ Send your content to the evaluation endpoint and get quality scores back.
 - **Relevance** (1-5): Does it include important points?
 - **Coherence** (1-5): Is it well-organized?
 
-**When to use**: 
+**When to use**:
 - Testing article summaries
 - Evaluating meeting notes
 - Checking document abstracts
@@ -322,7 +322,7 @@ Batch Results:
 
 #### "Rate limit exceeded"
 **Problem**: Too many requests too quickly.
-**Solution**: 
+**Solution**:
 - Wait 60 seconds before retrying
 - Use batch evaluation for multiple items
 - Spread requests over time
@@ -372,7 +372,7 @@ Batch Results:
    - GPT-4 for production/critical
    - Local models for high volume
 
-3. **Batch Processing**: 
+3. **Batch Processing**:
    - Group evaluations together
    - Run during off-peak hours
 

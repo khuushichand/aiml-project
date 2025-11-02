@@ -50,4 +50,3 @@ def test_create_embeddings_batch_accepts_provider_prefixed_model_id(monkeypatch)
     assert all(isinstance(v, list) and len(v) == 16 for v in embs_bare)
     # Deterministic property check
     assert embs_prefixed[0] == embs_bare[0]
-

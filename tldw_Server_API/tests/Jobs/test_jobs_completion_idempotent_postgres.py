@@ -30,4 +30,3 @@ def test_completion_idempotent_postgres(monkeypatch):
     assert ok2 is True
     ok3 = jm.complete_job(int(j["id"]), worker_id="w1", lease_id=token, completion_token="other-token")
     assert ok3 is False
-

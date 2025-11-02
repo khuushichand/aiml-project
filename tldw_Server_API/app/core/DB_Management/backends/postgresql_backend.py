@@ -228,12 +228,12 @@ class PostgreSQLBackend(DatabaseBackend):
     def __init__(self, config: DatabaseConfig):
         super().__init__(config)
         self._managed_tx_depths: Dict[int, int] = {}
-    
+
     @property
     def backend_type(self) -> BackendType:
         """Get the backend type."""
         return BackendType.POSTGRESQL
-    
+
     def _get_features(self) -> BackendFeatures:
         """Get PostgreSQL feature support."""
         return BackendFeatures(
@@ -401,7 +401,7 @@ class PostgreSQLBackend(DatabaseBackend):
                             logger.debug(f"Unable to apply scope settings via execute (after rollback): {cfg_exc}")
             except Exception as final_exc:
                 logger.debug(f"Failed to configure session scope settings: {final_exc}")
-    
+
     def _tx_depth(self, connection: Any) -> int:
         return self._managed_tx_depths.get(id(connection), 0)
 
@@ -638,13 +638,13 @@ class PostgreSQLBackend(DatabaseBackend):
         except Exception as scope_exc:
             logger.debug(f"Scope config failed for direct connection: {scope_exc}")
         return conn
-    
+
     def disconnect(self, connection: Any) -> None:
         """Close a PostgreSQL connection."""
         self._managed_tx_depths.pop(id(connection), None)
         if connection and not connection.closed:
             connection.close()
-    
+
     @contextmanager
     def transaction(self, connection: Optional[Any] = None) -> Generator[Any, None, None]:
         """PostgreSQL transaction context manager."""
@@ -654,7 +654,7 @@ class PostgreSQLBackend(DatabaseBackend):
         else:
             conn = self.get_pool().get_connection()
             owns_connection = True
-        
+
         try:
             # Track managed transaction depth per-connection so we can
             # reliably commit/rollback only at the outermost boundary,
@@ -686,7 +686,7 @@ class PostgreSQLBackend(DatabaseBackend):
             self._tx_depth_dec(conn)
             if owns_connection:
                 self.get_pool().return_connection(conn)
-    
+
     def get_pool(self) -> ConnectionPool:
         """Get or create the connection pool."""
         if self._pool is None:
@@ -695,7 +695,7 @@ class PostgreSQLBackend(DatabaseBackend):
             setattr(pool, "_apply_scope_settings", self._apply_scope_settings)
             self._pool = pool
         return self._pool
-    
+
     def _prepare_query(
         self,
         query: str,
@@ -725,14 +725,14 @@ class PostgreSQLBackend(DatabaseBackend):
         """Execute a query and return results."""
         start_time = time.time()
         query, params = self._prepare_query(query, params)
-        
+
         if connection:
             conn = connection
             external_conn = True
         else:
             conn = self.get_pool().get_connection()
             external_conn = False
-        
+
         try:
             cursor = conn.cursor()
             if params:
@@ -782,7 +782,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 description=cursor.description,
                 execution_time=execution_time
             )
-            
+
         except Exception as e:
             if not external_conn:
                 try:
@@ -794,7 +794,7 @@ class PostgreSQLBackend(DatabaseBackend):
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
-    
+
     def execute_many(
         self,
         query: str,
@@ -803,14 +803,14 @@ class PostgreSQLBackend(DatabaseBackend):
     ) -> QueryResult:
         """Execute a query multiple times with different parameters."""
         start_time = time.time()
-        
+
         if connection:
             conn = connection
             external_conn = True
         else:
             conn = self.get_pool().get_connection()
             external_conn = False
-        
+
         try:
             cursor = conn.cursor()
             normalized_query, normalized_params = prepare_backend_many_statement(
@@ -840,7 +840,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 description=cursor.description,
                 execution_time=execution_time
             )
-            
+
         except Exception as e:
             if not external_conn:
                 try:
@@ -852,20 +852,20 @@ class PostgreSQLBackend(DatabaseBackend):
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
-    
+
     def create_tables(self, schema: str, connection: Optional[Any] = None) -> None:
         """Create tables from a schema definition."""
         # PostgreSQL doesn't support multiple statements in execute()
         # Need to split and execute separately
         statements = [s.strip() for s in schema.split(';') if s.strip()]
-        
+
         if connection:
             conn = connection
             external_conn = True
         else:
             conn = self.get_pool().get_connection()
             external_conn = False
-        
+
         try:
             cursor = conn.cursor()
             for statement in statements:
@@ -881,7 +881,7 @@ class PostgreSQLBackend(DatabaseBackend):
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
-    
+
     def table_exists(self, table_name: str, connection: Optional[Any] = None) -> bool:
         """Check if a table exists."""
         query = (
@@ -891,7 +891,7 @@ class PostgreSQLBackend(DatabaseBackend):
         )
         result = self.execute(query, (table_name,), connection)
         return result.scalar
-    
+
     def get_table_info(
         self,
         table_name: str,
@@ -899,20 +899,20 @@ class PostgreSQLBackend(DatabaseBackend):
     ) -> List[Dict[str, Any]]:
         """Get information about a table's columns."""
         query = """
-            SELECT 
+            SELECT
                 column_name as name,
                 data_type as type,
                 is_nullable = 'YES' as nullable,
                 column_default as default,
                 false as primary_key
             FROM information_schema.columns
-            WHERE table_schema = 'public' 
+            WHERE table_schema = 'public'
             AND table_name = %s
             ORDER BY ordinal_position
         """
         result = self.execute(query, (table_name,), connection)
         return result.rows
-    
+
     def create_fts_table(
         self,
         table_name: str,
@@ -922,29 +922,29 @@ class PostgreSQLBackend(DatabaseBackend):
     ) -> None:
         """
         Create PostgreSQL full-text search setup.
-        
+
         Instead of a virtual table, PostgreSQL uses tsvector columns
         and GIN indexes.
         """
         self.features.require("full_text_search")
-        
+
         if connection:
             conn = connection
             external_conn = True
         else:
             conn = self.get_pool().get_connection()
             external_conn = False
-        
+
         try:
             cursor = conn.cursor()
-            
+
             # Add tsvector column to source table if not exists
             fts_column = f"{table_name}_tsv"
             cursor.execute(f"""
-                ALTER TABLE {self.escape_identifier(source_table)} 
+                ALTER TABLE {self.escape_identifier(source_table)}
                 ADD COLUMN IF NOT EXISTS {self.escape_identifier(fts_column)} tsvector
             """)
-            
+
             # Create update function for tsvector
             # Build columns concat for both contexts
             columns_concat_set = " || ' ' || ".join([
@@ -955,41 +955,41 @@ class PostgreSQLBackend(DatabaseBackend):
                 f"coalesce(NEW.{self.escape_identifier(col)}, '')"
                 for col in columns
             ])
-            
+
             cursor.execute(f"""
                 UPDATE {self.escape_identifier(source_table)}
-                SET {self.escape_identifier(fts_column)} = 
+                SET {self.escape_identifier(fts_column)} =
                     to_tsvector('english', {columns_concat_set})
             """)
-            
+
             # Create GIN index for fast searching
             index_name = f"idx_{source_table}_{fts_column}"
             cursor.execute(f"""
                 CREATE INDEX IF NOT EXISTS {self.escape_identifier(index_name)}
-                ON {self.escape_identifier(source_table)} 
+                ON {self.escape_identifier(source_table)}
                 USING gin({self.escape_identifier(fts_column)})
             """)
-            
+
             # Create trigger to keep tsvector updated
             trigger_name = f"update_{fts_column}_trigger"
             function_name = f"update_{fts_column}_function"
-            
+
             cursor.execute(f"""
                 CREATE OR REPLACE FUNCTION {self.escape_identifier(function_name)}()
                 RETURNS trigger AS $$
                 BEGIN
-                    NEW.{self.escape_identifier(fts_column)} := 
+                    NEW.{self.escape_identifier(fts_column)} :=
                         to_tsvector('english', {columns_concat_new});
                     RETURN NEW;
                 END;
                 $$ LANGUAGE plpgsql
             """)
-            
+
             cursor.execute(f"""
-                DROP TRIGGER IF EXISTS {self.escape_identifier(trigger_name)} 
+                DROP TRIGGER IF EXISTS {self.escape_identifier(trigger_name)}
                 ON {self.escape_identifier(source_table)}
             """)
-            
+
             cursor.execute(f"""
                 CREATE TRIGGER {self.escape_identifier(trigger_name)}
                 BEFORE INSERT OR UPDATE ON {self.escape_identifier(source_table)}
@@ -1007,7 +1007,7 @@ class PostgreSQLBackend(DatabaseBackend):
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
-    
+
     def fts_search(
         self,
         fts_query: FTSQuery,
@@ -1015,38 +1015,38 @@ class PostgreSQLBackend(DatabaseBackend):
     ) -> QueryResult:
         """Perform a PostgreSQL full-text search."""
         self.features.require("full_text_search")
-        
+
         if not fts_query.table:
             raise DatabaseError("Table name required for FTS")
-        
+
         # Build the FTS query
         fts_column = f"{fts_query.table}_tsv"
-        
+
         query_parts = [
             f"SELECT *, ts_rank({self.escape_identifier(fts_column)}, query) AS rank",
             f"FROM {self.escape_identifier(fts_query.table)},",
             f"to_tsquery('english', %s) query",
             f"WHERE {self.escape_identifier(fts_column)} @@ query"
         ]
-        
+
         params = [fts_query.query_text]
-        
+
         # Add additional filters
         for key, value in fts_query.filters.items():
             query_parts.append(f"AND {self.escape_identifier(key)} = %s")
             params.append(value)
-        
+
         # Add ORDER BY
         query_parts.append("ORDER BY rank DESC")
-        
+
         # Add LIMIT/OFFSET
         if fts_query.limit:
             query_parts.append(f"LIMIT {fts_query.limit}")
         if fts_query.offset:
             query_parts.append(f"OFFSET {fts_query.offset}")
-        
+
         query = " ".join(query_parts)
-        
+
         return self.execute(query, tuple(params), connection)
 
     # --- Optional FTS synonyms support (table + function) ---
@@ -1111,7 +1111,7 @@ class PostgreSQLBackend(DatabaseBackend):
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
-    
+
     def update_fts_index(
         self,
         table_name: str,
@@ -1121,19 +1121,19 @@ class PostgreSQLBackend(DatabaseBackend):
         # PostgreSQL FTS is updated automatically via triggers
         # This method exists for API compatibility
         pass
-    
+
     def escape_identifier(self, identifier: str) -> str:
         """Escape a PostgreSQL identifier."""
         # PostgreSQL uses double quotes for identifiers
         return '"' + identifier.replace('"', '""') + '"'
-    
+
     def get_last_insert_id(self, connection: Optional[Any] = None) -> Optional[int]:
         """Get the last inserted row ID using RETURNING clause."""
         # PostgreSQL doesn't have a direct equivalent to SQLite's lastrowid
         # Use RETURNING clause in INSERT statements instead
         logger.warning("PostgreSQL doesn't support last_insert_id. Use RETURNING clause in INSERT.")
         return None
-    
+
     def vacuum(self, connection: Optional[Any] = None) -> None:
         """Vacuum the PostgreSQL database."""
         # VACUUM can't run in a transaction
@@ -1143,7 +1143,7 @@ class PostgreSQLBackend(DatabaseBackend):
         else:
             conn = self.connect()  # Need a separate connection
             external_conn = False
-        
+
         try:
             # Use autocommit for VACUUM
             old_autocommit = getattr(conn, 'autocommit', False)
@@ -1160,33 +1160,33 @@ class PostgreSQLBackend(DatabaseBackend):
         finally:
             if not external_conn:
                 conn.close()
-    
+
     def get_database_size(self, connection: Optional[Any] = None) -> int:
         """Get the database size in bytes."""
         query = "SELECT pg_database_size(current_database())"
         result = self.execute(query, connection=connection)
         return result.scalar or 0
-    
+
     def export_schema(self, connection: Optional[Any] = None) -> str:
         """Export the database schema as SQL."""
         # This would require pg_dump or complex queries
         # Simplified version that gets table definitions
         query = """
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
             AND table_type = 'BASE TABLE'
         """
         result = self.execute(query, connection=connection)
-        
+
         schema_parts = []
         for row in result.rows:
             table_name = row['table_name']
             # This is a simplified version - full implementation would need pg_dump
             schema_parts.append(f"-- Table: {table_name}")
-        
+
         return "\n".join(schema_parts)
-    
+
     def export_data(
         self,
         table_name: str,
@@ -1194,24 +1194,24 @@ class PostgreSQLBackend(DatabaseBackend):
     ) -> Generator[Dict[str, Any], None, None]:
         """Export data from a table."""
         query = f"SELECT * FROM {self.escape_identifier(table_name)}"
-        
+
         if connection:
             conn = connection
             external_conn = True
         else:
             conn = self.get_pool().get_connection()
             external_conn = False
-        
+
         try:
             cursor = conn.cursor()
             cursor.execute(query)
-            
+
             for row in cursor:
                 yield dict(row)
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
-    
+
     def import_data(
         self,
         table_name: str,
@@ -1221,20 +1221,20 @@ class PostgreSQLBackend(DatabaseBackend):
         """Import data into a table."""
         if not data:
             return 0
-        
+
         # Get column names from first row
         columns = list(data[0].keys())
         columns_str = ", ".join([self.escape_identifier(col) for col in columns])
         placeholders = ", ".join(["%s" for _ in columns])
-        
+
         query = f"""
             INSERT INTO {self.escape_identifier(table_name)} ({columns_str})
             VALUES ({placeholders})
             ON CONFLICT DO NOTHING
         """
-        
+
         # Convert dicts to tuples
         params_list = [tuple(row.get(col) for col in columns) for row in data]
-        
+
         result = self.execute_many(query, params_list, connection)
         return result.rowcount

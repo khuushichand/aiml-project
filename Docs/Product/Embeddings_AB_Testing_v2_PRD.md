@@ -23,33 +23,33 @@
 - **Support Engineer**: Validates customer-requested experiments, ensures cleanup, and diagnoses run issues.
 
 ## Functional Requirements
-1. **Planning & Tracking**  
-   - Reintroduce `IMPLEMENTATION_PLAN.md` with milestone status updates.  
+1. **Planning & Tracking**
+   - Reintroduce `IMPLEMENTATION_PLAN.md` with milestone status updates.
    - Add a CI guard that fails when the plan is missing or stale (e.g., last updated milestone exceeds configured window).
 
-2. **Persistence Layer**  
-   - Adopt a SQLAlchemy-backed adapter (or document why the existing approach remains) with migration coverage for SQLite/Postgres.  
-   - Ensure tables for tests, arms, queries, and results have foreign keys and indexes for lookup patterns.  
+2. **Persistence Layer**
+   - Adopt a SQLAlchemy-backed adapter (or document why the existing approach remains) with migration coverage for SQLite/Postgres.
+   - Ensure tables for tests, arms, queries, and results have foreign keys and indexes for lookup patterns.
    - Provide CRUD unit tests validating create/update/delete flows across backends.
 
-3. **Collection Pipeline**  
-   - Respect `reuse_existing` flag by hashing corpus + config and skipping rebuild when collections exist.  
-   - Push collection builds into a background queue with retry/backoff handling and observable status transitions (`pending → building → ready/failed`).  
+3. **Collection Pipeline**
+   - Respect `reuse_existing` flag by hashing corpus + config and skipping rebuild when collections exist.
+   - Push collection builds into a background queue with retry/backoff handling and observable status transitions (`pending → building → ready/failed`).
    - Store stats metadata (chunk counts, embedding dimensions, provider/model revisions) for each arm.
 
-4. **Query Runner & Metrics**  
-   - Support vector-only and hybrid retrieval (with optional reranker) per arm.  
-   - Record per-query metrics (Recall@k, MRR, nDCG, Hit@k, latency percentiles) and persist results.  
+4. **Query Runner & Metrics**
+   - Support vector-only and hybrid retrieval (with optional reranker) per arm.
+   - Record per-query metrics (Recall@k, MRR, nDCG, Hit@k, latency percentiles) and persist results.
    - Expose paginated result APIs (default 50, max 500) with summary aggregates and significance calculations.
 
-5. **Governance & Cleanup**  
-   - Implement cleanup policies: immediate deletion when `on_complete` is set and TTL sweeper for residual collections.  
-   - Enforce quotas, provider allowlists, and rate limits at both API and worker levels.  
+5. **Governance & Cleanup**
+   - Implement cleanup policies: immediate deletion when `on_complete` is set and TTL sweeper for residual collections.
+   - Enforce quotas, provider allowlists, and rate limits at both API and worker levels.
    - Emit structured audit logs for create, run, delete, and export actions.
 
-6. **Observability & Exports**  
-   - Emit Prometheus metrics covering collection builds, job durations, queue depth, and success/failure counts.  
-   - Produce structured logs for key lifecycle events and errors.  
+6. **Observability & Exports**
+   - Emit Prometheus metrics covering collection builds, job durations, queue depth, and success/failure counts.
+   - Produce structured logs for key lifecycle events and errors.
    - Provide JSON/CSV exports with stable schema definitions and update developer/user documentation with usage guides.
 
 ## Non-Functional Requirements
@@ -59,19 +59,19 @@
 - Test coverage must address hashing determinism, collection reuse, cleanup behavior, API contracts, and export payload integrity.
 
 ## Milestones & Timeline
-1. **M1 - Persistence & Documentation (1 week)**  
+1. **M1 - Persistence & Documentation (1 week)**
    Finalize adapter/migrations, re-establish implementation plan doc, and add CRUD tests.
 
-2. **M2 - Collection Pipeline (1.5 weeks)**  
+2. **M2 - Collection Pipeline (1.5 weeks)**
    Implement reuse logic, background job execution, status transitions, and failure handling tests.
 
-3. **M3 - Query Runner & Metrics (1 week)**  
+3. **M3 - Query Runner & Metrics (1 week)**
    Solidify retrieval flows, persist metrics, and add pagination/aggregation tests.
 
-4. **M4 - Governance & Cleanup (1 week)**  
+4. **M4 - Governance & Cleanup (1 week)**
    Enforce quotas, implement cleanup scheduler, record audit logs, and validate enforcement paths.
 
-5. **M5 - Observability & Exports (1 week)**  
+5. **M5 - Observability & Exports (1 week)**
    Ship Prometheus metrics, structured logging, export endpoints with tests, and documentation updates including property/integration tests.
 
 ## Dependencies
@@ -81,7 +81,7 @@
 - Prometheus/Grafana stack for metrics ingestion and visualization.
 
 ## Risks & Mitigations
-- **Long-running jobs**: Use queue with max concurrency limits and cancellation hooks; surface progress metrics.  
-- **Resource overuse**: Enforce quotas and rate limits in API and worker tiers; alert on threshold breaches.  
-- **Data drift**: Hash configs and track provider/model revisions to detect mismatches before reuse.  
+- **Long-running jobs**: Use queue with max concurrency limits and cancellation hooks; surface progress metrics.
+- **Resource overuse**: Enforce quotas and rate limits in API and worker tiers; alert on threshold breaches.
+- **Data drift**: Hash configs and track provider/model revisions to detect mismatches before reuse.
 - **Test flakiness**: Employ synthetic embeddings and deterministic corpora in CI to guarantee repeatable results.

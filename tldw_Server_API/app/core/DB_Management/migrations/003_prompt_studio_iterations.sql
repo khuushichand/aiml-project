@@ -16,4 +16,3 @@ CREATE TABLE IF NOT EXISTS prompt_studio_optimization_iterations (
 
 CREATE INDEX IF NOT EXISTS idx_ps_opt_iter_opt ON prompt_studio_optimization_iterations(optimization_id);
 CREATE INDEX IF NOT EXISTS idx_ps_opt_iter_num ON prompt_studio_optimization_iterations(optimization_id, iteration_number);
-

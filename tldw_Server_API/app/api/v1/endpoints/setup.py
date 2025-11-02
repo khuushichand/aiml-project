@@ -153,7 +153,7 @@ async def ask_setup_assistant(
 
 
 @router.post(
-    
+
     "/reset",
     summary="Reset first-time setup flags (admin)",
     description=(
@@ -179,7 +179,7 @@ async def reset_setup_flags(_admin: Dict[str, Any] = Depends(require_admin)) -> 
 
 
 @router.post(
-    
+
     "/self-verify",
     summary="Mark current user as verified (initial setup)",
     description=(

@@ -22,29 +22,29 @@ from loguru import logger
 def apply_audit_logging_migration(db_path: str) -> bool:
     """
     Apply audit logging migration to database.
-    
+
     Args:
         db_path: Path to database file
-        
+
     Returns:
         True if migration applied successfully
     """
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Check if migration already applied
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='table' AND name='audit_events'
             """)
-            
+
             if cursor.fetchone():
                 logger.info("Audit logging migration already applied")
                 return True
-            
+
             logger.info("Applying audit logging migration v6...")
-            
+
             # Create audit_events table with comprehensive structure
             cursor.execute("""
                 CREATE TABLE audit_events (
@@ -68,7 +68,7 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # Create comprehensive indexes for efficient querying
             audit_indexes = [
                 "CREATE INDEX idx_audit_timestamp ON audit_events(timestamp)",
@@ -83,10 +83,10 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                 "CREATE INDEX idx_audit_user_time ON audit_events(user_id, timestamp)",
                 "CREATE INDEX idx_audit_security ON audit_events(severity, event_type, timestamp)"
             ]
-            
+
             for index_sql in audit_indexes:
                 cursor.execute(index_sql)
-            
+
             # Create audit configuration table for retention policies
             cursor.execute("""
                 CREATE TABLE audit_configuration (
@@ -99,7 +99,7 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # Insert default configuration
             cursor.execute("""
                 INSERT INTO audit_configuration (
@@ -107,11 +107,11 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     max_events_per_user_per_hour, suspicious_ip_threshold
                 ) VALUES (90, 'INFO', 1, 1000, 100)
             """)
-            
+
             # Create audit statistics view for reporting
             cursor.execute("""
                 CREATE VIEW audit_statistics AS
-                SELECT 
+                SELECT
                     DATE(timestamp) as audit_date,
                     event_type,
                     severity,
@@ -122,11 +122,11 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                 FROM audit_events
                 GROUP BY DATE(timestamp), event_type, severity, outcome
             """)
-            
+
             # Create security alerts view for high-priority events
             cursor.execute("""
                 CREATE VIEW security_alerts AS
-                SELECT 
+                SELECT
                     event_id,
                     timestamp,
                     event_type,
@@ -135,7 +135,7 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     ip_address,
                     action,
                     details,
-                    CASE 
+                    CASE
                         WHEN severity = 'critical' THEN 1
                         WHEN severity = 'high' THEN 2
                         WHEN severity = 'medium' THEN 3
@@ -145,7 +145,7 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                 WHERE severity IN ('critical', 'high')
                 ORDER BY priority, timestamp DESC
             """)
-            
+
             # Add audit logging trigger for user_rate_limits table changes
             cursor.execute("""
                 CREATE TRIGGER audit_rate_limit_changes
@@ -174,7 +174,7 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     );
                 END
             """)
-            
+
             # Create audit retention cleanup function (will be called by scheduled job)
             cursor.execute("""
                 CREATE TABLE audit_cleanup_log (
@@ -184,7 +184,7 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     retention_days INTEGER
                 )
             """)
-            
+
             # Update database version tracking
             cursor.execute("""
                 INSERT OR REPLACE INTO migrations (
@@ -196,11 +196,11 @@ def apply_audit_logging_migration(db_path: str) -> bool:
                     'audit_logging_v6_' || hex(randomblob(8))
                 )
             """)
-            
+
             conn.commit()
             logger.info("Audit logging migration v6 applied successfully")
             return True
-            
+
     except Exception as e:
         logger.error(f"Failed to apply audit logging migration: {e}")
         return False
@@ -209,39 +209,39 @@ def apply_audit_logging_migration(db_path: str) -> bool:
 def rollback_audit_logging_migration(db_path: str) -> bool:
     """
     Rollback audit logging migration.
-    
+
     Args:
         db_path: Path to database file
-        
+
     Returns:
         True if rollback successful
     """
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            
+
             logger.info("Rolling back audit logging migration v6...")
-            
+
             # Drop audit-related tables and views
             audit_objects = [
                 "DROP VIEW IF EXISTS security_alerts",
-                "DROP VIEW IF EXISTS audit_statistics", 
+                "DROP VIEW IF EXISTS audit_statistics",
                 "DROP TRIGGER IF EXISTS audit_rate_limit_changes",
                 "DROP TABLE IF EXISTS audit_cleanup_log",
                 "DROP TABLE IF EXISTS audit_configuration",
                 "DROP TABLE IF EXISTS audit_events"
             ]
-            
+
             for sql in audit_objects:
                 cursor.execute(sql)
-            
+
             # Remove migration record
             cursor.execute("DELETE FROM migrations WHERE version = 6")
-            
+
             conn.commit()
             logger.info("Audit logging migration v6 rolled back successfully")
             return True
-            
+
     except Exception as e:
         logger.error(f"Failed to rollback audit logging migration: {e}")
         return False
@@ -250,52 +250,52 @@ def rollback_audit_logging_migration(db_path: str) -> bool:
 def verify_audit_migration(db_path: str) -> bool:
     """
     Verify audit logging migration is properly applied.
-    
+
     Args:
         db_path: Path to database file
-        
+
     Returns:
         True if migration verified successfully
     """
     try:
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            
+
             # Check for required tables
             required_tables = ['audit_events', 'audit_configuration', 'audit_cleanup_log']
             for table in required_tables:
                 cursor.execute("""
-                    SELECT name FROM sqlite_master 
+                    SELECT name FROM sqlite_master
                     WHERE type='table' AND name=?
                 """, (table,))
-                
+
                 if not cursor.fetchone():
                     logger.error(f"Missing required table: {table}")
                     return False
-            
+
             # Check for required views
             required_views = ['audit_statistics', 'security_alerts']
             for view in required_views:
                 cursor.execute("""
-                    SELECT name FROM sqlite_master 
+                    SELECT name FROM sqlite_master
                     WHERE type='view' AND name=?
                 """, (view,))
-                
+
                 if not cursor.fetchone():
                     logger.error(f"Missing required view: {view}")
                     return False
-            
+
             # Check for required indexes
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='index' AND name LIKE 'idx_audit_%'
             """)
-            
+
             indexes = cursor.fetchall()
             if len(indexes) < 10:  # Should have at least 10 audit indexes
                 logger.error(f"Missing audit indexes. Found {len(indexes)}, expected at least 10")
                 return False
-            
+
             # Test basic functionality
             cursor.execute("""
                 INSERT INTO audit_events (
@@ -309,14 +309,14 @@ def verify_audit_migration(db_path: str) -> bool:
                     'success'
                 )
             """)
-            
+
             # Clean up test record
             cursor.execute("DELETE FROM audit_events WHERE event_type = 'test.migration_verify'")
-            
+
             conn.commit()
             logger.info("Audit logging migration verification passed")
             return True
-            
+
     except Exception as e:
         logger.error(f"Audit migration verification failed: {e}")
         return False
@@ -326,10 +326,10 @@ def verify_audit_migration(db_path: str) -> bool:
 def migrate_audit_logging(db_path: str) -> bool:
     """
     Apply audit logging migration with verification.
-    
+
     Args:
         db_path: Path to database file
-        
+
     Returns:
         True if migration successful
     """
@@ -345,7 +345,7 @@ def migrate_audit_logging(db_path: str) -> bool:
             )
         """)
         conn.commit()
-    
+
     # Apply migration
     if apply_audit_logging_migration(db_path):
         # Verify migration
@@ -356,5 +356,5 @@ def migrate_audit_logging(db_path: str) -> bool:
             logger.error("Migration verification failed, rolling back...")
             rollback_audit_logging_migration(db_path)
             return False
-    
+
     return False

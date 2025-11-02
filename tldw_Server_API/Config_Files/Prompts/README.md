@@ -27,4 +27,3 @@ Example Loader (future)
 Editing Tips
 - Keep a changelog at the bottom of each file.
 - If you need environment-specific variants, create files like embeddings.prompts.local.md and reference them in config.
-

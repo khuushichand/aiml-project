@@ -99,4 +99,3 @@ async def test_agentic_hard_citations_and_numeric(monkeypatch):
     # Numeric fidelity should show present token '42'
     nf = md.get("numeric_fidelity") or {}
     assert "present" in nf and any("42" in x for x in (nf.get("present") or []))
-

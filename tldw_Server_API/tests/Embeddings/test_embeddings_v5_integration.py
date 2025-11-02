@@ -93,11 +93,11 @@ def setup():
             "Authorization": "Bearer test-api-key",
             "X-CSRF-Token": csrf_token
         }
-        
+
         data.test_user = User(
-            id=1, 
-            username="testuser", 
-            email="test@example.com", 
+            id=1,
+            username="testuser",
+            email="test@example.com",
             is_active=True,
             is_admin=False
         )
@@ -111,7 +111,7 @@ def setup():
 @pytest.mark.integration
 class TestEmbeddingsIntegration:
     """Integration tests without mocking - requires actual services"""
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -124,9 +124,9 @@ class TestEmbeddingsIntegration:
         async def override_user():
             return setup.test_user
         app.dependency_overrides[get_request_user] = override_user
-        
+
         app.dependency_overrides[get_request_user] = override_user
-        
+
         # This test uses real HuggingFace models - no mocking
         response = setup.client.post(
             "/api/v1/embeddings",
@@ -247,7 +247,7 @@ class TestEmbeddingsIntegration:
                 os.environ.pop("EMBEDDINGS_DIMENSION_POLICY", None)
             else:
                 os.environ["EMBEDDINGS_DIMENSION_POLICY"] = prev_policy
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -258,9 +258,9 @@ class TestEmbeddingsIntegration:
         """Test actual OpenAI API integration (no mocks)"""
         async def override_user():
             return setup.test_user
-        
+
         app.dependency_overrides[get_request_user] = override_user
-        
+
         # This test uses real OpenAI API - no mocking
         response = setup.client.post(
             "/api/v1/embeddings",
@@ -270,26 +270,26 @@ class TestEmbeddingsIntegration:
                 "model": "text-embedding-3-small"
             }
         )
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         # Verify real OpenAI embeddings
         assert "data" in data
         assert len(data["data"]) == 1
-        
+
         embedding = data["data"][0]["embedding"]
         assert len(embedding) == 1536  # text-embedding-3-small default dimensions
-        
+
         # Check usage is reported correctly
         assert "usage" in data
         assert data["usage"]["total_tokens"] > 0
         assert data["usage"]["prompt_tokens"] > 0
-        
+
         # OpenAI embeddings should be normalized
         norm = np.linalg.norm(embedding)
         assert 0.95 < norm < 1.05
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.asyncio
@@ -301,12 +301,12 @@ class TestEmbeddingsIntegration:
         """Test cache persistence across requests (no mocks)"""
         async def override_user():
             return setup.test_user
-        
+
         app.dependency_overrides[get_request_user] = override_user
-        
+
         # Use unique text to avoid conflicts with other tests
         unique_text = f"Cache test {datetime.now().isoformat()} {os.getpid()}"
-        
+
         # First request - will create real embedding
         response1 = setup.client.post(
             "/api/v1/embeddings",
@@ -316,7 +316,7 @@ class TestEmbeddingsIntegration:
                 "model": "sentence-transformers/all-MiniLM-L6-v2"
             }
         )
-        
+
         if response1.status_code == 200:
             provider_header = (response1.headers.get("X-Embeddings-Provider") or "").lower()
             if provider_header and provider_header != "huggingface":
@@ -325,7 +325,7 @@ class TestEmbeddingsIntegration:
             embedding1 = response1.json()["data"][0]["embedding"]
             if len(embedding1) != 384:
                 pytest.skip(f"HuggingFace embedding returned unexpected dimension {len(embedding1)} (likely fallback)")
-            
+
             # Second identical request
             response2 = setup.client.post(
                 "/api/v1/embeddings",
@@ -335,7 +335,7 @@ class TestEmbeddingsIntegration:
                     "model": "sentence-transformers/all-MiniLM-L6-v2"
                 }
             )
-            
+
             assert response2.status_code == 200
             provider_header2 = (response2.headers.get("X-Embeddings-Provider") or "").lower()
             if provider_header2 and provider_header2 != "huggingface":
@@ -343,14 +343,14 @@ class TestEmbeddingsIntegration:
             embedding2 = response2.json()["data"][0]["embedding"]
             if len(embedding2) != 384:
                 pytest.skip(f"HuggingFace embedding returned unexpected dimension {len(embedding2)} (likely fallback)")
-            
+
             # Should return identical embeddings (from cache)
             assert embedding1 == embedding2
-            
+
             # Verify embeddings are valid
             assert len(embedding1) == 384
             assert len(embedding2) == 384
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -361,11 +361,11 @@ class TestEmbeddingsIntegration:
         """Test that different providers produce different embeddings for same text"""
         async def override_user():
             return setup.test_user
-        
+
         app.dependency_overrides[get_request_user] = override_user
-        
+
         test_text = "Compare embeddings across providers"
-        
+
         # Get HuggingFace embedding
         response_hf = setup.client.post(
             "/api/v1/embeddings",
@@ -375,14 +375,14 @@ class TestEmbeddingsIntegration:
                 "model": "sentence-transformers/all-MiniLM-L6-v2"
             }
         )
-        
+
         if response_hf.status_code == 200 and os.getenv("OPENAI_API_KEY"):
             provider_header = (response_hf.headers.get("X-Embeddings-Provider") or "").lower()
             if provider_header and provider_header != "huggingface":
                 pytest.skip(f"Embedding provider fell back to {provider_header}")
 
             embedding_hf = response_hf.json()["data"][0]["embedding"]
-            
+
             # Get OpenAI embedding
             response_openai = setup.client.post(
                 "/api/v1/embeddings",
@@ -392,19 +392,19 @@ class TestEmbeddingsIntegration:
                     "model": "text-embedding-3-small"
                 }
             )
-            
+
             if response_openai.status_code == 200:
                 embedding_openai = response_openai.json()["data"][0]["embedding"]
-                
+
                 # Should have different dimensions
                 assert len(embedding_hf) != len(embedding_openai)
                 assert len(embedding_hf) == 384
                 assert len(embedding_openai) == 1536
-                
+
                 # Both should be normalized
                 assert 0.95 < np.linalg.norm(embedding_hf) < 1.05
                 assert 0.95 < np.linalg.norm(embedding_openai) < 1.05
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -419,9 +419,9 @@ class TestEmbeddingsIntegration:
         """Test system under real concurrent load (no mocks)"""
         async def override_user():
             return setup.test_user
-        
+
         app.dependency_overrides[get_request_user] = override_user
-        
+
         async def make_real_request(idx):
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=30.0) as ac:
                 # Set CSRF token in cookie
@@ -435,7 +435,7 @@ class TestEmbeddingsIntegration:
                     }
                 )
                 return response
-        
+
         # Make real concurrent requests
         tasks = [make_real_request(i) for i in range(20)]
         # Apply an overall timeout to prevent hangs in CI
@@ -460,7 +460,7 @@ class TestEmbeddingsIntegration:
             provider_header = (resp.headers.get("X-Embeddings-Provider") or "").lower()
             if provider_header and provider_header != "huggingface":
                 pytest.skip(f"Embedding provider fell back to {provider_header}")
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -471,12 +471,12 @@ class TestEmbeddingsIntegration:
         """Test batch processing with real embeddings"""
         async def override_user():
             return setup.test_user
-        
+
         app.dependency_overrides[get_request_user] = override_user
-        
+
         # Create batch of unique texts
         batch_texts = [f"Batch text {i}" for i in range(10)]
-        
+
         response = setup.client.post(
             "/api/v1/embeddings",
             headers={**setup.auth_headers, "x-provider": "huggingface"},
@@ -485,28 +485,28 @@ class TestEmbeddingsIntegration:
                 "model": "sentence-transformers/all-MiniLM-L6-v2"
             }
         )
-        
+
         if response.status_code == 200:
             provider_header = (response.headers.get("X-Embeddings-Provider") or "").lower()
             if provider_header and provider_header != "huggingface":
                 pytest.skip(f"Embedding provider fell back to {provider_header}")
             data = response.json()
-            
+
             # Should return embeddings for all texts
             assert len(data["data"]) == 10
-            
+
             # Each embedding should be valid
             for i, embedding_data in enumerate(data["data"]):
                 assert embedding_data["index"] == i
                 embedding = embedding_data["embedding"]
                 if len(embedding) != 384:
                     pytest.skip(f"HuggingFace embedding returned unexpected dimension {len(embedding)} (likely fallback)")
-                
+
                 # Should have reasonable magnitude
                 norm = np.linalg.norm(embedding)
                 assert norm > 0.1  # Not zero or near-zero
                 assert norm < 100  # Not unreasonably large
-            
+
             # Different texts should produce different embeddings
             embeddings = [d["embedding"] for d in data["data"]]
             for i in range(len(embeddings) - 1):
@@ -515,23 +515,23 @@ class TestEmbeddingsIntegration:
                 vec2 = np.array(embeddings[i + 1])
                 cos_sim = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
                 assert cos_sim < 0.99, f"Different texts produced too similar embeddings (similarity={cos_sim})"
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_health_check_with_real_service(self, setup):
         """Test health check endpoint with real service"""
         response = setup.client.get("/api/v1/embeddings/health")
-        
+
         assert response.status_code in [200, 503]  # May be degraded if dependencies missing
         data = response.json()
-        
+
         assert "status" in data
         assert "service" in data
         assert data["service"] == "embeddings_v5_production_enhanced"
         assert "timestamp" in data
         assert "cache_stats" in data
         assert "active_requests" in data
-        
+
         # Cache stats should be valid
         cache_stats = data["cache_stats"]
         assert "size" in cache_stats

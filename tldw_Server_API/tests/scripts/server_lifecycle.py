@@ -127,9 +127,9 @@ def _get_timeout_seconds() -> float:
 def health_check() -> None:
     """
     Probe the server's health endpoints until one reports healthy or the configured startup timeout elapses.
-    
+
     Repeatedly requests each path in HEALTH_PATHS against the configured base URL. Treats HTTP 200 as a success for any path and HTTP 206 as a success for paths ending with "/health". Prints a brief success message with the path and status when a healthy response is observed. If no endpoint succeeds before the startup timeout, prints recent server logs and exits the process.
-    
+
     Raises:
         SystemExit: If no health endpoint reports success before the configured startup timeout; recent server logs are printed before exiting.
     """

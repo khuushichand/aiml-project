@@ -42,7 +42,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 def pytest_configure(config):
     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
-    config.addinivalue_line("markers", "integration: Integration tests with real components") 
+    config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
     config.addinivalue_line("markers", "slow: Tests that take > 1 second")
     config.addinivalue_line("markers", "requires_api_key: Tests requiring provider API keys")
@@ -76,13 +76,13 @@ def sample_audio_bytes() -> bytes:
     sample_rate = 24000
     duration = 1.0  # 1 second
     frequency = 440  # A4 note
-    
+
     t = np.linspace(0, duration, int(sample_rate * duration))
     samples = np.sin(2 * np.pi * frequency * t)
-    
+
     # Convert to 16-bit PCM
     samples = (samples * 32767).astype(np.int16)
-    
+
     # Create WAV file in memory
     buffer = io.BytesIO()
     with wave.open(buffer, 'wb') as wav_file:
@@ -90,7 +90,7 @@ def sample_audio_bytes() -> bytes:
         wav_file.setsampwidth(2)  # 16-bit
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(samples.tobytes())
-    
+
     return buffer.getvalue()
 
 @pytest.fixture
@@ -236,7 +236,7 @@ def mock_openai_adapter():
     adapter.is_available = True
     adapter.supported_models = ["tts-1", "tts-1-hd"]
     adapter.supported_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
-    
+
     async def mock_generate(request):
         return TTSResponse(
             audio_content=b"mock_audio_data",
@@ -246,19 +246,19 @@ def mock_openai_adapter():
             provider="openai",
             model=request.model
         )
-    
+
     adapter.generate = AsyncMock(side_effect=mock_generate)
     adapter.validate_request = AsyncMock(return_value=True)
-    
+
     return adapter
 
 @pytest.fixture
 def mock_adapter_factory():
     """Mock adapter factory."""
     factory = MagicMock()
-    
+
     adapters = {}
-    
+
     def get_adapter(provider):
         if provider not in adapters:
             adapter = MagicMock()
@@ -267,11 +267,11 @@ def mock_adapter_factory():
             adapter.generate = AsyncMock(return_value=MagicMock(audio_content=b"mock_audio"))
             adapters[provider] = adapter
         return adapters[provider]
-    
+
     factory.get_adapter = Mock(side_effect=get_adapter)
     factory.list_available_providers = Mock(return_value=["openai", "elevenlabs"])
     factory.is_provider_configured = Mock(return_value=True)
-    
+
     return factory
 
 # =====================================================================
@@ -313,7 +313,7 @@ def mock_circuit_breaker():
     breaker.record_success = Mock()
     breaker.record_failure = Mock()
     breaker.reset = Mock()
-    
+
     return breaker
 
 # =====================================================================
@@ -329,7 +329,7 @@ def mock_resource_manager():
     manager.release_resources = AsyncMock()
     manager.get_memory_usage = Mock(return_value={"used": 1024, "available": 4096})
     manager.get_gpu_usage = Mock(return_value={"used": 0, "available": 0})
-    
+
     return manager
 
 # =====================================================================

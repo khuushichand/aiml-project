@@ -45,4 +45,3 @@ def test_hierarchical_offsets_with_repeated_content_monotonic():
     starts = [ (c.get("metadata") or {}).get("start_offset", -1) for c in chunks ]
     assert all(isinstance(s, int) for s in starts)
     assert starts == sorted(starts), "Chunks should be emitted in non-decreasing document order"
-

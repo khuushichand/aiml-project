@@ -66,4 +66,3 @@ class VLMBackend(ABC):
             context: Optional context (e.g., page number)
         """
         raise NotImplementedError
-

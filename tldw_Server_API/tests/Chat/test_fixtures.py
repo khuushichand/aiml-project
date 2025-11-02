@@ -21,10 +21,10 @@ def real_test_db():
     # Create a temporary directory for the test database
     temp_dir = tempfile.mkdtemp(prefix="test_chacha_")
     db_path = os.path.join(temp_dir, "test_chacha.db")
-    
+
     # Initialize real database
     db = CharactersRAGDB(db_path, client_id="test_client")
-    
+
     # Add default character
     char_id = db.add_character_card({
         "name": DEFAULT_CHARACTER_NAME,
@@ -35,7 +35,7 @@ def real_test_db():
         "first_message": "Hello! I'm here to help with testing.",
         "creator_notes": "Created for integration testing"
     })
-    
+
     # Add a test character
     test_char_id = db.add_character_card({
         "name": "TestCharacter",
@@ -46,14 +46,14 @@ def real_test_db():
         "first_message": "Test first message",
         "creator_notes": "Test notes"
     })
-    
+
     # Create a test conversation with messages
     conv_id = db.create_conversation(
         character_id=char_id,
         conversation_name="Test Conversation",
         client_id="test_client"
     )
-    
+
     # Add some test messages to the conversation
     db.add_message(
         conversation_id=conv_id,
@@ -61,30 +61,30 @@ def real_test_db():
         content="Hello, how are you?",
         client_id="test_client"
     )
-    
+
     db.add_message(
         conversation_id=conv_id,
-        sender="assistant", 
+        sender="assistant",
         content="I'm doing well, thank you! How can I help you today?",
         client_id="test_client"
     )
-    
+
     db.add_message(
         conversation_id=conv_id,
         sender="user",
         content="Can you explain quantum computing?",
         client_id="test_client"
     )
-    
+
     db.add_message(
         conversation_id=conv_id,
         sender="assistant",
         content="Quantum computing uses quantum bits (qubits) that can exist in superposition...",
         client_id="test_client"
     )
-    
+
     yield db
-    
+
     # Cleanup
     try:
         # Close any open connections
@@ -102,12 +102,12 @@ def real_media_db():
     # Create a temporary directory for the test database
     temp_dir = tempfile.mkdtemp(prefix="test_media_")
     db_path = os.path.join(temp_dir, "test_media.db")
-    
+
     # Initialize real database
     db = MediaDatabase(db_path, client_id="test_client")
-    
+
     yield db
-    
+
     # Cleanup
     try:
         # Close any open connections
@@ -134,7 +134,7 @@ def test_user():
 def auth_headers(test_user):
     """Generate proper authentication headers."""
     settings = get_settings()
-    
+
     if settings.AUTH_MODE == "multi_user":
         from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
         jwt_service = get_jwt_service()
@@ -161,16 +161,16 @@ def setup_test_auth(test_user, real_test_db, real_media_db):
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-    
+
     # Override authentication to return test user
     async def mock_get_request_user(api_key=None, token=None):
         return test_user
-    
+
     # Override database dependencies to return real test databases
     app.dependency_overrides[get_request_user] = mock_get_request_user
     app.dependency_overrides[get_chacha_db_for_user] = lambda: real_test_db
     app.dependency_overrides[get_media_db_for_user] = lambda: real_media_db
-    
+
     yield
-    
+
     # Cleanup - don't clear, let the autouse fixture handle it

@@ -43,7 +43,7 @@ class UnifiedRAGRequest(BaseModel):
     Unified RAG request with ALL features as optional parameters.
     Every feature in the RAG system is accessible through this single schema.
     """
-    
+
     # ========== REQUIRED ==========
     query: str = Field(
         ...,
@@ -52,7 +52,7 @@ class UnifiedRAGRequest(BaseModel):
         max_length=2000,
         example="What is machine learning?"
     )
-    
+
     # ========== DATA SOURCES ==========
     sources: Optional[List[str]] = Field(
         default=["media_db"],
@@ -121,21 +121,21 @@ class UnifiedRAGRequest(BaseModel):
             except Exception:
                 pass
             return values
-    
+
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = Field(
         default="hybrid",
         description="Search mode: fts (full-text), vector (semantic), or hybrid",
         example="hybrid"
     )
-    
+
     # FTS granularity: media-level (Media.title/content) or chunk-level (UnvectorizedMediaChunks)
     fts_level: Literal["media", "chunk"] = Field(
         default=_DEF_FTS_LVL,
         description="FTS granularity: 'media' searches Media FTS; 'chunk' searches plaintext chunks",
         example="chunk"
     )
-    
+
     hybrid_alpha: float = Field(
         default=0.7,
         ge=0.0,
@@ -149,7 +149,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Analyze query intent and adjust retrieval knobs (top_k, hybrid weighting) before retrieval",
         example=False,
     )
-    
+
     top_k: int = Field(
         default=10,
         ge=1,
@@ -157,7 +157,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Number of results to return",
         example=10
     )
-    
+
     min_score: float = Field(
         default=0.0,
         ge=0.0,
@@ -179,33 +179,33 @@ class UnifiedRAGRequest(BaseModel):
         except Exception:
             pass
         return v
-    
+
     # ========== QUERY EXPANSION ==========
     expand_query: bool = Field(
         default=False,
         description="Enable query expansion",
         example=True
     )
-    
+
     expansion_strategies: Optional[List[str]] = Field(
         default=None,
         description="Expansion strategies: acronym, synonym, domain, entity",
         example=["acronym", "synonym"]
     )
-    
+
     spell_check: bool = Field(
         default=False,
         description="Enable spell checking",
         example=False
     )
-    
+
     # ========== CACHING ==========
     enable_cache: bool = Field(
         default=True,
         description="Enable semantic caching",
         example=True
     )
-    
+
     cache_threshold: float = Field(
         default=0.85,
         ge=0.0,
@@ -213,20 +213,20 @@ class UnifiedRAGRequest(BaseModel):
         description="Cache similarity threshold",
         example=0.85
     )
-    
+
     adaptive_cache: bool = Field(
         default=True,
         description="Use adaptive cache thresholds",
         example=True
     )
-    
+
     # ========== FILTERING ==========
     keyword_filter: Optional[List[str]] = Field(
         default=None,
         description="Filter results by keywords",
         example=["python", "api"]
     )
-    
+
     # Explicit selection of items per source
     include_media_ids: Optional[List[int]] = Field(
         default=None,
@@ -238,45 +238,45 @@ class UnifiedRAGRequest(BaseModel):
         description="Restrict search to these Note IDs (ChaChaNotes UUIDs)",
         example=["a1b2c3-uuid", "d4e5f6-uuid"]
     )
-    
+
     # ========== SECURITY & PRIVACY ==========
     enable_security_filter: bool = Field(
         default=False,
         description="Enable security filtering",
         example=False
     )
-    
+
     detect_pii: bool = Field(
         default=False,
         description="Detect personally identifiable information",
         example=False
     )
-    
+
     redact_pii: bool = Field(
         default=False,
         description="Redact detected PII",
         example=False
     )
-    
+
     sensitivity_level: Literal["public", "internal", "confidential", "restricted"] = Field(
         default="public",
         description="Maximum sensitivity level for results",
         example="internal"
     )
-    
+
     content_filter: bool = Field(
         default=False,
         description="Enable content filtering",
         example=False
     )
-    
+
     # ========== DOCUMENT PROCESSING ==========
     enable_table_processing: bool = Field(
         default=False,
         description="Enable table extraction and processing",
         example=False
     )
-    
+
     table_method: Literal["markdown", "html", "hybrid"] = Field(
         default="markdown",
         description="Table serialization method",
@@ -313,21 +313,21 @@ class UnifiedRAGRequest(BaseModel):
         description="Number of top retrieved documents to apply VLM late-chunking to",
         example=3
     )
-    
+
     # ========== CHUNKING & CONTEXT ==========
-    
+
     chunk_type_filter: Optional[List[str]] = Field(
         default=None,
         description="Filter chunks by type: text, code, table, list",
         example=["text", "code"]
     )
-    
+
     enable_parent_expansion: bool = Field(
         default=False,
         description="Expand chunks with parent document context",
         example=False
     )
-    
+
     parent_context_size: int = Field(
         default=500,
         ge=100,
@@ -335,13 +335,13 @@ class UnifiedRAGRequest(BaseModel):
         description="Size of parent context in characters",
         example=500
     )
-    
+
     include_sibling_chunks: bool = Field(
         default=_DEF_INC_SIB,
         description="Include adjacent chunks from same document",
         example=False
     )
-    
+
     sibling_window: int = Field(
         default=_DEF_SIB_WIN,
         ge=0,
@@ -349,7 +349,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Number of sibling chunks to include on each side when include_sibling_chunks is true",
         example=2
     )
-    
+
     include_parent_document: bool = Field(
         default=_DEF_INC_PARENT,
         description="Include the full parent document for each selected chunk",
@@ -629,20 +629,20 @@ class UnifiedRAGRequest(BaseModel):
         description="Local HuggingFace model id or path for MNLI (e.g., roberta-large-mnli or /models/mnli)",
         example="roberta-large-mnli",
     )
-    
+
     # ========== RERANKING ==========
     enable_reranking: bool = Field(
         default=True,
         description="Enable document reranking",
         example=True
     )
-    
+
     reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = Field(
         default="flashrank",
         description="Reranking strategy",
         example="hybrid"
     )
-    
+
     rerank_top_k: Optional[int] = Field(
         default=None,
         ge=1,
@@ -671,32 +671,32 @@ class UnifiedRAGRequest(BaseModel):
         description="Override required margin between top probability and sentinel (Two-Tier)",
         example=0.15,
     )
-    
+
     # ========== CITATIONS ==========
     enable_citations: bool = Field(
         default=False,
         description="Generate citations from results",
         example=True
     )
-    
+
     citation_style: Literal["apa", "mla", "chicago", "harvard", "ieee"] = Field(
         default="apa",
         description="Academic citation format style",
         example="apa"
     )
-    
+
     include_page_numbers: bool = Field(
         default=False,
         description="Include page numbers in citations",
         example=False
     )
-    
+
     enable_chunk_citations: bool = Field(
         default=True,
         description="Generate chunk-level citations for answer verification",
         example=True
     )
-    
+
     # ========== ANSWER GENERATION ==========
     enable_generation: bool = Field(
         default=False,
@@ -708,19 +708,19 @@ class UnifiedRAGRequest(BaseModel):
         description="Strict extractive mode: assemble the answer only from retrieved spans (no free-form generation). Intended for sentence-level grounding with hard citations.",
         example=False,
     )
-    
+
     generation_model: Optional[str] = Field(
         default=None,
         description="LLM model for answer generation",
         example="gpt-3.5-turbo"
     )
-    
+
     generation_prompt: Optional[str] = Field(
         default=None,
         description="Custom prompt template for generation",
         example=None
     )
-    
+
     max_generation_tokens: int = Field(
         default=500,
         ge=50,
@@ -874,71 +874,71 @@ class UnifiedRAGRequest(BaseModel):
         description="Optional cap on documents passed to quick-verify during rerun adoption checks",
         example=10,
     )
-    
+
     # ========== FEEDBACK ==========
     collect_feedback: bool = Field(
         default=False,
         description="Enable feedback collection",
         example=False
     )
-    
+
     feedback_user_id: Optional[str] = Field(
         default=None,
         description="User ID for feedback tracking",
         example="user123"
     )
-    
+
     apply_feedback_boost: bool = Field(
         default=False,
         description="Apply feedback-based result boosting",
         example=False
     )
-    
+
     # ========== MONITORING & ANALYTICS ==========
     enable_monitoring: bool = Field(
         default=False,
         description="Enable performance monitoring",
         example=True
     )
-    
+
     enable_analytics: bool = Field(
         default=True,
         description="Enable analytics collection (server QA)",
         example=True
     )
-    
+
     # ========== PERFORMANCE ==========
     use_connection_pool: bool = Field(
         default=True,
         description="Use database connection pooling",
         example=True
     )
-    
+
     use_embedding_cache: bool = Field(
         default=True,
         description="Use LRU cache for embeddings",
         example=True
     )
-    
+
     enable_observability: bool = Field(
         default=False,
         description="Enable observability tracing",
         example=False
     )
-    
+
     trace_id: Optional[str] = Field(
         default=None,
         description="Trace ID for observability",
         example=None
     )
-    
+
     # ========== PERFORMANCE ==========
     enable_performance_analysis: bool = Field(
         default=False,
         description="Enable detailed performance analysis",
         example=False
     )
-    
+
     timeout_seconds: Optional[float] = Field(
         default=None,
         ge=1.0,
@@ -946,26 +946,26 @@ class UnifiedRAGRequest(BaseModel):
         description="Request timeout in seconds",
         example=10.0
     )
-    
+
     # ========== QUICK WINS ==========
     highlight_results: bool = Field(
         default=False,
         description="Highlight matching terms in results",
         example=False
     )
-    
+
     highlight_query_terms: bool = Field(
         default=False,
         description="Highlight query terms specifically",
         example=False
     )
-    
+
     track_cost: bool = Field(
         default=False,
         description="Track estimated API costs",
         example=False
     )
-    
+
     debug_mode: bool = Field(
         default=False,
         description="Enable debug logging",
@@ -1007,20 +1007,20 @@ class UnifiedRAGRequest(BaseModel):
         description="Behavior when numeric values are not found in sources",
         example="ask",
     )
-    
+
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = Field(
         default=False,
         description="Enable batch query processing",
         example=False
     )
-    
+
     batch_queries: Optional[List[str]] = Field(
         default=None,
         description="Additional queries for batch processing",
         example=["query1", "query2"]
     )
-    
+
     batch_concurrent: int = Field(
         default=5,
         ge=1,
@@ -1028,14 +1028,14 @@ class UnifiedRAGRequest(BaseModel):
         description="Maximum concurrent batch queries",
         example=5
     )
-    
+
     # ========== RESILIENCE ==========
     enable_resilience: bool = Field(
         default=False,
         description="Enable resilience features",
         example=False
     )
-    
+
     retry_attempts: int = Field(
         default=3,
         ge=1,
@@ -1043,26 +1043,26 @@ class UnifiedRAGRequest(BaseModel):
         description="Number of retry attempts",
         example=3
     )
-    
+
     circuit_breaker: bool = Field(
         default=False,
         description="Enable circuit breaker",
         example=False
     )
-    
+
     # ========== USER CONTEXT ==========
     user_id: Optional[str] = Field(
         default=None,
         description="User ID for personalization",
         example="user123"
     )
-    
+
     session_id: Optional[str] = Field(
         default=None,
         description="Session ID for tracking",
         example="session456"
     )
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "query": "What is machine learning?",
@@ -1075,7 +1075,7 @@ class UnifiedRAGRequest(BaseModel):
             "reranking_strategy": "hybrid"
         }
     })
-    
+
     @field_validator('sources')
     @classmethod
     def validate_sources(cls, v):
@@ -1085,7 +1085,7 @@ class UnifiedRAGRequest(BaseModel):
             if invalid:
                 raise ValueError(f"Invalid sources: {invalid}. Valid options: {valid_sources}")
         return v
-    
+
     @field_validator('expansion_strategies')
     @classmethod
     def validate_expansion_strategies(cls, v):
@@ -1095,7 +1095,7 @@ class UnifiedRAGRequest(BaseModel):
             if invalid:
                 raise ValueError(f"Invalid strategies: {invalid}. Valid options: {valid_strategies}")
         return v
-    
+
     @field_validator('chunk_type_filter')
     @classmethod
     def validate_chunk_types(cls, v):
@@ -1109,70 +1109,70 @@ class UnifiedRAGRequest(BaseModel):
 
 class UnifiedRAGResponse(BaseModel):
     """Unified response structure for RAG queries."""
-    
+
     documents: List[Dict[str, Any]] = Field(
         description="Retrieved documents"
     )
-    
+
     query: str = Field(
         description="Original query"
     )
-    
+
     expanded_queries: List[str] = Field(
         default_factory=list,
         description="Expanded query variations"
     )
-    
+
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata"
     )
-    
+
     timings: Dict[str, float] = Field(
         default_factory=dict,
         description="Performance timings"
     )
-    
+
     citations: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Generated citations (academic and chunk-level)"
     )
-    
+
     academic_citations: List[str] = Field(
         default_factory=list,
         description="Formatted academic citations (MLA/APA/etc)"
     )
-    
+
     chunk_citations: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Chunk-level citations for answer verification"
     )
-    
+
     feedback_id: Optional[str] = Field(
         default=None,
         description="Feedback tracking ID"
     )
-    
+
     generated_answer: Optional[str] = Field(
         default=None,
         description="Generated answer from context"
     )
-    
+
     cache_hit: bool = Field(
         default=False,
         description="Whether result was from cache"
     )
-    
+
     errors: List[str] = Field(
         default_factory=list,
         description="Any errors encountered"
     )
-    
+
     security_report: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Security analysis report"
     )
-    
+
     total_time: float = Field(
         default=0.0,
         description="Total execution time"
@@ -1187,7 +1187,7 @@ class UnifiedRAGResponse(BaseModel):
         default=None,
         description="Summary of factuality (supported/refuted/nei, precision, coverage)",
     )
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "documents": [
@@ -1229,7 +1229,7 @@ class UnifiedRAGResponse(BaseModel):
 
 class UnifiedBatchRequest(BaseModel):
     """Request for batch processing multiple queries."""
-    
+
     queries: List[str] = Field(
         ...,
         min_length=1,
@@ -1237,7 +1237,7 @@ class UnifiedBatchRequest(BaseModel):
         description="List of queries to process",
         example=["What is AI?", "Explain neural networks", "Define machine learning"]
     )
-    
+
     max_concurrent: int = Field(
         default=5,
         ge=1,
@@ -1245,42 +1245,42 @@ class UnifiedBatchRequest(BaseModel):
         description="Maximum concurrent processing",
         example=5
     )
-    
+
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
     sources: Optional[List[str]] = Field(default=["media_db"], description="Databases to search")
     # Indexing / Namespace
     corpus: Optional[str] = Field(default=None, description="Alias for index_namespace")
     index_namespace: Optional[str] = Field(default=None, description="Corpus/namespace identifier")
-    
-    # Search Configuration  
+
+    # Search Configuration
     search_mode: Literal["fts", "vector", "hybrid"] = Field(default="hybrid")
     hybrid_alpha: float = Field(default=0.7, ge=0.0, le=1.0)
     enable_intent_routing: bool = Field(default=False)
     top_k: int = Field(default=10, ge=1, le=100)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
     adaptive_advanced_rewrites: Optional[bool] = Field(default=None)
-    
+
     # Query Expansion
     expand_query: bool = Field(default=False)
     expansion_strategies: Optional[List[str]] = Field(default=None)
     spell_check: bool = Field(default=False)
-    
+
     # Caching
     enable_cache: bool = Field(default=True)
     cache_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     adaptive_cache: bool = Field(default=True)
-    
+
     # Filtering
     keyword_filter: Optional[List[str]] = Field(default=None)
-    
+
     # Security & Privacy
     enable_security_filter: bool = Field(default=False)
     detect_pii: bool = Field(default=False)
     redact_pii: bool = Field(default=False)
     sensitivity_level: Literal["public", "internal", "confidential", "restricted"] = Field(default="public")
     content_filter: bool = Field(default=False)
-    
+
     # Document Processing
     enable_table_processing: bool = Field(default=False)
     table_method: Literal["markdown", "html", "hybrid"] = Field(default="markdown")
@@ -1290,7 +1290,7 @@ class UnifiedBatchRequest(BaseModel):
     vlm_detect_tables_only: bool = Field(default=True)
     vlm_max_pages: Optional[int] = Field(default=None, ge=1, le=1000)
     vlm_late_chunk_top_k_docs: int = Field(default=3, ge=1, le=50)
-    
+
     # Chunking & Context
     enable_enhanced_chunking: bool = Field(default=False)
     chunk_type_filter: Optional[List[str]] = Field(default=None)
@@ -1308,7 +1308,7 @@ class UnifiedBatchRequest(BaseModel):
     mv_max_spans: int = Field(default=8, ge=1, le=64)
     mv_flatten_to_spans: bool = Field(default=False)
     enable_numeric_table_boost: bool = Field(default=False)
-    
+
     # Reranking
     enable_reranking: bool = Field(default=True)
     reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = Field(default="flashrank")
@@ -1316,12 +1316,12 @@ class UnifiedBatchRequest(BaseModel):
     reranking_model: Optional[str] = Field(default=None)
     rerank_min_relevance_prob: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     rerank_sentinel_margin: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    
+
     # Citations
     enable_citations: bool = Field(default=False)
     citation_style: Literal["apa", "mla", "chicago", "harvard"] = Field(default="apa")
     include_page_numbers: bool = Field(default=False)
-    
+
     # Answer Generation
     enable_generation: bool = Field(default=False)
     strict_extractive: bool = Field(default=False)
@@ -1342,7 +1342,7 @@ class UnifiedBatchRequest(BaseModel):
     html_allowed_tags: Optional[List[str]] = Field(default=None)
     html_allowed_attrs: Optional[List[str]] = Field(default=None)
     ocr_confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    
+
     # Post-Verification (Adaptive)
     enable_post_verification: bool = Field(default=False)
     adaptive_max_retries: int = Field(default=1, ge=0, le=3)
@@ -1356,21 +1356,21 @@ class UnifiedBatchRequest(BaseModel):
     adaptive_rerun_bypass_cache: bool = Field(default=False)
     adaptive_rerun_time_budget_sec: Optional[float] = Field(default=None, ge=0.0)
     adaptive_rerun_doc_budget: Optional[int] = Field(default=None, ge=1)
-    
+
     # Feedback
     collect_feedback: bool = Field(default=False)
     feedback_user_id: Optional[str] = Field(default=None)
     apply_feedback_boost: bool = Field(default=False)
-    
+
     # Monitoring
     enable_monitoring: bool = Field(default=False)
     enable_observability: bool = Field(default=False)
     trace_id: Optional[str] = Field(default=None)
-    
+
     # Performance
     enable_performance_analysis: bool = Field(default=False)
     timeout_seconds: Optional[float] = Field(default=None, ge=1.0, le=60.0)
-    
+
     # Quick Wins
     highlight_results: bool = Field(default=False)
     highlight_query_terms: bool = Field(default=False)
@@ -1383,15 +1383,15 @@ class UnifiedBatchRequest(BaseModel):
     require_hard_citations: bool = Field(default=False)
     enable_numeric_fidelity: bool = Field(default=False)
     numeric_fidelity_behavior: Literal["continue", "ask", "decline", "retry"] = Field(default="continue")
-    
+
     # Batch Processing (excluding batch fields as this IS a batch request)
     # enable_batch, batch_queries, batch_concurrent are not included
-    
+
     # Resilience
     enable_resilience: bool = Field(default=False)
     retry_attempts: int = Field(default=3, ge=1, le=5)
     circuit_breaker: bool = Field(default=False)
-    
+
     # User Context
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
@@ -1418,7 +1418,7 @@ class UnifiedBatchRequest(BaseModel):
             except Exception:
                 pass
             return values
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "queries": ["What is AI?", "Explain neural networks"],
@@ -1432,27 +1432,27 @@ class UnifiedBatchRequest(BaseModel):
 
 class UnifiedBatchResponse(BaseModel):
     """Response for batch processing."""
-    
+
     results: List[UnifiedRAGResponse] = Field(
         description="Results for each query"
     )
-    
+
     total_queries: int = Field(
         description="Total number of queries processed"
     )
-    
+
     successful: int = Field(
         description="Number of successful queries"
     )
-    
+
     failed: int = Field(
         description="Number of failed queries"
     )
-    
+
     total_time: float = Field(
         description="Total batch processing time"
     )
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "results": [],  # List of UnifiedRAGResponse objects

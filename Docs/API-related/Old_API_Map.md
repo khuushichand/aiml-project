@@ -1,7 +1,7 @@
 Version 1.0.0
     - **Search**
         Each search endpoint accepts a JSON payload with the search query and returns a list of results.
-        Media search supports RAG and FTS. 
+        Media search supports RAG and FTS.
         Chat supports FTS
         Prompts supports FTS
         Characters supports FTS
@@ -35,7 +35,7 @@ Version 1.0.0
     - **Media Management**
         ```
             GET /api/v1/media - List all media items
-            GET /api/v1/media/{id} - Get details of a specific media item      
+            GET /api/v1/media/{id} - Get details of a specific media item
             PUT /api/v1/media/{id} - Update an existing media item
             DELETE /api/v1/media/{id} - Delete a media item
         ```

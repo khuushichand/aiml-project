@@ -16,4 +16,3 @@ def test_invalidate_intra_doc_vectors():
     ac.clear_agentic_caches()
     assert not ac._INTRA_DOC_VEC_CACHE
     assert isinstance(ac._EPHEMERAL_CACHE, dict)
-

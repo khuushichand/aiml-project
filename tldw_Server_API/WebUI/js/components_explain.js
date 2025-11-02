@@ -92,4 +92,3 @@
   // Expose to global
   window.renderAgenticExplainPanel = renderExplainPanel;
 })();
-

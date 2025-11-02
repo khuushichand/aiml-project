@@ -83,5 +83,3 @@ def test_prompt_studio_project_and_ws(api_client):
         asyncio.get_event_loop().run_until_complete(_run())
     except Exception as e:
         pytest.skip(f"Prompt Studio WS not available/configured: {e}")
-
-

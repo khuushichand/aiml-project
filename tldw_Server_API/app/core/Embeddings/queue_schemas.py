@@ -104,7 +104,7 @@ class EmbeddingJobMessage(BaseModel):
     retry_count: int = Field(default=0, ge=0)
     max_retries: int = Field(default=3, ge=0)
     trace_id: Optional[str] = Field(None, description="For distributed tracing")
-    
+
     model_config = ConfigDict(use_enum_values=True, populate_by_name=True)
 
 
@@ -117,7 +117,7 @@ class ChunkingMessage(EmbeddingJobMessage):
     source_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-# Embedding stage message  
+# Embedding stage message
 class EmbeddingMessage(EmbeddingJobMessage):
     """Message for embedding queue"""
     chunks: List[ChunkData] = Field(..., description="Chunks to be embedded")
@@ -153,7 +153,7 @@ class JobInfo(BaseModel):
     chunks_processed: int = Field(default=0, ge=0)
     total_chunks: int = Field(default=0, ge=0)
     current_stage: Optional[str] = None
-    
+
     model_config = ConfigDict(use_enum_values=True)
 
 

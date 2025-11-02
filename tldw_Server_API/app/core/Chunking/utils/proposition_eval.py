@@ -140,4 +140,3 @@ def evaluate_propositions(
         dedup_rate=dedup_rate,
         details=details,
     )
-

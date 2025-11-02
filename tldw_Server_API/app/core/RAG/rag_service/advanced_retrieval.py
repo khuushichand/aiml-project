@@ -210,4 +210,3 @@ async def apply_multi_vector_passages(
         out_docs.append(Document(id=new_id, content=span_text, source=getattr(d, 'source', None), metadata=new_meta, score=float(sim)))
 
     return out_docs
-

@@ -10,7 +10,7 @@ from starlette.websockets import WebSocketDisconnect
 async def test_ws_concurrent_streams_denied(monkeypatch):
     """
     Verify the audio WebSocket endpoint rejects connections when concurrent-streams quota is exceeded.
-    
+
     The test monkeypatches quota helpers to simulate active streams and then attempts a WebSocket connection
     to the transcribe endpoint with a valid token. If the endpoint is available, it asserts an incoming error
     frame whose `type` is "error" and whose message mentions "Concurrent streams", and verifies the connection
@@ -23,10 +23,10 @@ async def test_ws_concurrent_streams_denied(monkeypatch):
     async def _deny_stream(_user_id: int):
         """
         Simulate that a user already has two active streams.
-        
+
         Parameters:
             user_id (int): The user's identifier (unused; present for interface compatibility).
-        
+
         Returns:
             int: `2` indicating two active streams.
         """
@@ -35,7 +35,7 @@ async def test_ws_concurrent_streams_denied(monkeypatch):
     async def _can_start_stream(_user_id: int):
         """
         Indicates that a user cannot start a new stream because the concurrent streams quota is exceeded.
-        
+
         Returns:
             (bool, str): `False` and an error message stating the concurrent streams limit.
         """

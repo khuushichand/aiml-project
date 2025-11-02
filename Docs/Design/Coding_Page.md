@@ -117,5 +117,3 @@ Power-phrase file targeting - tab-complete file names in prompts so Claude jumps
 **Debug MCP setups with **--mcp-debug - prints a verbose trace of server discovery and tool hand-offs to surface config mistakes instantly.
 Keep these in your muscle memory and Claude Code jumps from helpful to game-changing.
 ```
-
-

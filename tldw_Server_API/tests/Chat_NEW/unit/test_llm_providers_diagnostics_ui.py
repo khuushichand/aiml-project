@@ -29,4 +29,3 @@ def test_llm_providers_includes_diagnostics_ui(monkeypatch):
             assert isinstance(qa.get('min'), int) and isinstance(qa.get('max'), int)
             assert qs['min'] >= 1 and qs['max'] >= qs['min']
             assert qa['min'] >= 1 and qa['max'] >= qa['min']
-

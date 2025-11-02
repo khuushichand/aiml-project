@@ -50,4 +50,3 @@ def test_metrics_endpoint_details_shape(client):
         assert "config" in payload and "dimension_policy" in payload["config"]
     finally:
         os.environ.pop("TESTING", None)
-

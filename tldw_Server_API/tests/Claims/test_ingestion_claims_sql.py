@@ -45,4 +45,3 @@ def test_ingestion_time_claims_extract_and_store_sql():
             db.close_connection()
         except Exception:
             pass
-

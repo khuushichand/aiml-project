@@ -13,7 +13,7 @@ GET    /v1/evals/{eval_id}                 # Get evaluation details
 PATCH  /v1/evals/{eval_id}                 # Update evaluation
 DELETE /v1/evals/{eval_id}                 # Delete evaluation
 
-# Run Management  
+# Run Management
 POST   /v1/evals/{eval_id}/runs            # Create & start a run
 GET    /v1/evals/{eval_id}/runs            # List runs for an eval
 GET    /v1/runs/{run_id}                   # Get run details/status
@@ -238,10 +238,10 @@ async def run_evaluation_async(run_id: str, eval_config: Dict[str, Any]):
     try:
         # Update status to running
         await update_run_status(run_id, "running")
-        
+
         # Get evaluation function
         eval_fn = EVAL_TYPE_MAPPING[eval_config["eval_type"]][eval_config["sub_type"]]
-        
+
         # Process samples in batches
         results = []
         for batch in create_batches(eval_config["samples"], batch_size=10):
@@ -249,21 +249,21 @@ async def run_evaluation_async(run_id: str, eval_config: Dict[str, Any]):
                 eval_fn(sample) for sample in batch
             ])
             results.extend(batch_results)
-            
+
             # Update progress
             await update_run_progress(run_id, len(results))
-        
+
         # Calculate aggregate metrics
         aggregate = calculate_aggregate_metrics(results)
-        
+
         # Store results
         await store_run_results(run_id, results, aggregate)
         await update_run_status(run_id, "completed")
-        
+
         # Send webhook if configured
         if eval_config.get("webhook_url"):
             await send_webhook_notification(eval_config["webhook_url"], run_id)
-            
+
     except Exception as e:
         await update_run_status(run_id, "failed", error=str(e))
 ```
@@ -274,7 +274,7 @@ async def run_evaluation_async(run_id: str, eval_config: Dict[str, Any]):
 async def get_run_status(run_id: str):
     """Get current status of evaluation run"""
     run = await get_run_from_db(run_id)
-    
+
     if run["status"] == "completed":
         # Include results in response
         run["results"] = await get_run_results(run_id)
@@ -282,7 +282,7 @@ async def get_run_status(run_id: str):
         # Include progress information
         run["progress"] = await get_run_progress(run_id)
         run["estimated_completion"] = estimate_completion_time(run)
-    
+
     return run
 ```
 
@@ -362,7 +362,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 **Status**: Implemented
 **Decision**: Use SQLite for evaluation data storage
 **Context**: Need persistent storage for evaluations, runs, and datasets
-**Consequences**: 
+**Consequences**:
 - Simple deployment (single file database)
 - Good enough performance for evaluation workloads
 - May need to migrate to PostgreSQL for production scale

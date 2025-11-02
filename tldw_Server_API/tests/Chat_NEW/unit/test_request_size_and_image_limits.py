@@ -69,4 +69,3 @@ def test_image_limit_rejects_oversized_data_image(monkeypatch):
     # MIME should still reflect the declared type
     assert mime == "image/png"
     assert decoded is None
-

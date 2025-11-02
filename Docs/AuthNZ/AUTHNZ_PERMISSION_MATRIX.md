@@ -11,7 +11,7 @@ The tldw_server AuthNZ module implements a comprehensive Role-Based Access Contr
 - **Permissions**: ALL permissions granted by default
 - **Use Case**: System administrators, server owners
 
-### 2. **User** (`user`) 
+### 2. **User** (`user`)
 - **Description**: Standard user access
 - **Default Permissions**:
   - `media.create` - Create and upload new media
@@ -360,5 +360,5 @@ conn.commit()
 
 ---
 
-*Last Updated: 2024*  
+*Last Updated: 2024*
 *AuthNZ Module Version: 1.0*

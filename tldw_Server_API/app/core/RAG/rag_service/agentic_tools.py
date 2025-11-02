@@ -47,4 +47,3 @@ def make_default_registry(toolbox: Any) -> ToolsRegistry:
     reg.register("quote_spans", _quote_spans)  # type: ignore[arg-type]
 
     return reg
-

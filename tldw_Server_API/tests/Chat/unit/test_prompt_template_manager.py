@@ -139,4 +139,3 @@ def test_default_raw_passthrough_template():
     data_missing_sys = {"message_content": "some_content"}  # original_system_message_from_request is missing
     assert apply_template_to_string(DEFAULT_RAW_PASSTHROUGH_TEMPLATE.system_message_template,
                                     data_missing_sys) == ""  # Jinja renders missing as empty
-

@@ -9,4 +9,3 @@ export function useIsAdmin(): boolean {
   const { user } = useAuth();
   return isAdmin(user);
 }
-

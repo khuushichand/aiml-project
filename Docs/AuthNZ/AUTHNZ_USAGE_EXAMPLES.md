@@ -136,7 +136,7 @@ user_db.assign_role(user_id, "moderator")
 ```python
 from fastapi import APIRouter, Depends
 from tldw_Server_API.app.core.AuthNZ.permissions import (
-    PermissionChecker, 
+    PermissionChecker,
     RoleChecker,
     AnyPermissionChecker,
     AllPermissionsChecker
@@ -191,7 +191,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 def process_media(user: User, media_id: int):
     if not check_permission(user, "media.transcribe"):
         raise PermissionError("User lacks transcription permission")
-    
+
     # Process the media
     print(f"Processing media {media_id} for user {user.username}")
 
@@ -231,10 +231,10 @@ print(f"Registration code: {code}")
 def register_user_with_code(username: str, email: str, password: str, reg_code: str):
     # Validate the registration code
     code_info = user_db.validate_registration_code(reg_code)
-    
+
     if not code_info:
         raise ValueError("Invalid or expired registration code")
-    
+
     # Create the user
     password_hash = password_service.hash_password(password)
     user_id = user_db.create_user(
@@ -243,7 +243,7 @@ def register_user_with_code(username: str, email: str, password: str, reg_code: 
         password_hash=password_hash,
         role=code_info['role_name']  # Assign role from code
     )
-    
+
     # Mark the code as used
     user_db.use_registration_code(
         reg_code,
@@ -251,7 +251,7 @@ def register_user_with_code(username: str, email: str, password: str, reg_code: 
         ip_address="192.168.1.1",
         user_agent="Mozilla/5.0"
     )
-    
+
     return user_id
 ```
 
@@ -312,7 +312,7 @@ def test_user_creation(sqlite_db):
         password_hash="hashed_password"
     )
     assert user_id is not None
-    
+
     user = sqlite_db.get_user(user_id=user_id)
     assert user['username'] == "test_user"
 ```
@@ -406,7 +406,7 @@ export TLDW_PG_SSLMODE=require  # or "prefer", "disable"
    ```bash
    # Check PostgreSQL is running
    sudo systemctl status postgresql
-   
+
    # Test connection
    psql -U tldw_user -d tldw_users -h localhost
    ```
@@ -421,11 +421,11 @@ export TLDW_PG_SSLMODE=require  # or "prefer", "disable"
    ```python
    # Check user permissions
    from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-   
+
    user_db = get_configured_user_database()
    permissions = user_db.get_user_permissions(user_id)
    print(f"User permissions: {permissions}")
-   
+
    # Check if specific permission exists
    has_perm = user_db.has_permission(user_id, "media.read")
    print(f"Has media.read: {has_perm}")
@@ -452,7 +452,7 @@ logger.add("authnz_debug.log", level="DEBUG")
    # Good
    from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
    user_db = get_configured_user_database()
-   
+
    # Avoid
    from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
    user_db = UserDatabase(...)  # Manual configuration
@@ -463,7 +463,7 @@ logger.add("authnz_debug.log", level="DEBUG")
    from tldw_Server_API.app.core.AuthNZ.permissions import (
        MEDIA_READ, MEDIA_CREATE, USERS_MANAGE_ROLES
    )
-   
+
    # Use constants instead of strings
    if check_permission(user, MEDIA_READ):
        # ...

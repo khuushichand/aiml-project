@@ -61,7 +61,7 @@ chunks = chunker.chunk_text(text, method='words', max_size=100)
 
 # Safe: Validated custom patterns are allowed
 chunks = chunker.chunk_text(
-    text, 
+    text,
     method='ebook_chapters',
     custom_chapter_pattern=r'Chapter \d+'  # Simple, safe pattern
 )
@@ -79,7 +79,7 @@ chunks = chunker.chunk_text(malicious_xml, method='xml')  # Raises InvalidInputE
 evil_pattern = r'(a+)+b'  # Exponential complexity
 chunks = chunker.chunk_text(
     text,
-    method='ebook_chapters', 
+    method='ebook_chapters',
     custom_chapter_pattern=evil_pattern  # Raises InvalidInputError
 )
 

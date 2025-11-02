@@ -1060,7 +1060,7 @@ class CharacterChatClient:
             "X-API-KEY": api_key,
             "Content-Type": "application/json"
         }
-    
+
     def create_character(self, name, description, personality, first_message):
         response = requests.post(
             f"{self.base_url}/api/v1/characters/",
@@ -1073,7 +1073,7 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def create_chat(self, character_id, title=None):
         response = requests.post(
             f"{self.base_url}/api/v1/chats/",
@@ -1084,7 +1084,7 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def send_message(self, chat_id, content, role="user"):
         """Send a message to a chat session."""
         response = requests.post(
@@ -1096,7 +1096,7 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def get_messages_for_completions(self, chat_id):
         """Get messages formatted for use with chat completions."""
         response = requests.get(
@@ -1109,15 +1109,15 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def get_completion(self, chat_id, message, max_tokens=500):
         # First get the formatted messages with character context
         context = self.get_messages_for_completions(chat_id)
-        
+
         # Add the new message
         messages = context["messages"]
         messages.append({"role": "user", "content": message})
-        
+
         # Call the main chat completions endpoint
         response = requests.post(
             f"{self.base_url}/api/v1/chat/completions",
@@ -1129,15 +1129,15 @@ class CharacterChatClient:
                 "temperature": 0.7
             }
         )
-        
+
         # Extract the response
         result = response.json()
         if "choices" in result and len(result["choices"]) > 0:
             ai_response = result["choices"][0]["message"]["content"]
-            
+
             # Save the AI response back to the conversation
             self.send_message(chat_id, ai_response, role="assistant")
-            
+
             return {
                 "response": ai_response,
                 "usage": result.get("usage", {})

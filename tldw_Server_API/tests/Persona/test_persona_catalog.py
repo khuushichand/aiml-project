@@ -13,4 +13,3 @@ def test_persona_catalog_smoke():
         assert r.status_code == 200
         # Returns empty list if disabled; else list of personas
         assert isinstance(r.json(), list)
-

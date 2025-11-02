@@ -63,7 +63,7 @@ def service(mock_db, tmp_path, monkeypatch):
     # Set environment variable to use temp directory for tests
     monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
     monkeypatch.setenv('TLDW_USER_DATA_PATH', str(tmp_path))
-    
+
     mock_db.execute_query.return_value = []
     connection = MagicMock()
     connection.execute = MagicMock()
@@ -116,48 +116,48 @@ def sample_content_items():
 
 class TestChatbookService:
     """Test suite for ChatbookService."""
-    
+
     def test_init_creates_tables(self, mock_db, tmp_path, monkeypatch):
         """Test that initialization creates necessary tables."""
         monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
         monkeypatch.setenv('TLDW_USER_DATA_PATH', str(tmp_path))
-        
+
         mock_db.execute_query.return_value = []
-        
+
         with patch('tldw_Server_API.app.core.Chatbooks.chatbook_service.Path.mkdir') as mock_mkdir:
             mock_mkdir.return_value = None
             service = ChatbookService(user_id="test_user", db=mock_db)
-        
+
         # Should create export and import job tables
         assert mock_db.execute_query.call_count >= 2
-        
+
         # Check table creation
         calls = mock_db.execute_query.call_args_list
         sql_statements = [call[0][0] for call in calls]
         assert any("CREATE TABLE IF NOT EXISTS export_jobs" in sql for sql in sql_statements)
         assert any("CREATE TABLE IF NOT EXISTS import_jobs" in sql for sql in sql_statements)
-    
+
     def test_create_export_job(self, service, mock_db):
         """Test creating an export job."""
         test_uuid = uuid4()
         job_id = str(test_uuid)
-        
+
         with patch('tldw_Server_API.app.core.Chatbooks.chatbook_service.uuid4', return_value=test_uuid):
             mock_db.execute_query.return_value = None
-            
+
             result = service.create_export_job(
                 name="Test Export",
                 description="Test export job",
                 content_types=["conversations", "characters"]
             )
-        
+
         assert result["job_id"] == job_id
         assert result["status"] == "pending"
-        
+
         # Check job was saved - looking for INSERT OR REPLACE
         call_args = mock_db.execute_query.call_args[0]
         assert "INSERT OR REPLACE INTO export_jobs" in call_args[0]
-    
+
     @pytest.mark.asyncio
     async def test_export_chatbook_sync(self, service, mock_db, tmp_path):
         """Test synchronous chatbook export."""
@@ -234,7 +234,7 @@ class TestChatbookService:
         job = service._get_export_job("job-zulu")
         assert job is not None
         assert job.created_at is not None
-    
+
     def test_parse_timestamp_accepts_numeric_epoch(self, service):
         """Numeric epoch values should be parsed as UTC datetimes."""
         epoch = 1_700_000_000
@@ -538,7 +538,7 @@ class TestChatbookService:
             "status": "pending",
             "content_summary": {},
         }
-    
+
     def test_preview_export(self, service, mock_db):
         """Test previewing export content."""
         # Mock queries based on what's being queried
@@ -550,13 +550,13 @@ class TestChatbookService:
             elif "notes" in query.lower():
                 return [{"id": "note1"}, {"id": "note2"}]
             return []
-        
+
         mock_db.execute_query = mock_query
-        
+
         result = service.preview_export(
             content_types=["conversations", "characters", "notes"]
         )
-        
+
         # Results should match mocked data
         assert result["conversations"] == 2
         assert result["characters"] == 1
@@ -594,14 +594,14 @@ class TestChatbookService:
              "2024-01-01T00:01:00", "2024-01-01T00:05:00",
              None, 100, 100, 100, 1024, metadata, None)
         ]
-        
+
         result = service.get_export_job_status("job123")
-        
+
         assert result["job_id"] == "job123"
         assert result["status"] == "completed"
         assert result["file_path"] == "/tmp/export.chatbook"
         assert result["content_summary"]["conversations"] == 5
-    
+
     def test_cancel_export_job(self, service, mock_db):
         """Test cancelling an export job."""
         # Mock database to return a pending job
@@ -622,11 +622,11 @@ class TestChatbookService:
             "download_url": None,
             "expires_at": None
         }]
-        
+
         result = service.cancel_export_job("job123")
-        
+
         assert result == True
-    
+
     @pytest.mark.asyncio
     async def test_import_chatbook_passes_conflict_resolution_enum(self, service):
         """Ensure string conflict_resolution values map to the enum."""
@@ -679,23 +679,23 @@ class TestChatbookService:
 
         call_args = mock_to_thread.await_args.args
         assert call_args[3] is ConflictResolution.SKIP
-    
+
     def test_create_import_job(self, service, mock_db):
         """Test creating an import job."""
         test_uuid = uuid4()
         job_id = str(test_uuid)
-        
+
         with patch('tldw_Server_API.app.core.Chatbooks.chatbook_service.uuid4', return_value=test_uuid):
             mock_db.execute_query.return_value = None
-            
+
             result = service.create_import_job(
                 file_path="/tmp/test.chatbook",
                 conflict_strategy="skip"
             )
-        
+
         assert result["job_id"] == job_id
         assert result["status"] == "pending"
-    
+
     def test_get_import_job_status(self, service, mock_db):
         """Test retrieving import job status."""
         # Return tuple matching database schema
@@ -704,15 +704,15 @@ class TestChatbookService:
              "2024-01-01T00:00:00", "2024-01-01T00:01:00", "2024-01-01T00:10:00",
              None, 100, 10, 10, 10, 0, 2, "[]", "[]")
         ]
-        
+
         result = service.get_import_job_status("job456")
-        
+
         assert result["job_id"] == "job456"
         assert result["status"] == "completed"
         assert result["successful_items"] == 10
         assert result["conflicts_found"] == 2
         assert result["conflicts_resolved"]["skipped"] == 2
-    
+
     def test_list_export_jobs(self, service, mock_db):
         """Test listing export jobs."""
         # Return tuples matching database schema
@@ -722,13 +722,13 @@ class TestChatbookService:
             ("job2", "test_user", "pending", "Export 2", None,
              "2024-01-01T00:00:00", None, None, None, 50, 0, 0, 0, None, None)
         ]
-        
+
         results = service.list_export_jobs()
-        
+
         assert len(results) == 2
         assert results[0]["chatbook_name"] == "Export 1"
         assert results[1]["status"] == "pending"
-    
+
     def test_list_import_jobs(self, service, mock_db):
         """Test listing import jobs."""
         # Return tuples matching database schema
@@ -738,13 +738,13 @@ class TestChatbookService:
             ("job4", "test_user", "failed", "/tmp/import2.chatbook",
              "2024-01-01T00:00:00", None, None, "File not found", 0, 0, 0, 0, 0, 0, "[]", "[]")
         ]
-        
+
         results = service.list_import_jobs()
-        
+
         assert len(results) == 2
         assert results[0]["successful_items"] == 5
         assert results[1]["error_message"] == "File not found"
-    
+
     def test_clean_old_exports(self, service, mock_db):
         """Test cleaning old export files."""
         # Return tuples with job_id and output_path
@@ -752,40 +752,40 @@ class TestChatbookService:
             ("old1", "/tmp/old1.chatbook"),
             ("old2", "/tmp/old2.chatbook")
         ]
-        
+
         with patch('os.path.exists', return_value=True):
             with patch('os.unlink') as mock_unlink:
                 count = service.clean_old_exports(days_old=7)
-        
+
         assert count == 2
         assert mock_unlink.call_count == 2
-    
+
     def test_validate_chatbook_file(self, service, sample_manifest):
         """Test validating a chatbook file structure."""
         with tempfile.NamedTemporaryFile(suffix='.chatbook', delete=False) as tmp:
             with zipfile.ZipFile(tmp.name, 'w') as zf:
                 zf.writestr('manifest.json', json.dumps(manifest_to_dict(sample_manifest)))
                 zf.writestr('conversations/test.json', '{}')
-            
+
             # Use the correct method name: validate_chatbook_file
             result = service.validate_chatbook_file(tmp.name)
-        
+
         # Result is a dict with is_valid key
         assert result["is_valid"] == True
         assert "manifest" in result
-    
+
     def test_validate_invalid_chatbook(self, service):
         """Test validating an invalid chatbook file."""
         with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp:
             tmp.write(b"Not a zip file")
             tmp.flush()
-            
+
             # Invalid ZIP should raise an exception
             result = service.validate_chatbook_file(tmp.name)
-        
+
         assert result["is_valid"] == False
         assert "error" in result
-    
+
     def test_get_statistics(self, service, mock_db):
         """Test getting import/export statistics."""
         # Mock returns tuples for status counts
@@ -793,15 +793,15 @@ class TestChatbookService:
             [("completed", 45), ("failed", 5)],  # Export stats by status
             [("completed", 28), ("failed", 2)],  # Import stats by status
         ]
-        
+
         stats = service.get_statistics()
-        
+
         # Check the structure returned by get_statistics
         assert "exports" in stats
         assert "imports" in stats
         assert stats["exports"].get("completed", 0) == 45
         assert stats["imports"].get("completed", 0) == 28
-    
+
     @pytest.mark.asyncio
     async def test_error_handling_during_export(self, service):
         """Test error handling during export."""
@@ -827,56 +827,56 @@ class TestChatbookService:
             "Error: Invalid or potentially malicious archive file",
             None,
         )
-    
+
     def test_user_isolation(self, service, mock_db):
         """Test that operations are isolated to the current user."""
         # Test export - should only get current user's content
         mock_db.execute_query.return_value = []
-        
+
         service.preview_export(content_types=["conversations"])
-        
+
         # Check that the query was made - the actual implementation uses "deleted = 0"
         # instead of user_id filtering because tables don't have user_id columns
         call_args = mock_db.execute_query.call_args[0]
         # Accept either user_id filtering or deleted filtering (actual implementation)
-        assert ("WHERE user_id = ?" in call_args[0] or 
-                "WHERE deleted = 0" in call_args[0] or 
+        assert ("WHERE user_id = ?" in call_args[0] or
+                "WHERE deleted = 0" in call_args[0] or
                 "test_user" in str(call_args))
-    
+
     def test_create_chatbook_archive(self, service, sample_manifest, sample_content_items):
         """Test creating a chatbook archive file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir) / "work"
             work_dir.mkdir()
             output_path = Path(tmpdir) / "test.chatbook"
-            
+
             # Write some test content to work dir
             (work_dir / "manifest.json").write_text(json.dumps(manifest_to_dict(sample_manifest)))
             (work_dir / "test.txt").write_text("test content")
-            
+
             # Call with correct parameters (work_dir and output_path)
             result = service._create_chatbook_archive(
                 work_dir=work_dir,
                 output_path=output_path
             )
-            
+
             assert result == True
             assert output_path.exists()
-            
+
             # Verify it's a valid zip file
             with zipfile.ZipFile(output_path, 'r') as zf:
                 assert 'manifest.json' in zf.namelist()
-    
+
     def test_process_import_items(self, service, mock_db, sample_content_items):
         """Test processing individual import items."""
         mock_db.execute_query.return_value = []  # No conflicts
-        
+
         # Call with correct parameter name (conflict_resolution)
         results = service._process_import_items(
             items=sample_content_items,
             conflict_resolution="skip"
         )
-        
+
         # Results is an ImportStatusData object
         assert results.successful_items == len(sample_content_items)
         assert results.skipped_items == 0

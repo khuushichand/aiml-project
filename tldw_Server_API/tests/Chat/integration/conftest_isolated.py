@@ -25,7 +25,7 @@ def isolated_db():
     import sqlite3
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
-    
+
     # Initialize database with WAL mode for better concurrency
     db = CharactersRAGDB(db_path, f"test_client_{id(tmp)}")
     conn = db.get_connection()
@@ -33,7 +33,7 @@ def isolated_db():
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.commit()
-    
+
     # Add default character
     db.add_character_card({
         "name": DEFAULT_CHARACTER_NAME,
@@ -44,9 +44,9 @@ def isolated_db():
         "first_message": "Hello!",
         "creator_notes": "Test"
     })
-    
+
     yield db
-    
+
     # Cleanup
     try:
         os.unlink(db_path)
@@ -62,24 +62,24 @@ def isolated_db():
 def isolated_client(isolated_db):
     """Create an isolated test client with its own database."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-    
+
     # Create a new TestClient instance with isolated overrides
     test_app = app
     original_overrides = test_app.dependency_overrides.copy()
-    
+
     # Override database dependency
     test_app.dependency_overrides[get_chacha_db_for_user] = lambda: isolated_db
-    
+
     client = TestClient(test_app)
-    
+
     # Get CSRF token
     response = client.get("/api/v1/health")
     csrf_token = response.cookies.get("csrf_token", "")
     client.csrf_token = csrf_token
     client.cookies = {"csrf_token": csrf_token}
-    
+
     yield client
-    
+
     # Restore original overrides
     test_app.dependency_overrides = original_overrides
 
@@ -142,10 +142,10 @@ def isolated_chat_endpoint_mocks(mock_api_keys, mock_llm_response):
     with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", mock_api_keys), \
          patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform, \
          patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_chat_call:
-        
+
         mock_perform.return_value = mock_llm_response
         mock_chat_call.return_value = mock_llm_response
-        
+
         yield {
             "perform_chat_api_call": mock_perform,
             "chat_api_call": mock_chat_call,
@@ -161,20 +161,20 @@ def isolated_chat_endpoint_mocks(mock_api_keys, mock_llm_response):
 def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
     """Client for unit tests with all external dependencies mocked."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-    
+
     test_app = app
     original_overrides = test_app.dependency_overrides.copy()
-    
+
     # Override database
     test_app.dependency_overrides[get_chacha_db_for_user] = lambda: isolated_db
-    
+
     client = TestClient(test_app)
-    
+
     # Setup CSRF
     response = client.get("/api/v1/health")
     csrf_token = response.cookies.get("csrf_token", "")
     client.csrf_token = csrf_token
-    
+
     # Add helper method for authenticated requests
     def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
         # In single-user mode, the API expects X-API-KEY to match settings.
@@ -192,11 +192,11 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
         # Also provide deprecated Token header used by some tests/utilities
         headers["Token"] = auth_token
         return client.post(url, json=json_data, headers=headers)
-    
+
     client.post_with_auth = post_with_auth
-    
+
     yield client
-    
+
     test_app.dependency_overrides = original_overrides
 
 
@@ -214,7 +214,7 @@ def mock_server_url():
             return "http://localhost:8080"
     except:
         pass
-    
+
     # If mock server is not running, skip integration tests
     pytest.skip("Mock OpenAI server not running - skipping integration tests")
 
@@ -223,13 +223,13 @@ def mock_server_url():
 def integration_test_client(isolated_db, mock_server_url):
     """Client for integration tests that need the mock server."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-    
+
     test_app = app
     original_overrides = test_app.dependency_overrides.copy()
-    
+
     # Override database
     test_app.dependency_overrides[get_chacha_db_for_user] = lambda: isolated_db
-    
+
     # Set environment for this test only using monkeypatch would be better
     # but for now we'll use a context manager approach
     with patch.dict(os.environ, {
@@ -240,12 +240,12 @@ def integration_test_client(isolated_db, mock_server_url):
         # Temporarily patch API_KEYS for this test
         with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}):
             client = TestClient(test_app)
-            
+
             # Setup CSRF
             response = client.get("/api/v1/health")
             csrf_token = response.cookies.get("csrf_token", "")
             client.csrf_token = csrf_token
-            
+
             # Add helper for authenticated requests
             def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
                 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
@@ -259,11 +259,11 @@ def integration_test_client(isolated_db, mock_server_url):
                     pass
                 headers["Token"] = auth_token
                 return client.post(url, json=json_data, headers=headers)
-            
+
             client.post_with_auth = post_with_auth
-            
+
             yield client
-    
+
     test_app.dependency_overrides = original_overrides
 
 
@@ -278,7 +278,7 @@ def sample_chat_request():
         ChatCompletionRequest,
         ChatCompletionUserMessageParam
     )
-    
+
     return ChatCompletionRequest(
         model="test-model",
         api_provider="openai",

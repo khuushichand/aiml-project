@@ -180,4 +180,3 @@ def delete_template(name: str) -> None:
         meta.unlink()
     if not removed:
         raise TemplateNotFoundError(name)
-

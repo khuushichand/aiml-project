@@ -54,4 +54,3 @@ def test_user_db_base_dir_env_relative_anchors_to_project(monkeypatch):
             shutil.rmtree(expected.parent)
         except Exception:
             pass
-

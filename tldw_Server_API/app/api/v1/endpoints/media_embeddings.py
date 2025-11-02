@@ -142,7 +142,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Media item {media_id} not found"
             )
-        
+
         # Get content
         content = media_item  # The get_media_by_id returns all data including content
         if not content:
@@ -150,7 +150,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No content found for media item {media_id}"
             )
-        
+
         return {
             "media_item": media_item,
             "content": content
@@ -169,13 +169,13 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
 def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, method: str = "words") -> List[Dict[str, Any]]:
     """
     Split text into overlapping chunks using the Chunking module.
-    
+
     Args:
         text: Text to chunk
         chunk_size: Maximum size of each chunk
         overlap: Overlap between chunks
         method: Chunking method to use (words, sentences, tokens, etc.)
-    
+
     Returns:
         List of chunk dictionaries with text and metadata
     """
@@ -186,9 +186,9 @@ def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, m
         default_overlap=overlap,
         language="en"  # TODO: Detect language from content
     )
-    
+
     chunker = Chunker(config=config)
-    
+
     # Use chunk_text_with_metadata to get detailed results
     chunk_results = chunker.chunk_text_with_metadata(
         text=text,
@@ -196,7 +196,7 @@ def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, m
         max_size=chunk_size,
         overlap=overlap
     )
-    
+
     # Convert ChunkResult objects to our format
     chunks = []
     for i, result in enumerate(chunk_results):
@@ -211,7 +211,7 @@ def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, m
                 "language": result.metadata.language if hasattr(result.metadata, 'language') else "en"
             }
         })
-    
+
     return chunks
 
 
@@ -230,7 +230,7 @@ async def generate_embeddings_for_media(
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
             create_embeddings_batch_async
         )
-        
+
         # Extract text content
         content_text = media_content["content"].get("content", "")
         if not content_text:
@@ -239,14 +239,14 @@ async def generate_embeddings_for_media(
                 "message": "No text content to generate embeddings from",
                 "embedding_count": 0
             }
-        
+
         # Chunk the text using the Chunking module
         chunks = chunk_media_content(content_text, chunk_size, chunk_overlap)
         logger.info(f"Created {len(chunks)} chunks for media {media_id}")
-        
+
         # Extract chunk texts for embedding
         chunk_texts = [chunk["text"] for chunk in chunks]
-        
+
         # Generate embeddings
         try:
             embeddings = await create_embeddings_batch_async(
@@ -255,10 +255,10 @@ async def generate_embeddings_for_media(
                 model_id=embedding_model,
                 metadata=request_metadata,
             )
-            
+
             # Store in ChromaDB using per-user collections
             collection_name = f"user_{user_id}_media_embeddings"
-            
+
             # Prepare metadata for each chunk
             metadatas = []
             for i, chunk in enumerate(chunks):
@@ -273,20 +273,20 @@ async def generate_embeddings_for_media(
                     "embedding_provider": embedding_provider
                 }
                 metadatas.append(metadata)
-            
+
             # Store embeddings
             ids = [f"chunk_{i}" for i in range(len(chunks))]
-            
+
             # Convert embeddings to list format if they're numpy arrays
             logger.info(f"Embeddings type: {type(embeddings)}, first item type: {type(embeddings[0]) if embeddings else 'None'}")
             if embeddings and hasattr(embeddings[0], 'tolist'):
                 embeddings_list = [emb.tolist() for emb in embeddings]
             else:
                 embeddings_list = embeddings
-            
+
             logger.info(f"After conversion - embeddings_list type: {type(embeddings_list)}, first item type: {type(embeddings_list[0]) if embeddings_list else 'None'}")
             logger.info(f"First embedding length: {len(embeddings_list[0]) if embeddings_list and embeddings_list[0] else 0}")
-            
+
             store_in_chroma(
                 texts=chunk_texts,
                 embeddings=embeddings_list,
@@ -294,14 +294,14 @@ async def generate_embeddings_for_media(
                 metadatas=metadatas,
                 collection_name=collection_name
             )
-            
+
             return {
                 "status": "success",
                 "message": f"Successfully generated {len(embeddings)} embeddings",
                 "embedding_count": len(embeddings),
                 "chunks_processed": len(chunks)
             }
-            
+
         except Exception as e:
             # Try fallback model if primary fails
             if embedding_model != FALLBACK_EMBEDDING_MODEL:
@@ -312,10 +312,10 @@ async def generate_embeddings_for_media(
                     model_id=FALLBACK_EMBEDDING_MODEL,
                     metadata=request_metadata,
                 )
-                
+
                 # Store with fallback model info in per-user collection
                 collection_name = f"user_{user_id}_media_embeddings"
-                
+
                 metadatas = []
                 for i, chunk in enumerate(chunks):
                     metadata = {
@@ -329,15 +329,15 @@ async def generate_embeddings_for_media(
                         "embedding_provider": "huggingface"
                     }
                     metadatas.append(metadata)
-                
+
                 ids = [f"chunk_{i}" for i in range(len(chunks))]
-                
+
                 # Convert embeddings to list format if they're numpy arrays
                 if embeddings and hasattr(embeddings[0], 'tolist'):
                     embeddings_list = [emb.tolist() for emb in embeddings]
                 else:
                     embeddings_list = embeddings
-                
+
                 store_in_chroma(
                     texts=chunk_texts,
                     embeddings=embeddings_list,
@@ -345,7 +345,7 @@ async def generate_embeddings_for_media(
                     metadatas=metadatas,
                     collection_name=collection_name
                 )
-                
+
                 return {
                     "status": "success",
                     "message": f"Generated embeddings using fallback model {FALLBACK_EMBEDDING_MODEL}",
@@ -354,7 +354,7 @@ async def generate_embeddings_for_media(
                 }
             else:
                 raise e
-                
+
     except Exception as e:
         logger.error(f"Error generating embeddings: {e}")
         return {
@@ -379,7 +379,7 @@ async def get_embeddings_status(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Media item {media_id} not found"
             )
-        
+
         # Check if embeddings exist by querying the per-user collection in ChromaDB
         user_id = str(getattr(current_user, 'id', '1'))
         manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
@@ -413,7 +413,7 @@ async def get_embeddings_status(
             embedding_model=embedding_model,
             last_generated=last_generated,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -433,19 +433,19 @@ async def generate_embeddings(
     current_user = Depends(get_request_user)
 ) -> GenerateEmbeddingsResponse:
     """Generate embeddings for a media item"""
-    
+
     # Use provided model or defaults
     embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
     embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
-    
+
     try:
         # Generate embeddings in per-user collection
         user_id = str(current_user.id)
         collection_name = f"user_{user_id}_media_embeddings"
-        
+
         # Get media content
         media_content = await get_media_content(media_id, db)
-        
+
         # Persist a job record and run generation in the background
         jobs_init_db(user_id)
         job_id = f"mej_{uuid.uuid4().hex[:20]}"
@@ -491,7 +491,7 @@ async def generate_embeddings(
             chunks_processed=None,
             job_id=job_id
         )
-            
+
     except HTTPException:
         raise
     except Exception as e:
@@ -670,7 +670,7 @@ async def delete_embeddings(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Media item {media_id} not found"
             )
-        
+
         # Delete embeddings from per-user collection using a where filter
         user_id = str(getattr(current_user, 'id', '1'))
         manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())

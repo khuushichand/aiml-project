@@ -47,7 +47,7 @@ Base prefix: `/api/v1/workflows`
 - Options discovery
   - `GET /options/chunkers` → Chunker methods, defaults, and basic param schema
   - `GET /step-types` → List available step types for UI builders
-  
+
 - Templates
   - `GET /templates` → List available workflow templates (with `tags` and titles)
   - `GET /templates/{name}` → Fetch a specific template by name
@@ -271,7 +271,7 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
 - Health & Readiness:
   - Liveness: `GET /healthz` returns `{status, queue_depth, time}`.
   - Readiness: `GET /readyz` returns `{ready, engine, db, time}` with DB connectivity and backend schema version (when using PostgreSQL) checked against the expected version.
- 
+
 In production, when the content backend is configured for PostgreSQL (recommended), the Workflows DB will default to PostgreSQL automatically via the shared backend wiring. SQLite remains the default for development and tests.
 
 ### Storage & Migrations
@@ -293,7 +293,7 @@ In production, when the content backend is configured for PostgreSQL (recommende
     - `WORKFLOWS_SQLITE_VACUUM=true|false` (default false)
   - PostgreSQL tunable:
     - `WORKFLOWS_POSTGRES_VACUUM=true|false` (default false)
-  
+
 The worker runs only when enabled and is started/stopped with the app lifecycle.
 
 ### Pagination
@@ -359,7 +359,7 @@ Ordering is stable with a tie-breaker (`run_id` for runs; `event_id` for events)
 
 - Engine concurrency
   - `WORKFLOWS_TENANT_CONCURRENCY` (default 2), `WORKFLOWS_WORKFLOW_CONCURRENCY` (default 1).
-  
+
 - Secrets lifecycle
   - In-memory per-run secrets are stored with a TTL and purged automatically on start/resume and when expired.
   - `WORKFLOWS_SECRETS_TTL_SECONDS` (default 3600) controls the TTL window.

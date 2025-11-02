@@ -32,4 +32,3 @@ def test_exemplar_labels_propagate_sqlite(monkeypatch, tmp_path):
     assert dur, "Expected duration observations"
     assert ("trace_id" in ql[-1].labels) or ("request_id" in ql[-1].labels)
     assert ("trace_id" in dur[-1].labels) or ("request_id" in dur[-1].labels)
-

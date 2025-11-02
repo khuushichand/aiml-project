@@ -416,7 +416,7 @@ class MediaDatabase:
         team_id INTEGER,
         payload TEXT
     );
-    
+
     -- Chunking Templates Table --
     CREATE TABLE IF NOT EXISTS ChunkingTemplates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -514,9 +514,9 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_sync_log_client_id ON sync_log(client_id);
     CREATE INDEX IF NOT EXISTS idx_sync_log_org_id ON sync_log(org_id);
     CREATE INDEX IF NOT EXISTS idx_sync_log_team_id ON sync_log(team_id);
-    
+
     -- Chunking Templates Indices --
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_template_name 
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_template_name
         ON ChunkingTemplates(name) WHERE deleted = 0;
     CREATE INDEX IF NOT EXISTS idx_template_is_builtin ON ChunkingTemplates(is_builtin);
     CREATE INDEX IF NOT EXISTS idx_template_deleted ON ChunkingTemplates(deleted);
@@ -1739,7 +1739,7 @@ class MediaDatabase:
                 if final_db_version != target_version:
                     raise SchemaError(f"Schema applied, but final DB version is {final_db_version}, expected {target_version}.")
                 logger.info(f"Database schema initialized to version {target_version}.")
-            
+
             elif current_db_version < target_version:
                 # Use the migration system for existing databases.
                 # Special-case in-memory DBs: treat them as fresh and apply base schema,
@@ -4461,7 +4461,7 @@ class MediaDatabase:
                                 return media_id, media_uuid, f"Media '{title}' already exists (concurrent insert). Overwrite not enabled."
                             # If overwrite is True, we could update, but for simplicity return existing
                             return media_id, media_uuid, f"Media '{title}' already exists (handled concurrent insert)."
-                        
+
                         # Proceed with INSERT - now protected by lock
                         media_uuid = self._generate_uuid()
                         payload = _media_payload(media_uuid, 1, chunk_status=final_chunk_status)
@@ -4720,8 +4720,8 @@ class MediaDatabase:
     # =========================================================================
     # Chunking Templates Methods (moved earlier to ensure availability)
     # =========================================================================
-    
-    def create_chunking_template(self, 
+
+    def create_chunking_template(self,
                                 name: str,
                                 template_json: str,
                                 description: Optional[str] = None,
@@ -4730,7 +4730,7 @@ class MediaDatabase:
                                 user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Create a new chunking template.
-        
+
         Args:
             name: Template name (must be unique among non-deleted templates)
             template_json: JSON string containing template configuration
@@ -4738,16 +4738,16 @@ class MediaDatabase:
             is_builtin: Whether this is a built-in template (cannot be modified/deleted)
             tags: Optional list of tags for categorization
             user_id: Optional user ID for ownership tracking
-            
+
         Returns:
             Dictionary containing created template information
-            
+
         Raises:
             DatabaseError: If template creation fails
             InputError: If name already exists
         """
         import uuid as uuid_module
-        
+
         template_uuid = str(uuid_module.uuid4())
         tags_json = json.dumps(tags) if tags else None
 
@@ -4817,20 +4817,20 @@ class MediaDatabase:
             'version': 1,
         }
 
-    def get_chunking_template(self, 
+    def get_chunking_template(self,
                              template_id: Optional[int] = None,
                              name: Optional[str] = None,
                              uuid: Optional[str] = None,
                              include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         """
         Get a chunking template by ID, name, or UUID.
-        
+
         Args:
             template_id: Template database ID
             name: Template name
             uuid: Template UUID
             include_deleted: Whether to include soft-deleted templates
-            
+
         Returns:
             Template dictionary or None if not found
         """
@@ -4883,14 +4883,14 @@ class MediaDatabase:
                                include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all chunking templates with optional filtering.
-        
+
         Args:
             include_builtin: Include built-in templates
             include_custom: Include custom templates
             tags: Filter by tags (templates must have at least one matching tag)
             user_id: Filter by user ID
             include_deleted: Include soft-deleted templates
-            
+
         Returns:
             List of template dictionaries
         """
@@ -4952,7 +4952,7 @@ class MediaDatabase:
                                 tags: Optional[List[str]] = None) -> bool:
         """
         Update a chunking template (cannot update built-in templates).
-        
+
         Args:
             template_id: Template ID to update
             name: Template name to update
@@ -4960,34 +4960,34 @@ class MediaDatabase:
             template_json: New template JSON configuration
             description: New description
             tags: New tags list
-            
+
         Returns:
             True if updated, False if not found or is built-in
-            
+
         Raises:
             InputError: If trying to update a built-in template
             DatabaseError: If update fails
         """
         # Get existing template
         template = self.get_chunking_template(
-            template_id=template_id, 
-            name=name, 
+            template_id=template_id,
+            name=name,
             uuid=uuid
         )
-        
+
         if not template:
             return False
-        
+
         if template['is_builtin']:
             raise InputError("Cannot modify built-in templates")
-        
+
         # Validate new JSON if provided
         if template_json:
             try:
                 json.loads(template_json)
             except json.JSONDecodeError as e:
                 raise InputError(f"Invalid template JSON: {e}")
-        
+
         updates: List[str] = []
         params: List[Any] = []
 
@@ -5036,16 +5036,16 @@ class MediaDatabase:
                                 hard_delete: bool = False) -> bool:
         """
         Delete a chunking template (soft delete by default).
-        
+
         Args:
             template_id: Template ID to delete
             name: Template name to delete
             uuid: Template UUID to delete
             hard_delete: Permanently delete instead of soft delete
-            
+
         Returns:
             True if deleted, False if not found
-            
+
         Raises:
             InputError: If trying to delete a built-in template
         """
@@ -5055,13 +5055,13 @@ class MediaDatabase:
             name=name,
             uuid=uuid
         )
-        
+
         if not template:
             return False
-        
+
         if template['is_builtin']:
             raise InputError("Cannot delete built-in templates")
-        
+
         deleted_rows = 0
 
         with self.transaction() as conn:
@@ -5095,22 +5095,22 @@ class MediaDatabase:
     def seed_builtin_templates(self, templates: List[Dict[str, Any]]) -> int:
         """
         Seed built-in templates into the database.
-        
+
         Args:
             templates: List of template dictionaries to seed
-            
+
         Returns:
             Number of templates seeded
         """
         count = 0
-        
+
         for template in templates:
             # Check if template already exists
             existing = self.get_chunking_template(
                 name=template['name'],
                 include_deleted=True
             )
-            
+
             if not existing:
                 try:
                     self.create_chunking_template(

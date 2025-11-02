@@ -28,11 +28,11 @@ class SecurityLogger:
     """
     Centralized security event logger for the Chunking module.
     """
-    
+
     def __init__(self, log_file: Optional[Path] = None, enable_console: bool = True):
         """
         Initialize the security logger.
-        
+
         Args:
             log_file: Optional path to security log file
             enable_console: Whether to also log to console
@@ -40,7 +40,7 @@ class SecurityLogger:
         self.log_file = log_file
         self.enable_console = enable_console
         self._events = []
-        
+
         # Configure dedicated security logger
         if log_file:
             logger.add(
@@ -50,15 +50,15 @@ class SecurityLogger:
                 rotation="100 MB",
                 retention="30 days"
             )
-    
-    def log_event(self, 
+
+    def log_event(self,
                   event_type: SecurityEventType,
                   message: str,
                   details: Optional[Dict[str, Any]] = None,
                   severity: str = "WARNING") -> None:
         """
         Log a security event.
-        
+
         Args:
             event_type: Type of security event
             message: Event message
@@ -72,14 +72,14 @@ class SecurityLogger:
             "severity": severity,
             "details": details or {}
         }
-        
+
         # Store event
         self._events.append(event)
-        
+
         # Log to configured outputs
         log_message = f"SECURITY EVENT: {message}"
         extra = {"security": True, "event_type": event_type.value}
-        
+
         if severity == "DEBUG":
             logger.debug(log_message, extra=extra)
         elif severity == "INFO":
@@ -90,11 +90,11 @@ class SecurityLogger:
             logger.error(log_message, extra=extra)
         elif severity == "CRITICAL":
             logger.critical(log_message, extra=extra)
-    
+
     def log_xxe_attempt(self, xml_content: str, source: Optional[str] = None) -> None:
         """
         Log an XXE attack attempt.
-        
+
         Args:
             xml_content: The malicious XML content (truncated)
             source: Optional source identifier
@@ -109,11 +109,11 @@ class SecurityLogger:
             },
             severity="ERROR"
         )
-    
+
     def log_redos_attempt(self, pattern: str, source: Optional[str] = None) -> None:
         """
         Log a ReDoS attack attempt.
-        
+
         Args:
             pattern: The regex pattern that was blocked
             source: Optional source identifier
@@ -128,11 +128,11 @@ class SecurityLogger:
             },
             severity="ERROR"
         )
-    
+
     def log_oversized_input(self, size: int, limit: int, source: Optional[str] = None) -> None:
         """
         Log an oversized input attempt.
-        
+
         Args:
             size: Size of the input
             limit: Maximum allowed size
@@ -148,11 +148,11 @@ class SecurityLogger:
             },
             severity="WARNING"
         )
-    
+
     def log_suspicious_content(self, content_type: str, details: str, source: Optional[str] = None) -> None:
         """
         Log suspicious content detection.
-        
+
         Args:
             content_type: Type of suspicious content
             details: Details about what was detected
@@ -168,44 +168,44 @@ class SecurityLogger:
             },
             severity="WARNING"
         )
-    
-    def get_events(self, 
+
+    def get_events(self,
                    event_type: Optional[SecurityEventType] = None,
                    severity: Optional[str] = None,
                    limit: int = 100) -> list:
         """
         Retrieve logged security events.
-        
+
         Args:
             event_type: Filter by event type
             severity: Filter by severity
             limit: Maximum number of events to return
-            
+
         Returns:
             List of security events
         """
         events = self._events
-        
+
         if event_type:
             events = [e for e in events if e["type"] == event_type.value]
-        
+
         if severity:
             events = [e for e in events if e["severity"] == severity]
-        
+
         return events[-limit:]
-    
+
     def export_events(self, output_file: Path) -> None:
         """
         Export security events to a JSON file.
-        
+
         Args:
             output_file: Path to output file
         """
         with open(output_file, 'w') as f:
             json.dump(self._events, f, indent=2, default=str)
-        
+
         logger.info(f"Exported {len(self._events)} security events to {output_file}")
-    
+
     def clear_events(self) -> None:
         """Clear stored security events."""
         self._events.clear()
@@ -219,7 +219,7 @@ _security_logger = None
 def get_security_logger() -> SecurityLogger:
     """
     Get the global security logger instance.
-    
+
     Returns:
         SecurityLogger instance
     """
@@ -232,7 +232,7 @@ def get_security_logger() -> SecurityLogger:
 def configure_security_logging(log_file: Optional[Path] = None, enable_console: bool = True) -> None:
     """
     Configure security logging.
-    
+
     Args:
         log_file: Optional path to security log file
         enable_console: Whether to also log to console

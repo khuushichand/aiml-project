@@ -29,4 +29,3 @@ class PersonaSessionResponse(BaseModel):
     session_id: str
     persona: PersonaInfo
     scopes: List[str] = Field(default_factory=list)
-

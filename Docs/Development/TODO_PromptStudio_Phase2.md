@@ -44,4 +44,3 @@ This file enumerates follow-up tasks for Prompt Studio Phase 2 (Correctness + Co
 - Summary: Extend optional validation for new knobs as they’re defined (beam pruning policies, anneal schedules, genetic crossover variants).
 - Acceptance:
   - New knobs validated when present; tests added for negative/positive cases
-

@@ -43,7 +43,7 @@ class QuotaManager:
     def __init__(self, user_id: str, user_tier: str = 'free', db: Optional[Any] = None):
         """
         Initialize quota manager for a user.
-        
+
         Args:
             user_id: User identifier
             user_tier: User tier (free, premium, enterprise)
@@ -76,10 +76,10 @@ class QuotaManager:
     async def check_storage_quota(self, additional_bytes: int = 0) -> Tuple[bool, str]:
         """
         Check if user has enough storage quota.
-        
+
         Args:
             additional_bytes: Additional bytes to be added
-            
+
         Returns:
             Tuple of (allowed, message)
         """
@@ -95,7 +95,7 @@ class QuotaManager:
     async def check_export_quota(self) -> Tuple[bool, str]:
         """
         Check if user can perform another export today.
-        
+
         Returns:
             Tuple of (allowed, message)
         """
@@ -109,7 +109,7 @@ class QuotaManager:
     async def check_import_quota(self) -> Tuple[bool, str]:
         """
         Check if user can perform another import today.
-        
+
         Returns:
             Tuple of (allowed, message)
         """
@@ -123,10 +123,10 @@ class QuotaManager:
     async def check_file_size(self, file_size_bytes: int) -> Tuple[bool, str]:
         """
         Check if file size is within limits.
-        
+
         Args:
             file_size_bytes: File size in bytes
-            
+
         Returns:
             Tuple of (allowed, message)
         """
@@ -140,7 +140,7 @@ class QuotaManager:
     async def check_concurrent_jobs(self) -> Tuple[bool, str]:
         """
         Check if user can start another concurrent job.
-        
+
         Returns:
             Tuple of (allowed, message)
         """
@@ -154,7 +154,7 @@ class QuotaManager:
     async def record_operation(self, operation_type: str, size_bytes: int = 0):
         """
         Record an operation for quota tracking.
-        
+
         Args:
             operation_type: Type of operation (export, import)
             size_bytes: Size of the operation in bytes
@@ -165,7 +165,7 @@ class QuotaManager:
     async def get_usage_summary(self) -> Dict[str, any]:
         """
         Get current usage summary for the user.
-        
+
         Returns:
             Dictionary with usage statistics
         """
@@ -321,10 +321,10 @@ class QuotaManager:
     def cleanup_expired_files(self, days_old: int = 7) -> int:
         """
         Clean up old export files to free up space.
-        
+
         Args:
             days_old: Delete files older than this many days
-            
+
         Returns:
             Number of files deleted
         """

@@ -65,4 +65,3 @@ async def run_workflows_artifact_gc_worker(stop_event: asyncio.Event) -> None:
             pass
 
     logger.info("Workflows artifact GC worker stopped")
-

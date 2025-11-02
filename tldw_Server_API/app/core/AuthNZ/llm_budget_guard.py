@@ -16,7 +16,7 @@ from loguru import logger
 async def enforce_llm_budget(request: Request) -> None:
     """
     Enforces LLM budgets for virtual API keys on incoming requests.
-    
+
     If budget enforcement is enabled and the request is associated with an API key that is marked virtual, verifies the key's token and USD limits and raises HTTPException(402) with a detail payload when the key is over its budget. This dependency is a no-op for requests without an API key or when virtual keys or budget enforcement are disabled.
     """
     settings = get_settings()

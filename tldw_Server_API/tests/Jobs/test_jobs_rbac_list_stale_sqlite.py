@@ -51,4 +51,3 @@ def test_rbac_for_list_and_stale_requires_domain_and_allowlist(monkeypatch, tmp_
         r6 = client.get("/api/v1/jobs/stale", params={"domain": "chatbooks"})
         assert r5.status_code == 200
         assert r6.status_code == 200
-

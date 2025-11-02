@@ -25,9 +25,3 @@ https://r2r-docs.sciphi.ai/self-hosting/configuration/ingestion
 https://r2r-docs.sciphi.ai/api-and-sdks/retrieval/rag-app
 https://r2r-docs.sciphi.ai/documentation/search-and-rag#hybrid-search-example
 https://github.com/SciPhi-AI/R2R/tree/main/py/core/main/api/v3
-
-
-
-
-
-

@@ -44,7 +44,7 @@ class AuthenticatedClient:
         self.client = httpx.AsyncClient(base_url=base_url)
         self.access_token = None
         self.refresh_token = None
-    
+
     async def login(self, username: str, password: str):
         response = await self.client.post(
             "/auth/login",
@@ -55,7 +55,7 @@ class AuthenticatedClient:
         self.access_token = data["access_token"]
         self.refresh_token = data["refresh_token"]
         return data
-    
+
     async def refresh_access_token(self):
         response = await self.client.post("/auth/refresh", json={
             "refresh_token": self.refresh_token
@@ -63,15 +63,15 @@ class AuthenticatedClient:
         data = response.json()
         self.access_token = data["access_token"]
         return data
-    
+
     async def make_request(self, method: str, path: str, **kwargs):
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
-        
+
         response = await self.client.request(
             method, path, headers=headers, **kwargs
         )
-        
+
         # Auto-refresh on 401
         if response.status_code == 401:
             await self.refresh_access_token()
@@ -79,7 +79,7 @@ class AuthenticatedClient:
             response = await self.client.request(
                 method, path, headers=headers, **kwargs
             )
-        
+
         return response
 ```
 
@@ -114,10 +114,10 @@ class AuthClient {
         const data = await response.json();
         this.accessToken = data.access_token;
         this.refreshToken = data.refresh_token;
-        
+
         // Store tokens securely
         this.storeTokens(data.access_token, data.refresh_token);
-        
+
         return data;
     }
 
@@ -250,30 +250,30 @@ export const useAuth = () => {
 # Python example
 async def setup_mfa(access_token: str):
     """Complete MFA setup process"""
-    
+
     # 1. Initialize MFA setup
     headers = {"Authorization": f"Bearer {access_token}"}
     response = await client.post("/auth/mfa/setup", headers=headers)
     setup_data = response.json()
-    
+
     secret = setup_data["secret"]
     qr_code = setup_data["qr_code"]
     backup_codes = setup_data["backup_codes"]
-    
+
     # 2. Display QR code to user
     print(f"Scan this QR code with your authenticator app:")
     print(f"Or manually enter this secret: {secret}")
-    
+
     # 3. Get TOTP from user
     user_token = input("Enter the 6-digit code from your app: ")
-    
+
     # 4. Verify and enable MFA
     headers["X-MFA-Secret"] = secret
-    response = await client.post("/auth/mfa/verify", 
+    response = await client.post("/auth/mfa/verify",
         json={"token": user_token},
         headers=headers
     )
-    
+
     if response.status_code == 200:
         print("MFA enabled successfully!")
         print(f"Save these backup codes: {backup_codes}")
@@ -294,12 +294,12 @@ class MFASetup {
             '/auth/mfa/setup',
             { method: 'POST' }
         );
-        
+
         const data = await response.json();
         this.secret = data.secret;
         this.qrCode = data.qr_code;
         this.backupCodes = data.backup_codes;
-        
+
         return data;
     }
 
@@ -315,7 +315,7 @@ class MFASetup {
                 body: JSON.stringify({ token: totpToken })
             }
         );
-        
+
         if (response.ok) {
             // Save backup codes securely
             this.saveBackupCodes(this.backupCodes);
@@ -343,7 +343,7 @@ class MFASetup {
 class PasswordResetFlow:
     def __init__(self, client):
         self.client = client
-    
+
     async def request_reset(self, email: str):
         """Request password reset email"""
         response = await self.client.post("/auth/forgot-password", json={
@@ -351,7 +351,7 @@ class PasswordResetFlow:
         })
         # Always returns success for security
         return response.status_code == 200
-    
+
     async def reset_password(self, token: str, new_password: str):
         """Reset password with token from email"""
         response = await self.client.post("/auth/reset-password", json={
@@ -387,7 +387,7 @@ export function PasswordResetRequest() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        
+
         const response = await fetch('/api/v1/auth/forgot-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -402,7 +402,7 @@ export function PasswordResetRequest() {
     if (submitted) {
         return (
             <div className="alert alert-success">
-                If an account exists with that email, you will receive 
+                If an account exists with that email, you will receive
                 password reset instructions.
             </div>
         );
@@ -430,7 +430,7 @@ export function PasswordResetConfirm({ token }: { token: string }) {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        
+
         if (password !== confirmPassword) {
             setError('Passwords do not match');
             return;
@@ -464,7 +464,7 @@ export function PasswordResetConfirm({ token }: { token: string }) {
     return (
         <form onSubmit={handleSubmit}>
             {error && <div className="alert alert-danger">{error}</div>}
-            
+
             <input
                 type="password"
                 value={password}
@@ -473,7 +473,7 @@ export function PasswordResetConfirm({ token }: { token: string }) {
                 minLength={8}
                 required
             />
-            
+
             <input
                 type="password"
                 value={confirmPassword}
@@ -482,7 +482,7 @@ export function PasswordResetConfirm({ token }: { token: string }) {
                 minLength={8}
                 required
             />
-            
+
             <button type="submit">Reset Password</button>
         </form>
     );
@@ -519,18 +519,18 @@ class AuthException(Exception):
 
 async def handle_auth_response(response):
     """Handle authentication API responses with proper error handling"""
-    
+
     if response.status_code == 200:
         return response.json()
-    
+
     error_data = response.json() if response.content else {}
     detail = error_data.get("detail", "Unknown error")
-    
+
     if response.status_code == 401:
         if "MFA" in detail:
             raise AuthException(AuthError.MFA_REQUIRED, detail)
         raise AuthException(AuthError.INVALID_CREDENTIALS, detail)
-    
+
     elif response.status_code == 429:
         retry_after = response.headers.get("Retry-After")
         raise AuthException(
@@ -538,13 +538,13 @@ async def handle_auth_response(response):
             detail,
             retry_after=int(retry_after) if retry_after else None
         )
-    
+
     elif response.status_code == 423:
         raise AuthException(AuthError.ACCOUNT_LOCKED, detail)
-    
+
     elif response.status_code >= 500:
         raise AuthException(AuthError.SERVER_ERROR, detail)
-    
+
     raise AuthException(AuthError.SERVER_ERROR, detail)
 
 # Usage with retry logic
@@ -556,18 +556,18 @@ async def login_with_retry(username: str, password: str, max_retries: int = 3):
                 "password": password
             })
             return await handle_auth_response(response)
-            
+
         except AuthException as e:
             if e.error_type == AuthError.RATE_LIMITED and e.retry_after:
                 print(f"Rate limited. Waiting {e.retry_after} seconds...")
                 await asyncio.sleep(e.retry_after)
                 continue
-            
+
             if e.error_type == AuthError.SERVER_ERROR and attempt < max_retries - 1:
                 print(f"Server error. Retrying in {2 ** attempt} seconds...")
                 await asyncio.sleep(2 ** attempt)
                 continue
-            
+
             raise
 ```
 
@@ -638,7 +638,7 @@ class AuthErrorHandler {
 
                 // Handle rate limiting
                 if (error.code === 'RATE_LIMITED' && error.retryAfter) {
-                    await new Promise(resolve => 
+                    await new Promise(resolve =>
                         setTimeout(resolve, error.retryAfter! * 1000)
                     );
                     continue;
@@ -646,7 +646,7 @@ class AuthErrorHandler {
 
                 // Exponential backoff for server errors
                 if (error.code === 'SERVER_ERROR' && attempt < maxRetries - 1) {
-                    await new Promise(resolve => 
+                    await new Promise(resolve =>
                         setTimeout(resolve, Math.pow(2, attempt) * 1000)
                     );
                     continue;
@@ -677,7 +677,7 @@ from typing import Dict, Optional
 class RateLimitHandler:
     def __init__(self):
         self.limits: Dict[str, dict] = {}
-    
+
     def update_limits(self, endpoint: str, headers: dict):
         """Update rate limit info from response headers"""
         retry_after = headers.get("Retry-After")
@@ -687,42 +687,42 @@ class RateLimitHandler:
             "reset": int(headers.get("X-RateLimit-Reset", 0)),
             "limit": int(headers.get("X-RateLimit-Limit", 100))
         }
-    
+
     def should_wait(self, endpoint: str) -> Optional[int]:
         """Check if we should wait before making request"""
         if endpoint not in self.limits:
             return None
-        
+
         limit_info = self.limits[endpoint]
         if limit_info["remaining"] <= 0:
             wait_time = limit_info["reset"] - int(time.time())
             return max(0, wait_time)
-        
+
         return None
-    
+
     async def make_request_with_limits(self, client, method: str, url: str, **kwargs):
         """Make request with automatic rate limit handling"""
         endpoint = url.split("/")[-1]  # Simple endpoint extraction
-        
+
         # Check if we need to wait
         wait_time = self.should_wait(endpoint)
         if wait_time:
             print(f"Rate limited. Waiting {wait_time} seconds...")
             await asyncio.sleep(wait_time)
-        
+
         # Make request
         response = await client.request(method, url, **kwargs)
-        
+
         # Update limits
         self.update_limits(endpoint, response.headers)
-        
+
         # Handle 429 response
         if response.status_code == 429:
             retry_after = int(response.headers.get("Retry-After", 60))
             print(f"Rate limited. Retrying after {retry_after} seconds...")
             await asyncio.sleep(retry_after)
             return await self.make_request_with_limits(client, method, url, **kwargs)
-        
+
         return response
 ```
 
@@ -746,7 +746,7 @@ async def auth_client():
 @pytest.mark.asyncio
 async def test_complete_auth_flow(auth_client):
     """Test complete authentication flow including MFA"""
-    
+
     # 1. Register user
     register_response = await auth_client.post("/auth/register", json={
         "username": "testuser",
@@ -754,7 +754,7 @@ async def test_complete_auth_flow(auth_client):
         "password": "TestPass123!"
     })
     assert register_response.status_code == 201
-    
+
     # 2. Login
     login_response = await auth_client.post("/auth/login", json={
         "username": "testuser",
@@ -763,15 +763,15 @@ async def test_complete_auth_flow(auth_client):
     assert login_response.status_code == 200
     tokens = login_response.json()
     access_token = tokens["access_token"]
-    
+
     # 3. Setup MFA
     headers = {"Authorization": f"Bearer {access_token}"}
     mfa_setup = await auth_client.post("/auth/mfa/setup", headers=headers)
     assert mfa_setup.status_code == 200
-    
+
     secret = mfa_setup.json()["secret"]
     backup_codes = mfa_setup.json()["backup_codes"]
-    
+
     # 4. Verify MFA with valid TOTP
     totp = pyotp.TOTP(secret)
     verify_response = await auth_client.post(
@@ -780,7 +780,7 @@ async def test_complete_auth_flow(auth_client):
         headers={**headers, "X-MFA-Secret": secret}
     )
     assert verify_response.status_code == 200
-    
+
     # 5. Logout
     logout_response = await auth_client.post(
         "/auth/logout",
@@ -788,7 +788,7 @@ async def test_complete_auth_flow(auth_client):
         headers=headers
     )
     assert logout_response.status_code == 200
-    
+
     # 6. Login with MFA
     login_mfa_response = await auth_client.post("/auth/login", json={
         "username": "testuser",
@@ -800,31 +800,31 @@ async def test_complete_auth_flow(auth_client):
 @pytest.mark.asyncio
 async def test_password_reset_flow(auth_client):
     """Test password reset flow"""
-    
+
     # Request reset
     reset_request = await auth_client.post("/auth/forgot-password", json={
         "email": "test@example.com"
     })
     assert reset_request.status_code == 200
-    
+
     # In test environment, capture the token from mock email
     # This would be retrieved from the email in production
     reset_token = get_reset_token_from_mock_email()
-    
+
     # Reset password
     reset_response = await auth_client.post("/auth/reset-password", json={
         "token": reset_token,
         "new_password": "NewTestPass123!"
     })
     assert reset_response.status_code == 200
-    
+
     # Verify old password doesn't work
     old_login = await auth_client.post("/auth/login", json={
         "username": "testuser",
         "password": "TestPass123!"
     })
     assert old_login.status_code == 401
-    
+
     # Verify new password works
     new_login = await auth_client.post("/auth/login", json={
         "username": "testuser",
@@ -933,7 +933,7 @@ class AuthEventLogger:
             mfa_used=mfa_used,
             timestamp=datetime.utcnow().isoformat()
         )
-    
+
     @staticmethod
     def log_mfa_setup(user_id: int, success: bool):
         logger.info(
@@ -942,7 +942,7 @@ class AuthEventLogger:
             success=success,
             timestamp=datetime.utcnow().isoformat()
         )
-    
+
     @staticmethod
     def log_password_reset(email: str, ip: str):
         logger.info(
@@ -951,7 +951,7 @@ class AuthEventLogger:
             ip_address=ip,
             timestamp=datetime.utcnow().isoformat()
         )
-    
+
     @staticmethod
     def log_suspicious_activity(user_id: int, activity_type: str, details: dict):
         logger.warning(
@@ -973,31 +973,31 @@ class AuthEventLogger:
 # Migration script for existing users
 async def migrate_to_jwt_auth(legacy_db, new_db):
     """Migrate users from basic auth to JWT system"""
-    
+
     # Get all users from legacy system
     legacy_users = await legacy_db.fetch_all("SELECT * FROM users")
-    
+
     for user in legacy_users:
         # Hash password if stored in plain text (NEVER do this in production!)
         if is_plain_text(user["password"]):
             password_hash = password_service.hash_password(user["password"])
         else:
             password_hash = user["password"]
-        
+
         # Create user in new system
         await new_db.execute("""
             INSERT INTO users (
                 username, email, password_hash, created_at, is_active
             ) VALUES ($1, $2, $3, $4, $5)
-        """, user["username"], user["email"], password_hash, 
+        """, user["username"], user["email"], password_hash,
             user["created_at"], True)
-        
+
         # Send email about migration
         await email_service.send_migration_notice(
             user["email"],
             user["username"]
         )
-    
+
     print(f"Migrated {len(legacy_users)} users")
 ```
 

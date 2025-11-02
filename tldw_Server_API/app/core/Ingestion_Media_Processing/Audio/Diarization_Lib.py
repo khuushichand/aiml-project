@@ -219,9 +219,9 @@ def _lazy_import_numpy():
 def _lazy_import_silero_vad():
     """
     Load and cache the Silero VAD model and its utility functions from the torch hub.
-    
+
     This function configures a torch hub cache directory (derived from TORCH_HOME or TORCH_HUB), attempts to load the Silero VAD package via torch.hub.load, validates the returned (model, utils) tuple, and stores them in module-level cache variables for reuse. On failure the cache is left unset and the function returns (None, None).
-    
+
     Returns:
         tuple: `(model, utils)` on success where `utils` is a sequence whose first five items are, in order, `get_speech_timestamps`, `save_audio`, `read_audio`, `VADIterator`, and `collect_chunks`; `(None, None)` if loading or validation fails.
     """
@@ -500,7 +500,7 @@ class DiarizationService:
     def _get_default_config(self) -> Dict[str, Any]:
         """
         Provide the default configuration dictionary used by DiarizationService.
-        
+
         Returns:
             dict: Mapping of configuration option names to their default values. Main keys include:
                 - vad_threshold: float threshold for voice activity detection.
@@ -660,7 +660,7 @@ class DiarizationService:
     def _load_embedding_model(self):
         """
         Load and cache the speaker embedding model according to the current configuration.
-        
+
         This method ensures a SpeechBrain EncoderClassifier is initialized and stored on the service instance for reuse. It selects the device from the service configuration, prefers a local model path or cached model directory when available, and enforces local-only mode if configured (raising DiarizationError when local files are required but missing). On failure to obtain or initialize the model it raises DiarizationError.
         """
         with self._model_lock:
@@ -717,12 +717,12 @@ class DiarizationService:
     def _load_vad_model(self):
         """
         Load and validate the Silero voice-activity-detection (VAD) model and its utilities into the instance.
-        
+
         This method lazy-loads the Silero VAD model and maps its returned utilities into self._vad_model and a dict self._vad_utils with keys
         'get_speech_timestamps', 'save_audio', 'read_audio', 'VADIterator', and 'collect_chunks'. It validates the utilities' presence and
         that each utility is callable (except 'VADIterator', which is expected to be a class). Loading may be skipped when the configuration
         flag 'enable_torch_hub_fetch' is False.
-        
+
         Raises:
             DiarizationError: If loading or validation fails, or if torch hub fetch is disabled by configuration.
         """
@@ -816,15 +816,15 @@ class DiarizationService:
     ) -> Dict[str, Any]:
         """
             Perform speaker diarization for an audio file and return time-aligned segments with speaker assignments.
-            
+
             This method runs voice-activity detection, creates analysis segments, extracts speaker embeddings, clusters segments into speakers, optionally detects overlapping speech, merges adjacent segments for the same speaker, and optionally aligns results to provided transcription segments.
-            
+
             Parameters:
                 audio_path: Path to the input audio file. Prefer a 16 kHz mono WAV for best results; common audio formats will be converted when possible.
                 transcription_segments: Optional list of transcription segment dictionaries to align diarization output to; if provided, aligned segments will inherit timestamps/text from these entries with speaker assignments applied.
                 num_speakers: Optional fixed number of speakers to force; when omitted the service will estimate the speaker count within configured min/max limits.
                 progress_callback: Optional callable invoked with progress updates: (progress_percent: float, message: str, metadata: Optional[dict]). Metadata (when provided) may include final 'num_speakers' and 'duration'.
-            
+
             Returns:
                 A dictionary with diarization results:
                     - 'segments': list of segment dictionaries (each includes start, end, speaker_id, speaker_label and related metadata).
@@ -832,7 +832,7 @@ class DiarizationService:
                     - 'duration': audio duration in seconds.
                     - 'num_speakers': number of unique speakers identified.
                     - 'processing_time': wall-clock time in seconds spent performing diarization.
-            
+
             Raises:
                 DiarizationError: If required dependencies are missing or an error occurs during processing.
             """
@@ -959,12 +959,12 @@ class DiarizationService:
     def _load_audio(self, audio_path: str):
         """
         Load an audio file and return a mono waveform sampled at 16 kHz.
-        
+
         Tries to load using torchaudio (converting multi-channel audio to mono and resampling to 16 kHz if needed). If torchaudio is unavailable or fails, falls back to the Silero VAD `read_audio` utility. Raises DiarizationError if neither loader can produce a valid waveform.
-        
+
         Returns:
             A 1-D tensor or array of audio samples resampled to 16 kHz.
-        
+
         Raises:
             DiarizationError: If audio cannot be loaded by either torchaudio or Silero VAD.
         """
@@ -1027,15 +1027,15 @@ class DiarizationService:
     def _detect_speech(self, waveform, sample_rate: int, streaming: bool = False) -> List[Dict]:
         """
         Detect speech regions in an audio waveform using the configured VAD, optionally in streaming mode, and fall back to a single full-span region when VAD is unavailable.
-        
+
         Parameters:
             waveform: Audio waveform tensor or sequence of samples.
             sample_rate (int): Sampling rate of the waveform in Hz.
             streaming (bool): If True, attempt a lower-memory streaming VAD pass; falls back to standard VAD on failure.
-        
+
         Returns:
             List[Dict]: A list of speech segments where each dict contains numeric `start` and `end` keys expressed in seconds.
-        
+
         Raises:
             DiarizationError: If VAD is unavailable and `allow_vad_fallback` in the configuration is False.
         """
@@ -1044,10 +1044,10 @@ class DiarizationService:
         def _fallback_full_span() -> List[Dict]:
             """
             Produce a single full-span speech region covering the entire waveform or raise an error if fallback is disabled.
-            
+
             Returns:
                 list[dict]: A list with one timestamp dict {'start': 0.0, 'end': <duration_seconds>} giving the speech region in seconds.
-            
+
             Raises:
                 DiarizationError: If fallback is not allowed.
             """
@@ -1152,20 +1152,20 @@ class DiarizationService:
     ) -> List[SegmentDict]:
         """
             Create fixed-length, overlapping speech segments from detected speech regions.
-            
+
             Segments cover each speech region with windows of length `segment_duration` and overlap `segment_overlap`
             (from the instance configuration). Short regions are either padded up to the minimum segment duration
             or emitted as shorter padded segments at the end of a region depending on their length relative to
             `min_segment_duration`. When the `memory_efficient` config flag is enabled, segments store index
             references into the original waveform (`start_sample`, `end_sample`, `waveform_ref`) and padding metadata
             instead of copying waveform tensors.
-            
+
             Parameters:
                 waveform (torch.Tensor): Mono audio samples (1D tensor) used as the source for segment extraction.
                 speech_timestamps (List[Dict]): List of speech region dictionaries with numeric `start` and `end`
                     values given in seconds.
                 sample_rate (int): Sampling rate of `waveform` in Hz.
-            
+
             Returns:
                 List[SegmentDict]: A list of segment dictionaries. Each segment includes start/end times (seconds),
                 either a `waveform` tensor (copied and possibly padded) or `waveform_ref` with `start_sample`/`end_sample`
@@ -1296,12 +1296,12 @@ class DiarizationService:
     ) -> "np.ndarray":
         """
             Compute speaker embeddings for each provided segment in batches.
-            
+
             Processes segments in configurable batches, supports memory-efficient on-demand waveform loading, and returns a 2-D NumPy array with one embedding vector per segment.
-            
+
             Returns:
                 np.ndarray: 2-D array of shape (n_segments, embedding_dim) containing embeddings for each segment.
-            
+
             Raises:
                 DiarizationError: If PyTorch or NumPy are unavailable, or if batching/embedding extraction fails.
             """
@@ -1417,22 +1417,22 @@ class DiarizationService:
     ) -> "np.ndarray":
         """
             Perform speaker clustering on precomputed embeddings and return integer cluster labels.
-            
+
             Clusters the provided L2-normalized embeddings into speaker groups using either spectral
             or agglomerative clustering as configured. If `num_speakers` is 1 or the embeddings are
             determined to come from a single speaker, all labels will be zero. When `num_speakers`
             is None the method will attempt to estimate an appropriate number of speakers.
-            
+
             Parameters:
                 embeddings (np.ndarray): 2D array of embedding vectors (one row per segment).
                 num_speakers (Optional[int]): Desired number of speaker clusters; when None the
                     method will estimate the number of speakers. If set to 1, all segments are
                     assigned the same speaker label.
-            
+
             Returns:
                 np.ndarray: 1D integer array of cluster labels with length equal to the number
                 of input embeddings.
-            
+
             Raises:
                 DiarizationError: If NumPy or scikit-learn modules are not available for clustering.
             """
@@ -1689,12 +1689,12 @@ class DiarizationService:
     ) -> List[Dict]:
         """
             Annotate segments that likely contain overlapping speech based on embedding similarities.
-            
+
             This function compares each segment's embedding to cluster centroids derived from the provided primary labels and annotates segments where the primary-speaker confidence falls below the configured overlap_confidence_threshold. Annotated fields added or updated on segments:
             - `is_overlapping` (bool): whether the segment is likely overlapping speech.
             - `primary_confidence` (float): similarity score of the segment to its primary cluster.
             - `secondary_speakers` (list[dict]): up to two candidate secondary speakers with keys `speaker_id` (int) and `confidence` (float).
-            
+
             Returns:
                 List[Dict]: The same list of segments with added overlap-related annotations where applicable.
             """
@@ -1813,20 +1813,20 @@ def audio_diarization(
 ) -> List[Dict[str, Any]]:
     """
     Backward compatibility wrapper for audio diarization.
-    
+
     This function provides compatibility with code expecting the old PyAnnote-based
     diarization interface. It wraps the new DiarizationService class.
-    
+
     Args:
         audio_file_path: Path to the audio file to diarize
         config_path: Path to configuration file (ignored - uses config.py)
         num_speakers: Number of speakers (if known)
         min_speakers: Minimum number of speakers
         max_speakers: Maximum number of speakers
-    
+
     Returns:
         List of diarization segments with speaker labels
-    
+
     Raises:
         DiarizationError: If diarization fails
     """
@@ -1839,24 +1839,24 @@ def audio_diarization(
             config['min_speakers'] = min_speakers
         if max_speakers is not None:
             config['max_speakers'] = max_speakers
-            
+
         service = DiarizationService(config=config)
-        
+
         if not service.is_available:
             raise DiarizationError(
                 "Diarization dependencies not available. "
                 "Install with: pip install tldw-server[diarization]"
             )
-        
+
         # Perform diarization
         result = service.diarize(audio_path=audio_file_path)
-        
+
         # Extract segments from result
         if result and 'segments' in result:
             return result['segments']
         else:
             return []
-            
+
     except Exception as e:
         if isinstance(e, DiarizationError):
             raise
@@ -1870,14 +1870,14 @@ def combine_transcription_and_diarization(
 ) -> List[Dict[str, Any]]:
     """
     Backward compatibility wrapper for combining transcription and diarization.
-    
+
     With the new implementation, this is handled internally by DiarizationService.diarize()
     when transcription_segments are provided. This function exists for compatibility.
-    
+
     Args:
         transcription_segments: List of transcription segments
         diarization_segments: List of diarization segments (ignored in new implementation)
-    
+
     Returns:
         Combined segments with speaker labels
     """
@@ -1885,39 +1885,39 @@ def combine_transcription_and_diarization(
     # when transcription segments are provided
     if not transcription_segments:
         return []
-    
+
     # If segments already have speaker info, return as-is
     if transcription_segments and 'speaker' in transcription_segments[0]:
         return transcription_segments
-    
+
     # Otherwise, perform diarization with transcription
     try:
         service = DiarizationService()
-        
+
         if not service.is_available:
             logger.warning("Diarization not available, returning transcription without speakers")
             return transcription_segments
-        
+
         # Get audio path from first segment if available
         audio_path = None
         if transcription_segments and 'audio_path' in transcription_segments[0]:
             audio_path = transcription_segments[0]['audio_path']
-        
+
         if not audio_path:
             logger.warning("No audio path found in segments, returning transcription without speakers")
             return transcription_segments
-        
+
         # Perform diarization with transcription segments
         result = service.diarize(
             audio_path=audio_path,
             transcription_segments=transcription_segments
         )
-        
+
         if result and 'segments' in result:
             return result['segments']
         else:
             return transcription_segments
-            
+
     except Exception as e:
         logger.warning(f"Failed to combine transcription and diarization: {e}")
         return transcription_segments

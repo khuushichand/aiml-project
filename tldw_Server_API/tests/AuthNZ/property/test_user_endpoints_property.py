@@ -147,4 +147,3 @@ class TestUserEndpointsProperty:
             assert "Password changed successfully" in response.json()["message"]
 
         app.dependency_overrides.clear()
-

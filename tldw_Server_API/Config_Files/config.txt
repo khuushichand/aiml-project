@@ -89,7 +89,7 @@ sqlite_path = Databases/server_media_summary.db
 sqlite_wal_mode = true
 sqlite_foreign_keys = true
 backup_path = ./tldw_DB_Backups/
-pg_connection_string = 
+pg_connection_string =
 pg_host = localhost
 pg_port = 5432
 pg_database = tldw_content
@@ -225,7 +225,7 @@ CLAIMS_EMBED = false
 CLAIMS_EMBED_MODEL_ID = ""
 CLAIMS_LLM_PROVIDER = ollama
 CLAIMS_LLM_TEMPERATURE = 0.1
-CLAIMS_LLM_MODEL = 
+CLAIMS_LLM_MODEL =
 CLAIMS_REBUILD_ENABLED = false
 CLAIMS_REBUILD_INTERVAL_SEC = 3600
 CLAIMS_REBUILD_POLICY = missing
@@ -263,9 +263,9 @@ cache_similarity_threshold = 0.85
 enable_reranking = true
 rerank_top_k = 10
 llm_reranker_provider = openai
-llm_reranker_model = 
+llm_reranker_model =
 llama_reranker_binary = llama-embedding
-llama_reranker_model = 
+llama_reranker_model =
 llama_reranker_ngl = 0
 llama_reranker_separator = <#sep#>
 llama_reranker_output = json+
@@ -273,7 +273,7 @@ llama_reranker_pooling = last
 llama_reranker_normalize = -1
 llama_reranker_max_doc_chars = 2000
 llama_reranker_template_mode = auto
-transformers_reranker_model = 
+transformers_reranker_model =
 
 # --- RAG Feature Toggles (Phased Rollout) ---
 # Structure index: persist headings/paragraph offsets and surface section metadata in retrieval
@@ -440,7 +440,7 @@ tabby_api_timeout = 90
 tabby_api_retry = 3
 tabby_api_retry_delay = 1
 vllm_api_IP = http://127.0.0.1:8000/v1/chat/completions
-vllm_model = 
+vllm_model =
 vllm_streaming = False
 vllm_temperature = 0.7
 vllm_top_p = 0.9
@@ -464,7 +464,7 @@ aphrodite_streaming = False
 aphrodite_temperature = 0.7
 aphrodite_top_p = 0.9
 aphrodite_min_p = 0.05
-aphrodite_model = 
+aphrodite_model =
 aprhodite_max_tokens = 4096
 aphrodite_api_timeout = 90
 aphrodite_api_retry = 3
@@ -495,10 +495,10 @@ buffered_merge_algo = lcs
 # --- Custom Vocabulary (optional) ---
 # Path to a file with domain terms (one per line) or JSON list.
 # Used to prime Whisper via initial_prompt.
-custom_vocab_terms_file = 
+custom_vocab_terms_file =
 # Path to a JSON mapping of misheard->correct replacements.
 # Applied as post-processing across all STT providers.
-custom_vocab_replacements_file = 
+custom_vocab_replacements_file =
 # Enable/disable using the terms list to build a Whisper initial_prompt
 custom_vocab_initial_prompt_enable = True
 # Enable/disable post-processing replacements
@@ -521,14 +521,14 @@ default_openai_tts_model = tts-1-hd
 default_openai_tts_output_format = mp3
 default_openai_tts_streaming = False
 default_eleven_tts_voice = pNInz6obpgDQGcFmaJgB
-default_eleven_tts_model = 
-default_eleven_tts_language_code = 
-default_eleven_tts_voice_stability = 
-default_eleven_tts_voice_similiarity_boost = 
-default_eleven_tts_voice_style = 
-default_eleven_tts_voice_use_speaker_boost = 
-default_eleven_tts_voice_pronunciation_dictionary_locators_dict_id = 
-default_eleven_tts_voice_pronunciation_dictionary_locators_version_id = 
+default_eleven_tts_model =
+default_eleven_tts_language_code =
+default_eleven_tts_voice_stability =
+default_eleven_tts_voice_similiarity_boost =
+default_eleven_tts_voice_style =
+default_eleven_tts_voice_use_speaker_boost =
+default_eleven_tts_voice_pronunciation_dictionary_locators_dict_id =
+default_eleven_tts_voice_pronunciation_dictionary_locators_version_id =
 default_eleven_tts_speed = 1
 default_eleven_tts_output_format = mp3_44100_128
 default_google_tts_model = FIXME
@@ -591,13 +591,13 @@ default_kokoro_tts_speed = 1.0
 stable_only = true
 
 # Comma-separated list of route keys to disable regardless of stability
-disable = 
+disable =
 
 # Comma-separated list of route keys to force-enable (useful when stable_only = true)
 enable = tools
 
 # Optionally extend the curated experimental set (comma-separated)
-experimental_routes = 
+experimental_routes =
 default_kokoro_tts_voice = sky
 default_kokoro_tts_model = pht
 default_kokoro_tts_output_format = wav
@@ -649,7 +649,7 @@ search_result_blacklist = []
 search_result_display_type = list
 search_result_display_metadata = False
 search_result_save_to_db = True
-search_result_analysis_tone = 
+search_result_analysis_tone =
 relevance_analysis_llm = openai
 final_answer_llm = openai
 search_engine_api_key_baidu = 1e1b1b1b1b1b1b1b1
@@ -664,13 +664,13 @@ google_search_country_code = US
 google_filter_setting = 1
 google_user_geolocation = US
 google_ui_language = en
-google_limit_search_results_to_language = 
-google_default_search_results = 
+google_limit_search_results_to_language =
+google_default_search_results =
 google_safe_search = "active"
-google_enable_site_search = 
-google_site_search_include = 
-google_site_search_exclude = 
-google_sort_results_by = 
+google_enable_site_search =
+google_site_search_include =
+google_site_search_exclude =
+google_sort_results_by =
 search_engine_api_key_kagi = <kagi_api_key>>
 search_engine_searx_api = https://search.rhscz.eu/
 search_engine_api_key_tavily = <tavily_api_key>
@@ -678,8 +678,8 @@ search_engine_api_key_yandex = 1e1b1b1b1b1b1b1b1
 search_engine_id_yandex = 1e1b1b1b1b1b1b1b1
 
 [Web-Scraper]
-web_scraper_api_key = 
-web_scraper_api_url = 
+web_scraper_api_key =
+web_scraper_api_url =
 web_scraper_api_timeout = 90
 web_scraper_api_retry = 3
 web_scraper_api_retry_delay = 1
@@ -690,7 +690,7 @@ web_scraper_stealth_playwright = False
 log_level = INFO
 log_file = ./Logs/tldw_app_logs.json
 log_metrics_file = ./Logs/tldw_metrics_logs.json
-max_bytes = 
+max_bytes =
 backup_count = 5
 
 [Moderation]
@@ -707,7 +707,7 @@ user_overrides_file = tldw_Server_API/Config_Files/moderation_user_overrides.jso
 per_user_overrides = True
 # Optional: enable built-in PII rules and category filtering
 pii_enabled = False
-categories_enabled = 
+categories_enabled =
 runtime_overrides_file = tldw_Server_API/Config_Files/moderation_runtime_overrides.json
 
 [Redis]

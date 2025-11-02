@@ -35,20 +35,20 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
     Use with care in async code: execute blocking DB work via run_in_executor
     or prefer `run_transaction` below to execute a function inside a single
     executor thread that holds the transaction for its entire duration.
-    
+
     Args:
         db: Database instance
         max_retries: Maximum number of retries for transient failures
-        
+
     Yields:
         Transaction context
-        
+
     Raises:
         CharactersRAGDBError: On database errors after retries exhausted
     """
     retry_count = 0
     last_error = None
-    
+
     while retry_count < max_retries:
         try:
             # Start transaction
@@ -56,7 +56,7 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
                 yield db
                 # If we get here, transaction was successful
                 return
-                
+
         except ConflictError as e:
             # Conflict due to concurrent modification - retry
             retry_count += 1
@@ -68,22 +68,22 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
             else:
                 logger.error(f"Transaction failed after {max_retries} retries due to conflicts")
                 raise
-                
+
         except InputError as e:
             # Input validation error - don't retry
             logger.error(f"Transaction failed due to input error: {e}")
             raise
-            
+
         except CharactersRAGDBError as e:
             # Other database errors - don't retry
             logger.error(f"Transaction failed due to database error: {e}")
             raise
-            
+
         except Exception as e:
             # Unexpected error - log and re-raise
             logger.error(f"Unexpected error in transaction: {e}", exc_info=True)
             raise CharactersRAGDBError(f"Transaction failed: {str(e)}")
-    
+
     # If we get here, all retries exhausted
     if last_error:
         raise last_error
@@ -153,10 +153,10 @@ async def run_transaction(
 def transactional(max_retries: int = 3):
     """
     Decorator to make a function transactional with automatic retry logic.
-    
+
     Args:
         max_retries: Maximum number of retries for transient failures
-        
+
     Returns:
         Decorated function
     """
@@ -171,14 +171,14 @@ def transactional(max_retries: int = 3):
                     break
             if not db:
                 db = kwargs.get('db')
-            
+
             if not db:
                 # No database parameter found, run without transaction
                 return await func(*args, **kwargs)
-            
+
             async with db_transaction(db, max_retries):
                 return await func(*args, **kwargs)
-        
+
         return wrapper
     return decorator
 
@@ -191,16 +191,16 @@ async def save_conversation_with_messages(
 ) -> tuple[str, list[str]]:
     """
     Save a conversation and its messages in a single transaction.
-    
+
     Args:
         db: Database instance
         conversation_data: Conversation data dictionary
         messages: List of message dictionaries
         max_retries: Maximum retry attempts
-        
+
     Returns:
         Tuple of (conversation_id, list of message_ids)
-        
+
     Raises:
         CharactersRAGDBError: On database errors
     """
@@ -248,13 +248,13 @@ async def update_conversation_with_rollback(
 ) -> bool:
     """
     Update a conversation and optionally add new messages, with rollback on failure.
-    
+
     Args:
         db: Database instance
         conversation_id: ID of the conversation to update
         updates: Dictionary of updates to apply
         new_messages: Optional list of new messages to add
-        
+
     Returns:
         True if successful, False otherwise
     """

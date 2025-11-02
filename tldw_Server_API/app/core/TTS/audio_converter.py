@@ -27,7 +27,7 @@ class AudioConversionError(TTSError):
 
 class AudioConverter:
     """Audio conversion and processing utilities"""
-    
+
     # Common audio formats and their codecs
     AUDIO_CODECS = {
         'wav': 'pcm_s16le',
@@ -37,7 +37,7 @@ class AudioConverter:
         'opus': 'libopus',
         'm4a': 'aac'
     }
-    
+
     @staticmethod
     async def convert_to_wav(
         input_path: Path,
@@ -48,14 +48,14 @@ class AudioConverter:
     ) -> bool:
         """
         Convert audio file to WAV format with specified parameters.
-        
+
         Args:
             input_path: Path to input audio file
             output_path: Path for output WAV file
             sample_rate: Target sample rate in Hz
             channels: Number of audio channels (1=mono, 2=stereo)
             bit_depth: Bit depth (16 or 24)
-            
+
         Returns:
             True if conversion successful, False otherwise
         """
@@ -72,7 +72,7 @@ class AudioConverter:
                 sample_fmt = 's24'
             else:
                 raise AudioConversionError(f"Unsupported bit depth: {bit_depth}. Supported values: 16, 24.")
-            
+
             # Build ffmpeg command
             cmd = [
                 'ffmpeg', '-y',  # Overwrite output
@@ -83,30 +83,30 @@ class AudioConverter:
                 '-c:a', codec,  # PCM codec for WAV
                 str(output_path)  # Output file
             ]
-            
+
             # Run conversion
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
                 logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
                 return False
-            
+
             logger.info(f"Converted {input_path.name} to WAV ({sample_rate}Hz, {channels}ch, {bit_depth}bit)")
             return True
-            
+
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
             raise AudioConversionError("FFmpeg is required for audio conversion")
         except Exception as e:
             logger.error(f"Audio conversion error: {e}")
             return False
-    
+
     @staticmethod
     async def convert_format(
         input_path: Path,
@@ -116,13 +116,13 @@ class AudioConverter:
     ) -> bool:
         """
         Convert audio between formats.
-        
+
         Args:
             input_path: Path to input audio file
             output_path: Path for output file
             target_format: Target format (wav, mp3, flac, etc.)
             **kwargs: Additional ffmpeg parameters
-            
+
         Returns:
             True if successful
         """
@@ -132,14 +132,14 @@ class AudioConverter:
             if not codec:
                 logger.error(f"Unsupported format: {target_format}")
                 return False
-            
+
             # Ensure output has correct extension
             output_path = output_path.with_suffix(f".{target_format.lower()}")
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Build command
             cmd = ['ffmpeg', '-y', '-i', str(input_path)]
-            
+
             # Add optional parameters
             if 'sample_rate' in kwargs:
                 cmd.extend(['-ar', str(kwargs['sample_rate'])])
@@ -147,30 +147,30 @@ class AudioConverter:
                 cmd.extend(['-ac', str(kwargs['channels'])])
             if 'bitrate' in kwargs:
                 cmd.extend(['-b:a', str(kwargs['bitrate'])])
-            
+
             # Add codec and output
             cmd.extend(['-c:a', codec, str(output_path)])
-            
+
             # Run conversion
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
                 logger.error(f"Format conversion failed: {stderr.decode()}")
                 return False
-            
+
             logger.info(f"Converted {input_path.name} to {target_format}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Format conversion error: {e}")
             return False
-    
+
     @staticmethod
     async def validate_duration(
         file_path: Path,
@@ -179,40 +179,40 @@ class AudioConverter:
     ) -> Tuple[bool, float]:
         """
         Check if audio duration is within specified range.
-        
+
         Args:
             file_path: Path to audio file
             min_seconds: Minimum duration in seconds
             max_seconds: Maximum duration in seconds
-            
+
         Returns:
             Tuple of (is_valid, actual_duration)
         """
         try:
             duration = await AudioConverter.get_duration(file_path)
-            
+
             is_valid = min_seconds <= duration <= max_seconds
-            
+
             if not is_valid:
                 if duration < min_seconds:
                     logger.warning(f"Audio duration {duration:.1f}s is below minimum {min_seconds}s")
                 else:
                     logger.warning(f"Audio duration {duration:.1f}s exceeds maximum {max_seconds}s")
-            
+
             return is_valid, duration
-            
+
         except Exception as e:
             logger.error(f"Duration validation error: {e}")
             return False, 0.0
-    
+
     @staticmethod
     async def get_duration(file_path: Path) -> float:
         """
         Get audio file duration in seconds.
-        
+
         Args:
             file_path: Path to audio file
-            
+
         Returns:
             Duration in seconds
         """
@@ -223,33 +223,33 @@ class AudioConverter:
                 '-of', 'default=noprint_wrappers=1:nokey=1',
                 str(file_path)
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode == 0 and stdout:
                 return float(stdout.decode().strip())
             else:
                 logger.error(f"Could not get duration: {stderr.decode()}")
                 return 0.0
-                
+
         except Exception as e:
             logger.error(f"Error getting duration: {e}")
             return 0.0
-    
+
     @staticmethod
     async def get_audio_info(file_path: Path) -> Dict[str, Any]:
         """
         Get detailed audio file information.
-        
+
         Args:
             file_path: Path to audio file
-            
+
         Returns:
             Dictionary with audio properties
         """
@@ -261,11 +261,11 @@ class AudioConverter:
             'bitrate': 0,
             'format': file_path.suffix[1:] if file_path.suffix else ''
         }
-        
+
         try:
             # Get duration
             info['duration'] = await AudioConverter.get_duration(file_path)
-            
+
             # Get detailed stream info
             cmd = [
                 'ffprobe', '-v', 'error',
@@ -274,15 +274,15 @@ class AudioConverter:
                 '-of', 'json',
                 str(file_path)
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode == 0 and stdout:
                 import json
                 data = json.loads(stdout.decode())
@@ -292,13 +292,13 @@ class AudioConverter:
                     info['sample_rate'] = int(stream.get('sample_rate', 0))
                     info['channels'] = int(stream.get('channels', 0))
                     info['bitrate'] = int(stream.get('bit_rate', 0))
-            
+
             return info
-            
+
         except Exception as e:
             logger.error(f"Error getting audio info: {e}")
             return info
-    
+
     @staticmethod
     async def normalize_audio(
         input_path: Path,
@@ -307,71 +307,71 @@ class AudioConverter:
     ) -> bool:
         """
         Normalize audio loudness using EBU R128 standard.
-        
+
         Args:
             input_path: Path to input audio
             output_path: Path for normalized output
             target_level: Target loudness in LUFS (default -23)
-            
+
         Returns:
             True if successful
         """
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # First pass: analyze loudness
             cmd_analyze = [
                 'ffmpeg', '-i', str(input_path),
                 '-af', 'loudnorm=print_format=json',
                 '-f', 'null', '-'
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd_analyze,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             # Parse loudness info from stderr (ffmpeg outputs to stderr)
             import json
             import re
-            
+
             # Extract JSON from stderr
             json_match = re.search(r'\{[^}]+\}', stderr.decode())
             if not json_match:
                 logger.error("Could not analyze audio loudness")
                 return False
-            
+
             loudness_info = json.loads(json_match.group())
-            
+
             # Second pass: apply normalization
             cmd_normalize = [
                 'ffmpeg', '-y', '-i', str(input_path),
                 '-af', f"loudnorm=I={target_level}:TP=-1.5:LRA=11",
                 str(output_path)
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd_normalize,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
                 logger.error(f"Normalization failed: {stderr.decode()}")
                 return False
-            
+
             logger.info(f"Normalized audio to {target_level} LUFS")
             return True
-            
+
         except Exception as e:
             logger.error(f"Audio normalization error: {e}")
             return False
-    
+
     @staticmethod
     async def trim_silence(
         input_path: Path,
@@ -381,19 +381,19 @@ class AudioConverter:
     ) -> bool:
         """
         Trim silence from beginning and end of audio.
-        
+
         Args:
             input_path: Path to input audio
             output_path: Path for trimmed output
             threshold: Silence threshold in dB
             duration: Minimum silence duration to trim (seconds)
-            
+
         Returns:
             True if successful
         """
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Use silenceremove filter
             cmd = [
                 'ffmpeg', '-y', '-i', str(input_path),
@@ -401,26 +401,26 @@ class AudioConverter:
                        f"stop_periods=1:stop_duration={duration}:stop_threshold={threshold}dB",
                 str(output_path)
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
                 logger.error(f"Silence trimming failed: {stderr.decode()}")
                 return False
-            
+
             logger.info(f"Trimmed silence from audio (threshold: {threshold}dB)")
             return True
-            
+
         except Exception as e:
             logger.error(f"Silence trimming error: {e}")
             return False
-    
+
     @staticmethod
     async def extract_segment(
         input_path: Path,
@@ -430,19 +430,19 @@ class AudioConverter:
     ) -> bool:
         """
         Extract a segment from audio file.
-        
+
         Args:
             input_path: Path to input audio
             output_path: Path for segment output
             start_time: Start time in seconds
             duration: Segment duration in seconds
-            
+
         Returns:
             True if successful
         """
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             cmd = [
                 'ffmpeg', '-y',
                 '-ss', str(start_time),  # Seek to start
@@ -451,26 +451,26 @@ class AudioConverter:
                 '-c', 'copy',  # Copy codec (no re-encoding)
                 str(output_path)
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
                 logger.error(f"Segment extraction failed: {stderr.decode()}")
                 return False
-            
+
             logger.info(f"Extracted {duration}s segment starting at {start_time}s")
             return True
-            
+
         except Exception as e:
             logger.error(f"Segment extraction error: {e}")
             return False
-    
+
     @staticmethod
     async def resample_audio(
         input_path: Path,
@@ -479,44 +479,44 @@ class AudioConverter:
     ) -> bool:
         """
         Resample audio to target sample rate.
-        
+
         Args:
             input_path: Path to input audio
             output_path: Path for resampled output
             target_sample_rate: Target sample rate in Hz
-            
+
         Returns:
             True if successful
         """
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             cmd = [
                 'ffmpeg', '-y', '-i', str(input_path),
                 '-ar', str(target_sample_rate),
                 '-c:a', 'pcm_s16le' if output_path.suffix == '.wav' else 'copy',
                 str(output_path)
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode != 0:
                 logger.error(f"Resampling failed: {stderr.decode()}")
                 return False
-            
+
             logger.info(f"Resampled audio to {target_sample_rate}Hz")
             return True
-            
+
         except Exception as e:
             logger.error(f"Resampling error: {e}")
             return False
-    
+
     @staticmethod
     def check_ffmpeg_installed() -> bool:
         """Check if FFmpeg is installed and available."""
@@ -530,7 +530,7 @@ class AudioConverter:
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return False
-    
+
     @staticmethod
     def check_ffprobe_installed() -> bool:
         """Check if FFprobe is installed and available."""
@@ -550,19 +550,19 @@ class AudioConverter:
 async def validate_audio_tools() -> Tuple[bool, str]:
     """
     Validate that required audio processing tools are installed.
-    
+
     Returns:
         Tuple of (all_tools_available, error_message)
     """
     errors = []
-    
+
     if not AudioConverter.check_ffmpeg_installed():
         errors.append("FFmpeg is not installed or not in PATH")
-    
+
     if not AudioConverter.check_ffprobe_installed():
         errors.append("FFprobe is not installed or not in PATH")
-    
+
     if errors:
         return False, "; ".join(errors)
-    
+
     return True, ""

@@ -36,4 +36,3 @@ async def test_cookie_manager_accepts_name_value(tmp_path):
         assert jar["foo"].value == "bar"
     finally:
         await manager.close_all()
-

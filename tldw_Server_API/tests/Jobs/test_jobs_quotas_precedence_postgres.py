@@ -89,4 +89,3 @@ def test_submits_per_minute_precedence_postgres(monkeypatch):
     jm.create_job(domain="other", queue="default", job_type="d1", payload={}, owner_user_id="2")
     with pytest.raises(ValueError):
         jm.create_job(domain="other", queue="default", job_type="d2", payload={}, owner_user_id="2")
-

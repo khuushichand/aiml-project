@@ -36,7 +36,7 @@ class ProjectResponse(ProjectBase, TimestampMixin, UUIDMixin):
     id: int
     user_id: str
     version: int = 1
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class ProjectListItem(BaseModel):
@@ -50,7 +50,7 @@ class ProjectListItem(BaseModel):
     updated_at: datetime
     prompt_count: Optional[int] = 0
     test_case_count: Optional[int] = 0
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 ########################################################################################################################
@@ -80,7 +80,7 @@ class SignatureResponse(SignatureBase, TimestampMixin, UUIDMixin):
     """Signature response model"""
     id: int
     project_id: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class SignatureValidateRequest(BaseModel):
@@ -141,7 +141,7 @@ class PromptResponse(PromptBase, TimestampMixin, UUIDMixin):
     signature_id: Optional[int]
     version_number: int
     parent_version_id: Optional[int]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class PromptVersion(BaseModel):
@@ -153,7 +153,7 @@ class PromptVersion(BaseModel):
     change_description: Optional[str]
     created_at: datetime
     parent_version_id: Optional[int]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class PromptCompareRequest(BaseModel):

@@ -612,7 +612,7 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
             ],
             "stream": streaming
         }
-        
+
         # Handle model-specific requirements
         if openai_model.startswith("gpt-5"):
             # gpt-5 models use max_completion_tokens and only support temperature=1
@@ -646,7 +646,7 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
         timeout_value = loaded_config_data.get('openai_api', {}).get('api_timeout', 120)
         if isinstance(timeout_value, str):
             timeout_value = float(timeout_value)
-        
+
         response = session.post(
             api_url,
             headers=headers,

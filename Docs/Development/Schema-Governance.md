@@ -36,4 +36,3 @@ Schema URLs
 Registry Maintenance
 - Update `embeddings_registry.json` on every schema change.
 - Keep `migration_notes` precise (what changed, why, rollout plan).
-

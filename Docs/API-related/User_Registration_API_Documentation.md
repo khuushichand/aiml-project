@@ -1,7 +1,7 @@
 # User Registration & Authentication API Documentation
 
-**Version**: 1.0.0  
-**Base URL**: `http://localhost:8000/api/v1`  
+**Version**: 1.0.0
+**Base URL**: `http://localhost:8000/api/v1`
 **Authentication**: JWT Bearer tokens (except for public endpoints)
 
 ---

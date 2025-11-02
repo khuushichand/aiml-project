@@ -23,4 +23,3 @@ def test_claims_rebuild_service_worker_handles_failure(monkeypatch):
         assert stats.get("processed", 0) == 0
     finally:
         svc.stop()
-

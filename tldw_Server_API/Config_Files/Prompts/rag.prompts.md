@@ -14,4 +14,3 @@ or off-topic matches. Promote entries that contain precise, verifiable statement
 
 Changelog:
 - v1.0: Seed prompts for retrieval and reranking.
-

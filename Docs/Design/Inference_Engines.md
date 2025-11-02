@@ -32,7 +32,7 @@ w
 volumes:
 - ./vllm_cache:/root/.cache/vllm
 
-The next time it starts, it will still compile but sub sequent starts will read the cache and skip the compile. Obviously if you change your config or load a different model, it will need to do another one-time compile. 
+The next time it starts, it will still compile but sub sequent starts will read the cache and skip the compile. Obviously if you change your config or load a different model, it will need to do another one-time compile.
 https://docs.vllm.ai/en/latest/examples/offline_inference/save_sharded_state.html
 
 https://lmsys.org/blog/2025-05-05-large-scale-ep/
@@ -83,8 +83,3 @@ https://github.com/HazyResearch/minions
 https://github.com/NVIDIA/NeMo-Inspector
 https://arxiv.org/html/2504.17999v2
 https://arxiv.org/html/2403.06988v1
-
-
-
-
-

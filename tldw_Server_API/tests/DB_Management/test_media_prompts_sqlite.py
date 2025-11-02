@@ -97,4 +97,3 @@ def test_sqlite_get_media_prompts_filters_and_orders(tmp_path):
     # Expect two prompts (B from v3 first, then A from v1)
     assert [p["content"] for p in prompts] == ["B", "A"]
     assert [p["version_number"] for p in prompts] == [3, 1]
-

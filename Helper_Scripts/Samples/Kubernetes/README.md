@@ -63,4 +63,3 @@ kubectl delete ns tldw
 - Move secrets to an external secret manager
 - Add HorizontalPodAutoscaler for the app
 - Configure cert-manager to issue TLS certificates automatically
-

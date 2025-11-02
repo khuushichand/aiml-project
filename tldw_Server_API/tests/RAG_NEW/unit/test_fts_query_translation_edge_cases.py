@@ -40,4 +40,3 @@ def test_fts_query_builder_hyphen_and_unicode():
     q2 = "naïve café"
     built2 = r._build_fts_query(q2)
     assert built2.startswith('"') and built2.endswith('"')
-

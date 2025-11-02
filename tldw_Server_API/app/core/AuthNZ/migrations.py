@@ -36,12 +36,12 @@ def migration_001_create_users_table(conn: sqlite3.Connection) -> None:
             storage_used_mb INTEGER DEFAULT 0
         )
     """)
-    
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
-    
+
     conn.commit()
     logger.info("Migration 001: Created users table")
 
@@ -73,7 +73,7 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
-    
+
     # Create indexes
     try:
         cursor = conn.execute("PRAGMA table_info(sessions)")
@@ -104,7 +104,7 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)")
-    
+
     conn.commit()
     logger.info("Migration 002: Created sessions table")
 
@@ -174,7 +174,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
-    
+
     conn.commit()
     logger.info("Migration 003: Created api_keys table")
 
@@ -194,11 +194,11 @@ def migration_004_create_api_key_audit_log(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
         )
     """)
-    
+
     # Create index
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_api_key_id ON api_key_audit_log(api_key_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_created_at ON api_key_audit_log(created_at)")
-    
+
     conn.commit()
     logger.info("Migration 004: Created api_key_audit_log table")
 
@@ -216,11 +216,11 @@ def migration_005_create_rate_limits_table(conn: sqlite3.Connection) -> None:
             UNIQUE(identifier, endpoint, window_start)
         )
     """)
-    
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_window_start ON rate_limits(window_start)")
-    
+
     conn.commit()
     logger.info("Migration 005: Created rate_limits table")
 
@@ -241,11 +241,11 @@ def migration_006_create_registration_codes_table(conn: sqlite3.Connection) -> N
             FOREIGN KEY (created_by) REFERENCES users(id)
         )
     """)
-    
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_registration_codes_code ON registration_codes(code)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_registration_codes_expires_at ON registration_codes(expires_at)")
-    
+
     conn.commit()
     logger.info("Migration 006: Created registration_codes table")
 
@@ -267,12 +267,12 @@ def migration_007_create_audit_logs_table(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
-    
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)")
-    
+
     conn.commit()
     logger.info("Migration 007: Created audit_logs table")
 
@@ -288,11 +288,11 @@ def migration_008_add_password_history_table(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     """)
-    
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_password_history_user_id ON password_history(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_password_history_created_at ON password_history(created_at)")
-    
+
     conn.commit()
     logger.info("Migration 008: Created password_history table")
 
@@ -302,15 +302,15 @@ def migration_009_add_session_encryption_columns(conn: sqlite3.Connection) -> No
     # Check if columns already exist
     cursor = conn.execute("PRAGMA table_info(sessions)")
     columns = [row[1] for row in cursor.fetchall()]
-    
+
     if 'encrypted_token' not in columns:
         conn.execute("ALTER TABLE sessions ADD COLUMN encrypted_token TEXT")
         logger.info("Added encrypted_token column to sessions table")
-    
+
     if 'encrypted_refresh' not in columns:
         conn.execute("ALTER TABLE sessions ADD COLUMN encrypted_refresh TEXT")
         logger.info("Added encrypted_refresh column to sessions table")
-    
+
     conn.commit()
     logger.info("Migration 009: Added session encryption columns")
 
@@ -320,19 +320,19 @@ def migration_010_add_2fa_columns(conn: sqlite3.Connection) -> None:
     # Check if columns already exist
     cursor = conn.execute("PRAGMA table_info(users)")
     columns = [row[1] for row in cursor.fetchall()]
-    
+
     if 'totp_secret' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
         logger.info("Added totp_secret column to users table")
-    
+
     if 'two_factor_enabled' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0")
         logger.info("Added two_factor_enabled column to users table")
-    
+
     if 'backup_codes' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN backup_codes TEXT")
         logger.info("Added backup_codes column to users table")
-    
+
     conn.commit()
     logger.info("Migration 010: Added 2FA columns to users table")
 
@@ -362,7 +362,7 @@ def rollback_003_drop_api_keys_table(conn: sqlite3.Connection) -> None:
 
 def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     """Create tables for enhanced authentication features"""
-    
+
     # Password reset tokens table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS password_reset_tokens (
@@ -390,7 +390,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)")
-    
+
     # Failed attempts table for lockout tracking
     conn.execute("""
         CREATE TABLE IF NOT EXISTS failed_attempts (
@@ -404,7 +404,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_failed_attempts_identifier ON failed_attempts(identifier)")
-    
+
     # Account lockouts table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS account_lockouts (
@@ -416,7 +416,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_lockouts_identifier ON account_lockouts(identifier)")
-    
+
     # Token blacklist table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS token_blacklist (
@@ -435,11 +435,11 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)")
-    
+
     # Add columns to users if not exists
     cursor = conn.execute("PRAGMA table_info(users)")
     columns = [row[1] for row in cursor.fetchall()]
-    
+
     if 'uuid' not in columns:
         # SQLite cannot add a UNIQUE constraint via ALTER TABLE. Add column first,
         # then create a unique index to enforce uniqueness. This keeps the
@@ -455,11 +455,11 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     if 'email_verified_at' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMP")
         logger.info("Added email_verified_at column to users table")
-    
+
     if 'is_verified' not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0")
         logger.info("Added is_verified column to users table")
-    
+
     conn.commit()
     logger.info("Migration 011: Created enhanced authentication tables")
 
@@ -1295,40 +1295,40 @@ def get_authnz_migrations() -> List[Migration]:
 def apply_authnz_migrations(db_path: Path, target_version: int = None) -> None:
     """
     Apply AuthNZ migrations to a database
-    
+
     Args:
         db_path: Path to the database file
         target_version: Target migration version (None = latest)
     """
     manager = MigrationManager(db_path)
-    
+
     # Add all migrations to the manager
     for migration in get_authnz_migrations():
         manager.add_migration(migration)
-    
+
     # Apply migrations
     manager.migrate(target_version)
-    
+
     logger.info(f"Applied AuthNZ migrations to {db_path}")
 
 
 def rollback_authnz_migrations(db_path: Path, target_version: int = 0) -> None:
     """
     Rollback AuthNZ migrations
-    
+
     Args:
         db_path: Path to the database file
         target_version: Target migration version to rollback to
     """
     manager = MigrationManager(db_path)
-    
+
     # Add all migrations to the manager
     for migration in get_authnz_migrations():
         manager.add_migration(migration)
-    
+
     # Rollback migrations
     manager.rollback(target_version)
-    
+
     logger.info(f"Rolled back AuthNZ migrations to version {target_version}")
 
 
@@ -1340,22 +1340,22 @@ def rollback_authnz_migrations(db_path: Path, target_version: int = 0) -> None:
 def check_migration_status(db_path: Path) -> dict:
     """
     Check the migration status of a database
-    
+
     Args:
         db_path: Path to the database file
-        
+
     Returns:
         Dictionary with migration status information
     """
     manager = MigrationManager(db_path)
-    
+
     # Add all migrations
     for migration in get_authnz_migrations():
         manager.add_migration(migration)
-    
+
     current_version = manager.get_current_version()
     pending = manager.get_pending_migrations()
-    
+
     return {
         "current_version": current_version,
         "latest_version": len(get_authnz_migrations()),
@@ -1367,13 +1367,13 @@ def check_migration_status(db_path: Path) -> dict:
 def ensure_authnz_tables(db_path: Path) -> None:
     """
     Ensure all AuthNZ tables exist in the database
-    
+
     Args:
         db_path: Path to the database file
     """
     # Check current status
     status = check_migration_status(db_path)
-    
+
     if not status["is_up_to_date"]:
         logger.info(f"Database needs migrations. Current: {status['current_version']}, Latest: {status['latest_version']}")
         apply_authnz_migrations(db_path)

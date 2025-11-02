@@ -7,4 +7,3 @@ unified pipeline tests under RAG_NEW.
 import pytest
 
 pytestmark = pytest.mark.skip(reason="Functional pipeline is deprecated; tests removed in favor of unified pipeline.")
-

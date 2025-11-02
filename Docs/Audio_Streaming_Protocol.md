@@ -195,4 +195,3 @@ Quotas and Redis (optional)
 Health
 - Check variant availability: `GET /api/v1/audio/stream/status`
 - Lists available models (feature probe) and the streaming WS endpoint.
-

@@ -77,13 +77,13 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
     # Disable CSRF protection for tests
     original_csrf_setting = global_settings.get('CSRF_ENABLED', None)
     global_settings['CSRF_ENABLED'] = False
-    
+
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
     with TestClient(fastapi_app) as c:
         # Set authentication header for single-user mode
         c.headers["X-API-KEY"] = TestConfig.TEST_API_KEY
         yield c
-    
+
     # Restore original settings
     fastapi_app.dependency_overrides.clear()
     try:
@@ -113,22 +113,22 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
             pass
 
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
-    
+
     with TestClient(fastapi_app) as c:
         # Set authentication header for single-user mode
         c.headers["X-API-KEY"] = TestConfig.TEST_API_KEY
-        
+
         # First make a GET request to obtain CSRF token
         response = c.get("/api/v1/health")  # Or any GET endpoint
         csrf_token = response.cookies.get("csrf_token")
-        
+
         # Add CSRF token to client's default headers if obtained
         if csrf_token:
             c.headers["X-CSRF-Token"] = csrf_token
             c.cookies["csrf_token"] = csrf_token
-        
+
         yield c
-    
+
     fastapi_app.dependency_overrides.clear()
 
 

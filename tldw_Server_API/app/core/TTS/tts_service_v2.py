@@ -65,11 +65,11 @@ class TTSServiceV2:
     Enhanced TTS service that uses the adapter pattern for multiple providers.
     Provides intelligent provider selection and fallback capabilities.
     """
-    
+
     def __init__(self, factory: Optional[TTSAdapterFactory] = None, circuit_manager: Optional[CircuitBreakerManager] = None):
         """
         Initialize the TTS service.
-        
+
         Args:
             factory: TTS adapter factory instance
             circuit_manager: Optional circuit breaker manager
@@ -128,7 +128,7 @@ class TTSServiceV2:
         self._stream_errors_as_audio = stream_errors_as_audio
         self._active_request_counts: Dict[str, int] = {}
         self._active_requests_lock = asyncio.Lock()
-        
+
         # Initialize metrics
         self.metrics = get_metrics_registry()
         self._register_tts_metrics()
@@ -282,7 +282,7 @@ class TTSServiceV2:
             if last_exc:
                 raise last_exc
             raise
-    
+
     def _register_tts_metrics(self):
         """Register TTS-specific metrics"""
         # TTS request metrics
@@ -294,7 +294,7 @@ class TTSServiceV2:
                 labels=["provider", "model", "voice", "format", "status"]
             )
         )
-        
+
         self.metrics.register_metric(
             MetricDefinition(
                 name="tts_request_duration_seconds",
@@ -305,7 +305,7 @@ class TTSServiceV2:
                 buckets=[0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60]
             )
         )
-        
+
         self.metrics.register_metric(
             MetricDefinition(
                 name="tts_text_length_characters",
@@ -316,7 +316,7 @@ class TTSServiceV2:
                 buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000]
             )
         )
-        
+
         self.metrics.register_metric(
             MetricDefinition(
                 name="tts_audio_size_bytes",
@@ -327,7 +327,7 @@ class TTSServiceV2:
                 buckets=[1024, 10240, 102400, 1048576, 10485760]  # 1KB, 10KB, 100KB, 1MB, 10MB
             )
         )
-        
+
         self.metrics.register_metric(
             MetricDefinition(
                 name="tts_active_requests",
@@ -336,7 +336,7 @@ class TTSServiceV2:
                 labels=["provider"]
             )
         )
-        
+
         self.metrics.register_metric(
             MetricDefinition(
                 name="tts_fallback_attempts",
@@ -345,7 +345,7 @@ class TTSServiceV2:
                 labels=["from_provider", "to_provider", "success"]
             )
         )
-    
+
     async def generate_speech(
         self,
         request: OpenAISpeechRequest,
@@ -354,19 +354,19 @@ class TTSServiceV2:
     ) -> AsyncGenerator[bytes, None]:
         """
         Generate speech from text using the best available provider.
-        
+
         Args:
             request: OpenAI-compatible speech request
             provider: Optional specific provider to use
             fallback: Whether to fallback to other providers on failure
-            
+
         Yields:
             Audio chunks in the requested format
         """
         # Convert OpenAI request to unified TTSRequest
         tts_request = self._convert_request(request)
         factory = await self._ensure_factory()
-        
+
         provider_hint: Optional[str] = None
         if provider:
             provider_hint = provider.lower()
@@ -396,7 +396,7 @@ class TTSServiceV2:
                 return
             else:
                 raise
-        
+
         # Get adapter
         adapter = await self._get_adapter(request.model, provider)
         if not adapter and fallback:
@@ -413,7 +413,7 @@ class TTSServiceV2:
                 yield f"ERROR: {str(error)}".encode()
                 return
             raise error
-        
+
         # Track metrics
         start_time = time.time()
         audio_size = 0
@@ -497,11 +497,11 @@ class TTSServiceV2:
             # Handle TTS-specific errors with proper categorization
             error_msg = f"Error generating speech with {adapter.provider_name}: {str(e)}"
             logger.error(error_msg)
-            
+
             # Record failure metrics
             self._record_tts_metrics(
                 provider=adapter.provider_name,
-                model=tts_request.model or "default", 
+                model=tts_request.model or "default",
                 voice=tts_request.voice or "default",
                 format=tts_request.format.value,
                 text_length=len(tts_request.text),
@@ -510,7 +510,7 @@ class TTSServiceV2:
                 success=False,
                 error=str(e)
             )
-            
+
             # Check if error is retryable and fallback is enabled
             if fallback and is_retryable_error(e):
                 logger.info(f"Attempting fallback due to retryable error: {type(e).__name__}")
@@ -531,11 +531,11 @@ class TTSServiceV2:
             # Handle unexpected errors
             error_msg = f"Unexpected error generating speech with {adapter.provider_name}: {str(e)}"
             logger.error(error_msg, exc_info=True)
-            
+
             # Record failure metrics
             self._record_tts_metrics(
                 provider=adapter.provider_name,
-                model=tts_request.model or "default", 
+                model=tts_request.model or "default",
                 voice=tts_request.voice or "default",
                 format=tts_request.format.value,
                 text_length=len(tts_request.text),
@@ -544,14 +544,14 @@ class TTSServiceV2:
                 success=False,
                 error=str(e)
             )
-            
+
             # Wrap in TTS error for consistency
             tts_error = TTSGenerationError(
                 f"Unexpected error in {adapter.provider_name}",
                 provider=adapter.provider_name,
                 details={"error": str(e), "error_type": type(e).__name__}
             )
-            
+
             if fallback:
                 logger.info("Attempting fallback due to unexpected error")
                 await self._decrement_active_requests(adapter.provider_name)
@@ -577,7 +577,7 @@ class TTSServiceV2:
             ):
                 yield chunk
             return
-    
+
     async def _generate_with_adapter(
         self,
         adapter: TTSAdapter,
@@ -592,7 +592,7 @@ class TTSServiceV2:
         try:
             async with self._semaphore:
                 response = await adapter.generate(request)
-                
+
                 if response.audio_stream:
                     async for chunk in response.audio_stream:
                         audio_size += len(chunk)
@@ -633,7 +633,7 @@ class TTSServiceV2:
                 )
             except Exception:
                 pass
-    
+
     def _convert_request(self, request: OpenAISpeechRequest) -> TTSRequest:
         """Convert OpenAI request to unified TTS request"""
         # Map format
@@ -645,7 +645,7 @@ class TTSServiceV2:
             "wav": AudioFormat.WAV,
             "pcm": AudioFormat.PCM
         }
-        
+
         audio_format = format_mapping.get(
             request.response_format.lower(),
             AudioFormat.MP3
@@ -681,7 +681,7 @@ class TTSServiceV2:
         setattr(tts_request, "model", getattr(request, "model", None))
 
         return tts_request
-    
+
     async def _get_adapter(
         self,
         model: str,
@@ -696,10 +696,10 @@ class TTSServiceV2:
                 return await factory.registry.get_adapter(provider_enum)
             except ValueError:
                 logger.warning(f"Unknown provider: {provider}")
-        
+
         # Get adapter by model name
         return await factory.get_adapter_by_model(model)
-    
+
     def _provider_aliases(self, adapter: TTSAdapter) -> Set[str]:
         """Return a normalized alias set for a provider/adapter."""
         aliases = {
@@ -777,21 +777,21 @@ class TTSServiceV2:
                 normalized_tokens.add(provider.value.lower())
                 normalized_tokens.add(provider.name.lower())
         exclude_tokens = normalized_tokens
-    
+
         # Find adapter that supports the requirements
         adapter = await factory.get_best_adapter(
             language=request.language,
             format=request.format,
             supports_streaming=request.stream
         )
-        
+
         # Check if adapter is not in exclude list
         if adapter:
             provider_aliases = self._provider_aliases(adapter)
             if not provider_aliases & exclude_tokens:
                 return adapter
             exclude_tokens.update(provider_aliases)
-        
+
         # Try any available adapter
         for provider in TTSProvider:
             if provider.value.lower() in exclude_tokens or provider.name.lower() in exclude_tokens:
@@ -827,9 +827,9 @@ class TTSServiceV2:
                 if is_valid:
                     return adapter
                 exclude_tokens.update(self._provider_aliases(adapter))
-        
+
         return None
-    
+
     def _record_tts_metrics(
         self,
         provider: str,
@@ -854,21 +854,21 @@ class TTSServiceV2:
                 "status": "success" if success else "failure"
             }
         )
-        
+
         # Record duration histogram
         self.metrics.observe(
             "tts_request_duration_seconds",
             duration,
             labels={"provider": provider, "model": model, "voice": voice}
         )
-        
+
         # Record text length histogram
         self.metrics.observe(
             "tts_text_length_characters",
             text_length,
             labels={"provider": provider}
         )
-        
+
         # Record audio size if successful
         if success and audio_size > 0:
             self.metrics.observe(
@@ -876,7 +876,7 @@ class TTSServiceV2:
                 audio_size,
                 labels={"provider": provider, "format": format}
             )
-        
+
         # Log performance metrics
         if success:
             chars_per_second = text_length / duration if duration > 0 else 0
@@ -890,25 +890,25 @@ class TTSServiceV2:
                 f"TTS failed: provider={provider}, duration={duration:.2f}s, "
                 f"error={error}"
             )
-    
+
     def _categorize_error(self, error: Exception) -> str:
         """
         Categorize error types for better error handling decisions.
         Uses the new exception system's categorization.
-        
+
         Args:
             error: Exception that occurred
-            
+
         Returns:
             Error category string
         """
         # Use the new exception system's categorization
         return categorize_error(error)
-    
+
     async def _handle_provider_fallback(self, request: TTSRequest, failed_provider: str, error_msg: str):
         """
         Handle provider fallback logging and circuit breaker updates.
-        
+
         Args:
             request: Original TTS request
             failed_provider: Name of the provider that failed
@@ -916,34 +916,34 @@ class TTSServiceV2:
         """
         logger.warning(f"Provider {failed_provider} failed: {error_msg}")
         logger.info(f"Attempting fallback for request: text_length={len(request.text)}, voice={request.voice}")
-        
+
         # Update circuit breaker state if available
         if self.circuit_manager:
             breaker = await self.circuit_manager.get_breaker(failed_provider)
             if breaker:
                 # The circuit breaker will track the failure internally
                 logger.debug(f"Circuit breaker updated for {failed_provider}")
-    
+
     async def _try_fallback_providers(
-        self, 
-        request: TTSRequest, 
+        self,
+        request: TTSRequest,
         exclude_providers: List[str],
         failed_provider: Optional[str]
     ) -> AsyncGenerator[bytes, None]:
         """
         Try fallback providers in priority order.
-        
+
         Args:
             request: TTS request to fulfill
             exclude_providers: List of provider names to exclude
             failed_provider: Canonical provider name that just failed
-            
+
         Yields:
             Audio chunks from successful provider
         """
         origin_provider = failed_provider or "unknown"
         fallback_adapter = await self._get_fallback_adapter(request, exclude_providers)
-        
+
         if fallback_adapter:
             try:
                 original_model = getattr(request, "model", None)
@@ -978,7 +978,7 @@ class TTSServiceV2:
                         "success": "false"
                     }
                 )
-                
+
                 # Try one more fallback if available and error is retryable
                 if is_retryable_error(e):
                     exclude_providers.extend(
@@ -987,7 +987,7 @@ class TTSServiceV2:
                     )
                     next_failed_provider = fallback_adapter.provider_name
                     final_fallback = await self._get_fallback_adapter(request, exclude_providers)
-                    
+
                     if final_fallback:
                         try:
                             secondary_original_model = getattr(request, "model", None)
@@ -1057,17 +1057,17 @@ class TTSServiceV2:
                 yield f"ERROR: No fallback providers available".encode()
             else:
                 raise TTSFallbackExhaustedError("No fallback providers available")
-    
+
     async def list_voices(self) -> Dict[str, List[Dict[str, Any]]]:
         """
         List all available voices from all providers.
-        
+
         Returns:
             Dictionary mapping provider names to voice lists
         """
         voices = {}
         factory = await self._ensure_factory()
-        
+
         for provider in TTSProvider:
             # Defensive skip: if the registry doesn't have an adapter spec for this
             # provider (e.g., unimplemented like 'alltalk'), skip it early.
@@ -1109,19 +1109,19 @@ class TTSServiceV2:
                         "description": voice.description
                     })
                 voices[provider.value] = provider_voices
-        
+
         return voices
-    
+
     async def get_capabilities(self) -> Dict[str, Any]:
         """
         Get capabilities of all available providers.
-        
+
         Returns:
             Dictionary with capability information
         """
         factory = await self._ensure_factory()
         capabilities = await factory.registry.get_all_capabilities()
-        
+
         result = {}
         for provider, caps in capabilities.items():
             result[provider.value] = {
@@ -1135,20 +1135,20 @@ class TTSServiceV2:
                 "latency_ms": caps.latency_ms,
                 "sample_rate": caps.sample_rate
             }
-        
+
         return result
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get service status"""
         factory = self.factory or self._factory
         if not factory or not hasattr(factory, "get_status"):
             return {"providers": {}, "initialized": False}
         status = factory.get_status()
-        
+
         # Add circuit breaker status if available
         if self.circuit_manager:
             status["circuit_breakers"] = self.circuit_manager.get_all_status()
-        
+
         return status
 
 
@@ -1160,15 +1160,15 @@ _service_lock = asyncio.Lock()
 async def get_tts_service_v2(config: Optional[Dict[str, Any]] = None) -> TTSServiceV2:
     """
     Get or create the enhanced TTS service singleton.
-    
+
     Args:
         config: Configuration for the service
-        
+
     Returns:
         TTSServiceV2 instance
     """
     global _service_instance
-    
+
     if _service_instance is None:
         async with _service_lock:
             if _service_instance is None:
@@ -1177,24 +1177,24 @@ async def get_tts_service_v2(config: Optional[Dict[str, Any]] = None) -> TTSServ
                     from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
                     config_obj = load_comprehensive_config_with_tts()
                     config = config_obj.get_tts_config()
-                
+
                 # Get factory
                 factory = await get_tts_factory(config)
-                
+
                 # Get circuit breaker manager
                 circuit_manager = await get_circuit_manager(config)
-                
+
                 # Create service
                 _service_instance = TTSServiceV2(factory, circuit_manager)
                 logger.info("Enhanced TTS Service (V2) initialized")
-    
+
     return _service_instance
 
 
 async def close_tts_service_v2():
     """Close the enhanced TTS service"""
     global _service_instance
-    
+
     if _service_instance:
         await close_tts_factory()
         _service_instance = None
@@ -1207,10 +1207,10 @@ class TTSServiceAdapter:
     Adapter to make V2 service compatible with existing code.
     Maps old interface to new service.
     """
-    
+
     def __init__(self):
         self.service_v2: Optional[TTSServiceV2] = None
-    
+
     async def generate_audio_stream(
         self,
         request: OpenAISpeechRequest,
@@ -1218,18 +1218,18 @@ class TTSServiceAdapter:
     ) -> AsyncGenerator[bytes, None]:
         """
         Generate audio stream (backwards compatible interface).
-        
+
         Args:
             request: OpenAI speech request
             internal_model_id: Internal model identifier
-            
+
         Yields:
             Audio chunks
         """
         # Get V2 service
         if not self.service_v2:
             self.service_v2 = await get_tts_service_v2()
-        
+
         # Map internal model ID to provider/model
         # This maintains compatibility with existing code
         model_mapping = {
@@ -1239,13 +1239,13 @@ class TTSServiceAdapter:
             "elevenlabs_english_v1": "elevenlabs",  # TODO: Implement
             "alltalk_api_backend": "alltalk"  # TODO: Implement
         }
-        
+
         # Update request model if needed
         if internal_model_id in model_mapping:
             request.model = model_mapping[internal_model_id]
         else:
             request.model = internal_model_id
-        
+
         # Generate with V2 service
         async for chunk in self.service_v2.generate_speech(request, fallback=True):
             yield chunk

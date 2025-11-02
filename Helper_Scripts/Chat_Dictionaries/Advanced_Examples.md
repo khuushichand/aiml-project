@@ -25,4 +25,3 @@ content: |
   You can upload files here: [upload portal](https://example.com/upload)
   Max size: 100MB
 ---@@@---
-

@@ -437,7 +437,7 @@ data = response.json()
 job_id = data.get("job_id")
 if job_id:
     print(f"Export started: {job_id}")
-    
+
     # Monitor export job
     import time
     while True:
@@ -446,9 +446,9 @@ if job_id:
             headers=headers
         )
         status_data = job_status.json()
-        
+
         print(f"Progress: {status_data['progress_percentage']}%")
-        
+
         if status_data["status"] == "completed":
             # Download the chatbook
             download_response = requests.get(
@@ -456,17 +456,17 @@ if job_id:
                 headers=headers,
                 stream=True
             )
-            
+
             with open("my_backup.chatbook", "wb") as f:
                 for chunk in download_response.iter_content(chunk_size=8192):
                     f.write(chunk)
-            
+
             print("Download complete!")
             break
         elif status_data["status"] == "failed":
             print(f"Export failed: {status_data['error_message']}")
             break
-        
+
         time.sleep(5)  # Check every 5 seconds
 
 # Import a chatbook (options as query parameters)
@@ -477,7 +477,7 @@ with open("my_backup.chatbook", "rb") as f:
         headers=headers,
         files=files
     )
-    
+
     if import_response.status_code == 200:
         result = import_response.json()
         print(f"Imported: {result['imported_items']}")
@@ -505,7 +505,7 @@ async function createChatbook() {
       async_mode: true
     })
   });
-  
+
   const data = await response.json();
   return data.job_id;
 }
@@ -521,16 +521,16 @@ async function monitorJob(jobId) {
         }
       }
     );
-    
+
     const status = await response.json();
     console.log(`Progress: ${status.progress_percentage}%`);
-    
+
     if (status.status === 'completed') {
       return status.download_url;
     } else if (status.status === 'failed') {
       throw new Error(status.error_message);
     }
-    
+
     // Wait 5 seconds before checking again
     await new Promise(resolve => setTimeout(resolve, 5000));
   }
@@ -540,7 +540,7 @@ async function monitorJob(jobId) {
 async function importChatbook(file) {
   const formData = new FormData();
   formData.append('file', file);
-  
+
   const response = await fetch(`${API_BASE}/chatbooks/import?conflict_resolution=skip&prefix_imported=false`, {
     method: 'POST',
     headers: {
@@ -548,7 +548,7 @@ async function importChatbook(file) {
     },
     body: formData
   });
-  
+
   return await response.json();
 }
 

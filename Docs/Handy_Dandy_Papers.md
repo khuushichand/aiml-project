@@ -54,7 +54,7 @@ https://arxiv.org/abs/2412.06769
 https://huggingface.co/spaces/HuggingFaceH4/blogpost-scaling-test-time-compute
 - https://machinelearning.apple.com/research/gsm-symbolic
 https://arxiv.org/abs/2402.10200
-- 
+-
 
 ### Test-Time Compute
 - https://github.com/GAIR-NLP/O1-Journey
@@ -95,5 +95,3 @@ https://arxiv.org/abs/2412.14689
 
 ### Test-Time related
     https://mathcritique.github.io/
-
-

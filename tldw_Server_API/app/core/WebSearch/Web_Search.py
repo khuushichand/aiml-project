@@ -712,7 +712,7 @@ def aggregate_results(
 
     # Aggregation Prompt #1
     analyze_search_results_prompt_1 = f"""
-        Generate a comprehensive, well-structured, and informative answer for a given question, 
+        Generate a comprehensive, well-structured, and informative answer for a given question,
         using ONLY the information found in the provided web Search Results (URL, Page Title, Summary).
         Use an unbiased, journalistic tone, adapting the level of formality to match the user’s question.
 

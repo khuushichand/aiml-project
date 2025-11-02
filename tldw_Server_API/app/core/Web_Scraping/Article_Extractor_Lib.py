@@ -1381,7 +1381,7 @@ class ContentMetadataHandler:
         formatted_content = f"""{ContentMetadataHandler.METADATA_START}
         {json.dumps(metadata, indent=2)}
         {ContentMetadataHandler.METADATA_END}
-        
+
         {content}"""
 
         return formatted_content

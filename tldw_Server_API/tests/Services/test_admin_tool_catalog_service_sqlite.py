@@ -87,4 +87,3 @@ async def test_admin_tool_catalog_sqlite_duplicate_guard():
         _ = await svc.create_tool_catalog(db, name="uniquecat", description=None, org_id=None, team_id=None, is_active=True)
         with pytest.raises(ValueError):
             await svc.create_tool_catalog(db, name="uniquecat", description=None, org_id=None, team_id=None, is_active=True)
-

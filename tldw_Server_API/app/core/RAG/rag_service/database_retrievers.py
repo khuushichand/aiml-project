@@ -180,7 +180,7 @@ class BaseRetriever(ABC):
 
 class MediaDBRetriever(BaseRetriever):
     """Retriever for Media_DB (main content database)."""
-    
+
     def __init__(
         self,
         db_path: Optional[str],
@@ -223,7 +223,7 @@ class MediaDBRetriever(BaseRetriever):
                     close_fn()
         except Exception:
             pass
-    
+
     def _initialize_vector_store(self):
         """Initialize vector store adapter if configured."""
         try:
@@ -238,7 +238,7 @@ class MediaDBRetriever(BaseRetriever):
         except Exception as e:
             logger.warning(f"Could not initialize vector store: {e}")
             self.vector_store = None
-    
+
     async def retrieve(
         self,
         query: str,
@@ -271,10 +271,10 @@ class MediaDBRetriever(BaseRetriever):
             content_w = float((_settings.get("RAG", {}) or {}).get("fts_content_weight", _settings.get("FTS_CONTENT_WEIGHT", 1.0)))
         except Exception:
             pass
-        
+
         # Build SQL with filters
         sql = """
-            SELECT 
+            SELECT
                 m.id,
                 m.title,
                 m.content,
@@ -287,14 +287,14 @@ class MediaDBRetriever(BaseRetriever):
             JOIN media m ON media_fts.rowid = m.id
             WHERE media_fts MATCH ?
         """
-        
+
         params = [title_w, content_w, fts_query]
-        
+
         # Add media type filter
         if media_type:
             sql += " AND m.type = ?"
             params.append(media_type)
-        
+
         # Add date filter
         if self.config.date_filter:
             start_date, end_date = self.config.date_filter
@@ -307,11 +307,11 @@ class MediaDBRetriever(BaseRetriever):
             placeholders = ",".join(["?"] * len(allowed_media_ids))
             sql += f" AND m.id IN ({placeholders})"
             params.extend(list(allowed_media_ids))
-        
+
         # Add ordering and limit (bm25: lower is better on SQLite)
         sql += " ORDER BY rank ASC LIMIT ?"
         params.append(self.config.max_results)
-        
+
         # Execute query and normalize scores to [0,1] (higher is better)
         rows = list(self._execute_query(sql, tuple(params)))
         raw_scores = [float(r["rank"]) if r["rank"] is not None else 0.0 for r in rows]
@@ -340,7 +340,7 @@ class MediaDBRetriever(BaseRetriever):
             )
             documents.append(doc)
         logger.debug(f"Retrieved {len(documents)} documents from Media_DB (normalized scores)")
-        
+
         return documents
 
     def _retrieve_chunk_fts(self, query: str, media_type: Optional[str], **kwargs) -> List[Document]:
@@ -371,7 +371,7 @@ class MediaDBRetriever(BaseRetriever):
             # Build SQLite FTS query and SQL
             fts_query = self._build_fts_query(query)
             sql = """
-                SELECT 
+                SELECT
                     u.uuid AS chunk_uuid,
                     u.id   AS chunk_rowid,
                     u.media_id,
@@ -598,7 +598,7 @@ class MediaDBRetriever(BaseRetriever):
             )
         documents.sort(key=lambda doc: getattr(doc, 'score', 0.0), reverse=True)
         return documents
-    
+
     async def retrieve_with_keywords(
         self,
         query: str,
@@ -607,7 +607,7 @@ class MediaDBRetriever(BaseRetriever):
         """Retrieve with additional keyword filtering."""
         # Get base results
         documents = await self.retrieve(query)
-        
+
         # Filter by keywords
         if keywords:
             filtered_docs = []
@@ -616,9 +616,9 @@ class MediaDBRetriever(BaseRetriever):
                 if any(keyword.lower() in content_lower for keyword in keywords):
                     filtered_docs.append(doc)
             documents = filtered_docs
-        
+
         return documents
-    
+
     async def _retrieve_fts(
         self,
         query: str,
@@ -627,7 +627,7 @@ class MediaDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """Internal method for FTS retrieval (same as retrieve)."""
         return await self.retrieve(query, media_type, **kwargs)
-    
+
     async def _retrieve_vector(
         self,
         query: str,
@@ -636,25 +636,25 @@ class MediaDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve documents using vector search.
-        
+
         Args:
             query: Search query text
             media_type: Optional media type filter
-            
+
         Returns:
             List of documents from vector search
         """
         if not self.vector_store:
             logger.warning("Vector store not initialized, falling back to FTS")
             return await self._retrieve_fts(query, media_type, **kwargs)
-        
+
         try:
             # Allow callers to provide a precomputed query vector (e.g., HyDE)
             provided_vector = kwargs.get("query_vector")
             # Initialize vector store if needed
             if not self.vector_store._initialized:
                 await self.vector_store.initialize()
-            
+
             # Get embedding for query (or use provided)
             if provided_vector is not None:
                 query_vector = provided_vector
@@ -674,18 +674,18 @@ class MediaDBRetriever(BaseRetriever):
                         user_app_config,
                         None,
                     )
-                    
+
                     if not embeddings or not embeddings[0]:
                         logger.error("Failed to generate query embedding")
                         return []
-                    
+
                     query_vector = embeddings[0]
                     if hasattr(query_vector, 'tolist'):
                         query_vector = query_vector.tolist()
                 except Exception as e:
                     logger.error(f"Failed to generate query embedding: {e}")
                     return []
-            
+
             # Build filter for vector search
             base_filter: Dict[str, Any] = {}
             if media_type:
@@ -718,7 +718,7 @@ class MediaDBRetriever(BaseRetriever):
             else:
                 # Default: user-specific media collection
                 collection_name = f"user_{self.user_id}_media_embeddings"
-            
+
             # HYDE-aware retrieval and merge
             try:
                 from tldw_Server_API.app.core.config import settings as _settings  # late import
@@ -929,12 +929,12 @@ class MediaDBRetriever(BaseRetriever):
             documents = chunk_docs[:k]
             logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, chunk-level)")
             return documents
-            
+
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
             # Fallback to FTS
             return await self._retrieve_fts(query, media_type, **kwargs)
-    
+
     async def retrieve_hybrid(
         self,
         query: str,
@@ -944,24 +944,24 @@ class MediaDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve documents using hybrid search (FTS + Vector).
-        
+
         Args:
             query: Search query
             media_type: Optional media type filter
             alpha: Weight for vector search (0=FTS only, 1=Vector only)
-            
+
         Returns:
             Merged and re-ranked documents
         """
         # Perform both searches in parallel
         fts_task = self._retrieve_fts(query, media_type, **kwargs)
         vector_task = self._retrieve_vector(query, media_type, **kwargs)
-        
+
         fts_docs, vector_docs = await asyncio.gather(fts_task, vector_task)
-        
+
         # Merge using reciprocal rank fusion
         return self._reciprocal_rank_fusion(fts_docs, vector_docs, alpha)
-    
+
     def _reciprocal_rank_fusion(
         self,
         fts_docs: List[Document],
@@ -971,13 +971,13 @@ class MediaDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Merge FTS and vector results using reciprocal rank fusion.
-        
+
         Args:
             fts_docs: Documents from FTS search
             vector_docs: Documents from vector search
             alpha: Weight for vector search (0=FTS only, 1=Vector only)
             k: Constant for RRF (typically 60)
-            
+
         Returns:
             Merged and re-ranked documents
         """
@@ -985,43 +985,43 @@ class MediaDBRetriever(BaseRetriever):
         fts_scores = {}
         vector_scores = {}
         doc_map = {}
-        
+
         # Calculate RRF scores for FTS results
         for rank, doc in enumerate(fts_docs):
             doc_id = doc.id
             fts_scores[doc_id] = 1.0 / (k + rank + 1)
             doc_map[doc_id] = doc
-        
+
         # Calculate RRF scores for vector results
         for rank, doc in enumerate(vector_docs):
             doc_id = doc.id
             vector_scores[doc_id] = 1.0 / (k + rank + 1)
             if doc_id not in doc_map:
                 doc_map[doc_id] = doc
-        
+
         # Combine scores with weighting
         final_scores = {}
         all_doc_ids = set(fts_scores.keys()) | set(vector_scores.keys())
-        
+
         for doc_id in all_doc_ids:
             fts_score = fts_scores.get(doc_id, 0)
             vector_score = vector_scores.get(doc_id, 0)
             # Weighted combination
             final_scores[doc_id] = (1 - alpha) * fts_score + alpha * vector_score
-        
+
         # Sort by final score
         sorted_ids = sorted(final_scores.keys(), key=lambda x: final_scores[x], reverse=True)
-        
+
         # Create final document list
         merged_docs = []
         for doc_id in sorted_ids[:self.config.max_results]:
             doc = doc_map[doc_id]
             doc.score = final_scores[doc_id]
             merged_docs.append(doc)
-        
+
         logger.debug(f"Hybrid search merged {len(merged_docs)} documents")
         return merged_docs
-    
+
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get full metadata for a media item."""
         aggregator = "GROUP_CONCAT(t.name)"
@@ -1029,7 +1029,7 @@ class MediaDBRetriever(BaseRetriever):
         if media_adapter is not None and getattr(media_adapter, 'backend_type', None) == BackendType.POSTGRESQL:
             aggregator = "STRING_AGG(t.name, ',')"
         sql = f"""
-            SELECT 
+            SELECT
                 m.*,
                 {aggregator} as tags,
                 COUNT(DISTINCT ma.id) as analysis_count
@@ -1040,9 +1040,9 @@ class MediaDBRetriever(BaseRetriever):
             WHERE m.id = ?
             GROUP BY m.id
         """
-        
+
         results = self._execute_query(sql, (doc_id,))
-        
+
         if results:
             row = results[0]
             return {
@@ -1054,9 +1054,9 @@ class MediaDBRetriever(BaseRetriever):
                 "analysis_count": row["analysis_count"],
                 "created_at": row["created_at"]
             }
-        
+
         return {}
-    
+
     def _build_fts_query(self, query: str) -> str:
         """Build FTS5 query with proper escaping and hyphen/unicode handling.
 
@@ -1088,7 +1088,7 @@ class NotesDBRetriever(BaseRetriever):
     ) -> None:
         super().__init__(db_path, config, db_adapter=chacha_db)
         self.chacha_db = chacha_db
-    
+
     async def retrieve(
         self,
         query: str,
@@ -1109,7 +1109,7 @@ class NotesDBRetriever(BaseRetriever):
 
         # Build SQL query compatible with ChaChaNotes schema (no notebooks/tags tables)
         sql = """
-            SELECT 
+            SELECT
                 n.id,
                 n.title,
                 n.content,
@@ -1119,28 +1119,28 @@ class NotesDBRetriever(BaseRetriever):
             WHERE n.deleted = 0 AND (n.title LIKE ? OR n.content LIKE ?)
         """
         params = [f"%{query}%", f"%{query}%"]
-        
+
         # Optional restriction to specific note IDs (e.g., from access control)
         allowed_note_ids = kwargs.get("allowed_note_ids")
         if allowed_note_ids and isinstance(allowed_note_ids, (list, tuple)):
             placeholders = ",".join(["?"] * len(allowed_note_ids))
             sql += f" AND n.id IN ({placeholders})"
             params.extend(list(allowed_note_ids))
-        
+
         # Order and limit
         sql += " ORDER BY n.last_modified DESC LIMIT ?"
         params.append(self.config.max_results)
-        
+
         # Execute query
         results = self._execute_query(sql, tuple(params))
-        
+
         # Convert to documents
         for row in results:
             # Calculate simple relevance score
             title_match = query.lower() in row["title"].lower()
             content_match = query.lower() in row["content"].lower()
             score = (1.0 if title_match else 0.0) + (0.5 if content_match else 0.0)
-            
+
             doc = Document(
                 id=f"note_{row['id']}",
                 content=f"# {row['title']}\n\n{row['content']}",
@@ -1156,14 +1156,14 @@ class NotesDBRetriever(BaseRetriever):
                 score=score
             )
             documents.append(doc)
-        
+
         # Sort by score
         documents.sort(key=lambda x: x.score, reverse=True)
-        
+
         logger.debug(f"Retrieved {len(documents)} documents from Notes_DB")
-        
+
         return documents
-    
+
     def _retrieve_via_chacha(self, query: str, notebook_id: Optional[int]) -> List[Document]:
         if self.chacha_db is None:
             return []
@@ -1222,17 +1222,17 @@ class NotesDBRetriever(BaseRetriever):
             )
         documents.sort(key=lambda x: getattr(x, 'score', 0.0), reverse=True)
         return documents
-    
+
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get metadata for a note."""
         # Extract numeric ID
         note_id = doc_id.replace("note_", "")
-        
+
         aggregator = "GROUP_CONCAT(t.name)"
         if self.chacha_db is not None and getattr(self.chacha_db, 'backend_type', None) == BackendType.POSTGRESQL:
             aggregator = "STRING_AGG(t.name, ',')"
         sql = f"""
-            SELECT 
+            SELECT
                 n.*,
                 nb.name as notebook_name,
                 {aggregator} as tags
@@ -1243,9 +1243,9 @@ class NotesDBRetriever(BaseRetriever):
             WHERE n.id = ?
             GROUP BY n.id
         """
-        
+
         results = self._execute_query(sql, (note_id,))
-        
+
         if results:
             row = results[0]
             return {
@@ -1256,7 +1256,7 @@ class NotesDBRetriever(BaseRetriever):
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"]
             }
-        
+
         return {}
 
 
@@ -1272,7 +1272,7 @@ class PromptsDBRetriever(BaseRetriever):
     ) -> None:
         super().__init__(db_path, config, db_adapter=chacha_db)
         self.chacha_db = chacha_db
-    
+
     async def retrieve(
         self,
         query: str,
@@ -1281,19 +1281,19 @@ class PromptsDBRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve from prompts database.
-        
+
         Args:
             query: Search query
             category: Optional category filter
-            
+
         Returns:
             List of retrieved documents
         """
         documents = []
-        
+
         # Build SQL query
         sql = """
-            SELECT 
+            SELECT
                 p.id,
                 p.name,
                 p.prompt,
@@ -1304,34 +1304,34 @@ class PromptsDBRetriever(BaseRetriever):
             FROM prompts p
             WHERE (p.name LIKE ? OR p.prompt LIKE ?)
         """
-        
+
         params = [f"%{query}%", f"%{query}%"]
-        
+
         # Add category filter
         if category:
             sql += " AND p.category = ?"
             params.append(category)
-        
+
         # Order by relevance and usage
         sql += " ORDER BY p.rating DESC, p.times_used DESC LIMIT ?"
         params.append(self.config.max_results)
-        
+
         # Execute query
         results = self._execute_query(sql, tuple(params))
-        
+
         # Convert to documents
         for row in results:
             # Calculate relevance score
             name_match = query.lower() in row["name"].lower()
             prompt_match = query.lower() in row["prompt"].lower()
             base_score = (1.0 if name_match else 0.0) + (0.5 if prompt_match else 0.0)
-            
+
             # Boost by rating and usage
             rating_boost = (row["rating"] or 0) / 5.0 * 0.3
             usage_boost = min(row["times_used"] / 100.0, 1.0) * 0.2
-            
+
             score = base_score + rating_boost + usage_boost
-            
+
             doc = Document(
                 id=f"prompt_{row['id']}",
                 content=f"**{row['name']}**\n\n{row['prompt']}",
@@ -1347,25 +1347,25 @@ class PromptsDBRetriever(BaseRetriever):
                 score=score
             )
             documents.append(doc)
-        
+
         # Sort by score
         documents.sort(key=lambda x: x.score, reverse=True)
-        
+
         logger.debug(f"Retrieved {len(documents)} documents from Prompts_DB")
-        
+
         return documents
-    
+
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get metadata for a prompt."""
         prompt_id = doc_id.replace("prompt_", "")
-        
+
         sql = "SELECT * FROM prompts WHERE id = ?"
         results = self._execute_query(sql, (prompt_id,))
-        
+
         if results:
             row = results[0]
             return dict(row)
-        
+
         return {}
 
 
@@ -1381,7 +1381,7 @@ class CharacterCardsRetriever(BaseRetriever):
     ) -> None:
         super().__init__(db_path, config, db_adapter=chacha_db)
         self.chacha_db = chacha_db
-    
+
     async def retrieve(
         self,
         query: str,
@@ -1390,11 +1390,11 @@ class CharacterCardsRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve from character cards and chats.
-        
+
         Args:
             query: Search query
             include_chats: Whether to include chat messages
-            
+
         Returns:
             List of retrieved documents
         """
@@ -1505,7 +1505,7 @@ class CharacterCardsRetriever(BaseRetriever):
         # Legacy SQLite-style path
         # Search character cards
         card_sql = """
-            SELECT 
+            SELECT
                 cc.id,
                 cc.name,
                 cc.description,
@@ -1517,7 +1517,7 @@ class CharacterCardsRetriever(BaseRetriever):
                 cc.version
             FROM character_cards cc
             WHERE cc.deleted = 0 AND (
-                cc.name LIKE ? 
+                cc.name LIKE ?
                 OR cc.description LIKE ?
                 OR cc.personality LIKE ?
                 OR cc.scenario LIKE ?
@@ -1551,7 +1551,7 @@ class CharacterCardsRetriever(BaseRetriever):
 
         if include_chats:
             chat_sql = """
-                SELECT 
+                SELECT
                     m.id,
                     m.content,
                     m.sender,
@@ -1587,7 +1587,7 @@ class CharacterCardsRetriever(BaseRetriever):
         documents.sort(key=lambda x: x.score, reverse=True)
         logger.debug(f"Retrieved {len(documents)} documents from Character Cards")
         return documents
-    
+
     async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
         """Get metadata for a character card or chat."""
         if doc_id.startswith("character_"):
@@ -1606,10 +1606,10 @@ class CharacterCardsRetriever(BaseRetriever):
             results = self._execute_query(sql, (chat_id,))
         else:
             return {}
-        
+
         if results:
             return dict(results[0])
-        
+
         return {}
 
 
@@ -2094,24 +2094,24 @@ except Exception:
     ) -> List[Document]:
         """
         Retrieve with result fusion across databases.
-        
+
         Args:
             query: Search query
             sources: List of sources to search
             fusion_method: Fusion method (rrf, weighted, max)
-            
+
         Returns:
             Fused list of documents
         """
         # Get results from each source
         source_results = {}
         sources = sources or list(self.retrievers.keys())
-        
+
         for source in sources:
             if source in self.retrievers:
                 docs = await self.retrievers[source].retrieve(query)
                 source_results[source] = docs
-        
+
         # Apply fusion
         if fusion_method == "rrf":
             return self._reciprocal_rank_fusion(source_results)
@@ -2125,7 +2125,7 @@ except Exception:
             for docs in source_results.values():
                 all_docs.extend(docs)
             return sorted(all_docs, key=lambda x: x.score, reverse=True)
-    
+
     def _reciprocal_rank_fusion(
         self,
         source_results: Dict[DataSource, List[Document]],
@@ -2133,15 +2133,15 @@ except Exception:
     ) -> List[Document]:
         """Apply Reciprocal Rank Fusion."""
         doc_scores = {}
-        
+
         for source, docs in source_results.items():
             for rank, doc in enumerate(docs, 1):
                 if doc.id not in doc_scores:
                     doc_scores[doc.id] = {"doc": doc, "score": 0}
-                
+
                 # RRF formula
                 doc_scores[doc.id]["score"] += 1.0 / (k + rank)
-        
+
         # Sort by fused score
         fused_docs = [
             Document(
@@ -2157,9 +2157,9 @@ except Exception:
                 reverse=True
             )
         ]
-        
+
         return fused_docs
-    
+
     def _weighted_fusion(
         self,
         source_results: Dict[DataSource, List[Document]],
@@ -2174,18 +2174,18 @@ except Exception:
                 DataSource.PROMPTS: 0.6,
                 DataSource.CHARACTER_CARDS: 0.5
             }
-        
+
         doc_scores = {}
-        
+
         for source, docs in source_results.items():
             weight = weights.get(source, 1.0)
-            
+
             for doc in docs:
                 if doc.id not in doc_scores:
                     doc_scores[doc.id] = {"doc": doc, "score": 0}
-                
+
                 doc_scores[doc.id]["score"] += doc.score * weight
-        
+
         # Create fused documents
         fused_docs = [
             Document(
@@ -2201,23 +2201,23 @@ except Exception:
                 reverse=True
             )
         ]
-        
+
         return fused_docs
-    
+
     def _max_fusion(
         self,
         source_results: Dict[DataSource, List[Document]]
     ) -> List[Document]:
         """Take maximum score for each document across sources."""
         doc_scores = {}
-        
+
         for source, docs in source_results.items():
             for doc in docs:
                 if doc.id not in doc_scores:
                     doc_scores[doc.id] = doc
                 elif doc.score > doc_scores[doc.id].score:
                     doc_scores[doc.id] = doc
-        
+
         return sorted(doc_scores.values(), key=lambda x: x.score, reverse=True)
 
 
@@ -2225,16 +2225,16 @@ except Exception:
 async def retrieve_from_databases(context: Any, **kwargs) -> Any:
     """Retrieve documents from configured databases for pipeline."""
     config = context.config.get("database_retrieval", {})
-    
+
     # Get database paths from config
     db_paths = config.get("db_paths", {})
     if not db_paths:
         logger.warning("No database paths configured")
         return context
-    
+
     # Create multi-database retriever
     retriever = MultiDatabaseRetriever(db_paths)
-    
+
     # Configure retrieval
     retrieval_config = RetrievalConfig(
         max_results=config.get("max_results", 20),
@@ -2242,12 +2242,12 @@ async def retrieve_from_databases(context: Any, **kwargs) -> Any:
         use_fts=config.get("use_fts", True),
         include_metadata=config.get("include_metadata", True)
     )
-    
+
     # Get sources to search
     sources = config.get("sources")
     if sources:
         sources = [DataSource[s.upper()] for s in sources]
-    
+
     # Retrieve with fusion if enabled
     if config.get("use_fusion", True):
         documents = await retriever.retrieve_with_fusion(
@@ -2261,7 +2261,7 @@ async def retrieve_from_databases(context: Any, **kwargs) -> Any:
             sources=sources,
             config=retrieval_config
         )
-    
+
     # Update context
     context.documents = documents
     context.metadata["database_retrieval"] = {
@@ -2269,7 +2269,7 @@ async def retrieve_from_databases(context: Any, **kwargs) -> Any:
         "documents_retrieved": len(documents),
         "fusion_used": config.get("use_fusion", True)
     }
-    
+
     logger.info(f"Retrieved {len(documents)} documents from databases")
-    
+
     return context

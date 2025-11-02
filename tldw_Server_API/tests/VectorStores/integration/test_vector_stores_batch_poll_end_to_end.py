@@ -69,4 +69,3 @@ def test_batch_upsert_then_poll_to_completion(client: TestClient):
         g = client.get(f"/api/v1/vector_stores/{sid}/vectors/batches/{bid}")
         assert g.status_code == 200
         assert g.json().get('upserted', 0) >= 2
-

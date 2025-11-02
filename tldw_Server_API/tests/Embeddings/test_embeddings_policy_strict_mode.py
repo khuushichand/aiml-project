@@ -56,4 +56,3 @@ def test_policy_strict_blocks_admin(client):
             settings.pop("ALLOWED_EMBEDDING_MODELS", None)
         else:
             settings["ALLOWED_EMBEDDING_MODELS"] = original_allowed_models
-

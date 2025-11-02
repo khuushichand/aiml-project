@@ -48,17 +48,17 @@ class CircuitBreakerStats:
 class CircuitBreaker:
     """
     Circuit breaker for protecting against cascading failures.
-    
+
     Implements the circuit breaker pattern with three states:
     - CLOSED: Normal operation, calls pass through
     - OPEN: Too many failures, calls are rejected immediately
     - HALF_OPEN: Testing recovery, limited calls allowed
     """
-    
+
     def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None):
         """
         Initialize circuit breaker.
-        
+
         Args:
             name: Name for logging and identification
             config: Circuit breaker configuration
@@ -69,19 +69,19 @@ class CircuitBreaker:
         self.stats = CircuitBreakerStats()
         self._state_changed_at = time.time()
         self._lock = asyncio.Lock()
-    
+
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """
         Execute a function through the circuit breaker.
-        
+
         Args:
             func: Function to call (can be async or sync)
             *args: Positional arguments for func
             **kwargs: Keyword arguments for func
-            
+
         Returns:
             Result from func
-            
+
         Raises:
             CircuitOpenError: If circuit is open
             TimeoutError: If call times out
@@ -94,10 +94,10 @@ class CircuitBreaker:
                 else:
                     self.stats.rejected_calls += 1
                     raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
-        
+
         # Attempt the call
         self.stats.total_calls += 1
-        
+
         try:
             # Handle both async and sync functions
             if asyncio.iscoroutinefunction(func):
@@ -112,25 +112,25 @@ class CircuitBreaker:
                     loop.run_in_executor(None, func, *args),
                     timeout=self.config.timeout
                 )
-            
+
             # Call succeeded
             await self._on_success()
             return result
-            
+
         except asyncio.TimeoutError:
             self.stats.timeouts += 1
             await self._on_failure()
             raise TimeoutError(f"Call through circuit breaker {self.name} timed out after {self.config.timeout}s")
-            
+
         except self.config.expected_exception as e:
             await self._on_failure()
             raise
-            
+
         except Exception as e:
             # Unexpected exception, don't count as circuit failure
             logger.warning(f"Unexpected exception in circuit breaker {self.name}: {e}")
             raise
-    
+
     async def _on_success(self):
         """Handle successful call."""
         async with self._lock:
@@ -138,11 +138,11 @@ class CircuitBreaker:
             self.stats.last_success_time = datetime.now()
             self.stats.consecutive_successes += 1
             self.stats.consecutive_failures = 0
-            
+
             if self.state == CircuitState.HALF_OPEN:
                 if self.stats.consecutive_successes >= self.config.success_threshold:
                     self._transition_to_closed()
-    
+
     async def _on_failure(self):
         """Handle failed call."""
         async with self._lock:
@@ -150,31 +150,31 @@ class CircuitBreaker:
             self.stats.last_failure_time = datetime.now()
             self.stats.consecutive_failures += 1
             self.stats.consecutive_successes = 0
-            
+
             if self.state == CircuitState.CLOSED:
                 if self.stats.consecutive_failures >= self.config.failure_threshold:
                     self._transition_to_open()
             elif self.state == CircuitState.HALF_OPEN:
                 self._transition_to_open()
-    
+
     def _should_attempt_reset(self) -> bool:
         """Check if enough time has passed to attempt reset."""
         return time.time() - self._state_changed_at >= self.config.recovery_timeout
-    
+
     def _transition_to_open(self):
         """Transition to OPEN state."""
         logger.warning(f"Circuit breaker {self.name} transitioning to OPEN")
         self.state = CircuitState.OPEN
         self._state_changed_at = time.time()
         self.stats.consecutive_failures = 0
-    
+
     def _transition_to_closed(self):
         """Transition to CLOSED state."""
         logger.info(f"Circuit breaker {self.name} transitioning to CLOSED")
         self.state = CircuitState.CLOSED
         self._state_changed_at = time.time()
         self.stats.consecutive_successes = 0
-    
+
     def _transition_to_half_open(self):
         """Transition to HALF_OPEN state."""
         logger.info(f"Circuit breaker {self.name} transitioning to HALF_OPEN")
@@ -182,7 +182,7 @@ class CircuitBreaker:
         self._state_changed_at = time.time()
         self.stats.consecutive_successes = 0
         self.stats.consecutive_failures = 0
-    
+
     def get_state(self) -> Dict[str, Any]:
         """Get current state and statistics."""
         return {
@@ -214,7 +214,7 @@ class CircuitBreaker:
                 "recovery_timeout": self.config.recovery_timeout
             }
         }
-    
+
     def reset(self):
         """Reset circuit breaker to initial state."""
         self.state = CircuitState.CLOSED
@@ -232,11 +232,11 @@ class LLMCircuitBreaker:
     """
     Specialized circuit breaker for LLM calls with provider-specific configs.
     """
-    
+
     def __init__(self):
         """Initialize LLM circuit breakers for different providers."""
         self.breakers = {}
-        
+
         # Default configurations for different providers
         self.provider_configs = {
             "openai": CircuitBreakerConfig(
@@ -260,7 +260,7 @@ class LLMCircuitBreaker:
                 recovery_timeout=60.0
             )
         }
-    
+
     def get_breaker(self, provider: str) -> CircuitBreaker:
         """Get or create circuit breaker for a provider."""
         if provider not in self.breakers:
@@ -273,7 +273,7 @@ class LLMCircuitBreaker:
                 config=config
             )
         return self.breakers[provider]
-    
+
     async def call_with_breaker(
         self,
         provider: str,
@@ -283,26 +283,26 @@ class LLMCircuitBreaker:
     ) -> Any:
         """
         Call an LLM function with circuit breaker protection.
-        
+
         Args:
             provider: LLM provider name
             func: Function to call
             *args: Positional arguments
             **kwargs: Keyword arguments
-            
+
         Returns:
             Result from function
         """
         breaker = self.get_breaker(provider)
         return await breaker.call(func, *args, **kwargs)
-    
+
     def get_all_states(self) -> Dict[str, Dict[str, Any]]:
         """Get states of all circuit breakers."""
         return {
             provider: breaker.get_state()
             for provider, breaker in self.breakers.items()
         }
-    
+
     def reset_all(self):
         """Reset all circuit breakers."""
         for breaker in self.breakers.values():
@@ -317,7 +317,7 @@ llm_circuit_breaker = LLMCircuitBreaker()
 def with_circuit_breaker(provider: str = "default"):
     """
     Decorator to add circuit breaker protection to a function.
-    
+
     Args:
         provider: Provider name for circuit breaker configuration
     """

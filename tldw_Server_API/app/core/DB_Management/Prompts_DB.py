@@ -1082,7 +1082,7 @@ class PromptsDatabase:
 
         col_name = "id"
         identifier_value = prompt_id_or_name_or_uuid
-        
+
         if isinstance(prompt_id_or_name_or_uuid, str):
             # First check if it's a numeric string (ID)
             if prompt_id_or_name_or_uuid.isdigit():

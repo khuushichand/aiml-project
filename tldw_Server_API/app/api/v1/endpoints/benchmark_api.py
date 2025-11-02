@@ -54,8 +54,8 @@ class BenchmarkRunResponse(BaseModel):
     total_samples: int = Field(..., description="Total samples evaluated")
     results_summary: Dict[str, Any] = Field(..., description="Summary of results")
     evaluation_id: Optional[str] = Field(None, description="Evaluation ID if saved")
-    
-    
+
+
 class BenchmarkSampleResponse(BaseModel):
     """Response with benchmark samples."""
     benchmark: str = Field(..., description="Benchmark name")
@@ -67,25 +67,25 @@ class BenchmarkSampleResponse(BaseModel):
 async def list_benchmarks():
     """
     List all available benchmarks.
-    
+
     Returns information about registered benchmarks including
     their types, descriptions, and metadata.
     """
     try:
         registry = get_registry()
         benchmark_names = registry.list_benchmarks()
-        
+
         benchmarks = []
         for name in benchmark_names:
             info = registry.get_benchmark_info(name)
             if info:
                 benchmarks.append(info)
-        
+
         return BenchmarkListResponse(
             benchmarks=benchmarks,
             total=len(benchmarks)
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to list benchmarks: {e}")
         raise HTTPException(
@@ -98,26 +98,26 @@ async def list_benchmarks():
 async def get_benchmark_info(benchmark_name: str):
     """
     Get detailed information about a specific benchmark.
-    
+
     Args:
         benchmark_name: Name of the benchmark
-        
+
     Returns:
         Detailed benchmark information including configuration and metadata.
     """
     try:
         registry = get_registry()
         config = registry.get(benchmark_name)
-        
+
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Benchmark '{benchmark_name}' not found"
             )
-        
+
         info = registry.get_benchmark_info(benchmark_name)
         return BenchmarkInfoResponse(**info)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -135,39 +135,39 @@ async def get_benchmark_samples(
 ):
     """
     Get sample items from a benchmark dataset.
-    
+
     Useful for previewing benchmark questions before running full evaluation.
-    
+
     Args:
         benchmark_name: Name of the benchmark
         limit: Number of samples to return (max 100)
-        
+
     Returns:
         Sample items from the benchmark dataset.
     """
     try:
         registry = get_registry()
         config = registry.get(benchmark_name)
-        
+
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Benchmark '{benchmark_name}' not found"
             )
-        
+
         # Load limited samples
         dataset = load_benchmark_dataset(benchmark_name, limit=limit)
-        
+
         # Get total count (load 1 more to check if there are more)
         full_dataset = load_benchmark_dataset(benchmark_name, limit=limit + 1)
         total_available = len(full_dataset) if len(full_dataset) <= limit else f"{limit}+"
-        
+
         return BenchmarkSampleResponse(
             benchmark=benchmark_name,
             samples=dataset,
             total_available=total_available if isinstance(total_available, int) else limit
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -186,28 +186,28 @@ async def run_benchmark(
 ):
     """
     Run a benchmark evaluation.
-    
+
     This endpoint loads the benchmark dataset, evaluates each item,
     and returns aggregated results.
-    
+
     Args:
         benchmark_name: Name of the benchmark to run
         request: Run configuration
         user_id: User ID from auth
-        
+
     Returns:
         Summary of benchmark results.
     """
     try:
         registry = get_registry()
         config = registry.get(benchmark_name)
-        
+
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Benchmark '{benchmark_name}' not found"
             )
-        
+
         # Create evaluator
         evaluator = registry.create_evaluator(benchmark_name)
         if not evaluator:
@@ -215,7 +215,7 @@ async def run_benchmark(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail=f"Evaluator not implemented for benchmark type: {config.evaluation_type}"
             )
-        
+
         # Load dataset
         dataset = load_benchmark_dataset(benchmark_name, limit=request.limit)
         if not dataset:
@@ -223,7 +223,7 @@ async def run_benchmark(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Failed to load dataset for benchmark '{benchmark_name}'"
             )
-        
+
         # Filter by categories if specified
         if request.filter_categories:
             dataset = [
@@ -231,20 +231,20 @@ async def run_benchmark(
                 if item.get("category") in request.filter_categories
                 or item.get("topic") in request.filter_categories
             ]
-        
+
         # Process items in batches
         results = []
         batch_size = request.parallel
-        
+
         for i in range(0, len(dataset), batch_size):
             batch = dataset[i:i+batch_size]
-            
+
             # Create evaluation tasks
             tasks = []
             for item in batch:
                 # Format for evaluation
                 eval_data = evaluator.format_for_custom_metric(item)
-                
+
                 # Create evaluation task
                 task = evaluation_manager.evaluate_custom_metric(
                     metric_name=eval_data['name'],
@@ -255,10 +255,10 @@ async def run_benchmark(
                     api_name=request.api_name
                 )
                 tasks.append(task)
-            
+
             # Run batch
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             # Process results
             for item, result in zip(batch, batch_results):
                 if isinstance(result, Exception):
@@ -274,11 +274,11 @@ async def run_benchmark(
                         "score": result.get("score", 0.0),
                         "explanation": result.get("explanation", "")
                     })
-        
+
         # Calculate summary statistics
         successful_results = [r for r in results if "error" not in r]
         scores = [r["score"] for r in successful_results]
-        
+
         summary = {
             "total_evaluated": len(results),
             "successful": len(successful_results),
@@ -287,7 +287,7 @@ async def run_benchmark(
             "min_score": min(scores) if scores else 0.0,
             "max_score": max(scores) if scores else 0.0
         }
-        
+
         # Add category breakdown if available
         categories = {}
         for r in successful_results:
@@ -295,7 +295,7 @@ async def run_benchmark(
             if cat not in categories:
                 categories[cat] = []
             categories[cat].append(r["score"])
-        
+
         if categories:
             summary["by_category"] = {
                 cat: {
@@ -304,7 +304,7 @@ async def run_benchmark(
                 }
                 for cat, scores in categories.items()
             }
-        
+
         # Save results if requested
         eval_id = None
         if request.save_results:
@@ -321,14 +321,14 @@ async def run_benchmark(
                     "total_samples": len(dataset)
                 }
             )
-        
+
         return BenchmarkRunResponse(
             benchmark=benchmark_name,
             total_samples=len(results),
             results_summary=summary,
             evaluation_id=eval_id
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -349,17 +349,17 @@ async def evaluate_simpleqa(
 ):
     """
     Evaluate a single SimpleQA-style question.
-    
+
     Returns the three-grade classification: correct, incorrect, or not_attempted.
     """
     try:
         from tldw_Server_API.app.core.Evaluations.simpleqa_eval import SimpleQAEvaluation
-        
+
         evaluator = SimpleQAEvaluation(
             grading_model=api_name,
             strict_grading=strict_grading
         )
-        
+
         # This would need to be integrated with the actual model calling
         # For now, return a placeholder
         return {
@@ -368,7 +368,7 @@ async def evaluate_simpleqa(
             "explanation": "SimpleQA evaluation endpoint placeholder",
             "note": "Full implementation requires model integration"
         }
-        
+
     except Exception as e:
         logger.error(f"SimpleQA evaluation failed: {e}")
         raise HTTPException(

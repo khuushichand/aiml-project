@@ -325,6 +325,6 @@ Example:
 - Performance:
   - Avoid expensive regex or O(n^2) scans inside hot paths; prefer precomputed spans and streaming.
   - Keep cache-friendly behavior (stable options, deterministic output).
-  
+
 ## Backwards Compatibility
 - `Chunking.improved_chunking_process(...)` shims to `Chunker.process_text(...)`. Prefer direct `Chunker` usage and migrate call sites over time.

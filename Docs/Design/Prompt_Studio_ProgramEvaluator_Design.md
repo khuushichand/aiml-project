@@ -76,4 +76,3 @@ Provide an optional, sandboxed execution environment to evaluate code generated 
 - M2.1: Minimal evaluator (subprocess, time/mem limit, no network, import gate).
 - M2.2: Integrate with TestRunner and MCTS reward path; add metrics & logs.
 - M2.3: Hardening (deny-list syscalls, resource enforcement), documentation & examples.
-

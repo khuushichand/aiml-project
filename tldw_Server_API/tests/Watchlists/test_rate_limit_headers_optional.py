@@ -46,4 +46,3 @@ def test_opml_import_rate_limit_headers_optional(client_with_user):
                 int(r.headers[hdr])
             except Exception:
                 pytest.fail(f"Header {hdr} not an int: {r.headers[hdr]}")
-

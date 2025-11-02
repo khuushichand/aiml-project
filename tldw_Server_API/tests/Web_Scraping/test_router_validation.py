@@ -35,4 +35,3 @@ def test_validate_rules_normalizes_and_drops_invalid():
     sub = cleaned["domains"]["*.sub.example.com"]
     assert sub["backend"] == "curl"
     assert sub["url_patterns"] == [".*"]
-

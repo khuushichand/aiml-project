@@ -48,4 +48,3 @@ Operational Tips
 - Permissions: grant workflows.runs.read to users who need visibility into runs beyond ownership; workflows.runs.control for operators.
 - Events polling: clients should poll with since=last_seq and a reasonable limit (e.g., 200-500).
 - Webhooks: set allowlist/denylist and keep DLQ enabled to ensure reliable delivery; monitor attempts and errors via DB queries.
-

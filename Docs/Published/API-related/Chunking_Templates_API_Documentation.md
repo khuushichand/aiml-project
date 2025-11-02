@@ -621,10 +621,10 @@ response = requests.post(
         "text": """
         # Abstract
         This paper presents a novel approach...
-        
+
         # Introduction
         Recent advances in machine learning...
-        
+
         # Methodology
         We propose a three-stage approach...
         """
@@ -655,7 +655,7 @@ for doc in documents:
             "text": doc["text"]
         }
     )
-    
+
     if response.status_code == 200:
         result = response.json()
         print(f"Processed {doc['type']}: {result['metadata']['chunk_count']} chunks")

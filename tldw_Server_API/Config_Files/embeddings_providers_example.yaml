@@ -5,7 +5,7 @@
 default:
   provider: openai
   model: text-embedding-3-small
-  
+
 # Provider-specific configurations
 providers:
   openai:
@@ -19,7 +19,7 @@ providers:
       dimensions_support: true
       max_dimensions: 3072
       token_input: true
-      
+
   cohere:
     enabled: true
     api_key: ${COHERE_API_KEY}
@@ -31,7 +31,7 @@ providers:
     features:
       dimensions_support: true
       max_dimensions: 1024
-      
+
   voyage:
     enabled: false  # Enable when API key is available
     api_key: ${VOYAGE_API_KEY}
@@ -42,7 +42,7 @@ providers:
       - voyage-lite-02-instruct
     features:
       dimensions_support: false
-      
+
   google:
     enabled: false
     api_key: ${GOOGLE_API_KEY}
@@ -53,7 +53,7 @@ providers:
       - textembedding-gecko-multilingual@001
     features:
       dimensions_support: false
-      
+
   mistral:
     enabled: false
     api_key: ${MISTRAL_API_KEY}
@@ -61,7 +61,7 @@ providers:
       - mistral-embed
     features:
       dimensions_support: false
-      
+
   huggingface:
     enabled: true
     # No API key needed for public models
@@ -75,7 +75,7 @@ providers:
     features:
       dimensions_support: false
       local_execution: true
-      
+
   onnx:
     enabled: true
     models:
@@ -89,7 +89,7 @@ providers:
       dimensions_support: false
       local_execution: true
       optimized: true
-      
+
   local_api:
     enabled: false
     # Configure for your local embedding server
@@ -108,14 +108,14 @@ rate_limiting:
   requests_per_minute: 60
   requests_per_hour: 1000
   max_batch_size: 100
-  
+
 # Caching configuration
 caching:
   enabled: true
   max_entries: 10000
   ttl_seconds: 3600
   cache_dir: ./embedding_cache
-  
+
 # Performance tuning
 performance:
   thread_pool_workers: 8
@@ -123,13 +123,13 @@ performance:
   timeout_seconds: 30
   max_retries: 3
   retry_delay_seconds: 1
-  
+
 # Model loading configuration
 model_loading:
   preload_models: false  # Set to true to preload models at startup
   unload_timeout_seconds: 300  # Unload models after 5 minutes of inactivity
   max_loaded_models: 3  # Maximum number of models to keep in memory
-  
+
 # Monitoring and logging
 monitoring:
   log_level: INFO
@@ -137,7 +137,7 @@ monitoring:
   log_cache_hits: true
   metrics_enabled: false  # Enable Prometheus metrics
   metrics_port: 9090
-  
+
 # Security
 security:
   require_authentication: true
@@ -148,7 +148,7 @@ security:
     - huggingface
     - onnx
     - cohere
-    
+
 # Fallback configuration
 fallback:
   enabled: true
@@ -157,18 +157,18 @@ fallback:
     - huggingface
     - onnx
   on_error: use_fallback  # Options: use_fallback, return_error
-  
+
 # Provider-specific optimizations
 optimizations:
   openai:
     batch_size: 100
     auto_retry: true
-    
+
   huggingface:
     use_gpu: false  # Set to true if GPU is available
     batch_size: 32
     max_sequence_length: 512
-    
+
   onnx:
     use_quantized: false  # Use quantized models for faster inference
     num_threads: 4

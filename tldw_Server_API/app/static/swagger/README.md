@@ -37,4 +37,3 @@ PY
    curl -o tldw_Server_API/app/static/swagger/swagger-ui.css                 https://cdn.jsdelivr.net/npm/swagger-ui-dist@latest/swagger-ui.css
 
 Once the files are in place, restart the server. The app auto-detects local assets and serves them at /docs.
-

@@ -109,13 +109,13 @@ This is the core of the process. You'll use a pre-trained model to convert each 
     for segment in speech_segments:
         # The model expects audio in a specific format (torch.Tensor)
         waveform = torch.tensor(segment["waveform"]).unsqueeze(0)
-        
+
         # Generate the embedding
         embedding = classifier.encode_batch(waveform)
-        
+
         # Squeeze to remove unnecessary dimensions and convert to numpy
         embedding = embedding.squeeze().numpy()
-        
+
         embeddings.append(embedding)
         segment['embedding'] = embedding # Store embedding with its segment info
     ```
@@ -144,17 +144,17 @@ You now have a list of vector embeddings, where each vector represents a voice f
 
     # Convert list of embeddings to a numpy array
     embedding_array = np.array(embeddings)
-    
+
     # Normalize the embeddings
     embedding_array = normalize(embedding_array, axis=1, norm='l2')
 
     # You can try to estimate the number of speakers or set it if you know it
     # For estimation, you can use methods like the elbow method or silhouette score
     # Or, let the algorithm decide if possible.
-    
+
     # Let's assume we want to find 2 speakers
-    num_speakers = 2 
-    
+    num_speakers = 2
+
     clustering = SpectralClustering(n_clusters=num_speakers,
                                     assign_labels='kmeans',
                                     random_state=0).fit(embedding_array)
@@ -188,7 +188,7 @@ def merge_segments(segments):
             current_speaker = segment['speaker_id']
             current_start = segment['start_time']
             current_end = segment['end_time']
-            
+
     merged.append({'speaker': f"Speaker_{current_speaker}", 'start': current_start, 'end': current_end})
     return merged
 

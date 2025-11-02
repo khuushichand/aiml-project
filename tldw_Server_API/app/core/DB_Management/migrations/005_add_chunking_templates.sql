@@ -22,13 +22,13 @@ CREATE TABLE IF NOT EXISTS ChunkingTemplates (
 );
 
 -- Create indices for ChunkingTemplates
-CREATE UNIQUE INDEX IF NOT EXISTS idx_template_name_not_deleted 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_template_name_not_deleted
     ON ChunkingTemplates(name) WHERE deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_template_is_builtin ON ChunkingTemplates(is_builtin);
 CREATE INDEX IF NOT EXISTS idx_template_deleted ON ChunkingTemplates(deleted);
 
 -- Add trigger for updated_at
-CREATE TRIGGER IF NOT EXISTS update_chunking_templates_updated_at 
+CREATE TRIGGER IF NOT EXISTS update_chunking_templates_updated_at
 AFTER UPDATE ON ChunkingTemplates
 FOR EACH ROW
 BEGIN

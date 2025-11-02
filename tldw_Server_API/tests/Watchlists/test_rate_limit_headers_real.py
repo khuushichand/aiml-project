@@ -75,4 +75,3 @@ def test_rate_limit_headers_real_middleware(monkeypatch, tmp_path):
     assert "STATUS: 200" in out
     # Deterministically require at least the Limit header when middleware is active
     assert "HDR: X-RateLimit-Limit" in out
-

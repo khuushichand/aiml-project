@@ -125,4 +125,3 @@ curl -X POST "$BASE/api/v1/jobs/integrity/sweep" \
 - Confirmation header `X-Confirm: true` is required for destructive actions when `dry_run` is false.
 - In multi-user mode, use `Authorization: Bearer <token>` instead of `X-API-KEY`.
 - For idempotent finalize guarantees, set `JOBS_REQUIRE_COMPLETION_TOKEN=true` and ensure workers pass `completion_token` (workers already use `lease_id`).
-

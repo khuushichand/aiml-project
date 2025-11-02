@@ -36,29 +36,29 @@ _backend_instances: Dict[str, DatabaseBackend] = {}
 
 class DatabaseBackendFactory:
     """Factory for creating database backend instances."""
-    
+
     @staticmethod
     def create_backend(config: DatabaseConfig) -> DatabaseBackend:
         """
         Create a database backend instance based on configuration.
-        
+
         Args:
             config: Database configuration
-            
+
         Returns:
             DatabaseBackend instance
-            
+
         Raises:
             DatabaseError: If backend type is not supported
         """
         backend_type = config.backend_type
-        
+
         if backend_type not in _BACKEND_REGISTRY:
             raise DatabaseError(f"Unsupported backend type: {backend_type}")
-        
+
         backend_class = _BACKEND_REGISTRY[backend_type]
         logger.info(f"Creating {backend_type.value} backend")
-        
+
         return backend_class(config)
 
 
@@ -81,7 +81,7 @@ class BackendFactory:
                 # Match expected behavior in tests
                 raise ValueError(f"Invalid backend type: {bt}") from e
         return DatabaseBackendFactory.create_backend(config)
-    
+
     @staticmethod
     def create_from_env(
         backend_type: Optional[str] = None,
@@ -89,26 +89,26 @@ class BackendFactory:
     ) -> DatabaseBackend:
         """
         Create a backend from environment variables.
-        
+
         Args:
             backend_type: Override backend type (default from env)
             config_overrides: Additional config overrides
-            
+
         Returns:
             DatabaseBackend instance
         """
         # Determine backend type
         if backend_type is None:
             backend_type = os.getenv("TLDW_DB_BACKEND", "sqlite").lower()
-        
+
         try:
             backend_enum = BackendType(backend_type)
         except ValueError:
             raise DatabaseError(f"Invalid backend type: {backend_type}")
-        
+
         # Build configuration from environment
         config = DatabaseConfig(backend_type=backend_enum)
-        
+
         # SQLite configuration
         if backend_enum == BackendType.SQLITE:
             config.sqlite_path = os.getenv(
@@ -121,7 +121,7 @@ class BackendFactory:
             config.sqlite_foreign_keys = os.getenv(
                 "TLDW_SQLITE_FOREIGN_KEYS", "true"
             ).lower() == "true"
-        
+
         # PostgreSQL configuration (future)
         elif backend_enum == BackendType.POSTGRESQL:
             config.pg_host = os.getenv("TLDW_PG_HOST", "localhost")
@@ -130,20 +130,20 @@ class BackendFactory:
             config.pg_user = os.getenv("TLDW_PG_USER", "tldw_user")
             config.pg_password = os.getenv("TLDW_PG_PASSWORD", "")
             config.pg_sslmode = os.getenv("TLDW_PG_SSLMODE", "prefer")
-        
+
         # Common configuration
         config.pool_size = int(os.getenv("TLDW_DB_POOL_SIZE", "10"))
         config.pool_timeout = float(os.getenv("TLDW_DB_POOL_TIMEOUT", "30.0"))
         config.echo = os.getenv("TLDW_DB_ECHO", "false").lower() == "true"
-        
+
         # Apply overrides
         if config_overrides:
             for key, value in config_overrides.items():
                 if hasattr(config, key):
                     setattr(config, key, value)
-        
+
         return DatabaseBackendFactory.create_backend(config)
-    
+
     @staticmethod
     def create_from_config_file(
         config_path: str,
@@ -151,31 +151,31 @@ class BackendFactory:
     ) -> DatabaseBackend:
         """
         Create a backend from a configuration file.
-        
+
         Args:
             config_path: Path to configuration file
             backend_override: Override backend type from config
-            
+
         Returns:
             DatabaseBackend instance
         """
         import yaml
-        
+
         with open(config_path, 'r') as f:
             config_data = yaml.safe_load(f)
-        
+
         db_config = config_data.get('database', {})
-        
+
         # Determine backend type
         backend_type_str = backend_override or db_config.get('backend', 'sqlite')
-        
+
         try:
             backend_type = BackendType(backend_type_str)
         except ValueError:
             raise DatabaseError(f"Invalid backend type: {backend_type_str}")
-        
+
         config = DatabaseConfig(backend_type=backend_type)
-        
+
         # Load backend-specific configuration
         if backend_type == BackendType.SQLITE:
             sqlite_config = db_config.get('sqlite', {})
@@ -184,7 +184,7 @@ class BackendFactory:
             )
             config.sqlite_wal_mode = sqlite_config.get('wal_mode', True)
             config.sqlite_foreign_keys = sqlite_config.get('foreign_keys', True)
-        
+
         elif backend_type == BackendType.POSTGRESQL:
             pg_config = db_config.get('postgresql', {})
             config.pg_host = pg_config.get('host', 'localhost')
@@ -195,14 +195,14 @@ class BackendFactory:
             config.pg_sslmode = pg_config.get('sslmode', 'prefer')
             config.pool_size = pg_config.get('pool_size', 20)
             config.max_overflow = pg_config.get('max_overflow', 40)
-        
+
         return DatabaseBackendFactory.create_backend(config)
 
 
 def register_backend(backend_type: BackendType, backend_class: Type[DatabaseBackend]) -> None:
     """
     Register a new backend implementation.
-    
+
     Args:
         backend_type: Backend type enum
         backend_class: Backend implementation class
@@ -218,32 +218,32 @@ def get_backend(
 ) -> Optional[DatabaseBackend]:
     """
     Get or create a named backend instance.
-    
+
     This function provides a singleton pattern for backend instances,
     ensuring that the same backend instance is reused across the application.
-    
+
     Args:
         name: Backend instance name
         config: Configuration for creating new instance
         create_if_missing: Create instance if it doesn't exist
-        
+
     Returns:
         DatabaseBackend instance or None
     """
     global _backend_instances
-    
+
     if name in _backend_instances:
         return _backend_instances[name]
-    
+
     if not create_if_missing:
         return None
-    
+
     if config is None:
         # Try to create from environment
         backend = DatabaseBackendFactory.create_from_env()
     else:
         backend = DatabaseBackendFactory.create_backend(config)
-    
+
     _backend_instances[name] = backend
     return backend
 
@@ -251,7 +251,7 @@ def get_backend(
 def close_all_backends() -> None:
     """Close all backend instances and clear the cache."""
     global _backend_instances
-    
+
     for name, backend in _backend_instances.items():
         try:
             if hasattr(backend, '_pool') and backend._pool:
@@ -259,7 +259,7 @@ def close_all_backends() -> None:
             logger.info(f"Closed backend: {name}")
         except Exception as e:
             logger.error(f"Error closing backend {name}: {e}")
-    
+
     _backend_instances.clear()
 
 
@@ -267,7 +267,7 @@ def close_all_backends() -> None:
 def get_default_backend() -> DatabaseBackend:
     """
     Get the default database backend.
-    
+
     Returns:
         Default DatabaseBackend instance
     """

@@ -32,7 +32,7 @@ class ProviderHealth:
     last_failure: Optional[float] = None
     consecutive_failures: int = 0
     response_times: deque = None
-    
+
     def __post_init__(self):
         if self.response_times is None:
             self.response_times = deque(maxlen=100)
@@ -59,7 +59,7 @@ class CircuitBreaker:
     Circuit breaker pattern implementation for provider failures.
     States: CLOSED (normal), OPEN (failing), HALF_OPEN (testing)
     """
-    
+
     def __init__(
         self,
         failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
@@ -73,7 +73,7 @@ class CircuitBreaker:
         self.last_failure_time = None
         self.state = "CLOSED"
         self.half_open_count = 0
-    
+
     def call_succeeded(self):
         """Record a successful call."""
         self.failure_count = 0
@@ -82,24 +82,24 @@ class CircuitBreaker:
             if self.half_open_count >= self.half_open_requests:
                 self.state = "CLOSED"
                 logger.info(f"Circuit breaker closed after successful recovery")
-    
+
     def call_failed(self):
         """Record a failed call."""
         self.failure_count += 1
         self.last_failure_time = time.time()
-        
+
         if self.state == "HALF_OPEN":
             self.state = "OPEN"
             logger.warning(f"Circuit breaker reopened after failure in half-open state")
         elif self.failure_count >= self.failure_threshold:
             self.state = "OPEN"
             logger.warning(f"Circuit breaker opened after {self.failure_count} failures")
-    
+
     def can_attempt_call(self) -> bool:
         """Check if a call can be attempted."""
         if self.state == "CLOSED":
             return True
-        
+
         if self.state == "OPEN":
             if self.last_failure_time and (time.time() - self.last_failure_time) > self.timeout:
                 self.state = "HALF_OPEN"
@@ -107,7 +107,7 @@ class CircuitBreaker:
                 logger.info(f"Circuit breaker entering half-open state for testing")
                 return True
             return False
-        
+
         # HALF_OPEN state
         return self.half_open_count < self.half_open_requests
 
@@ -116,11 +116,11 @@ class ProviderManager:
     """
     Manages LLM providers with health checks, circuit breakers, and fallback support.
     """
-    
+
     def __init__(self, providers: List[str], primary_provider: Optional[str] = None):
         """
         Initialize the provider manager.
-        
+
         Args:
             providers: List of available provider names
             primary_provider: Primary provider to use (defaults to first in list)
@@ -129,7 +129,7 @@ class ProviderManager:
         self.primary_provider = primary_provider or (providers[0] if providers else None)
         self.health_status: Dict[str, ProviderHealth] = {}
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
-        
+
         # Initialize health tracking for each provider
         for provider in providers:
             self.health_status[provider] = ProviderHealth(
@@ -137,15 +137,15 @@ class ProviderManager:
                 status=ProviderStatus.HEALTHY
             )
             self.circuit_breakers[provider] = CircuitBreaker()
-        
+
         # Start background health check task
         self._health_check_task = None
-    
+
     async def start_health_checks(self):
         """Start background health monitoring."""
         if not self._health_check_task:
             self._health_check_task = asyncio.create_task(self._health_check_loop())
-    
+
     async def stop_health_checks(self):
         """Stop background health monitoring."""
         if self._health_check_task:
@@ -154,7 +154,7 @@ class ProviderManager:
                 await self._health_check_task
             except asyncio.CancelledError:
                 pass
-    
+
     async def _health_check_loop(self):
         """Background task to periodically check provider health."""
         while True:
@@ -166,16 +166,16 @@ class ProviderManager:
                 break
             except Exception as e:
                 logger.error(f"Error in health check loop: {e}")
-    
+
     async def _update_health_status(self, provider: str):
         """Update health status for a provider based on recent metrics."""
         health = self.health_status[provider]
-        
+
         # Calculate error rate
         total_calls = health.success_count + health.failure_count
         if total_calls > 0:
             error_rate = health.failure_count / total_calls
-            
+
             # Update status based on error rate and circuit breaker
             if self.circuit_breakers[provider].state == "OPEN":
                 health.status = ProviderStatus.CIRCUIT_OPEN
@@ -185,16 +185,16 @@ class ProviderManager:
                 health.status = ProviderStatus.UNHEALTHY
             else:
                 health.status = ProviderStatus.HEALTHY
-        
+
         # Reset counters periodically
         if total_calls > 1000:
             health.success_count = int(health.success_count * 0.5)
             health.failure_count = int(health.failure_count * 0.5)
-    
+
     def record_success(self, provider: str, response_time: float):
         """
         Record a successful API call.
-        
+
         Args:
             provider: Provider name
             response_time: Response time in seconds
@@ -205,13 +205,13 @@ class ProviderManager:
             health.consecutive_failures = 0
             health.last_success = time.time()
             health.response_times.append(response_time)
-            
+
             self.circuit_breakers[provider].call_succeeded()
-    
+
     def record_failure(self, provider: str, error: Optional[Exception] = None):
         """
         Record a failed API call.
-        
+
         Args:
             provider: Provider name
             error: The exception that occurred
@@ -221,37 +221,37 @@ class ProviderManager:
             health.failure_count += 1
             health.consecutive_failures += 1
             health.last_failure = time.time()
-            
+
             self.circuit_breakers[provider].call_failed()
-            
+
             logger.warning(f"Provider {provider} failure recorded: {error}")
-    
+
     def get_available_provider(self, exclude: Optional[List[str]] = None) -> Optional[str]:
         """
         Get the best available provider.
-        
+
         Args:
             exclude: List of providers to exclude
-            
+
         Returns:
             Provider name or None if no providers available
         """
         exclude = exclude or []
-        
+
         # Try primary provider first
         if self.primary_provider and self.primary_provider not in exclude:
             if self.circuit_breakers[self.primary_provider].can_attempt_call():
                 return self.primary_provider
-        
+
         # Find next best provider
         candidates = []
         for provider in self.providers:
             if provider in exclude:
                 continue
-            
+
             if not self.circuit_breakers[provider].can_attempt_call():
                 continue
-            
+
             health = self.health_status[provider]
             if health.status in [ProviderStatus.HEALTHY, ProviderStatus.DEGRADED]:
                 # Calculate average response time
@@ -260,22 +260,22 @@ class ProviderManager:
                     if health.response_times else float('inf')
                 )
                 candidates.append((provider, health.status, avg_response_time))
-        
+
         # Sort by status (HEALTHY first) and then by response time
         candidates.sort(key=lambda x: (x[1].value, x[2]))
-        
+
         if candidates:
             selected = candidates[0][0]
             logger.info(f"Selected fallback provider: {selected}")
             return selected
-        
+
         logger.error("No available providers found")
         return None
-    
+
     def get_health_report(self) -> Dict[str, Dict[str, Any]]:
         """
         Get a health report for all providers.
-        
+
         Returns:
             Dictionary with health information for each provider
         """
@@ -285,7 +285,7 @@ class ProviderManager:
                 sum(health.response_times) / len(health.response_times)
                 if health.response_times else None
             )
-            
+
             report[provider] = {
                 "status": health.status.value,
                 "success_count": health.success_count,
@@ -296,7 +296,7 @@ class ProviderManager:
                 "last_success": health.last_success,
                 "last_failure": health.last_failure
             }
-        
+
         return report
 
 
@@ -310,7 +310,7 @@ def get_provider_manager() -> Optional[ProviderManager]:
 def initialize_provider_manager(providers: List[str], primary_provider: Optional[str] = None):
     """
     Initialize the global provider manager.
-    
+
     Args:
         providers: List of available providers
         primary_provider: Primary provider to use

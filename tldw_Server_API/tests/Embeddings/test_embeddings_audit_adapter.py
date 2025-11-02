@@ -101,4 +101,3 @@ async def test_memory_limit_exceeded_records_system_error(tmp_path):
         None,
     )
     assert match is not None, "Memory limit exceeded event not found"
-

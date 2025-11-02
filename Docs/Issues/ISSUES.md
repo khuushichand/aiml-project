@@ -55,7 +55,7 @@ Logits
 
 
 Import HTML Files
-    
+
 Manga
 https://github.com/ragavsachdeva/magi
 Emails:
@@ -99,7 +99,7 @@ Part 1: (Insert title here)
 - (Topic 2)
 ```
 ```
-Create comprehensive and easy to consume Anki flashcards for Part 1 of REPLACEWITHLECTURE. If there is embedded questions or topics per question, split them up into their own individual questions. Start each question on a new line. 
+Create comprehensive and easy to consume Anki flashcards for Part 1 of REPLACEWITHLECTURE. If there is embedded questions or topics per question, split them up into their own individual questions. Start each question on a new line.
 Use the following as a scaffold for the expected output:
 What noise does a cow make? ; Moo
 What is the capital of Australia? ; Canberra

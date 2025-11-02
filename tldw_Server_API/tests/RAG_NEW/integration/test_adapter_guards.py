@@ -124,4 +124,3 @@ async def test_character_retriever_uses_adapter_without_raw_sql(monkeypatch):
     assert len(docs) >= 1
     assert docs[0].source == DataSource.CHARACTER_CARDS
     assert async_calls["executed"] == 0
-

@@ -50,4 +50,3 @@ def test_renew_progress_persists_with_enforcement_sqlite(monkeypatch, tmp_path):
     got = jm.get_job(int(acq["id"]))
     assert got.get("progress_percent") == 75.0
     assert got.get("progress_message") == "3/4"
-

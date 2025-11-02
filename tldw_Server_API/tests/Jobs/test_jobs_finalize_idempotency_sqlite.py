@@ -45,4 +45,3 @@ def test_fail_idempotent_with_token(monkeypatch, tmp_path):
     # Different token: job is already terminal
     ok3 = jm.fail_job(int(j["id"]), error="boom", retryable=False, worker_id="w2", lease_id=str(acq.get("lease_id")), completion_token=token + "-x")
     assert ok3 is False
-

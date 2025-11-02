@@ -70,4 +70,3 @@ def test_failopen_non_positive_env_ignored(monkeypatch):
     })
     mod = _import_audio_module(monkeypatch, cfg=cfg)
     assert abs(mod._get_failopen_cap_minutes() - 3.5) < 1e-6
-

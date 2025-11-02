@@ -55,4 +55,3 @@ def test_numeric_fidelity_normalization_handles_units_and_currency():
     # Ensure present contains both tokens in normalized form
     assert any(tok.endswith("m") for tok in nf.present), "Expected million mapping to 'm' suffix"
     assert any(tok.endswith("%") for tok in nf.present), "Expected percent mapping to '%' suffix"
-

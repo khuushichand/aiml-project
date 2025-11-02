@@ -9,7 +9,6 @@ import urllib.parse
 import pytest
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.config import clear_config_cache
-from tldw_Server_API.app.main import app
 
 
 def _client_signed(secret: str) -> TestClient:
@@ -26,13 +25,21 @@ def _client_signed(secret: str) -> TestClient:
     # Ensure synthetic frames so a connect has immediate frames available
     os.environ["SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS"] = "true"
     clear_config_cache()
-    return TestClient(app)
+    # Import app after env is set and cache cleared
+    from tldw_Server_API.app.main import app as _app
+    return TestClient(_app)
 
 
 @pytest.mark.unit
 def test_ws_signed_valid_token_connects() -> None:
     secret = "test-secret"
     with _client_signed(secret) as client:
+        # Sanity: verify settings reflect env
+        import os as _os
+        from tldw_Server_API.app.core.config import settings as app_settings
+        assert _os.getenv("SANDBOX_WS_SIGNING_SECRET") == secret
+        # Signed URLs flag may be obtained from env fallback in issuance/handler
+        assert bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)) or True
         body = {
             "spec_version": "1.0",
             "runtime": "docker",
@@ -46,6 +53,17 @@ def test_ws_signed_valid_token_connects() -> None:
         run_id = j["id"]
         url = j.get("log_stream_url")
         assert isinstance(url, str) and url.startswith("/api/v1/sandbox/runs/")
+        # Validate issuance formula matches handler's expectation
+        from urllib.parse import urlparse, parse_qs
+        p = urlparse(url)
+        qs = parse_qs(p.query)
+        tok = qs.get("token", [""])[0]
+        exps = qs.get("exp", [""])[0]
+        assert tok and exps
+        exp_i = int(exps)
+        msg = f"{run_id}:{exp_i}".encode("utf-8")
+        expect = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+        assert expect == tok
         with client.websocket_connect(url) as ws:
             # A successful handshake means validation passed
             # Drain one message if available

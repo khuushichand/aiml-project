@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any
 
 class ChatbookException(Exception):
     """Base exception for all Chatbook-related errors."""
-    
+
     def __init__(
         self,
         message: str,
@@ -24,7 +24,7 @@ class ChatbookException(Exception):
     ):
         """
         Initialize ChatbookException.
-        
+
         Args:
             message: Error message
             error_code: Unique error code for identification
@@ -36,7 +36,7 @@ class ChatbookException(Exception):
         self.error_code = error_code or "CHATBOOK_ERROR"
         self.context = context or {}
         self.cause = cause
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for logging/API responses."""
         return {
@@ -50,11 +50,11 @@ class ChatbookException(Exception):
 
 class ValidationError(ChatbookException):
     """Raised when input validation fails."""
-    
+
     def __init__(self, message: str, field: Optional[str] = None, **kwargs):
         """
         Initialize ValidationError.
-        
+
         Args:
             message: Validation error message
             field: Field that failed validation
@@ -70,11 +70,11 @@ class ValidationError(ChatbookException):
 
 class FileOperationError(ChatbookException):
     """Raised when file operations fail."""
-    
+
     def __init__(self, message: str, file_path: Optional[str] = None, operation: Optional[str] = None, **kwargs):
         """
         Initialize FileOperationError.
-        
+
         Args:
             message: Error message
             file_path: Path to the file
@@ -93,11 +93,11 @@ class FileOperationError(ChatbookException):
 
 class DatabaseError(ChatbookException):
     """Raised when database operations fail."""
-    
+
     def __init__(self, message: str, query: Optional[str] = None, **kwargs):
         """
         Initialize DatabaseError.
-        
+
         Args:
             message: Error message
             query: SQL query that failed
@@ -114,11 +114,11 @@ class DatabaseError(ChatbookException):
 
 class QuotaExceededError(ChatbookException):
     """Raised when user exceeds quota limits."""
-    
+
     def __init__(self, message: str, quota_type: str, limit: Any = None, current: Any = None, **kwargs):
         """
         Initialize QuotaExceededError.
-        
+
         Args:
             message: Error message
             quota_type: Type of quota exceeded
@@ -139,11 +139,11 @@ class QuotaExceededError(ChatbookException):
 
 class SecurityError(ChatbookException):
     """Raised when security violations are detected."""
-    
+
     def __init__(self, message: str, violation_type: str, **kwargs):
         """
         Initialize SecurityError.
-        
+
         Args:
             message: Error message
             violation_type: Type of security violation
@@ -158,11 +158,11 @@ class SecurityError(ChatbookException):
 
 class JobError(ChatbookException):
     """Raised when job processing fails."""
-    
+
     def __init__(self, message: str, job_id: Optional[str] = None, job_type: Optional[str] = None, **kwargs):
         """
         Initialize JobError.
-        
+
         Args:
             message: Error message
             job_id: ID of the failed job
@@ -181,11 +181,11 @@ class JobError(ChatbookException):
 
 class ImportError(ChatbookException):
     """Raised when chatbook import fails."""
-    
+
     def __init__(self, message: str, import_file: Optional[str] = None, item_type: Optional[str] = None, **kwargs):
         """
         Initialize ImportError.
-        
+
         Args:
             message: Error message
             import_file: File being imported
@@ -204,11 +204,11 @@ class ImportError(ChatbookException):
 
 class ExportError(ChatbookException):
     """Raised when chatbook export fails."""
-    
+
     def __init__(self, message: str, export_name: Optional[str] = None, item_type: Optional[str] = None, **kwargs):
         """
         Initialize ExportError.
-        
+
         Args:
             message: Error message
             export_name: Name of the export
@@ -227,11 +227,11 @@ class ExportError(ChatbookException):
 
 class ArchiveError(ChatbookException):
     """Raised when archive operations fail."""
-    
+
     def __init__(self, message: str, archive_path: Optional[str] = None, **kwargs):
         """
         Initialize ArchiveError.
-        
+
         Args:
             message: Error message
             archive_path: Path to the archive
@@ -247,11 +247,11 @@ class ArchiveError(ChatbookException):
 
 class ConflictError(ChatbookException):
     """Raised when import/export conflicts occur."""
-    
+
     def __init__(self, message: str, conflict_type: str, existing_item: Optional[str] = None, new_item: Optional[str] = None, **kwargs):
         """
         Initialize ConflictError.
-        
+
         Args:
             message: Error message
             conflict_type: Type of conflict
@@ -272,11 +272,11 @@ class ConflictError(ChatbookException):
 
 class RetryableError(ChatbookException):
     """Base class for errors that can be retried."""
-    
+
     def __init__(self, message: str, retry_after: Optional[int] = None, max_retries: int = 3, **kwargs):
         """
         Initialize RetryableError.
-        
+
         Args:
             message: Error message
             retry_after: Seconds to wait before retry
@@ -295,7 +295,7 @@ class RetryableError(ChatbookException):
 
 class TemporaryError(RetryableError):
     """Raised for temporary failures that should be retried."""
-    
+
     def __init__(self, message: str, **kwargs):
         """Initialize TemporaryError."""
         kwargs['error_code'] = kwargs.get('error_code', 'TEMPORARY_ERROR')
@@ -304,11 +304,11 @@ class TemporaryError(RetryableError):
 
 class NetworkError(RetryableError):
     """Raised for network-related failures."""
-    
+
     def __init__(self, message: str, url: Optional[str] = None, **kwargs):
         """
         Initialize NetworkError.
-        
+
         Args:
             message: Error message
             url: URL that failed
@@ -324,11 +324,11 @@ class NetworkError(RetryableError):
 
 class TimeoutError(ChatbookException):
     """Raised when operations timeout."""
-    
+
     def __init__(self, message: str, timeout_seconds: Optional[int] = None, **kwargs):
         """
         Initialize TimeoutError.
-        
+
         Args:
             message: Error message
             timeout_seconds: Timeout duration
@@ -347,10 +347,10 @@ class TimeoutError(ChatbookException):
 def is_retryable(error: Exception) -> bool:
     """
     Check if an error is retryable.
-    
+
     Args:
         error: Exception to check
-        
+
     Returns:
         True if error can be retried
     """
@@ -360,17 +360,17 @@ def is_retryable(error: Exception) -> bool:
 def get_retry_delay(error: Exception, attempt: int = 1) -> int:
     """
     Get retry delay for an error.
-    
+
     Args:
         error: Exception that occurred
         attempt: Current attempt number
-        
+
     Returns:
         Seconds to wait before retry
     """
     if isinstance(error, RetryableError) and error.context.get('retry_after'):
         return error.context['retry_after']
-    
+
     # Exponential backoff with jitter
     import random
     base_delay = 2 ** attempt
@@ -381,11 +381,11 @@ def get_retry_delay(error: Exception, attempt: int = 1) -> int:
 def should_circuit_break(error_count: int, threshold: int = 5) -> bool:
     """
     Determine if circuit breaker should open.
-    
+
     Args:
         error_count: Number of consecutive errors
         threshold: Error threshold
-        
+
     Returns:
         True if circuit should open
     """

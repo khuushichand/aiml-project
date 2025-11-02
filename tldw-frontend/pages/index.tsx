@@ -5,7 +5,7 @@ import { useAuth } from '@/hooks/useAuth';
 
 export default function Home() {
   const { isAuthenticated, user } = useAuth();
-  
+
   return (
     <Layout>
       <div className="text-center">
@@ -15,7 +15,7 @@ export default function Home() {
         <p className="mt-6 text-lg leading-8 text-gray-600">
           Too Long; Didn't Watch - Your personal media research assistant
         </p>
-        
+
         <div className="mt-10 flex items-center justify-center gap-x-6">
           {isAuthenticated ? (
             <>
@@ -41,7 +41,7 @@ export default function Home() {
             </>
           )}
         </div>
-        
+
         {isAuthenticated && (
           <div className="mt-12">
             <p className="text-sm text-gray-600">
@@ -49,7 +49,7 @@ export default function Home() {
             </p>
           </div>
         )}
-        
+
         <div className="mt-20 grid grid-cols-1 gap-8 sm:grid-cols-3">
           <div className="rounded-lg bg-white p-6 shadow">
             <h3 className="text-lg font-semibold text-gray-900">Media Processing</h3>
@@ -57,7 +57,7 @@ export default function Home() {
               Upload and process videos, audio, PDFs, and more with automatic transcription and analysis.
             </p>
           </div>
-          
+
           <div className="rounded-lg bg-white p-6 shadow">
             <h3 className="text-lg font-semibold text-gray-900">AI-Powered Chat</h3>
             <p className="mt-2 text-sm text-gray-600">
@@ -67,7 +67,7 @@ export default function Home() {
               Streaming tip: when viewing streamed answers, toggle <span className="font-medium">Show Claim Overlay</span> to annotate statements in real time (Supported / Refuted / Not Enough Info).
             </p>
           </div>
-          
+
           <div className="rounded-lg bg-white p-6 shadow">
             <h3 className="text-lg font-semibold text-gray-900">Smart Search</h3>
             <p className="mt-2 text-sm text-gray-600">

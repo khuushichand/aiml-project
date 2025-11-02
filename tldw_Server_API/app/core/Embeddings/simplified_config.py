@@ -25,7 +25,7 @@ class ProviderConfig:
     rate_limit: Optional[str] = None  # e.g., "100/min"
     fallback_provider: Optional[str] = None
     fallback_model: Optional[str] = None
-    
+
     def __post_init__(self):
         # Load API key from environment if not provided
         if not self.api_key:
@@ -89,20 +89,20 @@ class EmbeddingsConfig:
     batching: BatchingConfig = field(default_factory=BatchingConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
-    
+
     # Global settings
     default_provider: str = "openai"
     default_model: str = "text-embedding-3-small"
     chunk_size: int = 400
     chunk_overlap: int = 200
-    
+
     @classmethod
     def from_yaml(cls, path: str) -> 'EmbeddingsConfig':
         """Load configuration from YAML file"""
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'EmbeddingsConfig':
         """Create configuration from dictionary"""
@@ -110,7 +110,7 @@ class EmbeddingsConfig:
         providers = []
         for provider_data in data.get('providers', []):
             providers.append(ProviderConfig(**provider_data))
-        
+
         # Parse sub-configurations
         config = cls(
             providers=providers,
@@ -124,9 +124,9 @@ class EmbeddingsConfig:
             chunk_size=data.get('chunk_size', 400),
             chunk_overlap=data.get('chunk_overlap', 200)
         )
-        
+
         return config
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
         return {
@@ -141,48 +141,48 @@ class EmbeddingsConfig:
             'chunk_size': self.chunk_size,
             'chunk_overlap': self.chunk_overlap
         }
-    
+
     def to_yaml(self, path: str):
         """Save configuration to YAML file"""
         with open(path, 'w') as f:
             yaml.dump(self.to_dict(), f, default_flow_style=False)
-    
+
     def get_provider(self, name: str) -> Optional[ProviderConfig]:
         """Get provider configuration by name"""
         for provider in self.providers:
             if provider.name == name:
                 return provider
         return None
-    
+
     def get_enabled_providers(self) -> List[ProviderConfig]:
         """Get list of enabled providers sorted by priority"""
         enabled = [p for p in self.providers if p.enabled]
         return sorted(enabled, key=lambda x: x.priority)
-    
+
     def validate(self) -> List[str]:
         """Validate configuration and return list of issues"""
         issues = []
-        
+
         # Check for at least one enabled provider
         if not self.get_enabled_providers():
             issues.append("No enabled providers configured")
-        
+
         # Check for API keys
         for provider in self.providers:
             if provider.enabled and not provider.api_key and provider.name != "local":
                 issues.append(f"Provider {provider.name} is enabled but has no API key")
-        
+
         # Check resource limits
         if self.resources.max_models_in_memory < 1:
             issues.append("max_models_in_memory must be at least 1")
-        
+
         if self.resources.max_memory_gb < 0.5:
             issues.append("max_memory_gb should be at least 0.5 GB")
-        
+
         # Check cache settings
         if self.cache.enabled and self.cache.max_size < 100:
             issues.append("Cache size should be at least 100 entries")
-        
+
         return issues
 
 
@@ -230,10 +230,10 @@ def create_default_config() -> EmbeddingsConfig:
 def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
     """
     Load configuration from file or create default.
-    
+
     Args:
         path: Optional path to configuration file
-        
+
     Returns:
         EmbeddingsConfig instance
     """
@@ -245,7 +245,7 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
             return config
         except Exception as e:
             logger.error(f"Failed to load config from {path}: {e}")
-    
+
     # Try loading from environment variable
     env_path = os.getenv("EMBEDDINGS_CONFIG_PATH")
     if env_path and Path(env_path).exists():
@@ -255,14 +255,14 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
             return config
         except Exception as e:
             logger.error(f"Failed to load config from environment: {e}")
-    
+
     # Try default locations
     default_paths = [
         "./embeddings_config.yaml",
         "./config/embeddings.yaml",
         "./Config_Files/embeddings_config.yaml"
     ]
-    
+
     for default_path in default_paths:
         if Path(default_path).exists():
             try:
@@ -271,7 +271,7 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
                 return config
             except Exception as e:
                 logger.error(f"Failed to load config from {default_path}: {e}")
-    
+
     # Create default config
     logger.info("Using default embeddings configuration")
     return create_default_config()
@@ -293,7 +293,7 @@ providers:
     timeout_seconds: 30
     rate_limit: "3000/min"
     fallback_provider: huggingface
-    
+
   - name: huggingface
     priority: 2
     enabled: true
@@ -301,14 +301,14 @@ providers:
       - sentence-transformers/all-MiniLM-L6-v2
       - sentence-transformers/all-mpnet-base-v2
     rate_limit: "1000/min"
-    
+
   - name: cohere
     priority: 3
     enabled: false
     models:
       - embed-english-v3.0
     rate_limit: "1000/min"
-    
+
   - name: local
     priority: 4
     enabled: false
@@ -382,10 +382,10 @@ def reload_config(path: Optional[str] = None):
     """Reload configuration from file"""
     global _config
     _config = load_config(path)
-    
+
     # Validate configuration
     issues = _config.validate()
     if issues:
         logger.warning(f"Configuration validation issues: {issues}")
-    
+
     return _config

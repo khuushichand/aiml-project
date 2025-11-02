@@ -26,4 +26,3 @@ def test_emb_envelope_schema_drift_guard():
     names = {e.get("name"): e for e in entries}
     assert messages.CURRENT_SCHEMA in names
     assert int(names[messages.CURRENT_SCHEMA].get("version")) == int(messages.CURRENT_VERSION)
-

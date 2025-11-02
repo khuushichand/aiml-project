@@ -24,4 +24,3 @@ def test_sqlite_schema_additional_tables_and_indexes(tmp_path):
         assert any("idx_jobs_idempotent" in x for x in idxs)
     finally:
         conn.close()
-

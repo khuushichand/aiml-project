@@ -56,7 +56,7 @@ Tables:
   - novelty_hint TEXT CHECK(novelty_hint IN ('post_cutoff','unknown','pre_cutoff'))
   - emotion TEXT CHECK(emotion IN ('angry','neutral','happy','other'))
   - scenario TEXT CHECK(scenario IN ('press_challenge','fan_banter','debate','boardroom','small_talk','other'))
-  - rhetorical JSON TEXT  -- JSON array: ["opener","emphasis","ender",...] 
+  - rhetorical JSON TEXT  -- JSON array: ["opener","emphasis","ender",...]
   - register TEXT  -- optional (formal, informal)
   - safety_allowed JSON TEXT  -- JSON array of allowed categories
   - safety_blocked JSON TEXT  -- JSON array of blocked categories

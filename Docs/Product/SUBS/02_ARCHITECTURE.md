@@ -45,17 +45,17 @@ The Subscriptions feature integrates seamlessly with the existing tldw_server ar
 ```python
 class SubscriptionService:
     """Manages subscription CRUD operations and orchestration"""
-    
+
     def __init__(self, db_path: str):
         self.db = MediaDatabase(db_path)
         self.parser_factory = ParserFactory()
-    
+
     async def add_subscription(self, url: str, config: SubscriptionConfig) -> Subscription:
         """Add a new subscription with validation"""
-        
+
     async def check_subscription(self, subscription_id: int) -> List[ContentItem]:
         """Check a subscription for new content"""
-        
+
     async def import_items(self, item_ids: List[int]) -> List[int]:
         """Import selected items into media library"""
 ```
@@ -64,7 +64,7 @@ class SubscriptionService:
 ```python
 class ParserFactory:
     """Factory for creating appropriate parsers based on URL"""
-    
+
     @staticmethod
     def create_parser(url: str) -> BaseParser:
         if 'youtube.com' in url or 'youtu.be' in url:
@@ -82,11 +82,11 @@ class ParserFactory:
 ```python
 class BaseParser(ABC):
     """Abstract base class for content parsers"""
-    
+
     @abstractmethod
     async def parse(self, url: str) -> ParseResult:
         """Parse content from URL"""
-        
+
     @abstractmethod
     async def validate_url(self, url: str) -> bool:
         """Validate if URL is supported"""
@@ -110,16 +110,16 @@ class BaseParser(ABC):
 ```python
 class SubscriptionScheduler:
     """Manages periodic subscription checks"""
-    
+
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
         self.active_jobs = {}
-    
+
     async def start(self):
         """Initialize and start the scheduler"""
         await self._load_active_subscriptions()
         self.scheduler.start()
-    
+
     async def schedule_check(self, subscription: Subscription):
         """Schedule periodic checks for a subscription"""
         job = self.scheduler.add_job(

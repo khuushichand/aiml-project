@@ -31,4 +31,3 @@ def test_vixra_ingest_lenient(client_with_auth):
     # Attempt ingest; permit 200/404/5xx due to variability
     resp = client_with_auth.post("/api/v1/paper-search/vixra/ingest", params={"vid": "1901.0001", "perform_chunking": "false", "perform_analysis": "false"})
     assert resp.status_code in (200, 404, 502, 504), resp.text
-

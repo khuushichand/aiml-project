@@ -51,4 +51,3 @@ def test_artifact_download_range_support() -> None:
         assert r3.headers.get("Content-Range") == "bytes 7-9/10"
         assert r3.headers.get("Content-Length") == "3"
         assert r3.content == b"789"
-

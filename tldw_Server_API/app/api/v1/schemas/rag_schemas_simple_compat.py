@@ -49,7 +49,7 @@ class SearchApiRequest(BaseModel):
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of results to return")
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters")
     data_sources: Optional[List[str]] = Field(default=None, description="Databases to search")
-    
+
     # Additional fields expected by tests
     search_databases: Optional[List[str]] = Field(default=None, description="Databases to search (alias)")
     offset: Optional[int] = Field(default=0, ge=0, description="Pagination offset")
@@ -57,7 +57,7 @@ class SearchApiRequest(BaseModel):
     date_range_end: Optional[str] = Field(default=None, description="End date for filtering")
     use_semantic_search: Optional[bool] = Field(default=False, description="Enable semantic search")
     use_hybrid_search: Optional[bool] = Field(default=True, description="Enable hybrid search")
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -68,10 +68,10 @@ class RetrievalAgentRequest(BaseModel):
     mode: Optional[AgentModeEnum] = Field(default=AgentModeEnum.RAG, description="Agent mode")
     rag_generation_config: Optional[GenerationConfig] = Field(default=None, description="Generation config")
     api_config: Optional[Dict[str, Any]] = Field(default=None, description="API configuration")
-    
+
     # Additional fields for compatibility
     search_config: Optional[Dict[str, Any]] = Field(default=None, description="Search configuration")
-    
+
     @field_validator('messages', mode='before')
     def ensure_messages_list(cls, v, values):
         """Ensure we have either message or messages"""

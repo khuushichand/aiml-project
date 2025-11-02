@@ -25,29 +25,29 @@ The main RAG endpoint with complete feature access.
 {
   // ========== REQUIRED ==========
   "query": "string (1-2000 chars)",
-  
+
   // ========== DATA SOURCES ==========
   "sources": ["media_db", "notes", "characters", "chats"],  // Default: ["media_db"]
-  
+
   // ========== SEARCH CONFIGURATION ==========
   "search_mode": "hybrid",  // "fts" | "vector" | "hybrid"
   "hybrid_alpha": 0.7,      // 0=FTS only, 1=Vector only
   "enable_intent_routing": false, // analyze intent and adjust hybrid/top_k
   "top_k": 10,              // Max results (1-100)
   "min_score": 0.0,         // Minimum relevance score
-  
+
   // ========== QUERY ENHANCEMENT ==========
   "expand_query": false,
   "expansion_strategies": ["acronym", "synonym", "domain", "entity"],
   "spell_check": false,
-  
+
   // ========== FILTERING ==========
   "keyword_filter": ["term1", "term2"],  // Must contain these keywords
-  
+
   // ========== CACHING ==========
   "enable_cache": true,
   "cache_threshold": 0.85,    // Semantic similarity threshold (0.0-1.0)
-  
+
   // ========== DOCUMENT PROCESSING ==========
   "enable_reranking": true,
   "reranking_strategy": "two_tier",  // "flashrank" | "cross_encoder" | "hybrid" | "llm_scoring" | "two_tier" | "llama_cpp"
@@ -67,20 +67,20 @@ The main RAG endpoint with complete feature access.
   "sibling_window": 1,
   "include_parent_document": false,
   "parent_max_tokens": 1200,
-  
+
   // ========== CITATIONS ==========
   "enable_citations": false,
   "citation_style": "apa",  // "apa" | "mla" | "chicago" | "harvard" | "ieee"
   "include_page_numbers": false,
   "enable_chunk_citations": true,
-  
+
   // ========== GENERATION GUARDRAILS ==========
   "enable_injection_filter": true,          // Down-weight risky chunks pre-generation
   "injection_filter_strength": 0.5,         // Score multiplier for risky chunks
   "require_hard_citations": false,          // Require per-sentence supporting spans (doc_id + offsets)
   "enable_numeric_fidelity": false,         // Verify numeric tokens are present in sources
   "numeric_fidelity_behavior": "continue", // "continue" | "ask" | "decline" | "retry"
-  
+
   // ========== ANSWER GENERATION ==========
   "enable_generation": false,
   "strict_extractive": false,              // Assemble answer only from retrieved spans (no free-form generation)
@@ -94,7 +94,7 @@ The main RAG endpoint with complete feature access.
   "synthesis_time_budget_sec": 5.0,
   "synthesis_draft_tokens": 300,
   "synthesis_refine_tokens": 500,
-  
+
   // ========== POST-VERIFICATION (ADAPTIVE) ==========
   "enable_post_verification": false,
   "adaptive_max_retries": 1,
@@ -110,21 +110,21 @@ The main RAG endpoint with complete feature access.
   "adaptive_rerun_bypass_cache": false,           // Force enable_cache=false for the rerun to avoid stale cache hits
   "adaptive_rerun_time_budget_sec": 5.0,          // Optional soft cap; emits rag_phase_budget_exhausted_total{phase="adaptive_rerun"} on breach
   "adaptive_rerun_doc_budget": 8,                 // Optional: cap docs fed into quick verification during adoption check
-  
+
   // ========== SECURITY & PRIVACY ==========
   "enable_security_filter": false,
   "detect_pii": false,
   "redact_pii": false,
   "sensitivity_level": "public",    // "public" | "internal" | "confidential" | "restricted"
   "content_filter": false,
-  
+
   // ========== ANALYTICS & FEEDBACK ==========
   "collect_feedback": false,
   "feedback_user_id": "string (optional)",
   "apply_feedback_boost": false,
   "user_id": "string (optional)",
   "session_id": "string (optional)",
-  
+
   // ========== PERFORMANCE ==========
   "enable_monitoring": false,
   "enable_observability": false,
@@ -132,12 +132,12 @@ The main RAG endpoint with complete feature access.
   "enable_performance_analysis": false,
   "timeout_seconds": 10.0,
   "debug_mode": false,
-  
+
   // ========== RESILIENCE ==========
   "enable_resilience": false,
   "retry_attempts": 3,
   "circuit_breaker": false,
-  
+
   // ========== OUTPUT CONFIGURATION ==========
   "highlight_results": false,
   "highlight_query_terms": false,
@@ -391,7 +391,7 @@ Environment variables (optional):
 {
   "queries": ["query1", "query2", "query3"],  // Required: list of queries
   "max_concurrent": 3,                        // Max concurrent processing
-  
+
   // All unified pipeline parameters supported
   "sources": ["media_db"],
   "search_mode": "hybrid",
@@ -494,7 +494,7 @@ Advanced search with commonly used features enabled.
 
 Same as simple, plus:
 - `expand`: Enable query expansion (true/false)
-- `rerank`: Enable reranking (true/false) 
+- `rerank`: Enable reranking (true/false)
 - `citations`: Enable citations (true/false)
 - `style`: Citation style (mla/apa/chicago/harvard/ieee)
 
@@ -748,7 +748,7 @@ async function searchRAG(query, options = {}) {
       ...options
     })
   });
-  
+
   return response.json();
 }
 

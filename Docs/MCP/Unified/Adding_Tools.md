@@ -124,4 +124,3 @@ If you later enable Chat auto-execution:
 - Module registry: `tldw_Server_API/app/core/MCP_unified/modules/registry.py`
 - MCP protocol: `tldw_Server_API/app/core/MCP_unified/protocol.py`
 - Tools API: `Docs/API-related/Tools_API_Documentation.md`
-

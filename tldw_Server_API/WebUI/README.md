@@ -21,21 +21,21 @@ A browser-based interface for testing and interacting with the TLDW Server API. 
    The API will be available at http://localhost:8000
 
 2. **Start the WebUI** (in another terminal):
-   
+
    **Option A: With Auto-Configuration (Recommended)**
    ```bash
    cd tldw_Server_API/WebUI
    # The script will auto-detect SINGLE_USER_API_KEY from environment
    ./Start-WebUI.sh
    ```
-   
+
    **Option B: Manual Configuration**
    ```bash
    cd tldw_Server_API/WebUI
    python3 -m http.server 8080
    # You'll need to enter the API key manually in the UI
    ```
-   
+
    **Option C: With Custom API URL**
    ```bash
    cd tldw_Server_API/WebUI

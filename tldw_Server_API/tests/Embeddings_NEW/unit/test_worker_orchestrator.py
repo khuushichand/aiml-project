@@ -45,4 +45,3 @@ async def test_worker_pool_lifecycle():
         assert len(pool.workers) == 3
         await pool.stop()
         assert len(pool.workers) == 0
-

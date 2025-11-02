@@ -84,12 +84,12 @@ def get_cpu_process_pool() -> Optional[ProcessPoolExecutor]:
 async def run_cpu_bound(func: Callable[..., T], *args, **kwargs) -> T:
     """
     Run a CPU-intensive function in a process pool.
-    
+
     Args:
         func: The CPU-bound function to run
         *args: Positional arguments for the function
         **kwargs: Keyword arguments for the function
-        
+
     Returns:
         The function's return value
     """
@@ -114,17 +114,17 @@ async def run_cpu_bound_thread(func: Callable[..., T], *args, **kwargs) -> T:
     """
     Run a moderately CPU-intensive function in a thread pool.
     Use this for operations that are CPU-heavy but don't require process isolation.
-    
+
     Args:
         func: The function to run
         *args: Positional arguments for the function
         **kwargs: Keyword arguments for the function
-        
+
     Returns:
         The function's return value
     """
     loop = asyncio.get_event_loop()
-    
+
     try:
         result = await loop.run_in_executor(
             CPU_THREAD_POOL,
@@ -144,10 +144,10 @@ def json_encode_heavy(data: Any) -> str:
     """
     JSON encode large or complex data structures.
     This is CPU-intensive for large payloads.
-    
+
     Args:
         data: Data to encode
-        
+
     Returns:
         JSON string
     """
@@ -158,10 +158,10 @@ def json_decode_heavy(json_str: str) -> Any:
     """
     JSON decode large strings.
     This is CPU-intensive for large payloads.
-    
+
     Args:
         json_str: JSON string to decode
-        
+
     Returns:
         Decoded data
     """
@@ -171,10 +171,10 @@ def json_decode_heavy(json_str: str) -> Any:
 def base64_encode_large(data: bytes) -> str:
     """
     Base64 encode large binary data.
-    
+
     Args:
         data: Binary data to encode
-        
+
     Returns:
         Base64 encoded string
     """
@@ -184,10 +184,10 @@ def base64_encode_large(data: bytes) -> str:
 def base64_decode_large(encoded: str) -> bytes:
     """
     Base64 decode large strings.
-    
+
     Args:
         encoded: Base64 encoded string
-        
+
     Returns:
         Decoded binary data
     """
@@ -199,17 +199,17 @@ def base64_decode_large(encoded: str) -> bytes:
 async def process_large_json_async(data: Any) -> str:
     """
     Async wrapper for processing large JSON data.
-    
+
     Args:
         data: Data to encode as JSON
-        
+
     Returns:
         JSON string
     """
     # For small payloads, process inline
     if isinstance(data, (str, int, float, bool, type(None))):
         return json.dumps(data)
-    
+
     # For larger payloads, offload to thread pool
     try:
         # Quick size estimation
@@ -219,7 +219,7 @@ async def process_large_json_async(data: Any) -> str:
             estimated_size = len(data) * 100  # Rough estimate
         else:
             estimated_size = 1000
-        
+
         if estimated_size < 10000:  # Small payload
             return json.dumps(data)
         else:  # Large payload
@@ -232,17 +232,17 @@ async def process_large_json_async(data: Any) -> str:
 async def process_large_base64_async(data: bytes) -> str:
     """
     Async wrapper for processing large base64 encoding.
-    
+
     Args:
         data: Binary data to encode
-        
+
     Returns:
         Base64 encoded string
     """
     # For small payloads, process inline
     if len(data) < 10000:  # Less than 10KB
         return base64.b64encode(data).decode('ascii')
-    
+
     # For larger payloads, offload to thread pool
     return await run_cpu_bound_thread(base64_encode_large, data)
 
@@ -250,17 +250,17 @@ async def process_large_base64_async(data: bytes) -> str:
 async def decode_large_base64_async(encoded: str) -> bytes:
     """
     Async wrapper for decoding large base64 strings.
-    
+
     Args:
         encoded: Base64 encoded string
-        
+
     Returns:
         Decoded binary data
     """
     # For small payloads, process inline
     if len(encoded) < 10000:  # Less than 10KB
         return base64.b64decode(encoded)
-    
+
     # For larger payloads, offload to thread pool
     return await run_cpu_bound_thread(base64_decode_large, encoded)
 
@@ -269,11 +269,11 @@ class CPUBoundBatcher:
     """
     Batch CPU-intensive operations for better efficiency.
     """
-    
+
     def __init__(self, batch_size: int = 10, timeout: float = 0.1):
         """
         Initialize the batcher.
-        
+
         Args:
             batch_size: Maximum batch size
             timeout: Maximum time to wait for batch to fill
@@ -283,26 +283,26 @@ class CPUBoundBatcher:
         self.pending_operations = []
         self.results_futures = []
         self._batch_task = None
-    
+
     async def add_operation(self, func: Callable, *args, **kwargs) -> Any:
         """
         Add an operation to the batch.
-        
+
         Args:
             func: Function to execute
             *args: Function arguments
             **kwargs: Function keyword arguments
-            
+
         Returns:
             The function result
         """
         future = asyncio.Future()
         self.pending_operations.append((func, args, kwargs, future))
-        
+
         # Start batch processing if not already running
         if not self._batch_task or self._batch_task.done():
             self._batch_task = asyncio.create_task(self._process_batch())
-        
+
         # If batch is full, process immediately
         if len(self.pending_operations) >= self.batch_size:
             if self._batch_task and not self._batch_task.done():
@@ -315,22 +315,22 @@ class CPUBoundBatcher:
                     self._batch_task = None
             await self._process_batch(delay=False)
             self._batch_task = None
-        
+
         return await future
-    
+
     async def _process_batch(self, *, delay: bool = True):
         """Process the current batch of operations."""
         # Wait for timeout or batch to fill
         if delay:
             await asyncio.sleep(self.timeout)
-        
+
         if not self.pending_operations:
             return
-        
+
         # Process all pending operations
         batch = self.pending_operations[:self.batch_size]
         self.pending_operations = self.pending_operations[self.batch_size:]
-        
+
         # Execute operations in parallel
         tasks = []
         for func, args, kwargs, future in batch:
@@ -338,7 +338,7 @@ class CPUBoundBatcher:
                 run_cpu_bound_thread(func, *args, **kwargs)
             )
             tasks.append((task, future))
-        
+
         # Wait for all to complete
         for task, future in tasks:
             try:
@@ -355,10 +355,10 @@ _json_batcher = CPUBoundBatcher()
 async def batch_json_encode(data: Any) -> str:
     """
     Batch JSON encoding operations for efficiency.
-    
+
     Args:
         data: Data to encode
-        
+
     Returns:
         JSON string
     """

@@ -47,7 +47,7 @@ class TTSAdapterRegistry:
     Registry for TTS adapters.
     Manages registration, initialization, and access to TTS providers.
     """
-    
+
     # Default adapter mappings (lazy, via dotted paths to avoid heavy imports at module import time)
     DEFAULT_ADAPTERS: Dict["TTSProvider", "str|Type[TTSAdapter]"] = {
         TTSProvider.OPENAI: "tldw_Server_API.app.core.TTS.adapters.openai_adapter.OpenAITTSAdapter",
@@ -60,11 +60,11 @@ class TTSAdapterRegistry:
         TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
         TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
     }
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the registry.
-        
+
         Args:
             config: Configuration dictionary for all adapters
         """
@@ -86,7 +86,7 @@ class TTSAdapterRegistry:
             self.tts_config = self.config_manager.get_config()
             # Legacy config support - convert Pydantic model to dict
             self.config = model_dump_compat(self.tts_config)
-        
+
         self._adapters: Dict[TTSProvider, TTSAdapter] = {}
         # Store either classes or dotted paths; resolve lazily when needed
         self._adapter_specs: Dict[TTSProvider, Any] = self.DEFAULT_ADAPTERS.copy()
@@ -122,11 +122,11 @@ class TTSAdapterRegistry:
             retry_seconds = None
 
         self._failure_retry_seconds: Optional[float] = retry_seconds
-    
+
     def register_adapter(self, provider: TTSProvider, adapter: Any):
         """
         Register a custom adapter class for a provider.
-        
+
         Args:
             provider: The provider enum
             adapter: Adapter class or dotted import path string to register
@@ -155,17 +155,17 @@ class TTSAdapterRegistry:
             cls = getattr(module, class_name)
             return cls
         return spec
-    
+
     async def get_adapter(self, provider: TTSProvider) -> Optional[TTSAdapter]:
         """
         Get an adapter instance for the specified provider.
-        
+
         Args:
             provider: The TTS provider
-            
+
         Returns:
             Initialized adapter instance or None if unavailable
-            
+
         Raises:
             TTSProviderNotConfiguredError: If provider is not registered
         """
@@ -176,7 +176,7 @@ class TTSAdapterRegistry:
                 error_msg,
                 provider=provider.value
             )
-        
+
         retry_after = self._failed_providers.get(provider)
         if retry_after:
             if math.isinf(retry_after):
@@ -189,13 +189,13 @@ class TTSAdapterRegistry:
                 return None
             else:
                 self._failed_providers.pop(provider, None)
-        
+
         # Check if adapter already exists
         if provider in self._adapters:
             adapter = self._adapters[provider]
             if adapter.status == ProviderStatus.AVAILABLE:
                 return adapter
-        
+
         # Initialize adapter if needed
         async with self._init_lock:
             retry_after = self._failed_providers.get(provider)
@@ -210,13 +210,13 @@ class TTSAdapterRegistry:
                     return None
                 else:
                     self._failed_providers.pop(provider, None)
-                
+
             if provider not in self._adapters:
                 success = await self._initialize_adapter(provider)
                 if not success:
                     self._schedule_retry(provider)
                     return None
-            
+
             adapter = self._adapters.get(provider)
             if adapter and adapter.status == ProviderStatus.AVAILABLE:
                 self._failed_providers.pop(provider, None)
@@ -224,17 +224,17 @@ class TTSAdapterRegistry:
             else:
                 logger.warning(f"Adapter for {provider.value} is not available (status: {adapter.status if adapter else 'None'})")
                 return None
-    
+
     async def _initialize_adapter(self, provider: TTSProvider) -> bool:
         """
         Initialize an adapter for a provider.
-        
+
         Args:
             provider: The TTS provider
-            
+
         Returns:
             True if initialization successful
-            
+
         Raises:
             TTSProviderInitializationError: If initialization fails
         """
@@ -242,10 +242,10 @@ class TTSAdapterRegistry:
             # Get adapter class (lazily resolve to avoid heavy imports during module import)
             adapter_spec = self._adapter_specs[provider]
             adapter_class = self._resolve_adapter_class(adapter_spec)
-            
+
             # Get provider-specific config
             provider_config = self._get_provider_config(provider)
-            
+
             # Check if provider is enabled using unified config
             if self.config_manager:
                 if not self.config_manager.is_provider_enabled(provider.value):
@@ -257,22 +257,22 @@ class TTSAdapterRegistry:
                 if not self.config.get(enabled_key, True):
                     logger.info(f"Provider {provider.value} is disabled in configuration")
                     return False
-            
+
             # Get resource manager for monitoring
             resource_manager = await get_resource_manager()
-            
+
             # Check memory before initializing new adapter
             if resource_manager.memory_monitor.is_memory_critical():
                 logger.warning(f"Skipping {provider.value} initialization due to memory constraints")
                 return False
-            
+
             # Create adapter instance
             logger.info(f"Initializing {provider.value} adapter...")
             adapter = adapter_class(config=provider_config)
-            
+
             # Initialize the adapter
             success = await adapter.ensure_initialized()
-            
+
             if success:
                 self._adapters[provider] = adapter
                 self._initialized_providers.add(provider)
@@ -283,36 +283,36 @@ class TTSAdapterRegistry:
                 logger.error(error_msg)
                 # Don't store failed adapter - it will be retried next time
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error initializing {provider.value} adapter: {e}")
             # Don't store failed adapter - it will be retried next time
             return False
-    
+
     def _get_provider_config(self, provider: TTSProvider) -> Dict[str, Any]:
         """
         Get configuration for a specific provider.
-        
+
         Args:
             provider: The TTS provider
-            
+
         Returns:
             Provider-specific configuration dictionary
         """
         if self.config_manager:
             # Use unified configuration system
             provider_cfg = self.config_manager.get_provider_config(provider.value)
-            
+
             if provider_cfg:
                 # Convert to dict for adapter consumption
                 cfg = model_dump_compat(provider_cfg)
-                
+
                 # Duplicate generic keys into provider-prefixed aliases expected by adapters
                 p = provider.value
                 def alias(src: str, dst: str):
                     if src in cfg and dst not in cfg and cfg[src] is not None:
                         cfg[dst] = cfg[src]
-                
+
                 if p == 'openai':
                     alias('api_key', 'openai_api_key')
                     alias('base_url', 'openai_base_url')
@@ -402,26 +402,26 @@ class TTSAdapterRegistry:
                     alias('target_latency_ms', 'higgs_target_latency_ms')
 
                 return cfg
-        
+
         # Fallback to legacy config
         provider_config = self.config.copy()
-        
+
         # Add provider-specific overrides
         provider_key = f"{provider.value}_config"
         if provider_key in self.config:
             provider_config.update(self.config[provider_key])
-        
+
         return provider_config
-    
+
     async def get_all_capabilities(self) -> Dict[TTSProvider, TTSCapabilities]:
         """
         Get capabilities of all available adapters.
-        
+
         Returns:
             Dictionary mapping providers to their capabilities
         """
         capabilities = {}
-        
+
         for provider in TTSProvider:
             # Skip providers that are disabled or have failed
             retry_after = self._failed_providers.get(provider)
@@ -431,10 +431,10 @@ class TTSAdapterRegistry:
                 if retry_after > time.time():
                     continue
                 self._failed_providers.pop(provider, None)
-                
+
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
-            if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA, 
+            if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE]:
                 # Check if explicitly enabled in config
                 if self.config_manager:
@@ -444,7 +444,7 @@ class TTSAdapterRegistry:
                     enabled_key = f"{provider.value}_enabled"
                     if not self.config.get(enabled_key, False):
                         continue
-            
+
             try:
                 # Try to get adapter with a timeout to avoid hanging
                 adapter = await asyncio.wait_for(self.get_adapter(provider), timeout=5.0)
@@ -460,9 +460,9 @@ class TTSAdapterRegistry:
                 logger.debug(f"Error getting capabilities for {provider.value}: {e}")
                 if self._failure_retry_seconds is not None:
                     self._schedule_retry(provider)
-        
+
         return capabilities
-    
+
     async def find_adapter_for_requirements(
         self,
         language: Optional[str] = None,
@@ -474,7 +474,7 @@ class TTSAdapterRegistry:
     ) -> Optional[TTSAdapter]:
         """
         Find an adapter that meets specific requirements.
-        
+
         Args:
             language: Required language support
             format: Required audio format
@@ -482,7 +482,7 @@ class TTSAdapterRegistry:
             supports_emotion: Requires emotion control
             supports_voice_cloning: Requires voice cloning
             supports_multi_speaker: Requires multi-speaker support
-            
+
         Returns:
             First adapter that meets all requirements, or None
         """
@@ -490,9 +490,9 @@ class TTSAdapterRegistry:
             adapter = await self.get_adapter(provider)
             if not adapter or not adapter.capabilities:
                 continue
-            
+
             caps = adapter.capabilities
-            
+
             # Check requirements
             if language and language not in caps.supported_languages:
                 continue
@@ -506,16 +506,16 @@ class TTSAdapterRegistry:
                 continue
             if supports_multi_speaker is not None and caps.supports_multi_speaker != supports_multi_speaker:
                 continue
-            
+
             return adapter
-        
+
         return None
-    
+
     def _get_provider_priority(self) -> List[TTSProvider]:
         """
         Get provider priority order.
         Can be customized via configuration.
-        
+
         Returns:
             Ordered list of providers to try
         """
@@ -525,7 +525,7 @@ class TTSAdapterRegistry:
         else:
             # Use priority from config if available
             priority_names = self.config.get("provider_priority", [])
-        
+
         priority = []
         for provider_name in priority_names:
             try:
@@ -533,7 +533,7 @@ class TTSAdapterRegistry:
                 priority.append(provider)
             except ValueError:
                 logger.warning(f"Unknown provider in priority list: {provider_name}")
-        
+
         # Fallback to default if no valid providers
         if not priority:
             priority = [
@@ -543,51 +543,51 @@ class TTSAdapterRegistry:
                 TTSProvider.DIA,
                 TTSProvider.HIGGS
             ]
-        
+
         return priority
-    
+
     async def close_all(self):
         """Close all initialized adapters and clean up resources"""
         logger.info("Closing all TTS adapters...")
-        
+
         # Get resource manager for cleanup
         try:
             resource_manager = await get_resource_manager()
         except Exception as e:
             logger.warning(f"Could not get resource manager for cleanup: {e}")
             resource_manager = None
-        
+
         tasks = []
         for provider, adapter in self._adapters.items():
             logger.info(f"Closing {provider.value} adapter...")
             tasks.append(adapter.close())
-            
+
             # Unregister from resource manager if available
             if resource_manager:
                 try:
                     await resource_manager.unregister_model(provider.value)
                 except Exception as e:
                     logger.warning(f"Error unregistering {provider.value} from resource manager: {e}")
-        
+
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         self._adapters.clear()
         self._initialized_providers.clear()
-        
+
         # Clean up resource manager connections
         if resource_manager:
             try:
                 await resource_manager.cleanup_all()
             except Exception as e:
                 logger.warning(f"Error during resource manager cleanup: {e}")
-        
+
         logger.info("All TTS adapters closed")
-    
+
     def get_status_summary(self) -> Dict[str, Any]:
         """
         Get status summary of all adapters.
-        
+
         Returns:
             Dictionary with status information
         """
@@ -597,7 +597,7 @@ class TTSAdapterRegistry:
             "available": 0,
             "providers": {}
         }
-        
+
         for provider in TTSProvider:
             adapter = self._adapters.get(provider)
             if adapter:
@@ -631,7 +631,7 @@ class TTSAdapterRegistry:
                     ),
                 }
             summary["providers"][provider.value] = provider_info
-        
+
         return summary
 
 
@@ -640,7 +640,7 @@ class TTSAdapterFactory:
     Factory for creating and managing TTS adapters.
     Provides high-level interface for TTS operations.
     """
-    
+
     MODEL_PROVIDER_MAP: Dict[str, TTSProvider] = {
         # OpenAI models
         "tts-1": TTSProvider.OPENAI,
@@ -689,12 +689,12 @@ class TTSAdapterFactory:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the factory.
-        
+
         Args:
             config: Configuration for all adapters
         """
         self.registry = TTSAdapterRegistry(config)
-    
+
     def get_provider_for_model(self, model: Optional[str]) -> Optional[TTSProvider]:
         """
         Resolve which provider should serve a model name.
@@ -713,10 +713,10 @@ class TTSAdapterFactory:
         """
         Get adapter based on model name.
         Maps model names to providers.
-        
+
         Args:
             model: Model name (e.g., "tts-1", "kokoro", "higgs")
-            
+
         Returns:
             Appropriate adapter or None
         """
@@ -724,25 +724,25 @@ class TTSAdapterFactory:
         if not provider:
             logger.warning(f"Unknown model: {model}")
             return None
-        
+
         return await self.registry.get_adapter(provider)
-    
+
     async def get_best_adapter(self, **requirements) -> Optional[TTSAdapter]:
         """
         Get the best adapter for given requirements.
-        
+
         Args:
             **requirements: Requirements for the adapter
-            
+
         Returns:
             Best matching adapter or None
         """
         return await self.registry.find_adapter_for_requirements(**requirements)
-    
+
     async def close(self):
         """Close all adapters"""
         await self.registry.close_all()
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get factory status"""
         return self.registry.get_status_summary()
@@ -756,28 +756,28 @@ _factory_lock = asyncio.Lock()
 async def get_tts_factory(config: Optional[Dict[str, Any]] = None) -> TTSAdapterFactory:
     """
     Get or create the TTS adapter factory singleton.
-    
+
     Args:
         config: Configuration for the factory
-        
+
     Returns:
         TTSAdapterFactory instance
     """
     global _factory_instance
-    
+
     if _factory_instance is None:
         async with _factory_lock:
             if _factory_instance is None:
                 _factory_instance = TTSAdapterFactory(config)
                 logger.info("TTS Adapter Factory initialized")
-    
+
     return _factory_instance
 
 
 async def close_tts_factory():
     """Close the TTS factory and all adapters"""
     global _factory_instance
-    
+
     if _factory_instance:
         await _factory_instance.close()
         _factory_instance = None

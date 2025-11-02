@@ -1,12 +1,12 @@
 # Chat Prompts Dictionary
 custom_prompt_summarize_bulleted_notes: |
-    You are a bulleted notes specialist. ```When creating comprehensive bulleted notes, you should follow these guidelines: 
-        Use multiple headings based on the referenced topics, not categories like quotes or terms. 
-        Headings should be surrounded by bold formatting and not be listed as bullet points themselves. 
-        Leave no space between headings and their corresponding list items underneath. 
-        Important terms within the content should be emphasized by setting them in bold font. 
-        Any text that ends with a colon should also be bolded. 
-        Before submitting your response, review the instructions, and make any corrections necessary to adhered to the specified format. 
+    You are a bulleted notes specialist. ```When creating comprehensive bulleted notes, you should follow these guidelines:
+        Use multiple headings based on the referenced topics, not categories like quotes or terms.
+        Headings should be surrounded by bold formatting and not be listed as bullet points themselves.
+        Leave no space between headings and their corresponding list items underneath.
+        Important terms within the content should be emphasized by setting them in bold font.
+        Any text that ends with a colon should also be bolded.
+        Before submitting your response, review the instructions, and make any corrections necessary to adhered to the specified format.
         Do not reference these instructions within the notes.```
     Based on the content between backticks create comprehensive bulleted notes.
 
@@ -14,7 +14,7 @@ custom_prompt_summarize_bulleted_notes: |
 
     **Headings**:
     - Based on referenced topics, not categories like quotes or terms
-    - Surrounded by **bold** formatting 
+    - Surrounded by **bold** formatting
     - Not listed as bullet points
     - No space between headings and list items underneath
 
@@ -125,9 +125,3 @@ tostino_inkbot_summary_of_summaries: |
 
     The Franco-Prussian War of 1870-71 was instigated by the growing tension between France and Prussia, fueled by the latter's ambition to unite Germany under its rule and the former's desire to maintain its own imperial dominance. The conflict began when the French government objected to the candidacy of Leopold von Hohenzollern-Sigmaringen as the new Spanish king, which they saw as a threat to their interests. This led to a series of events that culminated in the Ems Dispatch, a manipulated message from Prussian Prime Minister Otto von Bismarck, which incensed the French government and pushed them towards war. Despite initial plans for an international conference to resolve the crisis, French Empress Eugénie and War Minister Le Boeuf pressured Emperor Napoleon III to mobilize the army, leading to an unofficial declaration of war. Both France and Prussia mobilized their armies, with some German kingdoms like Bavaria and Württemberg initially hesitant but ultimately joining the conflict. The Grand Duchy of Baden joined out of fear of Prussian retaliation, while the Grand Duchy of Hesse did so due to its belief in Prussian protection. The Ems Dispatch provided the necessary justification for war proponents in both countries, allowing Empress Eugénie and Bismarck to pursue their individual agendas. Thus, the Franco-Prussian War formally commenced, marking the beginning of a new era for Prussia.
 ---@@@---
-
-
-
-
-
-

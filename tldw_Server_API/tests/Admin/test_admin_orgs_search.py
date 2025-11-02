@@ -73,4 +73,3 @@ def test_admin_orgs_list_with_total_and_search(monkeypatch, tmp_path):
             assert target_id in ids
     finally:
         app.dependency_overrides.pop(require_admin, None)
-

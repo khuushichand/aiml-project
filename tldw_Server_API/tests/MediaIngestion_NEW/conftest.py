@@ -55,7 +55,7 @@ def pytest_configure(config):
 def test_env_vars():
     """Set up test environment variables."""
     original_env = os.environ.copy()
-    
+
     # Set test mode
     os.environ["TEST_MODE"] = "true"
     # Force single-user mode and deterministic API key so auth matches headers
@@ -63,9 +63,9 @@ def test_env_vars():
     os.environ["SINGLE_USER_API_KEY"] = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
     os.environ["TRANSCRIPTION_PROVIDER"] = "whisper"
     os.environ["MAX_FILE_SIZE"] = "100000000"  # 100MB for tests
-    
+
     yield
-    
+
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
@@ -96,7 +96,7 @@ def populated_media_db(media_database) -> MediaDatabase:
     """Create a MediaDatabase with test data."""
     # Add test media items
     from uuid import uuid4
-    
+
     test_items = [
         {
             "media_id": str(uuid4()),
@@ -123,7 +123,7 @@ def populated_media_db(media_database) -> MediaDatabase:
             "ingestion_date": datetime.now().isoformat()
         }
     ]
-    
+
     for item in test_items:
         # Map to new DB API (add_media_with_keywords)
         media_database.add_media_with_keywords(
@@ -136,7 +136,7 @@ def populated_media_db(media_database) -> MediaDatabase:
             overwrite=False,
             keywords=[],
         )
-    
+
     return media_database
 
 # =====================================================================
@@ -154,26 +154,26 @@ def test_media_dir() -> Generator[Path, None, None]:
 def test_audio_file(test_media_dir) -> Path:
     """Create a test audio file (WAV format)."""
     audio_path = test_media_dir / "test_audio.wav"
-    
+
     # Generate a simple sine wave audio
     sample_rate = 44100
     duration = 2  # seconds
     frequency = 440  # A4 note
-    
+
     # Generate samples
     t = np.linspace(0, duration, int(sample_rate * duration))
     samples = np.sin(2 * np.pi * frequency * t)
-    
+
     # Convert to 16-bit PCM
     samples = (samples * 32767).astype(np.int16)
-    
+
     # Write WAV file
     with wave.open(str(audio_path), 'wb') as wav_file:
         wav_file.setnchannels(1)  # Mono
         wav_file.setsampwidth(2)  # 16-bit
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(samples.tobytes())
-    
+
     return audio_path
 
 @pytest.fixture
@@ -182,7 +182,7 @@ def test_video_file(test_media_dir) -> Path:
     # For testing, we'll create a dummy file
     # Real video generation would require ffmpeg
     video_path = test_media_dir / "test_video.mp4"
-    
+
     # Create a dummy MP4 file with minimal header
     # This is just for file validation tests
     with open(video_path, 'wb') as f:
@@ -191,14 +191,14 @@ def test_video_file(test_media_dir) -> Path:
         f.write(b'isomiso2mp41\x00\x00\x00\x08free')
         # Add some dummy data
         f.write(b'\x00' * 1024)
-    
+
     return video_path
 
 @pytest.fixture
 def test_pdf_file(test_media_dir) -> Path:
     """Create a test PDF file."""
     pdf_path = test_media_dir / "test_document.pdf"
-    
+
     # Create a minimal valid PDF
     pdf_content = b"""%PDF-1.4
 1 0 obj
@@ -222,48 +222,48 @@ endstream
 endobj
 xref
 0 5
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000274 00000 n 
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000274 00000 n
 trailer
 << /Size 5 /Root 1 0 R >>
 startxref
 365
 %%EOF"""
-    
+
     with open(pdf_path, 'wb') as f:
         f.write(pdf_content)
-    
+
     return pdf_path
 
 @pytest.fixture
 def test_text_file(test_media_dir) -> Path:
     """Create a test text file."""
     text_path = test_media_dir / "test_document.txt"
-    
+
     with open(text_path, 'w', encoding='utf-8') as f:
         f.write("""This is a test document.
         It contains multiple lines.
         And some special characters: áéíóú ñ €.
-        
+
         It also has multiple paragraphs.
-        
+
         This is the final paragraph.""")
-    
+
     return text_path
 
 @pytest.fixture
 def malicious_file(test_media_dir) -> Path:
     """Create a file with potentially malicious content for security testing."""
     mal_path = test_media_dir / "malicious.txt"
-    
+
     with open(mal_path, 'w') as f:
         f.write("<?php system($_GET['cmd']); ?>")
         f.write("\n<script>alert('XSS')</script>")
         f.write("\n../../etc/passwd")
-    
+
     return mal_path
 
 # =====================================================================
@@ -274,7 +274,7 @@ def malicious_file(test_media_dir) -> Path:
 def mock_media_db():
     """Mock MediaDatabase for unit tests."""
     mock_db = MagicMock(spec=MediaDatabase)
-    
+
     mock_db.add_media.return_value = 1
     mock_db.get_media.return_value = {
         "id": 1,
@@ -283,14 +283,14 @@ def mock_media_db():
         "content": "Test content"
     }
     mock_db.search_media_items.return_value = []
-    
+
     return mock_db
 
 @pytest.fixture
 def mock_whisper_model():
     """Mock Whisper model for unit tests."""
     mock_model = MagicMock()
-    
+
     mock_model.transcribe.return_value = {
         "text": "This is a test transcription.",
         "segments": [
@@ -302,7 +302,7 @@ def mock_whisper_model():
         ],
         "language": "en"
     }
-    
+
     return mock_model
 
 @pytest.fixture
@@ -421,13 +421,13 @@ def invalid_validation_result():
 def sample_text_for_chunking():
     """Sample text for testing chunking strategies."""
     return """This is the first sentence. This is the second sentence.
-    
+
     This is a new paragraph with multiple sentences. It contains important information
     that should be preserved during chunking. The chunking algorithm needs to handle
     this properly.
-    
+
     Here's another paragraph. It's shorter. But still important.
-    
+
     Final paragraph with concluding remarks. The chunking should maintain context."""
 
 @pytest.fixture

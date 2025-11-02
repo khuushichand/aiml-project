@@ -154,7 +154,7 @@ def run_geval(
 
         Evaluation Criteria:
 
-        Consistency (1-5) - the factual alignment between the summary and the summarized source. A factually consistent summary contains only statements that are entailed by the source document. Annotators were also asked to penalize summaries that contained hallucinated facts. 
+        Consistency (1-5) - the factual alignment between the summary and the summarized source. A factually consistent summary contains only statements that are entailed by the source document. Annotators were also asked to penalize summaries that contained hallucinated facts.
 
         Evaluation Steps:
 
@@ -166,11 +166,11 @@ def run_geval(
         Example:
 
 
-        Source Document: 
+        Source Document:
 
         {{Document}}
 
-        Summary: 
+        Summary:
 
         {{Summary}}
 
@@ -285,14 +285,14 @@ def run_geval(
             "fluency": scores['fluency'],
             "relevance": scores['relevance']
         },
-        "average_score": (avg_scores['average_fluency'] + 
-                         avg_scores['average_consistency'] + 
-                         avg_scores['average_relevance'] + 
+        "average_score": (avg_scores['average_fluency'] +
+                         avg_scores['average_consistency'] +
+                         avg_scores['average_relevance'] +
                          avg_scores['average_coherence']) / 4,
-        "assessment": f"""The summary has been evaluated on four key metrics. 
-Average scores: Fluency: {avg_scores['average_fluency']:.2f}, 
-Consistency: {avg_scores['average_consistency']:.2f}, 
-Relevance: {avg_scores['average_relevance']:.2f}, 
+        "assessment": f"""The summary has been evaluated on four key metrics.
+Average scores: Fluency: {avg_scores['average_fluency']:.2f},
+Consistency: {avg_scores['average_consistency']:.2f},
+Relevance: {avg_scores['average_relevance']:.2f},
 Coherence: {avg_scores['average_coherence']:.2f}""",
         "explanations": explanations
     }
@@ -447,7 +447,7 @@ def validate_inputs(document: str, summary: str, api_name: str, api_key: str) ->
     }
     if api_name.lower() not in allowed_apis:
         raise ValueError(f"Unsupported API: {api_name}")
-    
+
     # Check if API key is required for the given API
     commercial_apis = {
         "openai",

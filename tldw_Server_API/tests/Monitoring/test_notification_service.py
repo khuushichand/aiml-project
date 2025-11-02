@@ -44,4 +44,3 @@ def test_notification_threshold_and_file_sink(tmp_path, monkeypatch):
     svc.notify(a2)
     text = out.read_text()
     assert "self_harm" in text and "critical" in text
-

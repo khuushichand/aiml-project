@@ -405,19 +405,19 @@ async def start_run(
 ) -> SandboxRunStatus:
     """
     Start a sandbox run (immediate scaffold or queued) using the provided request payload and return its status.
-    
+
     Builds a RunSpec from the request payload, initiates the run via the sandbox service (respecting an optional idempotency key), records metrics and audit events, and may publish synthetic start/end frames when test-synthetic frames are enabled.
-    
+
     Parameters:
         payload (SandboxRunCreateRequest): Run creation parameters (runtime, base_image, command, timeouts, resources, network policy, inline files, capture patterns, session association, and spec_version).
         idempotency_key (Optional[str]): Optional Idempotency-Key header used to deduplicate requests.
         request (Request): Incoming HTTP request (used for audit context and metadata).
         current_user (User): Authenticated user initiating the run.
         audit_service: Audit service dependency used to record API request/response events.
-    
+
     Returns:
         SandboxRunStatus: Current status of the created run, including id, spec_version, runtime, base_image, image_digest, policy_hash, phase, exit_code, start/finish timestamps, message, resource_usage, and estimated_start_time.
-    
+
     Raises:
         HTTPException: 409 with code "idempotency_conflict" when an idempotent request conflicts.
         HTTPException: 400 with code "invalid_spec_version" when the provided spec_version is unsupported.
@@ -621,11 +621,26 @@ async def start_run(
     log_stream_url: Optional[str] = None
     try:
         base_path = f"/api/v1/sandbox/runs/{status.id}/stream"
-        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)) and getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None):
+        # Read from settings first, then fall back to direct env to avoid stale cache issues in tests
+        signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
+        try:
+            if not signed_flag:
+                import os as _os
+                signed_flag = str(_os.getenv("SANDBOX_WS_SIGNED_URLS", "")).strip().lower() in {"1","true","yes","on","y"}
+        except Exception:
+            pass
+        secret_val = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
+        if not secret_val:
+            try:
+                import os as _os
+                secret_val = _os.getenv("SANDBOX_WS_SIGNING_SECRET")
+            except Exception:
+                secret_val = None
+        if signed_flag and secret_val:
             ttl = int(getattr(app_settings, "SANDBOX_WS_SIGNED_URL_TTL_SEC", 60))
             exp = int(time.time()) + max(1, ttl)
             msg = f"{status.id}:{exp}".encode("utf-8")
-            secret = str(getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", "")).encode("utf-8")
+            secret = str(secret_val).encode("utf-8")
             token = hmac.new(secret, msg, hashlib.sha256).hexdigest()
             log_stream_url = f"{base_path}?token={token}&exp={exp}"
         else:
@@ -799,17 +814,17 @@ async def cancel_run(
 async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     """
     Stream live sandbox run events and frames to a connected WebSocket client.
-    
+
     Subscribes to the run's event hub and forwards frames (events, logs, heartbeats) to the WebSocket. Periodically emits heartbeats and increments related metrics. When the configured synthetic-frames flag is enabled, publishes minimal synthetic start/end events to allow early-connected clients to observe non-heartbeat frames. Closes the connection after receiving an `end` event unless synthetic frames are enabled, and ensures heartbeat tasks are cancelled and the socket is closed on disconnect or error.
-    
+
     Parameters:
         websocket (WebSocket): The active WebSocket connection to send frames to.
         run_id (str): Identifier of the sandbox run whose events should be streamed.
     """
     # Enforce signed WS URL validation when enabled
     try:
-        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)):
-            secret = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
+        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)) or str(os.getenv("SANDBOX_WS_SIGNED_URLS", "")).strip().lower() in {"1","true","yes","on","y"}:
+            secret = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None) or os.getenv("SANDBOX_WS_SIGNING_SECRET")
             if not secret:
                 # Signing is enabled but no secret configured: refuse connection
                 try:

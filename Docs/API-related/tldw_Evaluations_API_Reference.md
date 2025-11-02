@@ -4,7 +4,7 @@
 
 The tldw_server Evaluations API provides comprehensive evaluation capabilities for assessing the quality of AI-generated content, including summaries, RAG responses, and general text generation. The API supports multiple evaluation frameworks and metrics, with built-in rate limiting, health monitoring, and metrics collection.
 
-**Base URL**: `/api/v1/evaluations`  
+**Base URL**: `/api/v1/evaluations`
 **Authentication**: API key (single-user mode uses default key)
 
 ## Production Features

@@ -14,13 +14,13 @@ logger = logger
 def patch_numpy_sctypes():
     """
     Monkey patch for NumPy 2.0 compatibility.
-    
+
     np.sctypes was removed in NumPy 2.0. This patch adds it back for libraries
     that haven't been updated yet (like Nemo ASR).
     """
     if not hasattr(np, 'sctypes'):
         logger.info("Applying NumPy 2.0 compatibility patch for np.sctypes")
-        
+
         # Recreate the sctypes dictionary that was removed in NumPy 2.0
         np.sctypes = {
             'int': [np.int8, np.int16, np.int32, np.int64],
@@ -29,20 +29,20 @@ def patch_numpy_sctypes():
             'complex': [np.complex64, np.complex128],
             'others': [bool, object, bytes, str, np.void]
         }
-        
+
         logger.info("NumPy 2.0 compatibility patch applied successfully")
 
 def ensure_numpy_compatibility():
     """
     Ensure NumPy compatibility for all required features.
-    
+
     This function should be called before importing libraries that may have
     NumPy 2.0 compatibility issues.
     """
     patch_numpy_sctypes()
-    
+
     # Add any other compatibility patches here as needed
-    
+
     logger.debug("NumPy compatibility ensured")
 
 # Apply patches on module import

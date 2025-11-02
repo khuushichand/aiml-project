@@ -98,4 +98,3 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
             assert status_val == "completed"
     finally:
         _app.dependency_overrides.clear()
-

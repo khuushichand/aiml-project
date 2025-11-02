@@ -54,4 +54,3 @@ def normalize_model_and_variant(
 
 
 __all__ = ["normalize_model_and_variant", "ALLOWED_PARAKEET_VARIANTS"]
-

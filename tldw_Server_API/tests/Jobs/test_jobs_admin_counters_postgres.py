@@ -116,4 +116,3 @@ def test_pg_batch_requeue_quarantined_adjusts_counters(monkeypatch):
             assert int(row[0] or 0) >= 1 and int(row[1] or 0) == 0
     finally:
         conn.close()
-

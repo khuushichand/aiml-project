@@ -126,4 +126,3 @@ def test_ocr_pdf_with_dots_and_vllm_text_accuracy():
         # Cleanup overrides
         app.dependency_overrides.pop(eval_mod.verify_api_key, None)
         app.dependency_overrides.pop(auth_deps.get_rate_limiter_dep, None)
-

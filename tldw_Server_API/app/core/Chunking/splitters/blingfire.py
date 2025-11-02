@@ -38,4 +38,3 @@ class BlingFireSentenceSplitter(SentenceSplitter):
             spans.append((start, end))
             cursor = end
         return spans
-

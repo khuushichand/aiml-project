@@ -72,4 +72,3 @@ def test_completion_precheck_uses_count_not_bulk_get(test_client, auth_headers, 
     # Verify a count was used at least once and that no huge-limit fetch was used (10000)
     assert calls["count_calls"] >= 1
     assert 10000 not in calls["get_limits"], "Bulk get with 10000 limit should not be used for pre-check"
-

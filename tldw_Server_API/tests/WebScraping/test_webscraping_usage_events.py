@@ -57,4 +57,3 @@ def test_webscrape_process_usage_event(client_with_ws_overrides):
     r = client.post("/api/v1/media/process-web-scraping", json=payload)
     assert r.status_code == 200, r.text
     assert any(e[0] == "webscrape.process" for e in dummy.events)
-

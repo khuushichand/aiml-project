@@ -34,11 +34,11 @@ This script will:
 
 ## Benefits of Same-Origin Serving
 
-✅ **No CORS Issues** - All requests are same-origin  
-✅ **Better Security** - No need to allow cross-origin requests  
-✅ **Simpler Configuration** - No CORS headers needed  
-✅ **Single Port** - Everything runs on port 8000  
-✅ **Production Ready** - This is how it should be deployed  
+✅ **No CORS Issues** - All requests are same-origin
+✅ **Better Security** - No need to allow cross-origin requests
+✅ **Simpler Configuration** - No CORS headers needed
+✅ **Single Port** - Everything runs on port 8000
+✅ **Production Ready** - This is how it should be deployed
 
 ## API Key Configuration
 

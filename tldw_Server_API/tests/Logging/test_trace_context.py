@@ -97,4 +97,3 @@ def test_reembed_schedule_propagates_request_id(monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     assert captured.get("request_id") == "req-456"
-

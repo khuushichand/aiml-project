@@ -18,7 +18,7 @@ class ConnectionPool:
     Manages connection pools for different API providers.
     Provides reusable connections with proper lifecycle management.
     """
-    
+
     def __init__(
         self,
         provider: str,
@@ -30,7 +30,7 @@ class ConnectionPool:
     ):
         """
         Initialize connection pool for a provider.
-        
+
         Args:
             provider: Name of the provider (e.g., 'openai', 'cohere')
             max_connections: Maximum number of connections in pool
@@ -45,7 +45,7 @@ class ConnectionPool:
         self.keepalive_timeout = keepalive_timeout
         self.timeout_seconds = timeout_seconds
         self.retry_attempts = retry_attempts
-        
+
         self.session: Optional[ClientSession] = None
         self._lock = threading.RLock()
         self._usage_stats = {
@@ -54,13 +54,13 @@ class ConnectionPool:
             'total_time': 0,
             'active_connections': 0
         }
-        
+
         logger.info(
             f"ConnectionPool for {provider} initialized: "
             f"max_connections={max_connections}, "
             f"keepalive_timeout={keepalive_timeout}s"
         )
-    
+
     async def _create_session(self) -> ClientSession:
         """Create a new aiohttp session with connection pooling."""
         connector = TCPConnector(
@@ -71,45 +71,45 @@ class ConnectionPool:
             keepalive_timeout=self.keepalive_timeout,
             force_close=False
         )
-        
+
         timeout = ClientTimeout(
             total=self.timeout_seconds,
             connect=5,
             sock_connect=5,
             sock_read=self.timeout_seconds
         )
-        
+
         return ClientSession(
             connector=connector,
             timeout=timeout,
             trust_env=True  # Use system proxy settings if available
         )
-    
+
     async def get_session(self) -> ClientSession:
         """Get or create the session."""
         if self.session is None or self.session.closed:
             self.session = await self._create_session()
         return self.session
-    
+
     @asynccontextmanager
     async def acquire_connection(self):
         """
         Context manager to acquire a connection from the pool.
-        
+
         Yields:
             ClientSession: An aiohttp session for making requests
         """
         session = await self.get_session()
-        
+
         with self._lock:
             self._usage_stats['active_connections'] += 1
-        
+
         try:
             yield session
         finally:
             with self._lock:
                 self._usage_stats['active_connections'] -= 1
-    
+
     @circuit_breaker(name="api_request", failure_threshold=5, recovery_timeout=60)
     async def request(
         self,
@@ -122,7 +122,7 @@ class ConnectionPool:
     ) -> Dict[str, Any]:
         """
         Make an HTTP request using the connection pool.
-        
+
         Args:
             method: HTTP method (GET, POST, etc.)
             url: Target URL
@@ -130,16 +130,16 @@ class ConnectionPool:
             json_data: JSON payload
             data: Form data or raw data
             params: Query parameters
-            
+
         Returns:
             Response data as dictionary
-            
+
         Raises:
             aiohttp.ClientError: On network errors
             ValueError: On invalid responses
         """
         start_time = time.time()
-        
+
         async with self.acquire_connection() as session:
             try:
                 async with session.request(
@@ -155,7 +155,7 @@ class ConnectionPool:
                     with self._lock:
                         self._usage_stats['requests'] += 1
                         self._usage_stats['total_time'] += elapsed
-                    
+
                     # Check response status
                     if response.status >= 400:
                         error_text = await response.text()
@@ -163,10 +163,10 @@ class ConnectionPool:
                             f"{self.provider} API error: "
                             f"status={response.status}, body={error_text[:500]}"
                         )
-                        
+
                         with self._lock:
                             self._usage_stats['failures'] += 1
-                        
+
                         raise aiohttp.ClientResponseError(
                             request_info=response.request_info,
                             history=response.history,
@@ -174,14 +174,14 @@ class ConnectionPool:
                             message=error_text,
                             headers=response.headers
                         )
-                    
+
                     # Parse response
                     if 'application/json' in response.headers.get('content-type', ''):
                         return await response.json()
                     else:
                         text = await response.text()
                         return {'text': text}
-                        
+
             except asyncio.TimeoutError as e:
                 with self._lock:
                     self._usage_stats['failures'] += 1
@@ -197,16 +197,16 @@ class ConnectionPool:
                     self._usage_stats['failures'] += 1
                 logger.error(f"{self.provider} unexpected error: {e}")
                 raise
-    
+
     async def close(self):
         """Close the connection pool and cleanup resources."""
         if self.session and not self.session.closed:
             await self.session.close()
             # Allow time for graceful shutdown
             await asyncio.sleep(0.25)
-        
+
         logger.info(f"ConnectionPool for {self.provider} closed")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """Get connection pool statistics."""
         with self._lock:
@@ -214,13 +214,13 @@ class ConnectionPool:
                 self._usage_stats['total_time'] / self._usage_stats['requests']
                 if self._usage_stats['requests'] > 0 else 0
             )
-            
+
             success_rate = (
-                (self._usage_stats['requests'] - self._usage_stats['failures']) 
+                (self._usage_stats['requests'] - self._usage_stats['failures'])
                 / self._usage_stats['requests'] * 100
                 if self._usage_stats['requests'] > 0 else 100
             )
-            
+
             return {
                 'provider': self.provider,
                 'total_requests': self._usage_stats['requests'],
@@ -230,7 +230,7 @@ class ConnectionPool:
                 'active_connections': self._usage_stats['active_connections'],
                 'max_connections': self.max_connections
             }
-    
+
     def reset_stats(self):
         """Reset usage statistics."""
         with self._lock:
@@ -246,11 +246,11 @@ class ConnectionPoolManager:
     """
     Manages multiple connection pools for different providers.
     """
-    
+
     def __init__(self):
         self.pools: Dict[str, ConnectionPool] = {}
         self._lock = threading.RLock()
-    
+
     def get_pool(
         self,
         provider: str,
@@ -259,12 +259,12 @@ class ConnectionPoolManager:
     ) -> ConnectionPool:
         """
         Get or create a connection pool for a provider.
-        
+
         Args:
             provider: Provider name
             max_connections: Max connections in pool
             **kwargs: Additional pool configuration
-            
+
         Returns:
             ConnectionPool instance
         """
@@ -276,21 +276,21 @@ class ConnectionPoolManager:
                     **kwargs
                 )
             return self.pools[provider]
-    
+
     async def close_all(self):
         """Close all connection pools."""
         close_tasks = []
-        
+
         with self._lock:
             for pool in self.pools.values():
                 close_tasks.append(pool.close())
-        
+
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
-        
+
         self.pools.clear()
         logger.info("All connection pools closed")
-    
+
     def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
         """Get statistics for all connection pools."""
         with self._lock:
@@ -319,12 +319,12 @@ async def get_connection_pool(
 ) -> ConnectionPool:
     """
     Get a connection pool for the specified provider.
-    
+
     Args:
         provider: Provider name
         max_connections: Maximum connections
         **kwargs: Additional configuration
-        
+
     Returns:
         ConnectionPool instance
     """

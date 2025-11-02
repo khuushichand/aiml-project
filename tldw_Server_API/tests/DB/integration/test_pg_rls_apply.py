@@ -24,4 +24,3 @@ def test_apply_rls_policies_smoke():
     applied = ensure_prompt_studio_rls(backend)
     # idempotent: may return True even if policies exist; should not raise
     assert applied in (True, False)
-

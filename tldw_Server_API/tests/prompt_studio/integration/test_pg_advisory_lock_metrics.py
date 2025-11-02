@@ -36,4 +36,3 @@ def test_pg_advisory_lock_metrics_increment(prompt_studio_dual_backend_db, monke
     assert "prompt_studio.pg_advisory.lock_attempts_total" in names, "lock attempts not recorded"
     assert "prompt_studio.pg_advisory.locks_acquired_total" in names, "locks acquired not recorded"
     assert "prompt_studio.pg_advisory.unlocks_total" in names, "unlocks not recorded"
-

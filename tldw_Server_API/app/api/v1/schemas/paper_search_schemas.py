@@ -105,7 +105,7 @@ class BioRxivPubsSearchRequestForm:
 
 
 # End of paper_search_schemas.py
- 
+
 class PubMedPaper(BaseModel):
     pmid: str
     title: str

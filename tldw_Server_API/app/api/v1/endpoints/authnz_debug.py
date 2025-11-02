@@ -18,15 +18,15 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
     # Prefer earlier resolution from auth middlewares/deps
     """
     Resolve an API key to its `api_key_id` and associated `user_id` for the incoming request.
-    
+
     Prefers values previously set on `request.state` by auth middleware. Otherwise
     extracts an API key from the provided `x_api_key` parameter or a Bearer token
     in the Authorization header and resolves it via `resolve_api_key_by_hash`.
-    
+
     Parameters:
         request (Request): The incoming FastAPI request; may contain pre-resolved `state.api_key_id` and `state.user_id`.
         x_api_key (Optional[str]): An explicit API key (typically from the X-API-KEY header) to resolve; if omitted, the Authorization header is inspected.
-    
+
     Returns:
         dict: A mapping with keys:
             - "api_key_id": int or None - the resolved API key ID as an integer when found, otherwise None.
@@ -57,9 +57,9 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
 async def debug_api_key_id(request: Request, X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY")):
     """
     Resolve the provided API key and return its associated api_key_id and user_id.
-    
+
     This endpoint is for debugging and does not enforce authentication.
-    
+
     Returns:
         result (dict): A dictionary with `"status": "ok"` plus `api_key_id` (int or None) and `user_id` (user identifier or None).
     """
@@ -71,9 +71,9 @@ async def debug_api_key_id(request: Request, X_API_KEY: Optional[str] = Header(N
 async def debug_budget_summary(request: Request, X_API_KEY: Optional[str] = Header(None, alias="X-API-KEY")):
     """
     Provide limits, daily and monthly usage summaries, and an over-budget evaluation for the resolved API key.
-    
+
     If no API key is resolved from the request or headers, returns a response with `"api_key_id": None` and a `"message"` explaining no key was resolved.
-    
+
     Returns:
         dict: A response object containing:
             - status (str): Always `"ok"`.

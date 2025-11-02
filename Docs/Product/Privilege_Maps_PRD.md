@@ -259,7 +259,7 @@
 ### Aggregation & Drill-Down API Contract (Draft)
 - **Summary Endpoints** (`GET /api/v1/privileges/org`, `GET /api/v1/privileges/teams/{team_id}`):
   - Query params:
-    - `group_by`: 
+    - `group_by`:
       - `GET /api/v1/privileges/org` supports `role`, `team`, or `resource` (default `role`).
       - `GET /api/v1/privileges/teams/{team_id}` supports `member` or `resource` (default `member`); setting `team` is invalid because the request is already scoped to a single team.
     - `include_trends` (bool, default `false`): when `true`, the response adds a `trends` array describing deltas over the requested window.

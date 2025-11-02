@@ -30,4 +30,3 @@ Ingestion
 
 Security
 - Exemplars are redacted and truncated, but still contain user queries and snippets. Keep the JSONL file restricted and rotate/purge regularly.
-

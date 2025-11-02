@@ -115,7 +115,7 @@ class StreamingResponseHandler:
     """
     Handles streaming responses with proper error handling, cleanup, and timeouts.
     """
-    
+
     def __init__(
         self,
         conversation_id: str,
@@ -127,7 +127,7 @@ class StreamingResponseHandler:
     ):
         """
         Initialize the streaming response handler.
-        
+
         Args:
             conversation_id: ID of the conversation
             model_name: Name of the model being used
@@ -153,15 +153,15 @@ class StreamingResponseHandler:
         self.tool_call_accumulator: Dict[int, Dict[str, Any]] = {}
         self.tool_call_order: List[int] = []
         self.function_call_accumulator: Optional[Dict[str, Any]] = None
-        
+
     def update_activity(self):
         """Update the last activity timestamp."""
         self.last_activity = time.time()
-    
+
     def is_timed_out(self) -> bool:
         """Check if the stream has timed out due to inactivity."""
         return (time.time() - self.last_activity) > self.idle_timeout
-    
+
     def cancel(self):
         """Mark the stream as cancelled."""
         self.is_cancelled = True
@@ -254,7 +254,7 @@ class StreamingResponseHandler:
     async def heartbeat_generator(self) -> AsyncIterator[str]:
         """
         Generate heartbeat messages to keep the connection alive.
-        
+
         Yields:
             SSE heartbeat messages
         """
@@ -266,7 +266,7 @@ class StreamingResponseHandler:
                 yield f"data: {json.dumps({'error': {'message': 'Stream timeout - no activity'}})}\n\n"
                 break
             yield f": heartbeat {datetime.now(timezone.utc).isoformat()}\n\n"
-    
+
     async def safe_stream_generator(
         self,
         stream: Union[Iterator, AsyncIterator],
@@ -492,7 +492,7 @@ class StreamingResponseHandler:
             logger.error(f"Unexpected error in stream for {self.conversation_id}: {e}", exc_info=True)
             self.error_occurred = True
             yield f"data: {json.dumps({'error': {'message': f'Stream error: {str(e)}'}})}\n\n"
-            
+
         finally:
             # Cleanup and final message
             try:
@@ -527,7 +527,7 @@ class StreamingResponseHandler:
                     # Emit terminal DONE sentinel and mark it as sent to avoid duplicates
                     yield "data: [DONE]\n\n"
                     self.done_sent = True
-                
+
                 # Save the full response/tool calls if callback provided (only when not cancelled)
                 has_output = self.has_accumulated_output()
                 if (
@@ -561,7 +561,7 @@ class StreamingResponseHandler:
                         )
                     except Exception as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
-                
+
                 # Send stream end event (only when not cancelled)
                 if not self.is_cancelled:
                     yield f"event: stream_end\ndata: {json.dumps({'conversation_id': self.conversation_id, 'success': not self.error_occurred, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
@@ -569,7 +569,7 @@ class StreamingResponseHandler:
                     if not self.done_sent:
                         yield "data: [DONE]\n\n"
                         self.done_sent = True
-                
+
             except Exception as e:
                 logger.error(f"Error in stream cleanup for {self.conversation_id}: {e}")
 
@@ -585,7 +585,7 @@ async def create_streaming_response_with_timeout(
 ) -> AsyncIterator[str]:
     """
     Create a streaming response with timeout and error handling.
-    
+
     Args:
         stream: The stream to process
         conversation_id: ID of the conversation
@@ -593,7 +593,7 @@ async def create_streaming_response_with_timeout(
         save_callback: Optional callback to save the response
         idle_timeout: Timeout for idle connections
         heartbeat_interval: Interval for heartbeat messages
-        
+
     Yields:
         SSE formatted messages
     """
@@ -604,7 +604,7 @@ async def create_streaming_response_with_timeout(
         heartbeat_interval=heartbeat_interval,
         text_transform=text_transform,
     )
-    
+
     # Create tasks for streaming and heartbeat using persistent generator instances
     async def stream_with_heartbeat():
         stream_gen = handler.safe_stream_generator(stream, save_callback)
@@ -688,7 +688,7 @@ async def create_streaming_response_with_timeout(
                 await heartbeat_gen.aclose()
             except Exception:
                 pass
-    
+
     async for message in stream_with_heartbeat():
         yield message
 

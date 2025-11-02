@@ -127,4 +127,3 @@ def test_evaluations_migration_cli_row_counts(tmp_path):
             backend.get_pool().close_all()
         except Exception:
             pass
-

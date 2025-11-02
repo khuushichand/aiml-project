@@ -53,4 +53,3 @@ def test_batch_renew_complete_fail_sqlite(monkeypatch, tmp_path):
     # Idempotency: re-complete with same token should affect 0
     again = jm.batch_complete_jobs(complete_items)
     assert again == 0
-

@@ -37,4 +37,3 @@ This project supports both SQLite and PostgreSQL for content storage through a s
 
 - SQLite: use the built-in backup APIs (see `DB_Backups.create_backup`) and sidecar WAL/SHM copying.
 - PostgreSQL: use `pg_dump` via the helper in `DB_Backups.create_postgres_backup(...)`. Requires `pg_dump` to be installed and on PATH. The helper sources connection details from the configured backend.
-

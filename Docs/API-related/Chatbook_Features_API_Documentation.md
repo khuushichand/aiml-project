@@ -852,7 +852,7 @@ class ChatbookAPI:
     def __init__(self, base_url, token):
         self.base_url = base_url
         self.headers = {"Authorization": f"Bearer {token}"}
-    
+
     def create_dictionary(self, name, description):
         response = requests.post(
             f"{self.base_url}/api/v1/chat/dictionaries",
@@ -860,7 +860,7 @@ class ChatbookAPI:
             headers=self.headers
         )
         return response.json()
-    
+
     def process_text(self, text, token_budget=1000, dictionary_id=None):
         response = requests.post(
             f"{self.base_url}/api/v1/chat/dictionaries/process",
@@ -880,7 +880,7 @@ class ChatbookAPI {
       'Content-Type': 'application/json'
     };
   }
-  
+
   async exportChatbook(req) {
     const response = await fetch(`${this.baseUrl}/api/v1/chatbooks/export`, {
       method: 'POST',
@@ -889,7 +889,7 @@ class ChatbookAPI {
     });
     return response.json();
   }
-  
+
   async getExportStatus(jobId) {
     const response = await fetch(
       `${this.baseUrl}/api/v1/chatbooks/export/jobs/${jobId}`,

@@ -1,7 +1,7 @@
 # PRD: Code Interpreter Sandbox & LSP
 
-Owner: tldw_server Core Team  
-Status: v0.2  
+Owner: tldw_server Core Team
+Status: v0.2
 Last updated: 2025-10-28
 
 ## Table of Contents
@@ -428,7 +428,7 @@ Timeout Outcomes (quick reference)
 |---|---|---|
 | Startup exceeded `startup_timeout_sec` | `timed_out` | `startup_timeout` |
   | Execution exceeded `timeout_sec` | `timed_out` | `execution_timeout` |
-  
+
   Cancellation semantics
   - On user cancel: the server sends SIGTERM, waits `SANDBOX_CANCEL_GRACE_SECONDS`, then SIGKILL if still running. Final phase is `killed` with `message=canceled_by_user`. Exactly one WS `end` event is emitted per run.
 
@@ -745,7 +745,7 @@ Range: bytes=0-1023
   HTTP/1.1 416 Range Not Satisfiable
   Content-Range: bytes */12345
   Content-Type: application/problem+json
-  
+
   { "error": { "code": "invalid_request", "message": "Multi-range not supported", "details": { "ranges": 2 } } }
   ```
 
@@ -1393,7 +1393,7 @@ WebSocket logs
  - Reconnect: exponential backoff with jitter (1s → 2s → 4s … cap 30s). If run is already completed, skip reconnect and poll `GET /runs/{id}` for final status.
  - UI truncation: IDEs may truncate displayed logs (e.g., first 100KB per stream) and show a “View full logs in Web UI” link to `/webui/sandbox/runs/{id}`. Server enforces per-run log caps independently.
 
- 
+
 
 Handling 429 with Retry-After
 - When queue is full, server returns `429 Too Many Requests` with `Retry-After` (seconds or HTTP-date). Wait at least that interval before retrying.
@@ -1461,7 +1461,7 @@ Auth & RBAC
 
 Endpoints (read-only)
 - `GET /api/v1/sandbox/admin/runs`
-  - Query params: 
+  - Query params:
     - Paging/sort: `limit` (default 50, max 200), `offset` (default 0), `sort` (started_at|finished_at desc/asc)
     - Filters: `user_id?`, `phase?`, `runtime?`, `q?` (search base_image/message), `image_digest?` (exact digest, e.g., `sha256:...`), `base_image?` (e.g., `python:3.11-slim`),
       `started_at_from?` (ISO-8601), `started_at_to?` (ISO-8601), `finished_at_from?` (ISO-8601), `finished_at_to?` (ISO-8601).

@@ -89,7 +89,7 @@ for local development.
 
         $ flake8 App_Function_Libraries/<your_file>.py
         $ pytest Tests/test_<your_test>.py
-        $ tox (WIP) 
+        $ tox (WIP)
 
 1.  Commit your changes and push your branch to GitHub:
 

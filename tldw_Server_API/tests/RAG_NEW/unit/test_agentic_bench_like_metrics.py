@@ -52,4 +52,3 @@ async def test_agentic_tool_steps_and_bytes_logged(monkeypatch):
     # Each expand_window entry should carry a bytes field
     bytes_total = sum(int(t.get("bytes", 0)) for t in trace if t.get("tool") == "expand_window")
     assert bytes_total >= 0
-

@@ -38,4 +38,3 @@ receivers:
           description: '{{ .CommonAnnotations.description }}'
 
 templates: []
-

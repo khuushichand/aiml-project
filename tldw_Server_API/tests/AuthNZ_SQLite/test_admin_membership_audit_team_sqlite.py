@@ -78,4 +78,3 @@ async def test_team_membership_audit_events_sqlite(tmp_path, real_audit_service)
         assert cnt >= 1
     finally:
         con.close()
-

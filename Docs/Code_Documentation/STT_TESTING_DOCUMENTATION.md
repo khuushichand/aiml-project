@@ -13,7 +13,7 @@ The STT module has been enhanced with comprehensive unit, integration, and perfo
 - **Key Tests**:
   - Model loading and caching
   - Simple transcription
-  - Chunked transcription 
+  - Chunked transcription
   - Audio preprocessing (resampling, stereo to mono)
   - Error handling
   - Progress callbacks
@@ -66,7 +66,7 @@ The STT module has been enhanced with comprehensive unit, integration, and perfo
 - Integration with main transcription library
 - Cross-module functionality
 
-#### test_buffered_transcription.py - Integration Section  
+#### test_buffered_transcription.py - Integration Section
 - Integration with MLX backend
 - Integration with ONNX backend
 - Different merge algorithm comparisons

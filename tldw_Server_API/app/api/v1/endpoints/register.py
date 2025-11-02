@@ -59,18 +59,18 @@ router = APIRouter(
 
 class UserCreateRequest(BaseModel):
     """Request model for user registration with validation"""
-    
+
     username: str
     email: EmailStr
     password: str
     confirm_password: str
     registration_code: Optional[str] = None
-    
+
     model_config = ConfigDict(
         str_strip_whitespace=True,
         str_min_length=1
     )
-    
+
     @field_validator('username')
     @classmethod
     def validate_username(cls, v: str) -> str:
@@ -79,40 +79,40 @@ class UserCreateRequest(BaseModel):
             raise ValueError('Username must be at least 3 characters long')
         if len(v) > 50:
             raise ValueError('Username must not exceed 50 characters')
-        
+
         # Allow only alphanumeric, underscore, and dash
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
             raise ValueError('Username can only contain letters, numbers, underscore and dash')
-        
+
         # Prevent potentially problematic usernames
         reserved_names = ['admin', 'root', 'system', 'api', 'null', 'undefined']
         if v.lower() in reserved_names:
             raise ValueError('This username is reserved')
-        
+
         return v
-    
+
     @field_validator('email')
     @classmethod
     def validate_email(cls, v: str) -> str:
         """Additional email validation"""
         if len(v) > 255:
             raise ValueError('Email must not exceed 255 characters')
-        
+
         # Basic check for obviously invalid emails
         if v.count('@') != 1:
             raise ValueError('Invalid email format')
-        
+
         local, domain = v.split('@')
         if not local or not domain:
             raise ValueError('Invalid email format')
-        
+
         # Prevent some common test emails in production
         test_domains = ['example.com', 'test.com', 'localhost']
         if domain.lower() in test_domains:
             logger.warning(f"Registration attempt with test email domain: {domain}")
-        
+
         return v.lower()  # Normalize to lowercase
-    
+
     @field_validator('password')
     @classmethod
     def validate_password_format(cls, v: str) -> str:
@@ -121,13 +121,13 @@ class UserCreateRequest(BaseModel):
             raise ValueError('Password must be at least 10 characters long')
         if len(v) > 128:
             raise ValueError('Password must not exceed 128 characters')
-        
+
         # Check for NULL bytes or other control characters
         if '\x00' in v or any(ord(c) < 32 for c in v):
             raise ValueError('Password contains invalid characters')
-        
+
         return v
-    
+
     @field_validator('confirm_password')
     @classmethod
     def passwords_match(cls, v: str, info) -> str:
@@ -159,21 +159,21 @@ async def register_user(
 ) -> RegistrationResponse:
     """
     Register a new user account
-    
+
     This endpoint creates a new user account with the provided credentials.
     Registration may require a valid registration code depending on system configuration.
-    
+
     Args:
         user_data: User registration information
-        
+
     Returns:
         RegistrationResponse with success message
-        
+
     Raises:
         HTTPException: Various status codes for different error conditions
     """
     settings = get_settings()
-    
+
     # Check if registration is enabled
     if not settings.ENABLE_REGISTRATION:
         logger.warning(f"Registration attempt while disabled from IP: {request.client.host}")
@@ -181,53 +181,53 @@ async def register_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User registration is currently disabled"
         )
-    
+
     # Initialize registration service
     await registration_service.initialize()
-    
+
     # Log registration attempt
     client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Registration attempt for username: {user_data.username} from IP: {client_ip}")
-    
+
     try:
         # Validate password strength with username context
         password_service.validate_password_strength(
             user_data.password,
             username=user_data.username
         )
-        
+
         # Check for duplicate username
         existing_user = await db.fetchone(
             "SELECT id FROM users WHERE username = ? OR email = ?",
             user_data.username, user_data.email
         )
-        
+
         if existing_user:
             # Don't reveal which field is duplicate (security)
             logger.warning(f"Duplicate registration attempt for: {user_data.username}")
             raise DuplicateUserError("username or email")
-        
+
         # Validate registration code if required
         if settings.REQUIRE_REGISTRATION_CODE:
             if not user_data.registration_code:
                 raise InvalidRegistrationCodeError("Registration code is required")
-            
+
             # Verify registration code
             code_valid = await registration_service.validate_registration_code(
                 user_data.registration_code,
                 db_connection=db
             )
-            
+
             if not code_valid:
                 logger.warning(f"Invalid registration code used: {user_data.registration_code[:8]}...")
                 raise InvalidRegistrationCodeError()
-        
+
         # Hash the password
         password_hash = password_service.hash_password(user_data.password)
-        
+
         # Generate user UUID
         user_uuid = str(uuid4())
-        
+
         # Create user in database
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -252,14 +252,14 @@ async def register_user(
                  settings.DEFAULT_USER_ROLE, 1, 0)
             )
             user_id = cursor.lastrowid
-        
+
         # Create user directories
         try:
             await registration_service.create_user_resources(user_id, db)
         except Exception as e:
             logger.error(f"Failed to create user resources for {user_id}: {e}")
             # Continue - user is created but might have limited functionality
-        
+
         # Mark registration code as used if applicable
         if settings.REQUIRE_REGISTRATION_CODE and user_data.registration_code:
             await registration_service.mark_code_used(
@@ -267,7 +267,7 @@ async def register_user(
                 user_id,
                 db
             )
-        
+
         # Audit log
         context = AuditContext(
             user_id=str(user_id),
@@ -281,7 +281,7 @@ async def register_user(
                 "email": user_data.email
             }
         )
-        
+
         logger.info(f"Successfully registered user: {user_data.username} (ID: {user_id})")
 
         # If using SQLite backend, generate an API key so the user can authenticate via X-API-KEY
@@ -309,7 +309,7 @@ async def register_user(
             requires_verification=bool(settings.REQUIRE_REGISTRATION_CODE),
             api_key=api_key_value
         )
-        
+
     except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError) as e:
         # These are expected errors - log at warning level
         logger.warning(f"Registration failed for {user_data.username}: {e}")
@@ -348,27 +348,27 @@ async def validate_registration_code(
 ) -> MessageResponse:
     """
     Validate a registration code without consuming it
-    
+
     Args:
         code: Registration code to validate
-        
+
     Returns:
         MessageResponse indicating if code is valid
     """
     settings = get_settings()
-    
+
     if not settings.ENABLE_REGISTRATION:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration is currently disabled"
         )
-    
+
     if not settings.REQUIRE_REGISTRATION_CODE:
         return MessageResponse(
             success=True,
             message="Registration codes are not required"
         )
-    
+
     try:
         await registration_service.initialize()
         is_valid = await registration_service.validate_registration_code(
@@ -376,7 +376,7 @@ async def validate_registration_code(
             db_connection=db,
             check_only=True  # Don't consume the code
         )
-        
+
         if is_valid:
             return MessageResponse(
                 success=True,
@@ -387,7 +387,7 @@ async def validate_registration_code(
                 success=False,
                 message="Registration code is invalid or expired"
             )
-            
+
     except Exception as e:
         logger.error(f"Error validating registration code: {e}")
         raise HTTPException(
@@ -408,11 +408,11 @@ async def check_availability(
 ) -> MessageResponse:
     """
     Check if a username or email is available for registration
-    
+
     Args:
         username: Username to check
         email: Email to check
-        
+
     Returns:
         MessageResponse indicating availability
     """
@@ -421,7 +421,7 @@ async def check_availability(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Must provide username or email to check"
         )
-    
+
     try:
         if username:
             # Validate username format
@@ -433,38 +433,38 @@ async def check_availability(
                     success=False,
                     message=str(e)
                 )
-            
+
             existing = await db.fetchone(
                 "SELECT id FROM users WHERE username = ?",
                 username
             )
-            
+
             if existing:
                 return MessageResponse(
                     success=False,
                     message="Username is already taken"
                 )
-        
+
         if email:
             # Normalize email
             email = email.lower()
-            
+
             existing = await db.fetchone(
                 "SELECT id FROM users WHERE email = ?",
                 email
             )
-            
+
             if existing:
                 return MessageResponse(
                     success=False,
                     message="Email is already registered"
                 )
-        
+
         return MessageResponse(
             success=True,
             message="Available for registration"
         )
-        
+
     except Exception as e:
         logger.error(f"Error checking availability: {e}")
         raise HTTPException(

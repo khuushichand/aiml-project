@@ -43,4 +43,3 @@ def test_json_truncation_emits_metrics_postgres(monkeypatch):
     assert ok is True
     vals2 = list(reg.values["jobs.json_truncated_total"])  # payload + result
     assert any(v.labels.get("kind") == "result" for v in vals2)
-

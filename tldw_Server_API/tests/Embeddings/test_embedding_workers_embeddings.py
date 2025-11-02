@@ -275,78 +275,78 @@ def docker_redis_service():
 
 class TestBaseWorker:
     """Test suite for BaseWorker class"""
-    
+
     def test_worker_initialization(self, base_worker_config):
         """Test that worker initializes correctly"""
         # Create a concrete implementation for testing
         class TestWorker(BaseWorker):
             async def process_message(self, message: dict) -> bool:
                 return True
-            
+
             def _parse_message(self, data: dict):
                 return data
-            
+
             async def _send_to_next_stage(self, result):
                 pass
-        
+
         worker = TestWorker(base_worker_config)
-        
+
         assert worker.config == base_worker_config
         assert worker.running == False
         assert worker.jobs_processed == 0
         assert worker.jobs_failed == 0
         assert worker.processing_times == []
-    
+
     @pytest.mark.asyncio
     async def test_redis_connection_context(self, base_worker_config):
         """Test Redis connection context manager"""
         class TestWorker(BaseWorker):
             async def process_message(self, message: dict) -> bool:
                 return True
-            
+
             def _parse_message(self, data: dict):
                 return data
-            
+
             async def _send_to_next_stage(self, result):
                 pass
-        
+
         worker = TestWorker(base_worker_config)
-        
+
         with patch('redis.asyncio.from_url') as mock_redis:
             mock_client = AsyncMock()
             # Make from_url return a coroutine that returns the mock client
             async def create_client(*args, **kwargs):
                 return mock_client
             mock_redis.side_effect = create_client
-            
+
             # Mock the close method
             mock_client.close = AsyncMock()
-            
+
             async with worker._redis_connection() as client:
                 assert client == mock_client
                 mock_redis.assert_called_once_with(
                     base_worker_config.redis_url,
                     decode_responses=True
                 )
-    
+
     @pytest.mark.asyncio
     async def test_graceful_shutdown(self, base_worker_config):
         """Test graceful shutdown handling"""
         class TestWorker(BaseWorker):
             async def process_message(self, message: dict) -> bool:
                 return True
-            
+
             def _parse_message(self, data: dict):
                 return data
-            
+
             async def _send_to_next_stage(self, result):
                 pass
-        
+
         worker = TestWorker(base_worker_config)
-        
+
         # Simulate signal handler
         worker._signal_handler(15, None)  # SIGTERM
-        
+
         assert worker.running == False
 
 
@@ -387,14 +387,14 @@ class TestChunkingWorker:
         assert isinstance(first_chunk, str)
         assert start_idx == 0
         assert end_idx <= len(text)
-    
+
     def test_chunk_overlap(self, base_worker_config):
         """Test that chunk overlap works correctly"""
         worker = ChunkingWorker(base_worker_config)
-        
+
         text = "word1 word2 word3 word4 word5 word6 word7 word8"
         config = ChunkingConfig(chunk_size=100, overlap=20, separator=" ")
-        
+
         chunks = worker._chunk_text(text, config)
 
         if len(chunks) > 1:
@@ -405,7 +405,7 @@ class TestChunkingWorker:
 
 class TestEmbeddingWorker:
     """Test suite for EmbeddingWorker class"""
-    
+
     @pytest.mark.asyncio
     async def test_process_embedding_message(self, embedding_worker_config, embedding_message, redis_stub):
         """Test processing an embedding message"""
@@ -469,7 +469,7 @@ class TestEmbeddingWorker:
 
 class TestStorageWorker:
     """Test suite for StorageWorker class"""
-    
+
     @pytest.mark.asyncio
     async def test_process_storage_message(self, base_worker_config, storage_message, redis_stub):
         """Test processing a storage message using patched dependencies"""
@@ -577,27 +577,27 @@ class TestWorkerRetryLogic:
 
 class TestWorkerMetrics:
     """Test metrics collection across workers"""
-    
+
     @pytest.mark.asyncio
     async def test_metrics_collection(self, base_worker_config):
         """Test that workers collect metrics correctly"""
         class TestWorker(BaseWorker):
             async def process_message(self, message: dict) -> bool:
                 return True
-            
+
             def _parse_message(self, data: dict):
                 return data
-            
+
             async def _send_to_next_stage(self, result):
                 pass
-        
+
         worker = TestWorker(base_worker_config)
-        
+
         # Process some messages
         worker.jobs_processed = 5
         worker.jobs_failed = 1
         worker.processing_times = [100, 200, 150, 180, 120]
-        
+
         # Create expected metrics structure
         metrics = {
             'worker_id': worker.config.worker_id,
@@ -606,7 +606,7 @@ class TestWorkerMetrics:
             'jobs_failed': worker.jobs_failed,
             'average_processing_time_ms': sum(worker.processing_times) / len(worker.processing_times) if worker.processing_times else 0
         }
-        
+
         assert metrics['worker_id'] == "test-worker-1"
         assert metrics['worker_type'] == "test"
         assert metrics['jobs_processed'] == 5
@@ -618,16 +618,16 @@ def test_worker_orchestration_initial_state():
     """Ensure worker orchestrator initializes without side effects"""
     from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerPool
     from tldw_Server_API.app.core.Embeddings.worker_config import ChunkingWorkerPoolConfig
-    
+
     pool_config = ChunkingWorkerPoolConfig(
         worker_type="chunking",
         num_workers=2,
         queue_name="embeddings:chunking",
         consumer_group="chunking-group"
     )
-    
+
     pool = WorkerPool(pool_config)
-    
+
     assert pool.config == pool_config
     assert pool.running == False
     assert pool.workers == []
@@ -637,7 +637,7 @@ def test_worker_orchestration_initial_state():
 @pytest.mark.integration
 class TestWorkerIntegration:
     """Integration tests that require Redis and databases"""
-    
+
     @pytest.mark.asyncio
     async def test_end_to_end_pipeline(self, docker_redis_service, base_worker_config, chunking_message, embedding_worker_config):
         """Test chunking → embedding pipeline against a real Redis instance when available."""

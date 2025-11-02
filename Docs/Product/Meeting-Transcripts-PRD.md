@@ -87,24 +87,24 @@ Current transcription workflows focus on generic media ingestion. Power users ne
 
 ## Phased Roadmap
 
-1. **MVP (≈6 weeks)**  
-   - Template CRUD + default library  
-   - Meeting metadata schema, offline processing pipeline  
-   - Summary & action items generation  
-   - WebUI: template picker, transcript + summary view, manual owner assignment  
-   - API docs & automated tests  
+1. **MVP (≈6 weeks)**
+   - Template CRUD + default library
+   - Meeting metadata schema, offline processing pipeline
+   - Summary & action items generation
+   - WebUI: template picker, transcript + summary view, manual owner assignment
+   - API docs & automated tests
    - Instrumentation scaffold: event tracking for template usage, baseline metrics, feedback hooks
 
-2. **Live Experience (≈8 weeks)**  
-   - Real-time streaming UI and SSE endpoint  
-   - Live action item callouts, diarization updates  
-   - Slack export, manual calendar import (ICS)  
+2. **Live Experience (≈8 weeks)**
+   - Real-time streaming UI and SSE endpoint
+   - Live action item callouts, diarization updates
+   - Slack export, manual calendar import (ICS)
    - Expand analytics: latency reporting, post-meeting survey prompt
 
-3. **Integrations & Intelligence (≈10+ weeks)**  
-   - Automated owner mapping from calendar participants  
-   - CRM/PM exports (Notion, HubSpot, Jira)  
-   - Analytics dashboards (meeting trends)  
+3. **Integrations & Intelligence (≈10+ weeks)**
+   - Automated owner mapping from calendar participants
+   - CRM/PM exports (Notion, HubSpot, Jira)
+   - Analytics dashboards (meeting trends)
    - Knowledge base linking within RAG
 
 ## Dependencies & Risks

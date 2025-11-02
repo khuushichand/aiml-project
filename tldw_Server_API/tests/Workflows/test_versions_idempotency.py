@@ -104,4 +104,3 @@ def test_retry_from_failed_step(client_with_wf: TestClient):
         time.sleep(0.02)
     assert data2["status"] == "succeeded"
     assert (data2.get("outputs") or {}).get("text") == "OK"
-

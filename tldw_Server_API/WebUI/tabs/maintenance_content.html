@@ -3,7 +3,7 @@
     <div class="endpoint-section">
         <h2>Batch Operations</h2>
         <p>Perform batch operations on database items</p>
-        
+
         <div class="form-group">
             <label for="batchOperation">Operation Type:</label>
             <select id="batchOperation">
@@ -16,11 +16,11 @@
                 <option value="backup_db">Backup Database</option>
             </select>
         </div>
-        
+
         <div id="batchFields">
             <!-- Dynamic fields based on operation -->
         </div>
-        
+
         <div class="btn-group">
             <button class="btn btn-warning" id="btnBatchExecute">
                 Execute Batch Operation
@@ -29,14 +29,14 @@
                 Preview
             </button>
         </div>
-        
+
         <div id="batchProgress" style="display: none; margin-top: 20px;">
             <div class="progress-bar">
                 <div id="batchProgressBar" class="progress-fill" style="width: 0%"></div>
             </div>
             <div id="batchProgressText">Processing...</div>
         </div>
-        
+
         <pre id="batchResult"></pre>
     </div>
 </div>
@@ -45,47 +45,47 @@
     <div class="endpoint-section">
         <h2>Database Cleanup</h2>
         <p>Clean up and optimize database</p>
-        
+
         <div class="form-group">
             <h3>Cleanup Options</h3>
-            
+
             <label>
                 <input type="checkbox" id="cleanup_temp_files" checked>
                 Remove temporary files
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="cleanup_orphaned_embeddings" checked>
                 Remove orphaned embeddings
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="cleanup_old_versions">
                 Remove old media versions (keep latest 3)
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="cleanup_error_logs">
                 Clear error logs older than 30 days
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="cleanup_expired_sessions">
                 Remove expired sessions
             </label>
         </div>
-        
+
         <div class="form-group">
             <label for="cleanup_dry_run">
                 <input type="checkbox" id="cleanup_dry_run" checked>
                 Dry Run (preview only, no changes)
             </label>
         </div>
-        
+
         <button class="btn btn-warning" id="btnCleanupRun">
             Run Cleanup
         </button>
-        
+
         <pre id="cleanupResult"></pre>
     </div>
 </div>
@@ -94,36 +94,36 @@
     <div class="endpoint-section">
         <h2>Export Configuration</h2>
         <p>Export system configuration and settings</p>
-        
+
         <div class="form-group">
             <label>Export Options:</label>
-            
+
             <label>
                 <input type="checkbox" id="export_config" checked>
                 Configuration Settings
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="export_prompts" checked>
                 Prompt Library
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="export_characters">
                 Character Cards
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="export_api_keys">
                 API Keys (encrypted)
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="export_custom_settings">
                 Custom Settings
             </label>
         </div>
-        
+
         <div class="form-group">
             <label for="export_format">Export Format:</label>
             <select id="export_format">
@@ -132,46 +132,46 @@
                 <option value="zip">ZIP Archive</option>
             </select>
         </div>
-        
+
         <button class="btn btn-primary" id="btnExportConfig">
             Export Configuration
         </button>
-        
+
         <pre id="exportResult"></pre>
     </div>
 
     <div class="endpoint-section">
         <h2>Import Configuration</h2>
         <p>Import system configuration from file</p>
-        
+
         <div class="form-group">
             <label for="importFile">Configuration File:</label>
             <input type="file" id="importFile" accept=".json,.yaml,.yml,.zip">
         </div>
-        
+
         <div class="form-group">
             <label>Import Options:</label>
-            
+
             <label>
                 <input type="checkbox" id="import_backup" checked>
                 Create backup before import
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="import_merge">
                 Merge with existing (don't overwrite)
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="import_validate" checked>
                 Validate before import
             </label>
         </div>
-        
+
         <button class="btn btn-warning" id="btnImportConfig">
             Import Configuration
         </button>
-        
+
         <pre id="importResult"></pre>
     </div>
 </div>
@@ -179,65 +179,65 @@
 <div id="tabMaintenanceBackup" class="tab-content" role="tabpanel">
     <div class="endpoint-section">
         <h2>Database Backup & Restore</h2>
-        
+
         <div class="form-group">
             <h3>Create Backup</h3>
-            
+
             <label for="backup_name">Backup Name:</label>
             <input type="text" id="backup_name" placeholder="backup_2024_01_01">
             <small>Leave empty for auto-generated name</small>
         </div>
-        
+
         <div class="form-group">
             <label>Backup Options:</label>
-            
+
             <label>
                 <input type="checkbox" id="backup_media_db" checked>
                 Media Database
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="backup_vector_db" checked>
                 Vector Database (ChromaDB)
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="backup_notes_db" checked>
                 Notes Database
             </label><br>
-            
+
             <label>
                 <input type="checkbox" id="backup_compress" checked>
                 Compress Backup
             </label>
         </div>
-        
+
         <button class="btn btn-primary" id="btnCreateBackup">
             Create Backup
         </button>
-        
+
         <pre id="backupResult"></pre>
     </div>
 
     <div class="endpoint-section">
         <h3>Restore from Backup</h3>
-        
+
         <div class="form-group">
             <label for="restore_file">Backup File:</label>
             <input type="file" id="restore_file" accept=".db,.sql,.zip,.tar.gz">
         </div>
-        
+
         <div class="form-group">
             <label for="restore_confirm">
                 <input type="checkbox" id="restore_confirm">
                 I understand this will overwrite existing data
             </label>
         </div>
-        
+
         <button class="btn btn-danger" disabled id="restoreBtn">
             Restore Backup
         </button>
-        
+
         <pre id="restoreResult"></pre>
     </div>
 </div>
@@ -380,9 +380,9 @@
 function updateBatchFields() {
     const operation = document.getElementById('batchOperation').value;
     const fieldsDiv = document.getElementById('batchFields');
-    
+
     let html = '';
-    
+
     switch(operation) {
         case 'delete_media':
             html = `
@@ -399,7 +399,7 @@ function updateBatchFields() {
                 </div>
             `;
             break;
-            
+
         case 'cleanup_orphans':
             html = `
                 <div class="form-group">
@@ -412,7 +412,7 @@ function updateBatchFields() {
                 </div>
             `;
             break;
-            
+
         case 'export_data':
             html = `
                 <div class="form-group">
@@ -435,7 +435,7 @@ function updateBatchFields() {
             `;
             break;
     }
-    
+
     fieldsDiv.innerHTML = html;
 }
 
@@ -445,30 +445,30 @@ async function performBatchOperation() {
     const progressDiv = document.getElementById('batchProgress');
     const progressBar = document.getElementById('batchProgressBar');
     const progressText = document.getElementById('batchProgressText');
-    
+
     // Show progress
     progressDiv.style.display = 'block';
     resultEl.textContent = '';
-    
+
     try {
         // Build request based on operation type
         let endpoint = '/api/v1/maintenance/batch';
         let payload = { operation };
-        
+
         switch(operation) {
             case 'delete_media':
                 const idsText = document.getElementById('batch_media_ids').value;
                 payload.media_ids = parseMediaIds(idsText);
                 payload.permanent = document.getElementById('batch_permanent_delete').checked;
                 break;
-                
+
             case 'export_data':
                 payload.export_type = document.getElementById('batch_export_type').value;
                 payload.format = document.getElementById('batch_export_format').value;
                 endpoint = '/api/v1/maintenance/export';
                 break;
         }
-        
+
         // Simulate progress (replace with actual progress tracking)
         let progress = 0;
         const progressInterval = setInterval(() => {
@@ -476,22 +476,22 @@ async function performBatchOperation() {
             progressBar.style.width = progress + '%';
             progressText.textContent = `Processing... ${progress}%`;
         }, 200);
-        
+
         // Make request
         const response = await apiClient.post(endpoint, payload);
-        
+
         // Complete progress
         clearInterval(progressInterval);
         progressBar.style.width = '100%';
         progressText.textContent = 'Complete!';
-        
+
         // Display result
         resultEl.textContent = JSON.stringify(response, null, 2);
-        
+
         setTimeout(() => {
             progressDiv.style.display = 'none';
         }, 2000);
-        
+
     } catch (error) {
         progressDiv.style.display = 'none';
         resultEl.textContent = `Error: ${error.message}`;
@@ -503,7 +503,7 @@ async function performBatchOperation() {
 function parseMediaIds(text) {
     const ids = [];
     const parts = text.split(',');
-    
+
     parts.forEach(part => {
         part = part.trim();
         if (part.includes('-')) {
@@ -517,7 +517,7 @@ function parseMediaIds(text) {
             ids.push(parseInt(part));
         }
     });
-    
+
     return ids;
 }
 
@@ -525,7 +525,7 @@ function parseMediaIds(text) {
 async function performDatabaseCleanup() {
     const resultEl = document.getElementById('cleanupResult');
     const dryRun = document.getElementById('cleanup_dry_run').checked;
-    
+
     const options = {
         temp_files: document.getElementById('cleanup_temp_files').checked,
         orphaned_embeddings: document.getElementById('cleanup_orphaned_embeddings').checked,
@@ -534,15 +534,15 @@ async function performDatabaseCleanup() {
         expired_sessions: document.getElementById('cleanup_expired_sessions').checked,
         dry_run: dryRun
     };
-    
+
     try {
         Loading.show(resultEl.parentElement, dryRun ? 'Analyzing...' : 'Cleaning...');
-        
+
         const response = await apiClient.post('/api/v1/maintenance/cleanup', options);
-        
+
         resultEl.textContent = JSON.stringify(response, null, 2);
         Toast.success(dryRun ? 'Analysis complete' : 'Cleanup complete');
-        
+
     } catch (error) {
         resultEl.textContent = `Error: ${error.message}`;
         Toast.error(`Cleanup failed: ${error.message}`);
@@ -554,7 +554,7 @@ async function performDatabaseCleanup() {
 // Export configuration
 async function exportConfiguration() {
     const resultEl = document.getElementById('exportResult');
-    
+
     const options = {
         config: document.getElementById('export_config').checked,
         prompts: document.getElementById('export_prompts').checked,
@@ -563,10 +563,10 @@ async function exportConfiguration() {
         custom_settings: document.getElementById('export_custom_settings').checked,
         format: document.getElementById('export_format').value
     };
-    
+
     try {
         const response = await apiClient.post('/api/v1/maintenance/export-config', options);
-        
+
         // If it's a file, trigger download
         if (options.format === 'zip') {
             const blob = new Blob([response], { type: 'application/zip' });
@@ -580,9 +580,9 @@ async function exportConfiguration() {
         } else {
             resultEl.textContent = JSON.stringify(response, null, 2);
         }
-        
+
         Toast.success('Configuration exported');
-        
+
     } catch (error) {
         resultEl.textContent = `Error: ${error.message}`;
         Toast.error(`Export failed: ${error.message}`);
@@ -592,26 +592,26 @@ async function exportConfiguration() {
 async function importConfiguration() {
     const resultEl = document.getElementById('importResult');
     const fileInput = document.getElementById('importFile');
-    
+
     if (!fileInput.files.length) {
         Toast.error('Please select a file to import');
         return;
     }
-    
+
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
     formData.append('backup', document.getElementById('import_backup').checked);
     formData.append('merge', document.getElementById('import_merge').checked);
     formData.append('validate', document.getElementById('import_validate').checked);
-    
+
     try {
         Loading.show(resultEl.parentElement, 'Importing configuration...');
-        
+
         const response = await apiClient.post('/api/v1/maintenance/import-config', formData);
-        
+
         resultEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Configuration imported successfully');
-        
+
     } catch (error) {
         resultEl.textContent = `Error: ${error.message}`;
         Toast.error(`Import failed: ${error.message}`);
@@ -622,7 +622,7 @@ async function importConfiguration() {
 
 async function createBackup() {
     const resultEl = document.getElementById('backupResult');
-    
+
     const options = {
         name: document.getElementById('backup_name').value || undefined,
         media_db: document.getElementById('backup_media_db').checked,
@@ -630,15 +630,15 @@ async function createBackup() {
         notes_db: document.getElementById('backup_notes_db').checked,
         compress: document.getElementById('backup_compress').checked
     };
-    
+
     try {
         Loading.show(resultEl.parentElement, 'Creating backup...');
-        
+
         const response = await apiClient.post('/api/v1/maintenance/backup', options, { timeout: 300000 }); // 5 min timeout
-        
+
         resultEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Backup created successfully');
-        
+
     } catch (error) {
         resultEl.textContent = `Error: ${error.message}`;
         Toast.error(`Backup failed: ${error.message}`);
@@ -650,27 +650,27 @@ async function createBackup() {
 async function restoreBackup() {
     const resultEl = document.getElementById('restoreResult');
     const fileInput = document.getElementById('restore_file');
-    
+
     if (!fileInput.files.length) {
         Toast.error('Please select a backup file');
         return;
     }
-    
+
     if (!confirm('This will overwrite your existing data. Are you absolutely sure?')) {
         return;
     }
-    
+
     const formData = new FormData();
     formData.append('backup_file', fileInput.files[0]);
-    
+
     try {
         Loading.show(resultEl.parentElement, 'Restoring backup...');
-        
+
         const response = await apiClient.post('/api/v1/maintenance/restore', formData, { timeout: 600000 }); // 10 min timeout
-        
+
         resultEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Backup restored successfully');
-        
+
     } catch (error) {
         resultEl.textContent = `Error: ${error.message}`;
         Toast.error(`Restore failed: ${error.message}`);

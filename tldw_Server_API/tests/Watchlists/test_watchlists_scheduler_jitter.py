@@ -41,4 +41,3 @@ async def test_watchlist_schedule_has_jitter(monkeypatch):
         assert s.next_run_at is None or isinstance(s.next_run_at, str)
     finally:
         await svc.stop()
-

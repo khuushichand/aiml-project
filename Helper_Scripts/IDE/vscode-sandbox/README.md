@@ -15,4 +15,3 @@ Commands
 Notes
 - For live logs, the extension can connect to `WS /api/v1/sandbox/runs/{id}/stream` (not implemented in stub).
 - For MCP integration, use the `sandbox.run` tool via the MCP Unified module.
-

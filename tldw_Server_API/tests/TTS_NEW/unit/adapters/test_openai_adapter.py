@@ -31,7 +31,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 
 class TestOpenAIAdapterInitialization:
     """Test OpenAI adapter initialization and configuration."""
-    
+
     @pytest.mark.unit
     def test_adapter_initialization_with_config(self):
         """Test adapter initialization with configuration."""
@@ -40,12 +40,12 @@ class TestOpenAIAdapterInitialization:
             "openai_base_url": "https://api.openai.com/v1/audio/speech",
             "timeout": 30
         }
-        
+
         adapter = OpenAITTSAdapter(config)
-        
+
         assert adapter.provider_name.lower() == "openai"
         assert adapter.api_key == "test-key-123"
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_adapter_initialization_without_api_key(self, monkeypatch):
@@ -60,7 +60,7 @@ class TestOpenAIAdapterInitialization:
         success = await adapter.initialize()
         assert success is False
         assert str(adapter.status.value) in {"not_configured", "error"}
-    
+
     @pytest.mark.unit
     def test_adapter_supported_models(self):
         """Test adapter supports setting known models via config."""
@@ -69,7 +69,7 @@ class TestOpenAIAdapterInitialization:
 
         adapter_hd = OpenAITTSAdapter({"openai_api_key": "test-key", "openai_model": "tts-1-hd"})
         assert adapter_hd.model == "tts-1-hd"
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_adapter_supported_voices(self):
@@ -87,7 +87,7 @@ class TestOpenAIAdapterInitialization:
 
 class TestRequestValidation:
     """Test request validation in OpenAI adapter."""
-    
+
     @pytest.mark.unit
     async def test_validate_valid_request(self):
         """Test validation of valid request."""
@@ -96,7 +96,7 @@ class TestRequestValidation:
         request = TTSRequest(text="Hello world", voice="alloy", stream=False)
         is_valid, error = await adapter.validate_request(request)
         assert is_valid and error is None
-    
+
     @pytest.mark.unit
     async def test_validate_invalid_voice(self):
         """OpenAI maps unknown voices to defaults; validation should pass."""
@@ -106,7 +106,7 @@ class TestRequestValidation:
         is_valid, error = await adapter.validate_request(request)
         assert is_valid and error is None
         assert adapter.map_voice("invalid_voice") in {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
-    
+
     @pytest.mark.unit
     @pytest.mark.xfail(reason="OpenAIAdapter does not validate model names in validate_request")
     async def test_validate_invalid_model(self):
@@ -115,7 +115,7 @@ class TestRequestValidation:
         request = TTSRequest(text="Hello", voice="alloy")
         is_valid, _ = await adapter.validate_request(request)
         assert is_valid
-    
+
     @pytest.mark.unit
     async def test_validate_text_too_long(self):
         """Test validation rejects text exceeding limit."""
@@ -127,7 +127,7 @@ class TestRequestValidation:
         is_valid, error = await adapter.validate_request(request)
         assert not is_valid
         assert "exceeds maximum" in (error or "")
-    
+
     @pytest.mark.unit
     @pytest.mark.xfail(reason="OpenAIAdapter validate_request does not enforce speed bounds")
     async def test_validate_speed_out_of_range(self):
@@ -143,7 +143,7 @@ class TestRequestValidation:
 
 class TestAudioGeneration:
     """Test audio generation functionality."""
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_generate_basic_audio(self, mock_post):
@@ -154,20 +154,20 @@ class TestAudioGeneration:
         mock_response.content = b"fake_audio_data"
         mock_response.headers = {"content-type": "audio/mpeg"}
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Hello world", voice="alloy", stream=False)
-        
+
         response = await adapter.generate(request)
-        
+
         assert (response.audio_content or response.audio_data) == b"fake_audio_data"
         assert (response.provider or "").lower() == "openai"
-        
+
         # Verify API call
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         assert "audio/speech" in str(call_args[0][0])
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_generate_with_hd_model(self, mock_post):
@@ -176,14 +176,14 @@ class TestAudioGeneration:
         mock_response.status_code = 200
         mock_response.content = b"hd_audio_data"
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key", "openai_model": "tts-1-hd"})
         request = TTSRequest(text="High quality audio", voice="nova", stream=False)
-        
+
         response = await adapter.generate(request)
-        
+
         assert (response.audio_content or response.audio_data) == b"hd_audio_data"
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_generate_with_speed_adjustment(self, mock_post):
@@ -192,7 +192,7 @@ class TestAudioGeneration:
         mock_response.status_code = 200
         mock_response.content = b"audio_data"
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(
             text="Slow speech",
@@ -201,13 +201,13 @@ class TestAudioGeneration:
             speed=0.75,
             stream=False
         )
-        
+
         response = await adapter.generate(request)
-        
+
         # Verify speed was included in request
         call_kwargs = mock_post.call_args[1]
         assert call_kwargs['json']['speed'] == 0.75
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_generate_different_formats(self, mock_post):
@@ -216,15 +216,15 @@ class TestAudioGeneration:
         mock_response.status_code = 200
         mock_response.content = b"audio_data"
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
-        
+
         # Test different formats
         formats = [AudioFormat.MP3, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.FLAC]
-        
+
         for audio_format in formats:
             request = TTSRequest(text="Test", voice="alloy", format=audio_format, stream=False)
-            
+
             response = await adapter.generate(request)
             assert response.format == audio_format
 
@@ -234,7 +234,7 @@ class TestAudioGeneration:
 
 class TestStreamingGeneration:
     """Test streaming audio generation."""
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_streaming_generation(self, mock_post):
@@ -247,23 +247,23 @@ class TestStreamingGeneration:
         async def mock_iter_with_size(chunk_size=1024):
             async for c in mock_iter():
                 yield c
-        
+
         mock_response = AsyncMock()
         mock_response.aiter_bytes = mock_iter_with_size
         # Ensure raise_for_status behaves like a regular method (non-async)
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Stream this", voice="fable", stream=True)
-        
+
         chunks = []
         resp = await adapter.generate(request)
         async for chunk in resp.audio_stream:
             chunks.append(chunk)
-        
+
         assert chunks == [b"chunk1", b"chunk2", b"chunk3"]
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_streaming_with_error(self, mock_post):
@@ -275,21 +275,21 @@ class TestStreamingGeneration:
         async def mock_error_iter_with_size(chunk_size=1024):
             async for c in mock_error_iter():
                 yield c
-        
+
         mock_response = AsyncMock()
         mock_response.aiter_bytes = mock_error_iter_with_size
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Test", voice="alloy", stream=True)
-        
+
         chunks = []
         with pytest.raises((TTSGenerationError, Exception)):
             resp = await adapter.generate(request)
             async for chunk in resp.audio_stream:
                 chunks.append(chunk)
-        
+
         # Should have received first chunk before error
         assert len(chunks) == 1
 
@@ -299,7 +299,7 @@ class TestStreamingGeneration:
 
 class TestErrorHandling:
     """Test error handling in OpenAI adapter."""
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_handle_rate_limit_error(self, mock_post):
@@ -313,15 +313,15 @@ class TestErrorHandling:
             "429", request=Mock(), response=mock_response
         )
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Test", voice="alloy", stream=False)
-        
+
         with pytest.raises(TTSRateLimitError) as exc_info:
             await adapter.generate(request)
-        
+
         assert getattr(exc_info.value, "retry_after", exc_info.value.details.get("retry_after")) == 60
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_handle_api_error(self, mock_post):
@@ -334,10 +334,10 @@ class TestErrorHandling:
             "500", request=Mock(), response=mock_response
         )
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Test", voice="alloy", stream=False)
-        
+
         with pytest.raises((TTSGenerationError, Exception)):
             await adapter.generate(request)
 
@@ -359,16 +359,16 @@ class TestErrorHandling:
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSAuthenticationError
         with pytest.raises(TTSAuthenticationError):
             await adapter.generate(request)
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_handle_network_error(self, mock_post):
         """Test handling of network errors maps to TTSNetworkError."""
         mock_post.side_effect = httpx.ConnectError("Connection failed")
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Test", voice="alloy", stream=False)
-        
+
         with pytest.raises(TTSNetworkError):
             await adapter.generate(request)
 
@@ -377,10 +377,10 @@ class TestErrorHandling:
     async def test_handle_timeout_error(self, mock_post):
         """Test handling of timeout errors maps to TTSTimeoutError."""
         mock_post.side_effect = httpx.TimeoutException("Request timed out")
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key"})
         request = TTSRequest(text="Test", voice="alloy", stream=False)
-        
+
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSTimeoutError
         with pytest.raises(TTSTimeoutError):
             await adapter.generate(request)
@@ -391,7 +391,7 @@ class TestErrorHandling:
 
 class TestMetadataAndInfo:
     """Test metadata and information methods."""
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_get_adapter_info(self):
@@ -408,7 +408,7 @@ class TestMetadataAndInfo:
         assert "tts-1" in ["tts-1", "tts-1-hd"]
         assert "alloy" in info["voices"]
         assert info["max_characters"] == 4096
-    
+
     @pytest.mark.unit
     @patch('httpx.AsyncClient.post')
     async def test_response_includes_metadata(self, mock_post):
@@ -417,11 +417,11 @@ class TestMetadataAndInfo:
         mock_response.status_code = 200
         mock_response.content = b"audio_data"
         mock_post.return_value = mock_response
-        
+
         adapter = OpenAITTSAdapter({"openai_api_key": "test-key", "openai_model": "tts-1-hd"})
         request = TTSRequest(text="Test metadata", voice="shimmer", stream=False)
-        
+
         response = await adapter.generate(request)
-        
+
         assert (response.provider or "").lower() == "openai"
         assert (response.audio_content or response.audio_data) == b"audio_data"

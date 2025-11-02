@@ -42,4 +42,3 @@ services:
 
   redis:
     restart: unless-stopped
-

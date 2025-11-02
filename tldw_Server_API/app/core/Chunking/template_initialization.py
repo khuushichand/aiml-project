@@ -18,7 +18,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 def load_builtin_templates() -> List[Dict[str, Any]]:
     """
     Load all built-in templates from the template_library directory.
-    
+
     Returns:
         List of template dictionaries
     """
@@ -166,12 +166,12 @@ def load_builtin_templates() -> List[Dict[str, Any]]:
 def initialize_chunking_templates(db_path: str = None, client_id: str = 'system', db: MediaDatabase = None) -> int:
     """
     Initialize built-in chunking templates in the database.
-    
+
     Args:
         db_path: Path to the database file (uses default if None and db is None)
         client_id: Client ID for database operations (only used if creating new db)
         db: MediaDatabase instance (if provided, db_path is ignored)
-        
+
     Returns:
         Number of templates successfully seeded
     """
@@ -202,23 +202,23 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
                         db_path = str(Path(get_project_root()) / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
                     except Exception:
                         db_path = str(Path(__file__).resolve().parents[5] / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
-            
+
             # Create database instance
             db = MediaDatabase(db_path=db_path, client_id=client_id)
-        
+
         # Load built-in templates
         templates = load_builtin_templates()
-        
+
         if not templates:
             logger.warning("No built-in templates found to seed")
             return 0
-        
+
         # Seed templates into database
         count = db.seed_builtin_templates(templates)
-        
+
         logger.info(f"Successfully seeded {count} built-in templates into database")
         return count
-        
+
     except Exception as e:
         logger.error(f"Error initializing chunking templates: {e}")
         return 0
@@ -227,12 +227,12 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
 def update_builtin_templates(db_path: str = None, client_id: str = 'system', force: bool = False, db: MediaDatabase = None) -> int:
     """
     Update existing built-in templates with latest definitions.
-    
+
     Args:
         db_path: Path to the database file
         client_id: Client ID for database operations
         force: If True, overwrites existing templates even if not changed
-        
+
     Returns:
         Number of templates updated
     """
@@ -261,20 +261,20 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
                         db_path = str(Path(get_project_root()) / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
                     except Exception:
                         db_path = str(Path(__file__).resolve().parents[5] / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
-            
+
             db = MediaDatabase(db_path=db_path, client_id=client_id)
         templates = load_builtin_templates()
-        
+
         updated_count = 0
-        
+
         for template in templates:
             existing = db.get_chunking_template(name=template['name'])
-            
+
             if existing and existing['is_builtin']:
                 # Compare template content
                 existing_template = json.loads(existing['template_json'])
                 new_template = template['template']
-                
+
                 if force or existing_template != new_template:
                     # Update the template
                     success = db.update_chunking_template(
@@ -283,13 +283,13 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
                         description=template.get('description'),
                         tags=template.get('tags')
                     )
-                    
+
                     if success:
                         updated_count += 1
                         logger.info(f"Updated built-in template: {template['name']}")
-        
+
         return updated_count
-        
+
     except Exception as e:
         logger.error(f"Error updating built-in templates: {e}")
         return 0
@@ -300,16 +300,16 @@ def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) 
     """
     Ensure built-in templates are initialized in the database.
     Called during application startup.
-    
+
     Args:
         db_path: Path to the database file
-        
+
     Returns:
         True if templates are properly initialized
     """
     try:
         count = initialize_chunking_templates(db_path=db_path, db=db)
-        
+
         if count > 0:
             logger.info(f"Initialized {count} chunking templates on startup")
         else:
@@ -333,17 +333,17 @@ def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) 
                         db_path = str(Path(get_project_root()) / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
                     except Exception:
                         db_path = str(Path(__file__).resolve().parents[5] / 'Databases' / 'user_databases' / '1' / 'Media_DB_v2.db')
-                
+
                 db = MediaDatabase(db_path=db_path, client_id='system')
             existing = db.list_chunking_templates(include_builtin=True, include_custom=False)
-            
+
             if existing:
                 logger.debug(f"Found {len(existing)} existing built-in templates")
             else:
                 logger.warning("No chunking templates found in database")
-        
+
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to ensure templates initialized: {e}")
         return False
@@ -352,7 +352,7 @@ def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) 
 if __name__ == "__main__":
     # If run directly, initialize templates
     import sys
-    
+
     db_path = sys.argv[1] if len(sys.argv) > 1 else None
     count = initialize_chunking_templates(db_path)
     print(f"Initialized {count} templates")

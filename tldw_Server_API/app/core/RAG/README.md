@@ -717,43 +717,43 @@ Instead of pre-built pipelines, the unified architecture provides direct paramet
     # All features accessible via parameters
     result = await unified_rag_pipeline(
         query="your query here",
-    
+
     # Data sources
     sources=["media_db", "notes", "characters", "chats"],
-    
+
     # Search configuration
     search_mode="hybrid",  # fts, vector, hybrid
     top_k=10,
-    
+
     # Query expansion
     expand_query=True,
     expansion_strategies=["acronym", "synonym", "domain", "entity"],
-    
+
     # Caching
     enable_cache=True,
     cache_threshold=0.85,
-    
+
     # Reranking
     enable_reranking=True,
     reranking_strategy="hybrid",  # flashrank | cross_encoder | hybrid | llama_cpp | llm_scoring | two_tier
-    
+
     # Citations
     enable_citations=True,
     citation_style="apa",  # mla, apa, chicago, harvard, ieee
     enable_chunk_citations=True,
-    
+
     # Generation
     enable_generation=True,
     generation_model="gpt-4o",
-    
+
     # Security
     enable_security_filter=True,
     detect_pii=True,
     content_filter=True,
-    
+
     # Monitoring
     enable_monitoring=True,
-    
+
     # Feedback
     collect_feedback=True
     )

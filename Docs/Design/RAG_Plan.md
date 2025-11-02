@@ -33,7 +33,7 @@ https://arxiv.org/pdf/2504.08748v1
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ### Plan<a name="plan"></a>
 1. Pre-Query Steps
-	1. Data is first parsed. 
+	1. Data is first parsed.
 	2. Data is then chunked
 		- Chunking depends on data type
 			1. Websites
@@ -41,11 +41,11 @@ https://arxiv.org/pdf/2504.08748v1
 			3. PDFs
 			4. Unstructured text
 		- Chunking strategy for all items involves a tree ToC as part of each chunk
-			- Each chunk contains: 
+			- Each chunk contains:
 				* a summary of the parent document
 				* Summary of the chunk (if larger than X size)
 				* a #/# indicating where the chunk exists in relation to the larger document
-				* 
+				*
 	3. Data is then converted to vector Embeddings and stored using metadata from main DB entries for keyword searches
 2. Performing a Query:
 3. Performing Ranking and Fusion
@@ -55,7 +55,7 @@ https://arxiv.org/pdf/2504.08748v1
 7. Providing Citations for generated result(s) + Delivery & Presentation to the user
 8. Metrics for every one of the above steps
 	- Time taken
-	- 
+	-
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 

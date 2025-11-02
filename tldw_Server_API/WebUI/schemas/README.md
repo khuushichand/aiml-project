@@ -56,4 +56,3 @@ window.addEventListener('agentic:highlight-spans', (e) => {
 ```
 
 To integrate, call the renderer when an agentic response arrives (e.g., in the RAG tab after a search), passing `result.metadata` and a DOM element container.
-

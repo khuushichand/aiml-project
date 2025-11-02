@@ -39,4 +39,3 @@ def test_llm_providers_includes_health(monkeypatch):
             assert openai is not None
             assert 'health' in openai
             assert openai['health']['status'] in ('healthy', 'degraded', 'unhealthy', 'circuit_open', 'CLOSED', 'OPEN', 'HALF_OPEN')
-

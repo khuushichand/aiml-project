@@ -69,4 +69,3 @@ def test_create_optimization_includes_request_id_in_job_payload(monkeypatch, ove
     )
     assert r.status_code in (200, 201), r.text
     assert captured.get("payload", {}).get("request_id") == "req-ps-create-001"
-

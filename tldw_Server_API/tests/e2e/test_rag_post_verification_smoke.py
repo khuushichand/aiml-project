@@ -42,4 +42,3 @@ def test_rag_search_with_post_verification_smoke(api_client):
         assert "unsupported_ratio" in pv
         assert "total_claims" in pv
         assert "unsupported_count" in pv
-

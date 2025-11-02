@@ -92,4 +92,3 @@ def test_json_caps_result_reject_and_truncate_postgres(monkeypatch):
     assert isinstance(res, dict)
     assert res.get("_truncated") is True
     assert res.get("len_bytes") and res["len_bytes"] > 128
-

@@ -86,17 +86,17 @@ def _default_scheduler_base_path() -> Path:
 class SchedulerConfig:
     """
     Complete configuration for the scheduler system.
-    
+
     All paths are absolute to avoid working directory dependencies.
     Environment variables can override defaults.
     """
-    
+
     # Database configuration
     database_url: str = field(default_factory=_default_scheduler_db_url)
-    
+
     # Base path for all scheduler data
     base_path: Path = field(default_factory=_default_scheduler_base_path)
-    
+
     # Write buffer configuration
     write_buffer_size: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_BUFFER_SIZE', '1000'))
@@ -104,7 +104,7 @@ class SchedulerConfig:
     write_buffer_flush_interval: float = field(
         default_factory=lambda: float(os.getenv('SCHEDULER_FLUSH_INTERVAL', '0.1'))
     )
-    
+
     # Worker pool configuration
     min_workers: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_MIN_WORKERS', '1'))
@@ -115,7 +115,7 @@ class SchedulerConfig:
     worker_recycle_after_tasks: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_WORKER_RECYCLE', '1000'))
     )
-    
+
     # Lease management
     lease_duration_seconds: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_LEASE_DURATION', '300'))
@@ -129,7 +129,7 @@ class SchedulerConfig:
     leader_ttl_seconds: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_LEADER_TTL', '300'))
     )
-    
+
     # Payload management
     payload_threshold_bytes: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_PAYLOAD_THRESHOLD', '65536'))
@@ -137,7 +137,7 @@ class SchedulerConfig:
     payload_compression: bool = field(
         default_factory=lambda: os.getenv('SCHEDULER_PAYLOAD_COMPRESSION', 'true').lower() == 'true'
     )
-    
+
     # Cleanup and retention
     payload_retention_days: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_PAYLOAD_RETENTION', '7'))
@@ -148,7 +148,7 @@ class SchedulerConfig:
     cleanup_interval_seconds: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_CLEANUP_INTERVAL', '3600'))
     )
-    
+
     # Performance tuning
     batch_size: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_BATCH_SIZE', '100'))
@@ -156,7 +156,7 @@ class SchedulerConfig:
     max_concurrent_tasks: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_MAX_CONCURRENT', '100'))
     )
-    
+
     # Database pool settings (PostgreSQL)
     db_pool_min_size: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_DB_POOL_MIN', '10'))
@@ -164,7 +164,7 @@ class SchedulerConfig:
     db_pool_max_size: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_DB_POOL_MAX', '100'))
     )
-    
+
     # Monitoring
     metrics_enabled: bool = field(
         default_factory=lambda: os.getenv('SCHEDULER_METRICS_ENABLED', 'true').lower() == 'true'
@@ -175,7 +175,7 @@ class SchedulerConfig:
     health_check_interval: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_HEALTH_INTERVAL', '30'))
     )
-    
+
     # Queue defaults
     default_queue_name: str = field(
         default_factory=lambda: os.getenv('SCHEDULER_DEFAULT_QUEUE', 'default')
@@ -189,45 +189,45 @@ class SchedulerConfig:
     default_retry_delay: int = field(
         default_factory=lambda: int(os.getenv('SCHEDULER_DEFAULT_RETRY_DELAY', '60'))
     )
-    
+
     # Emergency backup file (for buffer fallbacks)
     emergency_backup_path: Optional[Path] = None
-    
+
     @property
     def payload_storage_path(self) -> Path:
         """Path for external payload storage"""
         return self.base_path / 'payloads'
-    
-    
-    
+
+
+
     @property
     def is_postgresql(self) -> bool:
         """Check if using PostgreSQL backend"""
         return 'postgresql' in self.database_url.lower() or 'postgres' in self.database_url.lower()
-    
+
     @property
     def is_sqlite(self) -> bool:
         """Check if using SQLite backend"""
         return 'sqlite' in self.database_url.lower()
-    
+
     @property
     def is_memory(self) -> bool:
         """Check if using in-memory backend"""
         return self.database_url.lower() == 'memory://' or self.database_url == ':memory:'
-    
+
     def __post_init__(self):
         """Validate configuration and create necessary directories"""
         # Validate and sanitize paths to prevent directory traversal
         # This must happen before attempting to create directories
         self._validate_and_sanitize_paths()
-        
+
         # Default emergency backup path if not provided
         if self.emergency_backup_path is None:
             self.emergency_backup_path = self.base_path / 'emergency' / 'backup.json'
         else:
             # Ensure Path type and absolute
             self.emergency_backup_path = Path(self.emergency_backup_path).resolve()
-        
+
         # Only create directories after validation passes
         try:
             # Ensure base path and subdirectories exist
@@ -237,23 +237,23 @@ class SchedulerConfig:
         except (PermissionError, OSError) as e:
             logger.error(f"Failed to create scheduler directories: {e}")
             raise ValueError(f"Cannot create scheduler directories at {self.base_path}: {e}")
-        
+
         # Validate configuration
         self._validate()
-        
+
         logger.info(f"Scheduler configuration initialized:")
         logger.info(f"  Database: {self._safe_database_url()}")
         logger.info(f"  Base path: {self.base_path}")
         logger.info(f"  Workers: {self.min_workers}-{self.max_workers}")
         logger.info(f"  Buffer: {self.write_buffer_size} items, {self.write_buffer_flush_interval}s flush")
-    
+
     def _validate_and_sanitize_paths(self):
         """Validate and sanitize paths to prevent directory traversal attacks"""
         import platform
-        
+
         # Check for directory traversal BEFORE resolving
         original_base = str(self.base_path)
-        
+
         # Reject symlink base paths explicitly before resolving
         import os as _os
         try:
@@ -263,13 +263,13 @@ class SchedulerConfig:
                 raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
         except Exception:
             pass
-        
+
         # Detect and prevent directory traversal attempts
         if '..' in original_base or '~' in original_base:
             raise ValueError(f"Directory traversal detected in base_path: {original_base}")
-        
+
         # Do not resolve symlinks here to preserve detection
-        
+
         # Platform-specific path validation
         if platform.system() == 'Windows':
             # Windows-specific validations
@@ -290,11 +290,11 @@ class SchedulerConfig:
                 # Fall back to user's home directory if var/lib is not writable
                 self.base_path = Path.home() / '.local' / 'share' / 'scheduler'
                 logger.warning(f"Using user directory: {self.base_path}")
-        
+
         # Ensure path is not a symlink to prevent symlink attacks
         if self.base_path.exists() and self.base_path.is_symlink():
             raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
-        
+
         # Validate database URL if it's a file path
         if self.is_sqlite and 'sqlite:///' in self.database_url:
             db_path = self.database_url.replace('sqlite:///', '')
@@ -302,47 +302,47 @@ class SchedulerConfig:
                 db_path_obj = Path(db_path)
                 if '..' in str(db_path_obj) or '~' in str(db_path_obj):
                     raise ValueError(f"Directory traversal detected in database path: {db_path}")
-    
+
     def _validate(self):
         """Validate configuration values"""
         errors = []
-        
+
         # Validate numeric ranges
         # Allow 0 in test or when workers aren't started; in production
         # users typically run with >=1. Tests may configure 0.
         if self.min_workers < 0:
             errors.append(f"min_workers must be >= 0, got {self.min_workers}")
-        
+
         if self.max_workers < self.min_workers:
             errors.append(f"max_workers ({self.max_workers}) must be >= min_workers ({self.min_workers})")
-        
+
         if self.write_buffer_size < 1:
             errors.append(f"write_buffer_size must be >= 1, got {self.write_buffer_size}")
-        
+
         if self.write_buffer_flush_interval <= 0:
             errors.append(f"write_buffer_flush_interval must be > 0, got {self.write_buffer_flush_interval}")
-        
+
         if self.lease_duration_seconds < 10:
             errors.append(f"lease_duration_seconds should be >= 10, got {self.lease_duration_seconds}")
-        
+
         if self.payload_threshold_bytes < 1024:
             errors.append(f"payload_threshold_bytes should be >= 1024, got {self.payload_threshold_bytes}")
-        
+
         # Validate database URL
         if not self.database_url:
             errors.append("database_url cannot be empty")
-        
+
         # Check for conflicting settings
         if self.lease_renewal_interval >= self.lease_duration_seconds:
             errors.append(
                 f"lease_renewal_interval ({self.lease_renewal_interval}) should be less than "
                 f"lease_duration_seconds ({self.lease_duration_seconds})"
             )
-        
+
         if errors:
             error_msg = "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
             raise ValueError(error_msg)
-    
+
     def _safe_database_url(self) -> str:
         """Return database URL with password masked"""
         url = self.database_url
@@ -356,7 +356,7 @@ class SchedulerConfig:
                     scheme_user = prefix.rsplit(':', 1)[0]
                     return f"{scheme_user}:****@{parts[1]}"
         return url
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
         return {

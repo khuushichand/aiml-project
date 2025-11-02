@@ -12,16 +12,16 @@ from .program_evaluator import ProgramEvaluator
 
 class TestRunner:
     """Runs test cases against prompts using LLM."""
-    
+
     def __init__(self, db_manager):
         """
         Initialize test runner.
-        
+
         Args:
             db_manager: Database manager instance
         """
         self.db = db_manager
-    
+
     async def run_test_case(
         self,
         prompt_id: int,
@@ -32,14 +32,14 @@ class TestRunner:
     ) -> Dict[str, Any]:
         """
         Run a single test case against a prompt.
-        
+
         Args:
             prompt_id: ID of the prompt
             test_case_id: ID of the test case
             model: LLM model to use
             temperature: Temperature setting
             max_tokens: Maximum tokens
-            
+
         Returns:
             Test run result
         """
@@ -61,7 +61,7 @@ class TestRunner:
         user_prompt = prompt.get("user_prompt", "")
         for key, value in inputs.items():
             user_prompt = user_prompt.replace(f"{{{key}}}", str(value))
-        
+
         # Call LLM
         try:
             response = await asyncio.to_thread(
@@ -75,10 +75,10 @@ class TestRunner:
                 temperature=temperature,
                 max_tokens=max_tokens
             )
-            
+
             actual_output = {"response": response[0] if response else ""}
             _log.info("PS testrun.llm.done time_ms={}", int((time.time() - start_time) * 1000))
-            
+
         except Exception as e:
             _log.error("PS testrun.llm.error error={} time_ms={}", e, int((time.time() - start_time) * 1000))
             actual_output = {"error": str(e)}
@@ -197,7 +197,7 @@ class TestRunner:
             int((time.perf_counter() - t0) * 1000),
         )
         return result
-    
+
     async def run_multiple_tests(
         self,
         prompt_id: int,
@@ -209,7 +209,7 @@ class TestRunner:
     ) -> List[Dict[str, Any]]:
         """
         Run multiple test cases.
-        
+
         Args:
             prompt_id: ID of the prompt
             test_case_ids: List of test case IDs
@@ -217,7 +217,7 @@ class TestRunner:
             temperature: Temperature setting
             max_tokens: Maximum tokens
             parallel: Run tests in parallel
-            
+
         Returns:
             List of test run results
         """
@@ -230,7 +230,7 @@ class TestRunner:
                 for test_id in test_case_ids
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             # Handle exceptions
             processed_results = []
             for i, result in enumerate(results):
@@ -242,7 +242,7 @@ class TestRunner:
                     })
                 else:
                     processed_results.append(result)
-            
+
             _log.info("PS testrun.multi.done mode=parallel ok={} failed={}", sum(1 for r in processed_results if not isinstance(r, dict) or not r.get("error")), sum(1 for r in processed_results if isinstance(r, dict) and r.get("error")))
             return processed_results
         else:

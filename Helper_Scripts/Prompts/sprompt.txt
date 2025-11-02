@@ -3,7 +3,7 @@
 
 **Headings**:
 - Based on referenced topics, not categories like quotes or terms
-- Surrounded by **bold** formatting 
+- Surrounded by **bold** formatting
 - Not listed as bullet points
 - No space between headings and list items underneath
 

@@ -41,7 +41,7 @@ The Responses API represents a significant evolution in OpenAI's API offerings:
 **Timeline: Day 1-2**
 
 #### Decision: Extend ChaChaNotes_DB
-**Rationale**: 
+**Rationale**:
 - Responses ARE conversations with additional metadata
 - Avoids data fragmentation
 - Leverages existing indexes and relationships
@@ -56,7 +56,7 @@ class AddResponsesSupport(Migration):
         self.add_column('conversations', 'response_type', 'TEXT')
         self.add_column('conversations', 'response_status', 'TEXT')
         self.add_column('conversations', 'response_metadata', 'TEXT')
-        
+
         # Create response-specific tables
         self.create_table('response_tools', ...)
         self.create_table('response_tasks', ...)
@@ -146,7 +146,7 @@ from enum import Enum
 
 class ResponseStatus(str, Enum):
     QUEUED = "queued"
-    IN_PROGRESS = "in_progress" 
+    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -171,7 +171,7 @@ class CreateResponseRequest(OpenAIBaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
     stream: bool = Field(default=False)
     timeout_seconds: Optional[int] = Field(default=300, ge=1, le=3600)
-    
+
     @field_validator('messages')
     def validate_messages(cls, v):
         if not v:
@@ -179,7 +179,7 @@ class CreateResponseRequest(OpenAIBaseModel):
         if len(v) > 100:
             raise ValueError("Too many messages (max 100)")
         return v
-    
+
     @field_validator('webhook_url')
     def validate_webhook(cls, v):
         if v:
@@ -227,14 +227,14 @@ from contextlib import asynccontextmanager
 
 class ResponseRunner:
     """Manages async execution of responses with proper error handling"""
-    
+
     def __init__(self, db_path: str, max_concurrent: int = 100):
         self.db = CharactersRAGDB(db_path)  # Reuse existing DB
         self.tool_orchestrator = ToolOrchestrator()
         self.running_tasks: Dict[str, asyncio.Task] = {}
         self.task_semaphore = asyncio.Semaphore(max_concurrent)
         self.shutdown_event = asyncio.Event()
-        
+
     async def run_response(
         self,
         response_id: str,
@@ -242,28 +242,28 @@ class ResponseRunner:
         background: bool = True
     ) -> Dict[str, Any]:
         """Execute response with proper resource management"""
-        
+
         if background:
             # Check concurrency limit
             if len(self.running_tasks) >= self.max_concurrent:
                 raise ValueError(f"Too many concurrent tasks: {len(self.running_tasks)}")
-            
+
             # Create background task with proper cleanup
             task = asyncio.create_task(
                 self._execute_with_cleanup(response_id, request)
             )
             self.running_tasks[response_id] = task
-            
+
             # Set up cleanup callback
             task.add_done_callback(
                 lambda t: self.running_tasks.pop(response_id, None)
             )
-            
+
             return {"id": response_id, "status": "queued"}
         else:
             # Execute synchronously
             return await self._execute_response(response_id, request)
-    
+
     async def _execute_with_cleanup(self, response_id: str, request: Dict):
         """Execute with semaphore and cleanup"""
         async with self.task_semaphore:
@@ -275,7 +275,7 @@ class ResponseRunner:
             finally:
                 # Ensure task is removed from tracking
                 self.running_tasks.pop(response_id, None)
-    
+
     @asynccontextmanager
     async def _transaction(self):
         """Database transaction context manager"""
@@ -287,29 +287,29 @@ class ResponseRunner:
         except Exception:
             await self.db.execute("ROLLBACK")
             raise
-    
+
     async def _execute_response(
         self,
         response_id: str,
         request: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Core execution logic with all steps"""
-        
+
         start_time = time.time()
         correlation_id = f"resp_{response_id}_{int(start_time)}"
-        
+
         logger.info(f"Starting response {response_id}", extra={"correlation_id": correlation_id})
-        
+
         try:
             # 1. Update status to in_progress
             async with self._transaction():
                 await self._update_status(response_id, "in_progress", {
                     "started_at": datetime.utcnow().isoformat()
                 })
-            
+
             # 2. Get conversation context if thread_id provided
             context = await self._get_context(request.get("thread_id"))
-            
+
             # 3. Execute tools if requested
             tool_results = {}
             if request.get("tools"):
@@ -324,10 +324,10 @@ class ResponseRunner:
                     except Exception as e:
                         logger.error(f"Tool {tool} failed: {e}")
                         tool_results[tool] = {"error": str(e)}
-            
+
             # 4. Generate response using existing chat infrastructure
             from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
-            
+
             # Prepare messages with tool results
             messages = request["messages"].copy()
             if tool_results:
@@ -335,7 +335,7 @@ class ResponseRunner:
                     "role": "system",
                     "content": f"Tool results: {tool_results}"
                 })
-            
+
             # Call LLM
             response = await chat_api_call(
                 provider=request.get("provider", "openai"),
@@ -345,7 +345,7 @@ class ResponseRunner:
                 max_tokens=request.get("max_tokens"),
                 stream=False  # Never stream in background
             )
-            
+
             # 5. Save response to database
             async with self._transaction():
                 await self._save_response(response_id, response, tool_results)
@@ -353,7 +353,7 @@ class ResponseRunner:
                     "completed_at": datetime.utcnow().isoformat(),
                     "duration_seconds": time.time() - start_time
                 })
-            
+
             # 6. Trigger webhook if configured
             if request.get("webhook_url"):
                 await self._send_webhook(
@@ -366,17 +366,17 @@ class ResponseRunner:
                         "tool_results": tool_results
                     }
                 )
-            
+
             logger.info(f"Completed response {response_id} in {time.time()-start_time:.2f}s")
             return {"id": response_id, "status": "completed", "response": response}
-            
+
         except asyncio.CancelledError:
             await self._mark_cancelled(response_id)
             raise
         except Exception as e:
             logger.error(f"Response {response_id} failed: {e}", exc_info=True)
             await self._mark_failed(response_id, str(e))
-            
+
             # Send failure webhook
             if request.get("webhook_url"):
                 await self._send_webhook(
@@ -396,31 +396,31 @@ from tldw_Server_API.app.core.RAG.RAG_Search.simplified.enhanced_rag_service_v2 
 
 class BaseTool(ABC):
     """Base class for all tools"""
-    
+
     @abstractmethod
     async def execute(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         pass
-    
+
     @abstractmethod
     def validate_parameters(self, parameters: Dict[str, Any]) -> bool:
         pass
 
 class FileSearchTool(BaseTool):
     """File search using existing RAG infrastructure"""
-    
+
     def __init__(self):
         self.rag_service = EnhancedRAGServiceV2()
-    
+
     def validate_parameters(self, parameters: Dict) -> bool:
         return "query" in parameters
-    
+
     async def execute(self, parameters: Dict) -> Dict:
         """Execute file search using RAG service"""
-        
+
         query = parameters["query"]
         filters = parameters.get("filters", {})
         top_k = parameters.get("top_k", 5)
-        
+
         try:
             # Use existing RAG search
             results = await self.rag_service.search(
@@ -429,7 +429,7 @@ class FileSearchTool(BaseTool):
                 top_k=top_k,
                 use_reranking=True
             )
-            
+
             return {
                 "success": True,
                 "results": results,
@@ -445,24 +445,24 @@ class FileSearchTool(BaseTool):
 
 class WebSearchTool(BaseTool):
     """Web search tool implementation"""
-    
+
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("SEARCH_API_KEY")
         self.client = httpx.AsyncClient(timeout=30.0)
-    
+
     def validate_parameters(self, parameters: Dict) -> bool:
         return "query" in parameters
-    
+
     async def execute(self, parameters: Dict) -> Dict:
         """Execute web search"""
-        
+
         query = parameters["query"]
         num_results = parameters.get("num_results", 5)
-        
+
         # Option 1: Use a search API (Serper, SerpAPI, etc.)
         # Option 2: Implement basic web scraping
         # For now, return mock results
-        
+
         return {
             "success": True,
             "results": [
@@ -473,7 +473,7 @@ class WebSearchTool(BaseTool):
 
 class ToolOrchestrator:
     """Manages tool execution with circuit breaker and caching"""
-    
+
     def __init__(self):
         self.tools: Dict[str, BaseTool] = {
             "file_search": FileSearchTool(),
@@ -481,7 +481,7 @@ class ToolOrchestrator:
         }
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self.cache = {}  # Simple in-memory cache
-        
+
     async def execute_tool(
         self,
         tool_name: str,
@@ -489,36 +489,36 @@ class ToolOrchestrator:
         context: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """Execute tool with error handling and caching"""
-        
+
         if tool_name not in self.tools:
             raise ValueError(f"Unknown tool: {tool_name}")
-        
+
         tool = self.tools[tool_name]
-        
+
         # Validate parameters
         if not tool.validate_parameters(parameters):
             raise ValueError(f"Invalid parameters for tool {tool_name}")
-        
+
         # Check cache
         cache_key = f"{tool_name}:{hash(frozenset(parameters.items()))}"
         if cache_key in self.cache:
             logger.debug(f"Cache hit for {tool_name}")
             return self.cache[cache_key]
-        
+
         # Execute with circuit breaker
         breaker = self.circuit_breakers.get(tool_name)
         if breaker and breaker.is_open:
             raise Exception(f"Circuit breaker open for {tool_name}")
-        
+
         try:
             result = await tool.execute(parameters)
-            
+
             # Cache successful results
             if result.get("success"):
                 self.cache[cache_key] = result
-                
+
             return result
-            
+
         except Exception as e:
             # Update circuit breaker
             if breaker:
@@ -533,7 +533,7 @@ class ToolOrchestrator:
 ```python
 # Different limits for different operations
 create_limit = limiter.limit("10/minute")    # Create responses
-read_limit = limiter.limit("100/minute")      # Read operations  
+read_limit = limiter.limit("100/minute")      # Read operations
 stream_limit = limiter.limit("20/minute")     # SSE streams
 cancel_limit = limiter.limit("30/minute")     # Cancel operations
 ```
@@ -555,17 +555,17 @@ async def create_response(
 ):
     """
     Create a new response synchronously or asynchronously.
-    
+
     If background=true, returns immediately with status="queued".
     Otherwise, waits for completion (with timeout).
-    
+
     Rate limit: 10/minute
     """
-    
+
     try:
         # Generate response ID
         response_id = f"resp_{uuid.uuid4().hex[:12]}"
-        
+
         # Create conversation record
         conversation_id = await db.create_conversation(
             title=f"Response {response_id}",
@@ -578,7 +578,7 @@ async def create_response(
                 "request": request.dict(exclude={"webhook_secret"})
             }
         )
-        
+
         # Store initial messages
         for msg in request.messages:
             await db.add_message(
@@ -586,7 +586,7 @@ async def create_response(
                 role=msg["role"],
                 content=msg["content"]
             )
-        
+
         # Prepare request for runner
         runner_request = {
             "conversation_id": conversation_id,
@@ -601,7 +601,7 @@ async def create_response(
             "temperature": request.temperature,
             "timeout_seconds": request.timeout_seconds
         }
-        
+
         # Execute
         if request.background:
             # Queue for background processing
@@ -610,7 +610,7 @@ async def create_response(
                 request=runner_request,
                 background=True
             )
-            
+
             return ResponseObject(
                 id=response_id,
                 object="response",
@@ -631,7 +631,7 @@ async def create_response(
                     ),
                     timeout=request.timeout_seconds
                 )
-                
+
                 return ResponseObject(
                     id=response_id,
                     object="response",
@@ -644,7 +644,7 @@ async def create_response(
                     thread_id=request.thread_id,
                     tools_used=list(result.get("tool_results", {}).keys())
                 )
-                
+
             except asyncio.TimeoutError:
                 # Mark as failed due to timeout
                 await response_runner._mark_failed(response_id, "Request timeout")
@@ -652,7 +652,7 @@ async def create_response(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                     detail="Response generation timed out"
                 )
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -768,7 +768,7 @@ async def web_search(query: str, num_results: int = 5) -> Dict:
     # Return structured search results
 ```
 
-#### File Search Tool  
+#### File Search Tool
 ```python
 async def file_search(query: str, filters: Dict = None) -> Dict:
     # Direct integration with RAG_Search/simplified/enhanced_rag_service.py
@@ -824,7 +824,7 @@ async def file_search(query: str, filters: Dict = None) -> Dict:
 
 ### CRITICAL ISSUE 1: Database Design Conflict
 **Problem**: Creating a separate Responses database will fragment data and complicate queries
-**Solution**: 
+**Solution**:
 - **EXTEND ChaChaNotes_DB instead of creating new database**
 - Add responses tables to existing conversations database
 - Leverage existing conversation/message structure
@@ -862,7 +862,7 @@ async def file_search(query: str, filters: Dict = None) -> Dict:
 
 ### Issue 6: Database Lock Contention
 **Problem**: SQLite locks during concurrent writes
-**Mitigation**: 
+**Mitigation**:
 - Use WAL mode (already implemented in existing DBs)
 - Leverage existing connection management patterns
 - Use existing DB_Manager patterns
@@ -909,7 +909,7 @@ from locust import HttpUser, task, between
 
 class ResponseAPIUser(HttpUser):
     wait_time = between(1, 3)
-    
+
     @task(3)
     def create_sync_response(self):
         self.client.post("/v1/responses", json={
@@ -917,7 +917,7 @@ class ResponseAPIUser(HttpUser):
             "messages": [{"role": "user", "content": "Hello"}],
             "background": False
         })
-    
+
     @task(7)
     def create_async_response(self):
         response = self.client.post("/v1/responses", json={
@@ -925,7 +925,7 @@ class ResponseAPIUser(HttpUser):
             "messages": [{"role": "user", "content": "Hello"}],
             "background": True
         })
-        
+
         if response.status_code == 201:
             response_id = response.json()["id"]
             # Poll for completion
@@ -1035,17 +1035,17 @@ class TestResponseRunner:
     @pytest.fixture
     def runner(self):
         return ResponseRunner(":memory:")
-    
+
     @pytest.mark.asyncio
     async def test_execute_response_success(self, runner):
         # Test successful response execution
         pass
-    
+
     @pytest.mark.asyncio
     async def test_execute_response_tool_failure(self, runner):
         # Test graceful handling of tool failures
         pass
-    
+
     @pytest.mark.asyncio
     async def test_concurrent_limit(self, runner):
         # Test concurrency limiting
@@ -1060,11 +1060,11 @@ class TestResponsesIntegration:
     async def test_end_to_end_sync(self, client):
         # Test complete sync flow
         pass
-    
+
     async def test_end_to_end_async(self, client):
         # Test complete async flow with polling
         pass
-    
+
     async def test_webhook_delivery(self, client, webhook_server):
         # Test webhook notifications
         pass

@@ -77,4 +77,3 @@ async def test_circuit_breaker_opens_and_skips(monkeypatch):
     )
     assert isinstance(out, dict)
     assert calls["n"] == 2
-

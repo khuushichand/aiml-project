@@ -26,7 +26,7 @@ classDiagram
         +list_providers()
         +get_health()
     }
-    
+
     class SynchronousAPI {
         -cache: TTLCache
         -connection_pool: ConnectionPoolManager
@@ -35,7 +35,7 @@ classDiagram
         +clear_cache()
         +get_metrics()
     }
-    
+
     class JobBasedAPI {
         -job_manager: JobManager
         -redis_client: Redis
@@ -43,7 +43,7 @@ classDiagram
         +get_job_status()
         +cancel_job()
     }
-    
+
     class TTLCache {
         -cache: Dict
         -lock: Lock
@@ -52,20 +52,20 @@ classDiagram
         +set()
         +cleanup_expired()
     }
-    
+
     class ConnectionPoolManager {
         -pools: Dict
         +get_session()
         +close_all()
     }
-    
+
     class WorkerOrchestrator {
         -worker_pools: Dict
         +start_workers()
         +scale_workers()
         +shutdown()
     }
-    
+
     class BaseWorker {
         <<abstract>>
         -config: WorkerConfig
@@ -73,23 +73,23 @@ classDiagram
         +process_message()
         +heartbeat()
     }
-    
+
     class ChunkingWorker {
         +chunk_text()
         +process_message()
     }
-    
+
     class EmbeddingWorker {
         -model_cache: Dict
         +create_embeddings()
         +process_message()
     }
-    
+
     class StorageWorker {
         +store_embeddings()
         +process_message()
     }
-    
+
     EmbeddingSystem <|-- SynchronousAPI
     EmbeddingSystem <|-- JobBasedAPI
     SynchronousAPI --> TTLCache
@@ -228,14 +228,14 @@ async def process_large_batch(texts: List[str]):
         content="\n".join(texts),
         priority=50
     )
-    
+
     # Poll for status
     while True:
         status = await job_manager.get_job_status(job.job_id)
         if status.status in ["completed", "failed"]:
             break
         await asyncio.sleep(1)
-    
+
     return status
 ```
 
@@ -270,7 +270,7 @@ def build_provider_config(
     dimensions: Optional[int] = None
 ) -> Dict[str, Any]:
     # ... existing providers ...
-    
+
     elif provider == EmbeddingProvider.NEWPROVIDER:
         return {
             "provider": "newprovider",
@@ -295,7 +295,7 @@ class NewProviderEmbedder(BaseEmbedder):
     def __init__(self, config: NewProviderCfg):
         self.config = config
         self.client = self._init_client()
-    
+
     def create_embeddings(self, texts: List[str]) -> np.ndarray:
         # Implement provider-specific logic
         response = self.client.embeddings.create(
@@ -328,13 +328,13 @@ async def test_newprovider_embeddings():
         mock_client.embeddings.create.return_value = Mock(
             data=[Mock(embedding=[0.1, 0.2, 0.3])]
         )
-        
+
         embeddings = await create_embeddings_batch_async(
             texts=["test"],
             provider="newprovider",
             model_id="newprovider-model-1"
         )
-        
+
         assert len(embeddings) == 1
         assert len(embeddings[0]) == 3
 ```
@@ -350,14 +350,14 @@ graph TD
         INTEGRATION[Integration Tests<br/>~20%]
         E2E[End-to-End Tests<br/>~10%]
     end
-    
+
     subgraph "Test Types"
         FUNC[Functional Tests]
         PROP[Property Tests]
         PERF[Performance Tests]
         SEC[Security Tests]
     end
-    
+
     UNIT --> FUNC
     UNIT --> PROP
     INTEGRATION --> FUNC
@@ -403,14 +403,14 @@ pytest -k test_cache_ttl_expiration
 class TestCacheOperations:
     async def test_cache_set_and_get(self):
         cache = TTLCache(max_size=10, ttl_seconds=60)
-        
+
         # Test set
         await cache.set("key1", [1.0, 2.0])
-        
+
         # Test get
         value = await cache.get("key1")
         assert value == [1.0, 2.0]
-        
+
         # Test non-existent key
         value = await cache.get("nonexistent")
         assert value is None
@@ -432,7 +432,7 @@ async def test_real_openai_embeddings(client):
             "model": "text-embedding-3-small"
         }
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert len(data["data"][0]["embedding"]) == 1536
@@ -449,10 +449,10 @@ from hypothesis import given, strategies as st
 )
 async def test_cache_never_exceeds_max_size(max_size, num_items):
     cache = TTLCache(max_size=max_size)
-    
+
     for i in range(num_items):
         await cache.set(f"key_{i}", [float(i)])
-    
+
     stats = cache.stats()
     assert stats['size'] <= max_size
 ```
@@ -508,12 +508,12 @@ cache = TTLCache(max_size=100, ttl_seconds=60)
 async def debug_cache():
     stats = cache.stats()
     logger.info(f"Cache stats: {stats}")
-    
+
     # Check specific key
     key = get_cache_key("text", "provider", "model")
     value = await cache.get(key)
     logger.info(f"Cache value for {key}: {value}")
-    
+
     # Clear cache if needed
     await cache.clear()
 ```
@@ -529,10 +529,10 @@ def check_memory():
     process = psutil.Process()
     mem_info = process.memory_info()
     logger.info(f"Memory usage: {mem_info.rss / 1024 / 1024:.2f} MB")
-    
+
     # Force garbage collection
     gc.collect()
-    
+
     # Check for memory leaks
     import tracemalloc
     tracemalloc.start()
@@ -553,10 +553,10 @@ import pdb
 async def debug_function():
     # Set breakpoint
     pdb.set_trace()
-    
+
     # Or use breakpoint() in Python 3.7+
     breakpoint()
-    
+
     # Inspect variables
     result = await some_operation()
     return result
@@ -587,18 +587,18 @@ from io import StringIO
 def profile_function():
     profiler = cProfile.Profile()
     profiler.enable()
-    
+
     # Run code to profile
     result = expensive_operation()
-    
+
     profiler.disable()
-    
+
     # Print statistics
     stream = StringIO()
     stats = pstats.Stats(profiler, stream=stream)
     stats.sort_stats('cumulative')
     stats.print_stats(10)
-    
+
     logger.info(stream.getvalue())
     return result
 ```
@@ -613,12 +613,12 @@ class MultiLevelCache:
     def __init__(self):
         self.l1_cache = {}  # In-memory
         self.l2_cache = Redis()  # Redis
-    
+
     async def get(self, key):
         # Check L1
         if key in self.l1_cache:
             return self.l1_cache[key]
-        
+
         # Check L2
         value = await self.l2_cache.get(key)
         if value:
@@ -646,7 +646,7 @@ OPTIMAL_BATCH_SIZES = {
 
 async def optimize_batching(texts: List[str], provider: str):
     batch_size = OPTIMAL_BATCH_SIZES.get(provider, 50)
-    
+
     results = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
@@ -655,7 +655,7 @@ async def optimize_batching(texts: List[str], provider: str):
             provider=provider
         )
         results.extend(embeddings)
-    
+
     return results
 ```
 
@@ -680,7 +680,7 @@ async def create_optimized_session(provider: str):
     config = CONNECTION_CONFIGS.get(provider, {})
     connector = aiohttp.TCPConnector(**config)
     timeout = aiohttp.ClientTimeout(total=30)
-    
+
     return aiohttp.ClientSession(
         connector=connector,
         timeout=timeout
@@ -770,7 +770,7 @@ logger.add(
 async def process_request(request):
     req_id = str(uuid.uuid4())
     request_id.set(req_id)
-    
+
     logger.info(
         "Processing embedding request",
         extra={
@@ -780,7 +780,7 @@ async def process_request(request):
             "input_count": len(request.input)
         }
     )
-    
+
     try:
         result = await create_embeddings(request)
         logger.info(
@@ -805,7 +805,7 @@ async def comprehensive_health_check():
         "checks": {},
         "timestamp": datetime.utcnow().isoformat()
     }
-    
+
     # Check cache
     try:
         await cache.get("health_check_key")
@@ -813,7 +813,7 @@ async def comprehensive_health_check():
     except Exception as e:
         health["checks"]["cache"] = f"unhealthy: {e}"
         health["status"] = "degraded"
-    
+
     # Check providers
     for provider in ["openai", "huggingface"]:
         try:
@@ -822,7 +822,7 @@ async def comprehensive_health_check():
         except Exception as e:
             health["checks"][provider] = f"unhealthy: {e}"
             health["status"] = "degraded"
-    
+
     # Check database
     try:
         await db.execute("SELECT 1")
@@ -830,7 +830,7 @@ async def comprehensive_health_check():
     except Exception as e:
         health["checks"]["database"] = f"unhealthy: {e}"
         health["status"] = "unhealthy"
-    
+
     return health
 ```
 
@@ -860,7 +860,7 @@ async def traced_operation():
     with tracer.start_as_current_span("create_embeddings") as span:
         span.set_attribute("provider", "openai")
         span.set_attribute("model", "text-embedding-3-small")
-        
+
         try:
             result = await create_embeddings()
             span.set_attribute("success", True)
@@ -909,7 +909,7 @@ async def handle_errors():
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Internal error")
-    
+
     return result
 ```
 

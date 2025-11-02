@@ -1,7 +1,7 @@
 # Media Ingestion Pipeline PRD
 
-Status: Foundations shipped (v0.2.x); Stage 1 roadmap in progress  
-Owner: Core Maintainers  
+Status: Foundations shipped (v0.2.x); Stage 1 roadmap in progress
+Owner: Core Maintainers
 Audience: Backend & infrastructure contributors
 
 ## 1. Summary
@@ -69,27 +69,27 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Downstream hooks include embeddings enqueue, claims extraction, watchlist output generation, and optional notifications.
 
 ## 8. Data Model (SQLite default, Postgres optional)
-- **Media DB v2 (per-user `Databases/user_databases/<user_id>/Media_DB_v2.db`):**  
-  - `Media`: canonical item record (title, url, type, status, metadata, favorite, soft delete).  
-  - `DocumentVersions`: versioned content body plus `safe_metadata`, prompts, analysis payloads.  
-  - `MediaChunks`: chunked text with embeddings metadata; triggers maintain `media_fts`.  
-  - `UnvectorizedMediaChunks`: pending chunks waiting on embeddings jobs.  
-  - `Keywords` & `MediaKeywords`: normalized tags and bridging table with BM25 scoring metadata.  
-  - `Transcripts`: audio/video transcripts with diarization metadata.  
-  - `Claims`: extracted claims + `claims_fts`.  
-  - `DocumentStructureIndex`: hierarchical section/paragraph offsets for structure-aware retrieval.  
-  - `sync_log`: change log for multi-device sync.  
-- **Collections DB (per user):** `content_items`, `content_item_tags`, `content_item_tag_links` share user IDs with watchlists/reading services. Watchlist/reading pipelines dual-write here today so `/api/v1/items` reflects those flows; `/media` uploads will join via a future dual-write stage.  
+- **Media DB v2 (per-user `Databases/user_databases/<user_id>/Media_DB_v2.db`):**
+  - `Media`: canonical item record (title, url, type, status, metadata, favorite, soft delete).
+  - `DocumentVersions`: versioned content body plus `safe_metadata`, prompts, analysis payloads.
+  - `MediaChunks`: chunked text with embeddings metadata; triggers maintain `media_fts`.
+  - `UnvectorizedMediaChunks`: pending chunks waiting on embeddings jobs.
+  - `Keywords` & `MediaKeywords`: normalized tags and bridging table with BM25 scoring metadata.
+  - `Transcripts`: audio/video transcripts with diarization metadata.
+  - `Claims`: extracted claims + `claims_fts`.
+  - `DocumentStructureIndex`: hierarchical section/paragraph offsets for structure-aware retrieval.
+  - `sync_log`: change log for multi-device sync.
+- **Collections DB (per user):** `content_items`, `content_item_tags`, `content_item_tag_links` share user IDs with watchlists/reading services. Watchlist/reading pipelines dual-write here today so `/api/v1/items` reflects those flows; `/media` uploads will join via a future dual-write stage.
 - **Backends:** SQLite is default and fully supported; Postgres backend exists but some ingestion routines rely on SQLite-specific syntax (e.g., `INSERT OR IGNORE`). Stage 2 roadmap covers removing those assumptions.
 
 ## 9. API Surface (developer focus)
-- `/api/v1/media/add` - process uploads/URLs and persist results (default path).  
-- `/api/v1/media/process-{audios|videos|documents|pdfs|ebooks|web-content|mediawiki}` - process without persistence (used by UI previews and external tooling).  
-- `/api/v1/media/process-code` - code-aware chunking pipeline.  
-- `/api/v1/media/ingest-web-content` - crawler/scraper entry that reuses watchlist fetchers.  
-- `/api/v1/media/mediawiki/...` - long-running MediaWiki ingestion with streaming responses.  
-- `/api/v1/media/{id}` - CRUD endpoints (fetch, update metadata, delete/restore).  
-- `/api/v1/watchlists/*` and `/api/v1/items` reuse ingestion outputs to list items and outputs.  
+- `/api/v1/media/add` - process uploads/URLs and persist results (default path).
+- `/api/v1/media/process-{audios|videos|documents|pdfs|ebooks|web-content|mediawiki}` - process without persistence (used by UI previews and external tooling).
+- `/api/v1/media/process-code` - code-aware chunking pipeline.
+- `/api/v1/media/ingest-web-content` - crawler/scraper entry that reuses watchlist fetchers.
+- `/api/v1/media/mediawiki/...` - long-running MediaWiki ingestion with streaming responses.
+- `/api/v1/media/{id}` - CRUD endpoints (fetch, update metadata, delete/restore).
+- `/api/v1/watchlists/*` and `/api/v1/items` reuse ingestion outputs to list items and outputs.
 - Future: `/api/v1/media/jobs/*` for asynchronous queued ingestion (Stage 2).
 
 ## 10. Functional Requirements (current + near term)
@@ -118,57 +118,57 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Watchlists/collections integration and embeddings enqueue hook.
 
 ### Stage 1 - Observability & Job Control (In progress)
-- Instrument per-media metrics (validation failures, processing duration, chunk counts).  
-- Normalize async task orchestration: background queues for long-running jobs (Large PDFs, yt-dlp).  
-- Introduce ingestion job registry with retry/backoff metadata stored in Media DB (or new table).  
-- Harden streaming ingestion (MediaWiki, large uploads) with resumable checkpoints.  
-- Ensure Content Collections pipeline receives consistent provenance metadata (run_id, source_id).  
+- Instrument per-media metrics (validation failures, processing duration, chunk counts).
+- Normalize async task orchestration: background queues for long-running jobs (Large PDFs, yt-dlp).
+- Introduce ingestion job registry with retry/backoff metadata stored in Media DB (or new table).
+- Harden streaming ingestion (MediaWiki, large uploads) with resumable checkpoints.
+- Ensure Content Collections pipeline receives consistent provenance metadata (run_id, source_id).
 - Tighten sanitization (HTML/XML cleaning) and document safe defaults.
 
 ### Stage 2 - Backend Parity & Scaling
-- Remove SQLite-specific SQL; add migrations for Postgres parity.  
-- Support distributed workers for heavy processing (audio transcription, OCR) with queue-based execution.  
-- Implement resource budgeting per user (size limits, concurrency) with metrics + limits surfaced to admin UI.  
-- Add structured structure-index writes (section hierarchy) per Ingest-Plan-1.  
+- Remove SQLite-specific SQL; add migrations for Postgres parity.
+- Support distributed workers for heavy processing (audio transcription, OCR) with queue-based execution.
+- Implement resource budgeting per user (size limits, concurrency) with metrics + limits surfaced to admin UI.
+- Add structured structure-index writes (section hierarchy) per Ingest-Plan-1.
 - Expand FTS/embedding parity (image captioning, table extraction).
 
 ### Stage 3 - Advanced Automation
-- Agentic ingestion workflows (auto-derive follow-up fetches, domain-specific pipelines).  
-- Built-in summarization + highlight extraction stored alongside media versions.  
-- Inline quality scoring and remediation suggestions for failed ingestion.  
+- Agentic ingestion workflows (auto-derive follow-up fetches, domain-specific pipelines).
+- Built-in summarization + highlight extraction stored alongside media versions.
+- Inline quality scoring and remediation suggestions for failed ingestion.
 - First-class support for streaming media (live transcripts) with partial persistence.
 
 ## 13. Metrics & Observability
-- Proposed counters/gauges (Stage 1):  
-  - `ingestion_requests_total{media_type,outcome}`  
-  - `ingestion_processing_seconds_bucket{media_type,processor}` (histogram)  
-  - `ingestion_validation_failures_total{reason}`  
-  - `ingestion_chunks_total{media_type,chunk_method}`  
-  - `ingestion_embeddings_enqueue_total{outcome}`  
-- Logs: structured loguru fields (`media_type`, `source`, `duration_ms`, `chunk_count`, `warnings`).  
-- Tracing: optional OpenTelemetry spans per stage (validation, download, parse, chunk).  
+- Proposed counters/gauges (Stage 1):
+  - `ingestion_requests_total{media_type,outcome}`
+  - `ingestion_processing_seconds_bucket{media_type,processor}` (histogram)
+  - `ingestion_validation_failures_total{reason}`
+  - `ingestion_chunks_total{media_type,chunk_method}`
+  - `ingestion_embeddings_enqueue_total{outcome}`
+- Logs: structured loguru fields (`media_type`, `source`, `duration_ms`, `chunk_count`, `warnings`).
+- Tracing: optional OpenTelemetry spans per stage (validation, download, parse, chunk).
 - Alerting: high validation failure rate, stuck processing jobs, embeddings enqueue backlog.
 
 ## 14. Security & Compliance
-- Enforce file size limits and timeouts configured in `Config_Files/config.txt` (`media_processing` section).  
-- Support Yara scanning when rules present; provide guidance for rule maintenance.  
-- Ensure temp directories are per-request and cleaned after use; quarantine suspicious files for analysis.  
-- Sanitization: HTML/XML sanitizers must strip scripts/forms; PDF/Doc ingestion should guard against embedded executables.  
-- Audit logging: Media DB `sync_log` captures create/update/delete attribution.  
+- Enforce file size limits and timeouts configured in `Config_Files/config.txt` (`media_processing` section).
+- Support Yara scanning when rules present; provide guidance for rule maintenance.
+- Ensure temp directories are per-request and cleaned after use; quarantine suspicious files for analysis.
+- Sanitization: HTML/XML sanitizers must strip scripts/forms; PDF/Doc ingestion should guard against embedded executables.
+- Audit logging: Media DB `sync_log` captures create/update/delete attribution.
 - Secrets: avoid logging API keys, cookies, credentials when fetching remote content.
 
 ## 15. Open Questions
-1. Should we standardize on asynchronous worker queues for heavy processors (audio/video) in Stage 1 or defer to Stage 2?  
-2. How do we reconcile per-user SQLite databases with org-level Postgres deployments for shared watchlists?  
-3. Do we need a pluggable antivirus scan beyond Yara (e.g., ClamAV integration)?  
-4. What is the long-term strategy for storing raw binaries (S3/minio vs. filesystem) when Media DB references file paths?  
-5. How should we expose ingestion progress to clients (WebSockets vs. polling) for long operations?  
+1. Should we standardize on asynchronous worker queues for heavy processors (audio/video) in Stage 1 or defer to Stage 2?
+2. How do we reconcile per-user SQLite databases with org-level Postgres deployments for shared watchlists?
+3. Do we need a pluggable antivirus scan beyond Yara (e.g., ClamAV integration)?
+4. What is the long-term strategy for storing raw binaries (S3/minio vs. filesystem) when Media DB references file paths?
+5. How should we expose ingestion progress to clients (WebSockets vs. polling) for long operations?
 6. Which sanitization library should replace current stubs, and how do we validate it across formats?
 
 ## 16. References
-- Code: `tldw_Server_API/app/core/Ingestion_Media_Processing/` (processors, Upload_Sink).  
-- Database: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py`; `Docs/Code_Documentation/Databases/Media_DB_v2.md`.  
-- Collections & Watchlists: `Docs/Product/Content_Collections_PRD.md`, `Docs/Product/Watchlist_PRD.md`.  
-- Ingestion guides: `Docs/Code_Documentation/Ingestion_Media_Processing.md`, `Docs/Code_Documentation/Ingestion_Pipeline_*.md`.  
-- Infrastructure: `Docs/Product/Infrastructure_Module_PRD.md` (Redis factory, metrics).  
+- Code: `tldw_Server_API/app/core/Ingestion_Media_Processing/` (processors, Upload_Sink).
+- Database: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py`; `Docs/Code_Documentation/Databases/Media_DB_v2.md`.
+- Collections & Watchlists: `Docs/Product/Content_Collections_PRD.md`, `Docs/Product/Watchlist_PRD.md`.
+- Ingestion guides: `Docs/Code_Documentation/Ingestion_Media_Processing.md`, `Docs/Code_Documentation/Ingestion_Pipeline_*.md`.
+- Infrastructure: `Docs/Product/Infrastructure_Module_PRD.md` (Redis factory, metrics).
 - Related plans: `Docs/Design/Ingest-Plan-1.md`, `Docs/Design/RAG_Plan.md`.

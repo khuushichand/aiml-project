@@ -3,7 +3,7 @@
 <h1>tldw Server</h1>
 <p>Too Long; Didn't Watch - API-first media analysis & research platform</p>
 
-<a href="https://www.gnu.org/licenses/old-licenses/gpl-3.0.en.html">[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server)   
+<a href="https://www.gnu.org/licenses/old-licenses/gpl-3.0.en.html">[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server)
 <img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-blue.svg" />
   </a>
 
@@ -625,7 +625,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
   - This can result in models that may be better at some tasks but worse at others, so it's important to test and see what works best for you.
 - FIXME (Qwen3-4B-Instruct-2507, Mistral-Nemo-Instruct-2407-GGUF, Qwen3-30B-A3B-Instruct-2507)
 
-For commercial API usage for use with this project: Latest Anthropic/ChatGPT/Gemini Models. 
+For commercial API usage for use with this project: Latest Anthropic/ChatGPT/Gemini Models.
 Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.
 That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.
 You are just a stepping stone to their goals.
@@ -633,15 +633,15 @@ You are just a stepping stone to their goals.
 From @nrose 05/08/2024 on Threads:
 ```
 No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
-  No. For efficiency. 
-Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth. 
-The model declines over time, then the optimization makes it somewhat better, then in a sort of 
-  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then 
+  No. For efficiency.
+Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth.
+The model declines over time, then the optimization makes it somewhat better, then in a sort of
+  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then
   trim down over time, so they can train the next big model… etc etc.
-None of these companies exist to provide AI services in 2024. They’re only doing it to finance the 
+None of these companies exist to provide AI services in 2024. They’re only doing it to finance the
  things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
-  and become a hidden monopoly like the oil and electric companies. 
-2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some 
+  and become a hidden monopoly like the oil and electric companies.
+2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some
   directional income
 ```
 
@@ -677,7 +677,7 @@ As an update to this, looking back a year, it still stands true, and I would onl
   - **Inference Engine** - A software system that is designed to execute a model that has been trained by a machine learning algorithm. Llama.cpp and Kobold.cpp are examples of inference engines.
 - **Papers & Concepts**
   1. Lost in the Middle: How Language Models Use Long Contexts(2023)
-    - https://arxiv.org/abs/2307.03172 
+    - https://arxiv.org/abs/2307.03172
     - `We analyze the performance of language models on two tasks that require identifying relevant information in their input contexts: multi-document question answering and key-value retrieval. We find that performance can degrade significantly when changing the position of relevant information, indicating that current language models do not robustly make use of information in long input contexts. In particular, we observe that performance is often highest when relevant information occurs at the beginning or end of the input context, and significantly degrades when models must access relevant information in the middle of long contexts, even for explicitly long-context models`
   2. [Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of Large Language Models(2024)](https://arxiv.org/abs/2402.14848)
      - `Our findings show a notable degradation in LLMs' reasoning performance at much shorter input lengths than their technical maximum. We show that the degradation trend appears in every version of our dataset, although at different intensities. Additionally, our study reveals that the traditional metric of next word prediction correlates negatively with performance of LLMs' on our reasoning dataset. We analyse our results and identify failure modes that can serve as useful guides for future research, potentially informing strategies to address the limitations observed in LLMs.`
@@ -699,22 +699,22 @@ As an update to this, looking back a year, it still stands true, and I would onl
      - [ChatGPT Doesn't Trust Chargers Fans: Guardrail Sensitivity in Context](https://arxiv.org/abs/2407.06866)
        - `While the biases of language models in production are extensively documented, the biases of their guardrails have been neglected. This paper studies how contextual information about the user influences the likelihood of an LLM to refuse to execute a request. By generating user biographies that offer ideological and demographic information, we find a number of biases in guardrail sensitivity on GPT-3.5. Younger, female, and Asian-American personas are more likely to trigger a refusal guardrail when requesting censored or illegal information. Guardrails are also sycophantic, refusing to comply with requests for a political position the user is likely to disagree with. We find that certain identity groups and seemingly innocuous information, e.g., sports fandom, can elicit changes in guardrail sensitivity similar to direct statements of political ideology. For each demographic category and even for American football team fandom, we find that ChatGPT appears to infer a likely political ideology and modify guardrail behavior accordingly.`
 - **Tools & Libraries**
-  1. `llama.cpp` - A C++ inference engine. Highly recommend. 
+  1. `llama.cpp` - A C++ inference engine. Highly recommend.
      * https://github.com/ggerganov/llama.cpp
-  2. `kobold.cpp` - A C++ inference engine. GUI wrapper of llama.cpp with some tweaks. 
+  2. `kobold.cpp` - A C++ inference engine. GUI wrapper of llama.cpp with some tweaks.
      * https://github.com/LostRuins/koboldcpp
   3. `sillytavern` - A web-based interface for text generation models. Supports inference engines. Ignore the cat girls and weebness. This software is _powerful_ and _useful_. Also supports just about every API you could want.
      * https://github.com/SillyTavern/SillyTavern
   4. `llamafile` - A wrapper for llama.cpp that allows for easy use of local LLMs.
-     * Uses libcosomopolitan for cross-platform compatibility. 
+     * Uses libcosomopolitan for cross-platform compatibility.
      * Can be used to run LLMs on Windows, Linux, and MacOS with a single binary wrapper around Llama.cpp.
   5. `pytorch` - An open-source machine learning library based on the Torch library.
   6. `ffmpeg` - A free software project consisting of a large suite of libraries and programs for handling video, audio, and other multimedia files and streams.
-  7. `pandoc` - A free and open-source document converter, widely used as a writing tool (especially by scholars) and as a basis for publishing workflows. 
+  7. `pandoc` - A free and open-source document converter, widely used as a writing tool (especially by scholars) and as a basis for publishing workflows.
      * https://pandoc.org/
-  8. `marker` - A tool for converting PDFs(and other document types) to markdown. 
+  8. `marker` - A tool for converting PDFs(and other document types) to markdown.
      * https://github.com/VikParuchuri/marker
-  9. `faster_whisper` - A fast, lightweight, and accurate speech-to-text model. 
+  9. `faster_whisper` - A fast, lightweight, and accurate speech-to-text model.
       * https://github.com/SYSTRAN/faster-whisper
 
 </details>
@@ -774,7 +774,7 @@ Long-term vision: Building towards a personal AI research assistant inspired by 
     * Terry Pratchett
 - `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
   *Richard Feynman
-  
+
 
 ---
 

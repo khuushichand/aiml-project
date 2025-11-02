@@ -69,4 +69,3 @@ def test_pg_advisory_lock_stress_threaded(prompt_studio_dual_backend_db, monkeyp
     assert acquired_cnt >= total_jobs
     assert unlocks_cnt >= total_jobs
     assert attempts >= acquired_cnt
-

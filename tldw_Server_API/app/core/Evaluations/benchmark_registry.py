@@ -37,7 +37,7 @@ class BenchmarkConfig:
     field_mappings: Dict[str, str] = field(default_factory=dict)
     evaluation_params: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -50,12 +50,12 @@ class BenchmarkConfig:
             "evaluation_params": self.evaluation_params,
             "metadata": self.metadata
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BenchmarkConfig':
         """Create from dictionary."""
         return cls(**data)
-    
+
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'BenchmarkConfig':
         """Load from YAML file."""
@@ -66,7 +66,7 @@ class BenchmarkConfig:
 
 class BenchmarkRegistry:
     """Registry for managing benchmarks."""
-    
+
     # Mapping of evaluation types to classes
     EVALUATION_TYPES = {
         "multiple_choice": MultipleChoiceEvaluation,
@@ -77,11 +77,11 @@ class BenchmarkRegistry:
         "function_calling": None,  # To be implemented
         "multi_turn": None,  # To be implemented
     }
-    
+
     def __init__(self):
         self.benchmarks: Dict[str, BenchmarkConfig] = {}
         self._load_default_benchmarks()
-    
+
     def _load_default_benchmarks(self):
         """Load default benchmark configurations."""
         # SimpleQA
@@ -135,7 +135,7 @@ class BenchmarkRegistry:
             ))
         except Exception as e:
             logger.warning(f"Failed to register simpleqa_verified: {e}")
-        
+
         # MMLU Pro
         self.register(BenchmarkConfig(
             name="mmlu_pro",
@@ -159,7 +159,7 @@ class BenchmarkRegistry:
                 "size": 12000
             }
         ))
-        
+
         # GPQA Diamond
         self.register(BenchmarkConfig(
             name="gpqa_diamond",
@@ -182,7 +182,7 @@ class BenchmarkRegistry:
                 "domains": ["physics", "chemistry", "biology"]
             }
         ))
-        
+
         # Simple Bench
         self.register(BenchmarkConfig(
             name="simple_bench",
@@ -199,7 +199,7 @@ class BenchmarkRegistry:
                 "require_reasoning": False
             }
         ))
-        
+
         # Aider Polyglot
         self.register(BenchmarkConfig(
             name="aider_polyglot",
@@ -217,7 +217,7 @@ class BenchmarkRegistry:
                 "run_tests": True
             }
         ))
-        
+
         # BFCL (Berkeley Function Calling Leaderboard)
         self.register(BenchmarkConfig(
             name="bfcl",
@@ -234,7 +234,7 @@ class BenchmarkRegistry:
                 "strict_params": True
             }
         ))
-        
+
         # MASK Benchmark
         self.register(BenchmarkConfig(
             name="mask",
@@ -251,7 +251,7 @@ class BenchmarkRegistry:
                 "check_consistency": True
             }
         ))
-        
+
         # Vending Bench
         self.register(BenchmarkConfig(
             name="vending_bench",
@@ -269,7 +269,7 @@ class BenchmarkRegistry:
                 "track_metrics": ["net_worth", "units_sold", "days_operational"]
             }
         ))
-        
+
         # SWE-bench
         self.register(BenchmarkConfig(
             name="swe_bench",
@@ -288,32 +288,32 @@ class BenchmarkRegistry:
                 "use_repo_context": True
             }
         ))
-    
+
     def register(self, config: BenchmarkConfig) -> None:
         """Register a benchmark configuration."""
         self.benchmarks[config.name] = config
         logger.info(f"Registered benchmark: {config.name}")
-    
+
     def unregister(self, name: str) -> None:
         """Unregister a benchmark."""
         if name in self.benchmarks:
             del self.benchmarks[name]
             logger.info(f"Unregistered benchmark: {name}")
-    
+
     def get(self, name: str) -> Optional[BenchmarkConfig]:
         """Get a benchmark configuration."""
         return self.benchmarks.get(name)
-    
+
     def list_benchmarks(self) -> List[str]:
         """List all registered benchmark names."""
         return list(self.benchmarks.keys())
-    
+
     def get_benchmark_info(self, name: str) -> Dict[str, Any]:
         """Get detailed information about a benchmark."""
         config = self.get(name)
         if not config:
             return {}
-        
+
         return {
             "name": config.name,
             "description": config.description,
@@ -321,14 +321,14 @@ class BenchmarkRegistry:
             "dataset_source": config.dataset_source,
             "metadata": config.metadata
         }
-    
+
     def create_evaluator(self, benchmark_name: str) -> Optional[BaseEvaluation]:
         """Create an evaluator instance for a benchmark."""
         config = self.get(benchmark_name)
         if not config:
             logger.error(f"Benchmark not found: {benchmark_name}")
             return None
-        
+
         # Special handling for SimpleQA
         if config.evaluation_type == "simpleqa":
             try:
@@ -341,12 +341,12 @@ class BenchmarkRegistry:
             except Exception as e:
                 logger.error(f"Failed to create SimpleQA evaluator: {e}")
                 return None
-        
+
         eval_class = self.EVALUATION_TYPES.get(config.evaluation_type)
         if not eval_class:
             logger.error(f"Evaluation type not implemented: {config.evaluation_type}")
             return None
-        
+
         # Create evaluator with benchmark-specific parameters
         try:
             evaluator = eval_class(
@@ -357,14 +357,14 @@ class BenchmarkRegistry:
         except Exception as e:
             logger.error(f"Failed to create evaluator for {benchmark_name}: {e}")
             return None
-    
+
     def load_dataset(self, benchmark_name: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Load dataset for a benchmark."""
         config = self.get(benchmark_name)
         if not config:
             logger.error(f"Benchmark not found: {benchmark_name}")
             return []
-        
+
         try:
             # Load based on format
             if config.dataset_format == "json":
@@ -372,27 +372,27 @@ class BenchmarkRegistry:
                     data = load_dataset_from_url(config.dataset_source, format="json")
                 else:
                     data = load_dataset_from_json(config.dataset_source)
-            
+
             elif config.dataset_format == "jsonl":
                 if config.dataset_source.startswith("http"):
                     data = load_dataset_from_url(config.dataset_source, format="jsonl")
                 else:
                     data = load_dataset_from_jsonl(config.dataset_source)
-            
+
             elif config.dataset_format == "huggingface":
                 # Would need to implement HuggingFace dataset loading
                 logger.warning(f"HuggingFace datasets not yet implemented for {benchmark_name}")
                 return []
-            
+
             elif config.dataset_format == "custom":
                 # Custom loaders for specific benchmarks
                 logger.warning(f"Custom loader not yet implemented for {benchmark_name}")
                 return []
-            
+
             else:
                 logger.error(f"Unknown dataset format: {config.dataset_format}")
                 return []
-            
+
             # Apply field mappings to normalize data
             normalized_data = []
             for item in data:
@@ -402,39 +402,39 @@ class BenchmarkRegistry:
                         normalized[target_field] = item[source_field]
                 normalized["_original"] = item  # Keep original for reference
                 normalized_data.append(normalized)
-            
+
             # Apply limit if specified
             if limit and limit > 0:
                 normalized_data = normalized_data[:limit]
-            
+
             logger.info(f"Loaded {len(normalized_data)} items for {benchmark_name}")
             return normalized_data
-            
+
         except Exception as e:
             logger.error(f"Failed to load dataset for {benchmark_name}: {e}")
             return []
-    
+
     def save_config(self, config: BenchmarkConfig, path: str) -> None:
         """Save benchmark configuration to file."""
         path = Path(path)
-        
+
         if path.suffix == '.yaml' or path.suffix == '.yml':
             with open(path, 'w') as f:
                 yaml.dump(config.to_dict(), f, default_flow_style=False)
         else:
             with open(path, 'w') as f:
                 json.dump(config.to_dict(), f, indent=2)
-        
+
         logger.info(f"Saved benchmark config to {path}")
-    
+
     def load_config(self, path: str) -> Optional[BenchmarkConfig]:
         """Load benchmark configuration from file."""
         path = Path(path)
-        
+
         if not path.exists():
             logger.error(f"Config file not found: {path}")
             return None
-        
+
         try:
             if path.suffix == '.yaml' or path.suffix == '.yml':
                 config = BenchmarkConfig.from_yaml(str(path))
@@ -442,9 +442,9 @@ class BenchmarkRegistry:
                 with open(path, 'r') as f:
                     data = json.load(f)
                 config = BenchmarkConfig.from_dict(data)
-            
+
             return config
-            
+
         except Exception as e:
             logger.error(f"Failed to load config from {path}: {e}")
             return None

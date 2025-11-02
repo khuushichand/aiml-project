@@ -279,10 +279,10 @@ const decoder = new TextDecoder();
 while (true) {
   const { done, value } = await reader.read();
   if (done) break;
-  
+
   const chunk = decoder.decode(value);
   const lines = chunk.split('\n');
-  
+
   for (const line of lines) {
     if (line.startsWith('data: ')) {
       const data = JSON.parse(line.slice(6));
@@ -534,7 +534,7 @@ class RAGClient:
             'X-API-KEY': api_key,
             'Content-Type': 'application/json'
         }
-    
+
     def search(
         self,
         query: str,
@@ -551,7 +551,7 @@ class RAGClient:
             'sources': databases or ['media_db'],
             'keyword_filter': keywords
         }
-        
+
         response = requests.post(
             f'{self.base_url}/search',
             headers=self.headers,
@@ -559,7 +559,7 @@ class RAGClient:
         )
         response.raise_for_status()
         return response.json()
-    
+
     def ask(self, message: str, databases: List[str] = None) -> Dict:
         """Generate an answer using unified search with generation enabled."""
         data = {
@@ -574,7 +574,7 @@ class RAGClient:
         )
         response.raise_for_status()
         return response.json()
-    
+
     def stream(self, query: str) -> Generator[str, None, None]:
         """Stream NDJSON answer chunks from unified search."""
         data = {
@@ -595,7 +595,7 @@ class RAGClient:
                     evt = json.loads(line)
                     if evt.get('type') == 'delta':
                         yield evt.get('text', '')
-    
+
     def advanced_search(self, query: str, with_citations: bool = True, with_answer: bool = True) -> Dict:
         """Perform an advanced search with common features enabled."""
         response = requests.get(
@@ -614,16 +614,16 @@ class RAGClient:
 # Usage example
 if __name__ == '__main__':
     rag = RAGClient('http://localhost:8000/api/v1/rag', 'your-api-key')
-    
+
     # Simple search
     results = rag.search('python tutorials', limit=5)
     for doc in results.get('documents', []):
         print(f"- {doc['id']}: {doc['score']:.2f}")
-    
+
     # Q&A conversation
     answer = rag.ask("What is machine learning?")
     print(f"Answer: {answer.get('generated_answer')}")
-    
+
     # Research with streaming
     print("Research output:")
     for chunk in rag.stream("Latest advances in quantum computing"):
@@ -725,14 +725,14 @@ async function streamResponse(message: string, onChunk: (chunk: string) => void)
       generation_config: { stream: true }
     })
   });
-  
+
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    
+
     const chunk = decoder.decode(value);
     // Parse SSE format
     if (chunk.startsWith('data: ')) {
@@ -787,38 +787,38 @@ async function safeSearch(query: string): Promise<SearchResponse | null> {
       },
       body: JSON.stringify({ query })
     });
-    
+
     if (!response.ok) {
       const error = await response.json();
-      
+
       switch (response.status) {
         case 400:
           console.error('Invalid request:', error.message);
           return null;
-        
+
         case 401:
           console.error('Authentication failed. Check API key.');
           throw new Error('Authentication failed');
-        
+
         case 429:
           console.warn('Rate limited. Retrying in 5 seconds...');
           await new Promise(resolve => setTimeout(resolve, 5000));
           return safeSearch(query); // Retry
-        
+
         case 500:
         case 503:
           console.error('Server error. Retrying with backoff...');
           await exponentialBackoff();
           return safeSearch(query); // Retry
-        
+
         default:
           console.error('Unexpected error:', error);
           return null;
       }
     }
-    
+
     return response.json();
-    
+
   } catch (error) {
     console.error('Network error:', error);
     return null;
@@ -875,7 +875,7 @@ class RateLimitedClient {
   private processing = false;
   private requestCount = 0;
   private resetTime = Date.now() + 60000;
-  
+
   async request(fn: () => Promise<any>): Promise<any> {
     return new Promise((resolve, reject) => {
       this.requestQueue.push(async () => {
@@ -885,14 +885,14 @@ class RateLimitedClient {
             this.requestCount = 0;
             this.resetTime = Date.now() + 60000;
           }
-          
+
           if (this.requestCount >= 100) {
             // Wait until reset
             const waitTime = this.resetTime - Date.now();
             await new Promise(r => setTimeout(r, waitTime));
             this.requestCount = 0;
           }
-          
+
           this.requestCount++;
           const result = await fn();
           resolve(result);
@@ -900,22 +900,22 @@ class RateLimitedClient {
           reject(error);
         }
       });
-      
+
       this.processQueue();
     });
   }
-  
+
   private async processQueue() {
     if (this.processing) return;
     this.processing = true;
-    
+
     while (this.requestQueue.length > 0) {
       const fn = this.requestQueue.shift();
       await fn();
       // Small delay between requests
       await new Promise(r => setTimeout(r, 100));
     }
-    
+
     this.processing = false;
   }
 }
@@ -934,7 +934,7 @@ class RateLimitedClient {
 async function* paginatedSearch(query: string, totalLimit: number = 100) {
   const pageSize = 20;
   let offset = 0;
-  
+
   while (offset < totalLimit) {
     const response = await fetch('/api/v1/rag/search/advanced', {
       method: 'POST',
@@ -950,10 +950,10 @@ async function* paginatedSearch(query: string, totalLimit: number = 100) {
         }
       })
     });
-    
+
     const data = await response.json();
     yield data.results;
-    
+
     if (data.results.length < pageSize) break;
     offset += pageSize;
   }
@@ -973,32 +973,32 @@ Implement intelligent caching:
 class CachedRAGClient {
   private cache = new Map();
   private cacheExpiry = 5 * 60 * 1000; // 5 minutes
-  
+
   private getCacheKey(method: string, params: object): string {
     return `${method}:${JSON.stringify(params)}`;
   }
-  
+
   async search(query: string, options: object = {}): Promise<any> {
     const cacheKey = this.getCacheKey('search', { query, ...options });
-    
+
     // Check cache
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
       return cached.data;
     }
-    
+
     // Make request
     const data = await this.ragClient.search(query, options);
-    
+
     // Cache result
     this.cache.set(cacheKey, {
       data,
       timestamp: Date.now()
     });
-    
+
     return data;
   }
-  
+
   clearCache() {
     this.cache.clear();
   }
@@ -1017,10 +1017,10 @@ async function documentQA(question: string) {
     databases: ['media_db'],
     limit: 5
   });
-  
+
   // Generate answer using agent
   const answer = await ragClient.ask(question);
-  
+
   return {
     answer: answer.response,
     sources: answer.sources,
@@ -1053,7 +1053,7 @@ async function researchTopic(topic: string) {
       }
     })
   });
-  
+
   return response.json();
 }
 ```
@@ -1091,7 +1091,7 @@ async function semanticSearch(query: string, filters: object = {}) {
 ```javascript
 class LearningAssistant {
   private conversationId: string | null = null;
-  
+
   async startLesson(topic: string) {
     const response = await this.ask(
       `Let's learn about ${topic}. Start with the basics.`,
@@ -1099,32 +1099,32 @@ class LearningAssistant {
     );
     return response;
   }
-  
+
   async askQuestion(question: string) {
     return await this.ask(question);
   }
-  
+
   async getExample() {
     return await this.ask("Can you give me a practical example?");
   }
-  
+
   async checkUnderstanding(concept: string) {
     return await this.ask(
       `Test my understanding of ${concept} with a question.`
     );
   }
-  
+
   private async ask(message: string, systemPrompt?: string) {
     const data: any = {
       message,
       conversation_id: this.conversationId,
       search_databases: ['media_db', 'notes']
     };
-    
+
     if (systemPrompt) {
       data.system_prompt = systemPrompt;
     }
-    
+
     const response = await fetch('/api/v1/rag/agent', {
       method: 'POST',
       headers: {
@@ -1133,12 +1133,12 @@ class LearningAssistant {
       },
       body: JSON.stringify(data)
     });
-    
+
     const result = await response.json();
     this.conversationId = result.conversation_id;
     return result;
   }
-  
+
   resetConversation() {
     this.conversationId = null;
   }

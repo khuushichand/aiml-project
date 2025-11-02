@@ -46,4 +46,3 @@ def count_tokens(text: Optional[str], strategy: Optional[str] = None) -> int:
 
     # default: whitespace
     return len(text.split())
-

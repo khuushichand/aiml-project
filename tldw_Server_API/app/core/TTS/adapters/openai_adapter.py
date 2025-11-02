@@ -44,7 +44,7 @@ class OpenAIAdapter(TTSAdapter):
     Note: This class implements all abstract methods so it can be instantiated
     directly by tests that import OpenAIAdapter (legacy name).
     """
-    
+
     # OpenAI voice definitions
     VOICES = {
         "alloy": VoiceInfo(
@@ -84,7 +84,7 @@ class OpenAIAdapter(TTSAdapter):
             description="Soft and pleasant female voice"
         )
     }
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.api_key = self.config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
@@ -110,11 +110,11 @@ class OpenAIAdapter(TTSAdapter):
             or "tts-1"
         )  # e.g., "tts-1" or "tts-1-hd"
         self.client: Optional[httpx.AsyncClient] = None
-        
+
         if not self.api_key:
             logger.warning(f"{self.provider_name}: API key not configured")
             self._status = ProviderStatus.NOT_CONFIGURED
-    
+
     async def initialize(self) -> bool:
         """Initialize the OpenAI adapter"""
         try:
@@ -123,20 +123,20 @@ class OpenAIAdapter(TTSAdapter):
                 logger.error(error_msg)
                 self._status = ProviderStatus.NOT_CONFIGURED
                 raise TTSProviderNotConfiguredError(error_msg, provider=self.provider_name)
-            
+
             # Get HTTP client from resource manager
             resource_manager = await get_resource_manager()
             self.client = await resource_manager.get_http_client(
                 provider=self.provider_name.lower(),
                 base_url=self.base_url
             )
-            
+
             # Test the API key with a minimal request
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
-            
+
             # Quick validation - we'll do a proper test in production
             # Mark initialized and cache capabilities for direct initialize() calls
             self._capabilities = await self.get_capabilities()
@@ -144,7 +144,7 @@ class OpenAIAdapter(TTSAdapter):
             self._status = ProviderStatus.AVAILABLE
             logger.info(f"{self.provider_name}: Initialized successfully")
             return True
-            
+
         except TTSProviderNotConfiguredError:
             return False
         except Exception as e:
@@ -316,7 +316,7 @@ class OpenAIAdapter(TTSAdapter):
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
-    
+
     async def _generate_complete(
         self,
         headers: Dict[str, str],
@@ -343,7 +343,7 @@ class OpenAIAdapter(TTSAdapter):
         # Check if it's already a valid OpenAI voice
         if voice_id in self.VOICES:
             return voice_id
-        
+
         # Try common mappings
         voice_mappings = {
             "male": "onyx",
@@ -354,7 +354,7 @@ class OpenAIAdapter(TTSAdapter):
             "expressive": "fable",
             "narrator": "fable",
         }
-        
+
         return voice_mappings.get(voice_id.lower(), "alloy")
 
 # Backward-compat alias expected by some tests

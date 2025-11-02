@@ -67,4 +67,3 @@ async def update_api_key_metadata(
 
     row.pop('key_hash', None)
     return row
-

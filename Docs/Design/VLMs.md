@@ -162,7 +162,7 @@ MoLMo/PixMo
     https://arxiv.org/abs/2409.17146
     https://huggingface.co/allenai/Molmo-7B-D-0924
 
-Ola 
+Ola
     https://arxiv.org/abs/2502.04328
     https://github.com/Ola-Omni/Ola
     https://huggingface.co/THUdyh/Ola-7b

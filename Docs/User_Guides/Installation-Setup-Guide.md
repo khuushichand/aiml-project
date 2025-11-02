@@ -129,4 +129,3 @@ PUT /api/v1/config/tokenizer
 To set defaults, you can also add environment or config values:
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`
 - `TOKEN_CHAR_APPROX_DIVISOR`: integer (default `4`)
-

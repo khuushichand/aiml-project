@@ -90,4 +90,3 @@ def test_admin_create_permission_conflict_returns_409(monkeypatch, tmp_path):
             assert r2.status_code == 409, r2.text
     finally:
         app.dependency_overrides.pop(dep, None)
-

@@ -33,4 +33,3 @@ def test_illegal_complete_fail_on_queued_postgres(monkeypatch):
     assert ok_f is False
     j2 = jm.get_job(int(j["id"]))
     assert j2["status"] == "queued"
-

@@ -27,4 +27,3 @@ def test_ps_optimization_simple_includes_request_id_in_payload(monkeypatch):
     )
     assert r.status_code == 200, r.text
     assert captured.get("payload", {}).get("request_id") == "req-ps-001"
-

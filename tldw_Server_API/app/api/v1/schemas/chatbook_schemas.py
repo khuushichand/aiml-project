@@ -72,7 +72,7 @@ class CreateChatbookRequest(BaseModel):
     name: str = Field(..., description="Name of the chatbook")
     description: str = Field(..., description="Description of the chatbook")
     content_selections: Dict[ContentType, List[str]] = Field(
-        ..., 
+        ...,
         description="Content to include by type and IDs"
     )
     author: Optional[str] = Field(None, description="Author name")
@@ -83,7 +83,7 @@ class CreateChatbookRequest(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Chatbook tags")
     categories: List[str] = Field(default_factory=list, description="Chatbook categories")
     async_mode: bool = Field(False, description="Run as background job")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "name": "My Research Chatbook",
@@ -122,7 +122,7 @@ class ImportChatbookRequest(BaseModel):
     import_media: bool = Field(True, description="Import media files")
     import_embeddings: bool = Field(False, description="Import embeddings")
     async_mode: bool = Field(False, description="Run as background job")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "conflict_resolution": "skip",
@@ -159,17 +159,17 @@ class ChatbookManifestResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     export_id: Optional[str] = None
-    
+
     # Content summary
     content_items: List[ContentItemResponse] = Field(default_factory=list)
-    
+
     # Configuration
     include_media: bool = False
     include_embeddings: bool = False
     include_generated_content: bool = True
     media_quality: str = "compressed"
     max_file_size_mb: int = 100
-    
+
     # Statistics
     total_conversations: int = 0
     total_notes: int = 0
@@ -182,7 +182,7 @@ class ChatbookManifestResponse(BaseModel):
     total_dictionaries: int = 0
     total_documents: int = 0
     total_size_bytes: int = 0
-    
+
     # Metadata
     tags: List[str] = Field(default_factory=list)
     categories: List[str] = Field(default_factory=list)

@@ -112,4 +112,3 @@ def test_mediawiki_process_dump_ephemeral_stream(monkeypatch, tmp_path: Path):
     assert progress_seen, "Did not see progress_total"
     assert page_seen, "Did not see validated page object"
     assert summary_seen, "Did not see summary"
-

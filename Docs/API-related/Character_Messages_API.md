@@ -53,4 +53,3 @@ Delete a message (soft)
 curl -X DELETE "http://localhost:8000/api/v1/messages/{message_id}?expected_version=1" \
   -H "X-API-KEY: $API_KEY"
 ```
-

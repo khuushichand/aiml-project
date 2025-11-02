@@ -183,4 +183,3 @@ const _ap_observer = new MutationObserver(() => {
   }
 });
 _ap_observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
-

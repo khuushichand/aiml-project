@@ -38,4 +38,3 @@ def test_local_llm_forwards_response_format_n_user_identifier_via_chat_api_call(
     assert kwargs["response_format"] == {"type": "json_object"}
     assert kwargs["n"] == 3
     assert kwargs["user_identifier"] == "test-user-123"
-

@@ -121,4 +121,3 @@ def test_admin_owner_override_and_tenant_isolation(client_with_db: TestClient):
     assert runs2 and all(str(r.get("user_id")) == "2" for r in runs2)
     # restore
     c.app.dependency_overrides[_gru] = prev
-

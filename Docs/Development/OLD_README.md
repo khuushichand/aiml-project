@@ -3,7 +3,7 @@
 <h1>tldw</h1>
 
 [![License](https://img.shields.io/badge/license-apache2.0-green)](https://img.shields.io/badge/license-apache2.0-green)
-[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw) 
+[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw)
 
 <h3>Your personal research multi-tool</h3>
 <h3>Download, Transcribe, Summarize/Analyze & then Chat with/about Videos, Audio, Documents, Web Articles, and Books.</h3>
@@ -13,11 +13,11 @@
 
 ### Latest Update (4/25/2025):
 - README needs to be updated....
-- tl/dr: 
+- tl/dr:
   - The API is functional, and the GUI is being worked on.
   - App is working, but DB replacement/integration of a syncing library is being worked on. Not pushing to main until this is done.
   - When the syncing library is done and the API endpoint exists/whole thing works, I'll push to main. (should be soon)
-  - Working Endpoints: 
+  - Working Endpoints:
     - POST /media/process-videos
     - POST /media/process-audios
     - POST /media/process-pdfs
@@ -32,7 +32,7 @@
     - POST /media/add
     - GET /media/debug/schema
     - POST /api/v1/chat/completions (Following OpenAI API spec)
-  - The GUI will be a TUI for now(https://github.com/rmusser01/tldw_chatbook). WebApp eventually. 
+  - The GUI will be a TUI for now(https://github.com/rmusser01/tldw_chatbook). WebApp eventually.
   - The API is not fully documented(thanks FastAPI autodoc), but the endpoints are functional.
   - The project is being actively developed, and I am looking for help with the GUI. (webapp specifically, but help with TUI is also welcome))
   - If you want to help out, please reach out via the Issues page, discussions page or email.
@@ -57,14 +57,14 @@
     - So you can keep your local media DB up to date, and then sync it to your home server/vice versa.
     - This has extended the timeline for an initial release, but I think it will be worth it in the end.
     - I do plan on opening up a Discord server for the project, but I don't have the time to manage it right now. So if you want to help out, please feel free to reach out via the Issues page, discussions page or email.
-- 
+-
 
 ### [Public Demo on HuggingFace Spaces](https://huggingface.co/spaces/oceansweep/Vid-Summarizer/?__theme=dark)- Demo is not working!
 - Demo is not currently working and is being updated. Please use the local version for now.
-<details> 
+<details>
 <summary>Public Demo Info</summary>
 
-- Please note that YouTube blocks requests from the demo. You have to provide a logged-in session cookie to bypass it :frowning_face: 
+- Please note that YouTube blocks requests from the demo. You have to provide a logged-in session cookie to bypass it :frowning_face:
 - Placeholder content is included for the demo. HuggingFace API is also setup in it, so you can select that as your API.)
 </details>
 
@@ -116,7 +116,7 @@ Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
 
 ----------
 ### Table of Contents
-- [What?](#what) | [Quickstart](#quickstart) | [Setup](#setup) | [Using tldw](#using) | [What's in the Repo / Pieces](#whatbox) | [Helpful Terms and Things to Know](#helpful) | [Setting up a Local LLM Inference Engine](#localllm) | [Credits](#credits) | [Roadmap Plans](#plans) | 
+- [What?](#what) | [Quickstart](#quickstart) | [Setup](#setup) | [Using tldw](#using) | [What's in the Repo / Pieces](#whatbox) | [Helpful Terms and Things to Know](#helpful) | [Setting up a Local LLM Inference Engine](#localllm) | [Credits](#credits) | [Roadmap Plans](#plans) |
 
 #### Quickstart
 <details>
@@ -140,7 +140,7 @@ Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
         - If you don't have CUDA installed on your system and available in your system path, go here: https://github.com/Purfview/whisper-standalone-win/releases/download/Faster-Whisper-XXL/Faster-Whisper-XXL_r192.3.4_windows.7z
           - Extract the two files named `cudnn_ops_infer64_8.dll` and `cudnn_cnn_infer64_8.dll` from the 7z file to the `tldw` directory, and then run the `Windows_Run_tldw.bat` file.
           - This will allow you to use the faster whisper models with the app. Otherwise, you won't be able to perform transcription.
-  - **BE SURE TO UPDATE 'config.txt' WITH YOUR API KEYS AND SETTINGS!** 
+  - **BE SURE TO UPDATE 'config.txt' WITH YOUR API KEYS AND SETTINGS!**
     - You need to do this unless you want to manually input your API keys everytime you interact with a commercial LLM...
 - **Run it as a WebApp**
   * `python summarize.py -gui` - This requires you to either stuff your API keys into the `config.txt` file, or pass them into the app every time you want to use it.
@@ -148,10 +148,10 @@ Screenshot of the Frontpage ![Screenshot](Docs/Screenshots/blank-front.png)
     - Gives you access to the whole SQLite DB backing it, with search, tagging, and export functionality
       * Yes, that's right. Everything you ingest, transcribe and summarize is tracked through a local(!) SQLite DB.
       * So everything you might consume during your path of research, tracked and assimilated and tagged.
-      * All into a shareable, single-file DB that is open source and extremely well documented. (The DB format, not this project :P) 
+      * All into a shareable, single-file DB that is open source and extremely well documented. (The DB format, not this project :P)
   - You should now have a web browser tab opened to `http://127.0.0.1:7860/` with the GUI for the app.
 - **Docker:**
-  - There's a docker build for GPU use(Needs Nvidia CUDA Controller(?): https://github.com/rmusser01/tldw/blob/main/tldw_Server_API/Dockerfiles/Dockerfile 
+  - There's a docker build for GPU use(Needs Nvidia CUDA Controller(?): https://github.com/rmusser01/tldw/blob/main/tldw_Server_API/Dockerfiles/Dockerfile
   - and plain CPU use: https://github.com/rmusser01/tldw/blob/main/tldw_Server_API/Dockerfiles/Dockerfile.Ubuntu
   - the `Dockerfile` in the main directory is the Nvidia base-image-based one. So you can use your GPU if you want with it.
 </details>
@@ -235,7 +235,7 @@ All features are designed to run **locally** on your device, ensuring privacy an
     5. Create a virtual env: `sudo python3 -m venv ./`
     6. Launch/activate your virtual environment: `source ./bin/activate`
     7. Setup the necessary python packages (Make sure to use the appropriate cuda version: https://docs.nvidia.com/deeplearning/cudnn/latest/installation/linux.html
-       * If you don't already have cuda installed, `python -m pip install --upgrade pip wheel` & `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` 
+       * If you don't already have cuda installed, `python -m pip install --upgrade pip wheel` & `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124`
        * Or CPU Only: `pip3 install torch torchvision torchaudio`
          * Also be sure to change `cuda` to `cpu` in `config.txt`
        * https://pytorch.org/get-started/previous-versions/#linux-and-windows-3
@@ -252,7 +252,7 @@ All features are designed to run **locally** on your device, ensuring privacy an
     7. Setup the necessary python packages:
        - Cuda
          * https://docs.nvidia.com/deeplearning/cudnn/latest/installation/windows.html
-           * If you don't already have cuda installed, `py -m pip install --upgrade pip wheel` & `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118` 
+           * If you don't already have cuda installed, `py -m pip install --upgrade pip wheel` & `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118`
        - CPU Only: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu`
            * https://pytorch.org/get-started/previous-versions/#linux-and-windows-3
            * Also be sure to change `cuda` to `cpu` in `config.txt`
@@ -314,10 +314,10 @@ All features are designed to run **locally** on your device, ensuring privacy an
     - If anything, I'd like to see this project be used in schools, universities, and research institutions, or anyone who wants to keep a record of what they've consumed and be able to search and ask questions about it.
     - I believe that this project can be a great tool for learning and research, and I'd like to see it develop to a point where it could be reasonably used as such.
     - In the meantime, if you don't care about data ownership or privacy, https://notebooklm.google/ is a good alternative that works and is free.
-  - **Current features:** 
+  - **Current features:**
     - **Ingest content(Video/Audio/epub/PDF/txt/websites) from a URL(single or multiple at once) or a local file(drag+drop).**
     - **Transcription of Video/Audio content using faster_whisper, with the ability to select the model to use.**
-      - Any site supported by yt-dl is supported, so you can use this with sites besides just youtube. 
+      - Any site supported by yt-dl is supported, so you can use this with sites besides just youtube.
       - **List of supported sites:** https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md
     - **Automatic summarization of content using an LLM API endpoint of your choice. A default prompt is used but you can set your own.**
       - Various chunking options for summarization, as well as the ability to chain summaries together.
@@ -329,8 +329,8 @@ All features are designed to run **locally** on your device, ensuring privacy an
       - Ability to tag content with keywords, and search across those tags.
       - Now also RAG support for search, so you can ask questions about the content you've ingested. (BM25+Vector Embeddings using FTS5 and ChromaDB)
     - **Chat with an LLM about the content you've ingested, or ask questions about it. (Multiple APIs Supported, 15 total)**
-      - **APIs Supported:** 
-        - **Commercial:** OpenAI / Anthropic / Cohere / DeepSeek / Groq / Mistral / OpenRouter / HuggingFace; 
+      - **APIs Supported:**
+        - **Commercial:** OpenAI / Anthropic / Cohere / DeepSeek / Groq / Mistral / OpenRouter / HuggingFace;
         - **Local:** Llama.cpp / Kobold.cpp / Oobabooga / TabbyAPI / vLLM / Ollama / ;
     - **Prompt storage and retrieval, as well as the ability to select prompts from the DB to use with your questions.**
     - **General Chat front-end**
@@ -396,9 +396,9 @@ You can view the current "Focused tasks" list at [Milestone: Beta v10](https://g
   - Text-to-Speech support for the UI so you can have the model speak out the results to you. (Status: Can generate chat responses, but nothing else currently))
   - Speech-to-Speech support for the UI so you can have a voice conversation with the model. (Status: Not started)
 - Add **some neat writing tools**, since why not have some fun?
-  - https://github.com/the-crypt-keeper/the-muse 
-  - https://github.com/the-crypt-keeper/LLooM 
-  - https://github.com/lmg-anon/mikupad 
+  - https://github.com/the-crypt-keeper/the-muse
+  - https://github.com/the-crypt-keeper/LLooM
+  - https://github.com/lmg-anon/mikupad
   - https://github.com/datacrystals/AIStoryWriter
 - Support for multiple different Evaluations
   - G-Eval summarization check is available in the video transcript tab, as well as under the `Benchmarks` tab (along with InfiniteBench[WIP] and [MMLU-Pro](https://github.com/TIGER-AI-Lab/MMLU-Pro).
@@ -414,8 +414,8 @@ You can view the current "Focused tasks" list at [Milestone: Beta v10](https://g
 - These are just the 'standard smaller' models I recommend, there are many more out there, and you can use any of them with this project.
   - One should also be aware that people create 'fine-tunes' and 'merges' of existing models, to create new models that are more suited to their needs.
   - This can result in models that may be better at some tasks but worse at others, so it's important to test and see what works best for you.
-- Llama 3.1 - The native llamas will give you censored output by default, but you can jailbreak them, or use a finetune which has attempted to tune out their refusals. 
-  - 8B: https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF 
+- Llama 3.1 - The native llamas will give you censored output by default, but you can jailbreak them, or use a finetune which has attempted to tune out their refusals.
+  - 8B: https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF
 - Mistral Nemo Instruct 2407 - https://huggingface.co/QuantFactory/Mistral-Nemo-Instruct-2407-GGUF
 - AWS MegaBeam Mistral (32k effective context): https://huggingface.co/bartowski/MegaBeam-Mistral-7B-512k-GGUF
 - Mistral Small: https://huggingface.co/bartowski/Mistral-Small-Instruct-2409-GGUF
@@ -429,7 +429,7 @@ You can view the current "Focused tasks" list at [Milestone: Beta v10](https://g
   - 72B: https://huggingface.co/Qwen/Qwen2.5-72B-Instruct
 
 
-For commercial API usage for use with this project: Claude Sonnet 3.5, Cohere Command R+, DeepSeek, gpt4o. 
+For commercial API usage for use with this project: Claude Sonnet 3.5, Cohere Command R+, DeepSeek, gpt4o.
 Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.
 That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.
 You are just a stepping stone to their goals.
@@ -437,15 +437,15 @@ You are just a stepping stone to their goals.
 From @nrose 05/08/2024 on Threads:
 ```
 No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
-  No. For efficiency. 
-Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth. 
-The model declines over time, then the optimization makes it somewhat better, then in a sort of 
-  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then 
+  No. For efficiency.
+Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth.
+The model declines over time, then the optimization makes it somewhat better, then in a sort of
+  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then
   trim down over time, so they can train the next big model… etc etc.
-None of these companies exist to provide AI services in 2024. They’re only doing it to finance the 
+None of these companies exist to provide AI services in 2024. They’re only doing it to finance the
  things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
-  and become a hidden monopoly like the oil and electric companies. 
-2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some 
+  and become a hidden monopoly like the oil and electric companies.
+2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some
   directional income
 ```
 </details>
@@ -525,7 +525,7 @@ None of these companies exist to provide AI services in 2024. They’re only doi
 
 - Run it as a WebApp:
   >`python summarize.py -gui
-  
+
 </details>
 
 ------------
@@ -555,7 +555,7 @@ None of these companies exist to provide AI services in 2024. They’re only doi
   - **Inference Engine** - A software system that is designed to execute a model that has been trained by a machine learning algorithm. Llama.cpp and Kobold.cpp are examples of inference engines.
 - **Papers & Concepts**
   1. Lost in the Middle: How Language Models Use Long Contexts(2023)
-    - https://arxiv.org/abs/2307.03172 
+    - https://arxiv.org/abs/2307.03172
     - `We analyze the performance of language models on two tasks that require identifying relevant information in their input contexts: multi-document question answering and key-value retrieval. We find that performance can degrade significantly when changing the position of relevant information, indicating that current language models do not robustly make use of information in long input contexts. In particular, we observe that performance is often highest when relevant information occurs at the beginning or end of the input context, and significantly degrades when models must access relevant information in the middle of long contexts, even for explicitly long-context models`
   2. [Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of Large Language Models(2024)](https://arxiv.org/abs/2402.14848)
      - `Our findings show a notable degradation in LLMs' reasoning performance at much shorter input lengths than their technical maximum. We show that the degradation trend appears in every version of our dataset, although at different intensities. Additionally, our study reveals that the traditional metric of next word prediction correlates negatively with performance of LLMs' on our reasoning dataset. We analyse our results and identify failure modes that can serve as useful guides for future research, potentially informing strategies to address the limitations observed in LLMs.`
@@ -577,22 +577,22 @@ None of these companies exist to provide AI services in 2024. They’re only doi
      - [ChatGPT Doesn't Trust Chargers Fans: Guardrail Sensitivity in Context](https://arxiv.org/abs/2407.06866)
        - `While the biases of language models in production are extensively documented, the biases of their guardrails have been neglected. This paper studies how contextual information about the user influences the likelihood of an LLM to refuse to execute a request. By generating user biographies that offer ideological and demographic information, we find a number of biases in guardrail sensitivity on GPT-3.5. Younger, female, and Asian-American personas are more likely to trigger a refusal guardrail when requesting censored or illegal information. Guardrails are also sycophantic, refusing to comply with requests for a political position the user is likely to disagree with. We find that certain identity groups and seemingly innocuous information, e.g., sports fandom, can elicit changes in guardrail sensitivity similar to direct statements of political ideology. For each demographic category and even for American football team fandom, we find that ChatGPT appears to infer a likely political ideology and modify guardrail behavior accordingly.`
 - **Tools & Libraries**
-  1. `llama.cpp` - A C++ inference engine. Highly recommend. 
+  1. `llama.cpp` - A C++ inference engine. Highly recommend.
      * https://github.com/ggerganov/llama.cpp
-  2. `kobold.cpp` - A C++ inference engine. GUI wrapper of llama.cpp with some tweaks. 
+  2. `kobold.cpp` - A C++ inference engine. GUI wrapper of llama.cpp with some tweaks.
      * https://github.com/LostRuins/koboldcpp
   3. `sillytavern` - A web-based interface for text generation models. Supports inference engines. Ignore the cat girls and weebness. This software is _powerful_ and _useful_. Also supports just about every API you could want.
      * https://github.com/SillyTavern/SillyTavern
   4. `llamafile` - A wrapper for llama.cpp that allows for easy use of local LLMs.
-     * Uses libcosomopolitan for cross-platform compatibility. 
+     * Uses libcosomopolitan for cross-platform compatibility.
      * Can be used to run LLMs on Windows, Linux, and MacOS with a single binary wrapper around Llama.cpp.
   5. `pytorch` - An open-source machine learning library based on the Torch library.
   6. `ffmpeg` - A free software project consisting of a large suite of libraries and programs for handling video, audio, and other multimedia files and streams.
-  7. `pandoc` - A free and open-source document converter, widely used as a writing tool (especially by scholars) and as a basis for publishing workflows. 
+  7. `pandoc` - A free and open-source document converter, widely used as a writing tool (especially by scholars) and as a basis for publishing workflows.
      * https://pandoc.org/
-  8. `marker` - A tool for converting PDFs(and other document types) to markdown. 
+  8. `marker` - A tool for converting PDFs(and other document types) to markdown.
      * https://github.com/VikParuchuri/marker
-  9. `faster_whisper` - A fast, lightweight, and accurate speech-to-text model. 
+  9. `faster_whisper` - A fast, lightweight, and accurate speech-to-text model.
       * https://github.com/SYSTRAN/faster-whisper
 
 </details>
@@ -649,7 +649,7 @@ None of these companies exist to provide AI services in 2024. They’re only doi
   * https://github.com/US-Artificial-Intelligence/abbey/tree/main
   * https://github.com/lfnovo/open-notebook
 - Commercial offerings:
-  * Bit.ai 
+  * Bit.ai
   * typeset.io/
   * https://www.getcoralai.com/
   * https://getcahier.com/#features
@@ -683,4 +683,3 @@ None of these companies exist to provide AI services in 2024. They’re only doi
     * Terry Pratchett
 - `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
   *Richard Feynman
-

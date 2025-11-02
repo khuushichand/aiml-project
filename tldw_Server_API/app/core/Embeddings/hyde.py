@@ -143,4 +143,3 @@ def generate_questions(
     except Exception as e:
         logger.debug(f"HYDE generate_questions failed (provider={provider}, model={model}): {e}")
         return []
-

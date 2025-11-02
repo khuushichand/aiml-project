@@ -22,18 +22,18 @@ from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 class ChromaDBAdapter(VectorStoreAdapter):
     """ChromaDB implementation of the vector store adapter."""
-    
+
     def __init__(self, config: VectorStoreConfig):
         """
         Initialize ChromaDB adapter.
-        
+
         Args:
             config: Vector store configuration
         """
         super().__init__(config)
         self.manager: Optional[ChromaDBManager] = None
         self._loop = None
-    
+
     async def initialize(self) -> None:
         """Initialize ChromaDB connection."""
         try:
@@ -46,32 +46,32 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 user_id=user_id,
                 user_embedding_config=embedding_config
             )
-            
+
             self._initialized = True
             self._loop = asyncio.get_event_loop()
             logger.info(f"ChromaDB adapter initialized for user {self.config.user_id}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB adapter: {e}")
             raise
-    
+
     async def create_collection(self, collection_name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """
         Create a new collection in ChromaDB.
-        
+
         Args:
             collection_name: Name of the collection to create
             metadata: Optional metadata for the collection
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Add embedding dimension to metadata
             if metadata is None:
                 metadata = {}
             metadata["embedding_dimension"] = self.config.embedding_dim
-            
+
             # ChromaDBManager's get_or_create_collection handles creation
             tm = get_tracing_manager()
             with tm.span("vectorstore.chromadb.create_collection", attributes={
@@ -79,51 +79,51 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 "vs.embed_dim": int(self.config.embedding_dim),
             }):
                 collection = self.manager.get_or_create_collection(collection_name)
-            
+
             # Update metadata if provided
             if metadata and hasattr(collection, 'modify'):
                 collection.modify(metadata=metadata)
-            
+
             logger.info(f"Created/accessed collection '{collection_name}'")
-            
+
         except Exception as e:
             logger.error(f"Failed to create collection '{collection_name}': {e}")
             raise
-    
+
     async def delete_collection(self, collection_name: str) -> None:
         """
         Delete a collection from ChromaDB.
-        
+
         Args:
             collection_name: Name of the collection to delete
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             self.manager.client.delete_collection(name=collection_name)
             logger.info(f"Deleted collection '{collection_name}'")
         except Exception as e:
             logger.error(f"Failed to delete collection '{collection_name}': {e}")
             raise
-    
+
     async def list_collections(self) -> List[str]:
         """
         List all collections in ChromaDB.
-        
+
         Returns:
             List of collection names
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             collections = self.manager.client.list_collections()
             return [col.name for col in collections]
         except Exception as e:
             logger.error(f"Failed to list collections: {e}")
             raise
-    
+
     async def upsert_vectors(
         self,
         collection_name: str,
@@ -134,7 +134,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
     ) -> None:
         """
         Insert or update vectors in ChromaDB collection.
-        
+
         Args:
             collection_name: Target collection name
             ids: Unique identifiers for each vector
@@ -144,7 +144,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Validate vectors
             self._validate_vectors(vectors)
@@ -166,18 +166,18 @@ class ChromaDBAdapter(VectorStoreAdapter):
         except Exception as e:
             logger.error(f"Failed to upsert vectors to '{collection_name}': {e}")
             raise
-    
+
     async def delete_vectors(self, collection_name: str, ids: List[str]) -> None:
         """
         Delete vectors from ChromaDB collection.
-        
+
         Args:
             collection_name: Target collection name
             ids: IDs of vectors to delete
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Use get-only to avoid creating missing collections implicitly
             collection = self.manager.client.get_collection(name=collection_name)
@@ -291,7 +291,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
                     'metadata': (data.get('metadatas') or [{}])[i] if data.get('metadatas') else {},
                 })
         return {'items': items, 'total': total}
-    
+
     async def search(
         self,
         collection_name: str,
@@ -302,28 +302,28 @@ class ChromaDBAdapter(VectorStoreAdapter):
     ) -> List[VectorSearchResult]:
         """
         Search for similar vectors in ChromaDB collection.
-        
+
         Args:
             collection_name: Collection to search in
             query_vector: Query embedding vector
             k: Number of results to return
             filter: Optional metadata filters
             include_metadata: Whether to include metadata in results
-            
+
         Returns:
             List of search results ordered by similarity
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             collection = self.manager.get_or_create_collection(collection_name)
-            
+
             # Prepare include fields
             include_fields = ["documents", "metadatas", "distances"]
             if not include_metadata:
                 include_fields.remove("metadatas")
-            
+
             # Perform search
             results = collection.query(
                 query_embeddings=[query_vector],
@@ -331,7 +331,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 where=filter,
                 include=include_fields
             )
-            
+
             # Convert to VectorSearchResult format
             search_results = []
             if results and results['ids'] and results['ids'][0]:
@@ -344,13 +344,13 @@ class ChromaDBAdapter(VectorStoreAdapter):
                         score=1.0 - results['distances'][0][i] if 'distances' in results else 1.0
                     )
                     search_results.append(result)
-            
+
             return search_results
-            
+
         except Exception as e:
             logger.error(f"Failed to search in collection '{collection_name}': {e}")
             raise
-    
+
     async def multi_search(
         self,
         collection_patterns: List[str],
@@ -360,23 +360,23 @@ class ChromaDBAdapter(VectorStoreAdapter):
     ) -> List[VectorSearchResult]:
         """
         Search across multiple collections matching patterns.
-        
+
         Args:
             collection_patterns: Patterns to match collection names
             query_vector: Query embedding vector
             k: Number of results per collection
             filter: Optional metadata filters
-            
+
         Returns:
             Merged list of search results from all matching collections
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Get all collections
             all_collections = await self.list_collections()
-            
+
             # Filter collections by patterns
             matching_collections = []
             for pattern in collection_patterns:
@@ -388,14 +388,14 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 else:
                     if pattern in all_collections:
                         matching_collections.append(pattern)
-            
+
             # Remove duplicates
             matching_collections = list(set(matching_collections))
-            
+
             if not matching_collections:
                 logger.warning(f"No collections found matching patterns: {collection_patterns}")
                 return []
-            
+
             # Search in all matching collections
             all_results = []
             for collection_name in matching_collections:
@@ -414,28 +414,28 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 except Exception as e:
                     logger.warning(f"Failed to search collection '{collection_name}': {e}")
                     continue
-            
+
             # Sort by score and return top k overall
             all_results.sort(key=lambda x: x.score, reverse=True)
             return all_results[:k]
-            
+
         except Exception as e:
             logger.error(f"Failed to perform multi-search: {e}")
             raise
-    
+
     async def get_collection_stats(self, collection_name: str) -> Dict[str, Any]:
         """
         Get statistics about a ChromaDB collection.
-        
+
         Args:
             collection_name: Name of the collection
-            
+
         Returns:
             Dictionary with stats (count, dimension, metadata)
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Use get-only call; raise if collection does not exist
             collection = self.manager.client.get_collection(name=collection_name)
@@ -469,7 +469,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
                     pass
             if dimension is None:
                 dimension = self.config.embedding_dim
-            
+
             return {
                 "name": collection_name,
                 "count": count,
@@ -477,22 +477,22 @@ class ChromaDBAdapter(VectorStoreAdapter):
                 "metadata": metadata,
                 "distance_metric": self.config.distance_metric
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get stats for collection '{collection_name}': {e}")
             raise
-    
+
     async def optimize_collection(self, collection_name: str) -> None:
         """
         Optimize the collection for better search performance.
         ChromaDB handles optimization internally, so this is a no-op.
-        
+
         Args:
             collection_name: Name of the collection to optimize
         """
         if not self._initialized:
             await self.initialize()
-        
+
         # ChromaDB handles optimization automatically
         logger.info(f"ChromaDB auto-optimizes collection '{collection_name}'")
 
@@ -509,7 +509,7 @@ class ChromaDBAdapter(VectorStoreAdapter):
     def set_ef_search(self, value: int) -> int:
         # No-op for Chroma
         return int(value)
-    
+
     async def close(self) -> None:
         """Close ChromaDB connection."""
         # ChromaDB manager handles cleanup internally

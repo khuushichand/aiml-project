@@ -21,7 +21,7 @@ providers:
     model: "tts-1"  # or "tts-1-hd" for higher quality
     timeout: 60
     max_retries: 3
-    
+
   # Kokoro TTS Configuration
   kokoro:
     enabled: true
@@ -37,7 +37,7 @@ providers:
     target_min_tokens: 175
     target_max_tokens: 250
     absolute_max_tokens: 450
-    
+
   # Higgs Audio V2 Configuration
   higgs:
     enabled: false  # Disabled by default (requires large model)
@@ -48,7 +48,7 @@ providers:
     batch_size: 1
     sample_rate: 24000
     frame_rate: 25  # Audio tokenizer frame rate
-    
+
   # Dia TTS Configuration
   dia:
     enabled: false  # Disabled by default (requires model download)
@@ -59,7 +59,7 @@ providers:
     sample_rate: 24000
     auto_detect_speakers: true
     max_speakers: 5
-    
+
   # Chatterbox TTS Configuration
   chatterbox:
     enabled: false  # Disabled by default (requires installation)
@@ -69,14 +69,14 @@ providers:
     sample_rate: 24000
     disable_watermark: true  # Ensure no watermark is applied
     target_latency_ms: 200  # Progressive chunk size target
-    
+
   # ElevenLabs Configuration (adapter implemented)
   elevenlabs:
     enabled: false
     api_key: ${ELEVENLABS_API_KEY}
     base_url: "https://api.elevenlabs.io/v1"
     model: "eleven_monolingual_v1"
-    
+
   # AllTalk Configuration (TODO: Implement adapter)
   alltalk:
     enabled: false
@@ -139,7 +139,7 @@ voice_mappings:
       dia: "narrator"
       chatterbox: "calm"
       index_tts: "clone_required"
-      
+
   # Emotion-based voice selection
   emotions:
     happy:
@@ -181,7 +181,7 @@ performance:
   cache_enabled: false  # Future: Enable response caching
   cache_ttl_seconds: 3600
   stream_chunk_size: 1024
-  
+
 # Fallback settings
 fallback:
   enabled: true

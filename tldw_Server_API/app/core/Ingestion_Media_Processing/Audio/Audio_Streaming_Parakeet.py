@@ -56,7 +56,7 @@ class AudioBuffer:
     sample_rate: int
     max_duration: float
     data: list = field(default_factory=list)
-    
+
     def add(self, audio_chunk: np.ndarray):
         """Add audio chunk to buffer."""
         self.data.append(audio_chunk)
@@ -68,44 +68,44 @@ class AudioBuffer:
         if total_samples > max_samples:
             combined = np.concatenate(self.data)
             self.data = [combined[-max_samples:]]
-    
+
     def get_duration(self) -> float:
         """Get current buffer duration in seconds."""
         if not self.data:
             return 0.0
         total_samples = sum(len(chunk) for chunk in self.data)
         return total_samples / self.sample_rate
-    
+
     def get_audio(self, duration: Optional[float] = None) -> Optional[np.ndarray]:
         """Get audio from buffer."""
         if not self.data:
             return None
-        
+
         combined = np.concatenate(self.data)
-        
+
         if duration is not None:
             samples_needed = int(duration * self.sample_rate)
             if len(combined) >= samples_needed:
                 return combined[:samples_needed]
             return None
-        
+
         return combined
-    
+
     def consume(self, duration: float, overlap: float = 0.0):
         """Consume duration from buffer, keeping overlap."""
         if not self.data:
             return
-        
+
         combined = np.concatenate(self.data)
         samples_to_consume = int((duration - overlap) * self.sample_rate)
-        
+
         if samples_to_consume > 0 and len(combined) > samples_to_consume:
             # Keep the remaining audio
             remaining = combined[samples_to_consume:]
             self.data = [remaining]
         else:
             self.data.clear()
-    
+
     def clear(self):
         """Clear the buffer."""
         self.data.clear()
@@ -114,11 +114,11 @@ class AudioBuffer:
 class ParakeetStreamingTranscriber:
     """
     Real-time streaming transcriber using Parakeet models.
-    
+
     Supports WebSocket-based streaming with chunked processing
     and partial results for all Parakeet variants.
     """
-    
+
     def __init__(self, config: Optional[StreamingConfig] = None):
         """Initialize the streaming transcriber."""
         self.config = config or StreamingConfig()
@@ -130,7 +130,7 @@ class ParakeetStreamingTranscriber:
         self.is_running = False
         self.last_partial_time = 0
         self.transcription_history = []
-        
+
     def initialize(self):
         """Load the model based on configuration.
         Returns an awaitable so callers may `await initialize()` or call synchronously.
@@ -151,14 +151,14 @@ class ParakeetStreamingTranscriber:
             return None
 
         return _noop()
-    
+
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
         Process a chunk of audio data.
-        
+
         Args:
             audio_data: Base64-encoded audio data
-        
+
         Returns:
             Transcription result or None if not ready
         """
@@ -180,45 +180,45 @@ class ParakeetStreamingTranscriber:
             else:
                 # Fallback: attempt to coerce to bytes via base64
                 audio_bytes = base64.b64decode(audio_data)
-            
+
             # Convert to numpy array (assuming float32 samples)
             # Ensure buffer aligns to float32 size
             remainder = len(audio_bytes) % 4
             if remainder:
                 audio_bytes = audio_bytes[:-remainder]
             audio_array = np.frombuffer(audio_bytes, dtype=np.float32)
-            
+
             # Add to buffer
             self.buffer.add(audio_array)
-            
+
             result = None
-            
+
             # Check if we have enough audio for transcription
             if self.buffer.get_duration() >= self.config.chunk_duration:
                 # Get audio chunk
                 audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
-                
+
                 if audio_chunk is not None:
                     # Transcribe
                     text = await self._transcribe_chunk(audio_chunk)
-                    
+
                     if text and not text.startswith("["):
                         # Consume buffer with overlap
                         self.buffer.consume(
                             self.config.chunk_duration,
                             self.config.overlap_duration
                         )
-                        
+
                         # Add to history
                         self.transcription_history.append(text)
-                        
+
                         result = {
                             "type": "transcription",
                             "text": text,
                             "timestamp": time.time(),
                             "is_final": True
                         }
-            
+
             # Send partial if enabled and enough time has passed
             elif self.config.enable_partial:
                 now = time.time()
@@ -234,13 +234,13 @@ class ParakeetStreamingTranscriber:
                                 "timestamp": now,
                                 "is_final": False
                             }
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error processing audio chunk: {e}")
             return {"type": "error", "message": str(e)}
-    
+
     async def _transcribe_chunk(self, audio_chunk: np.ndarray) -> Optional[str]:
         """Transcribe an audio chunk using the appropriate variant.
         If a model has been injected (e.g., tests), prefer it regardless of variant.
@@ -274,7 +274,7 @@ class ParakeetStreamingTranscriber:
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             return None
-    
+
     async def flush(self) -> Optional[Dict[str, Any]]:
         """Process any remaining audio in the buffer."""
         if self.buffer.get_duration() > 0:
@@ -282,7 +282,7 @@ class ParakeetStreamingTranscriber:
             if audio is not None:
                 text = await self._transcribe_chunk(audio)
                 self.buffer.clear()
-                
+
                 if text and not text.startswith("["):
                     self.transcription_history.append(text)
                     return {
@@ -292,11 +292,11 @@ class ParakeetStreamingTranscriber:
                         "is_final": True
                     }
         return None
-    
+
     def get_full_transcript(self) -> str:
         """Get the complete transcript so far."""
         return " ".join(self.transcription_history)
-    
+
     def reset(self):
         """Reset the transcriber state."""
         self.buffer.clear()
@@ -310,7 +310,7 @@ async def handle_websocket_transcription(
 ):
     """
     Handle WebSocket connection for real-time transcription.
-    
+
     Args:
         websocket: WebSocket connection
         config: Streaming configuration
@@ -402,43 +402,43 @@ def create_streaming_generator(
 ) -> AsyncGenerator[str, None]:
     """
     Create an async generator for streaming transcription.
-    
+
     Args:
         audio_source: Callable that returns audio bytes
         config: Streaming configuration
-    
+
     Yields:
         Transcribed text segments
     """
     transcriber = ParakeetStreamingTranscriber(config)
     transcriber.initialize()
-    
+
     async def generate():
         try:
             while True:
                 # Get audio from source
                 audio_bytes = await asyncio.to_thread(audio_source)
-                
+
                 if audio_bytes is None:
                     # End of stream
                     final = await transcriber.flush()
                     if final:
                         yield final["text"]
                     break
-                
+
                 # Convert to base64 for processing
                 audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                
+
                 # Process chunk
                 result = await transcriber.process_audio_chunk(audio_b64)
-                
+
                 if result and result.get("is_final"):
                     yield result["text"]
-                    
+
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             yield f"[Error: {str(e)}]"
-    
+
     return generate()
 
 

@@ -87,4 +87,3 @@ Server will only auto-execute when explicitly enabled; otherwise behavior stays 
 - Persist tool results as artifacts when configured.
 - Wire into Chat (`chat_service` streaming and non-streaming paths) under config flag.
 - Admin UI for granting `tools.execute:*` and per-tool permissions (backend already supports via Admin endpoints).
-

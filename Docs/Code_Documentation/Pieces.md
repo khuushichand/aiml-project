@@ -109,4 +109,3 @@ Claims include:
 ## Legacy Notes (Deprecated)
 
 - The former Gradio UI and `summarize.py` flow are deprecated. Some installer scripts may still reference them for convenience, but the supported interface is the FastAPI server with an integrated Web UI served by `main.py`.
-

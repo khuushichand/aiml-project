@@ -73,4 +73,3 @@ def test_rag_search_with_citations_returns_citations(client_with_wf: TestClient)
     # Citations may be empty but key should exist when enabled
     if out.get("documents"):
         assert "citations" in out or out.get("generated_answer") is not None
-

@@ -74,10 +74,10 @@ async def run_benchmark(
     registry = get_registry()
     evaluator = registry.create_evaluator(benchmark_name)
     dataset = load_benchmark_dataset(benchmark_name, limit=limit)
-    
+
     # Use existing batch endpoint
     items = [evaluator.format_for_custom_metric(item) for item in dataset]
-    
+
     # Process through existing batch endpoint
     return await evaluate_batch(
         BatchEvaluationRequest(

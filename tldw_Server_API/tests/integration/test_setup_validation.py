@@ -47,4 +47,3 @@ def test_update_config_type_validation_boolean(mocker):
         resp = client.post('/api/v1/setup/config', json=payload)
     assert resp.status_code == 400
     assert 'Invalid boolean' in resp.text
-

@@ -54,4 +54,3 @@ function formatValue(v: any) {
 }
 
 export default JsonTree;
-

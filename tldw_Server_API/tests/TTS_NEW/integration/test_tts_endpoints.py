@@ -33,7 +33,7 @@ class TestTTSGenerateEndpoint:
         mock_response.content = b"fake_audio_data"
         mock_response.headers = {"content-type": "audio/mpeg"}
         mock_post.return_value = mock_response
-        
+
         response = test_client.post(
             "/api/v1/audio/speech",
             json={
@@ -45,11 +45,11 @@ class TestTTSGenerateEndpoint:
             },
             headers=auth_headers
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         assert response.headers.get("content-type") == "audio/mpeg"
         assert len(response.content) > 0
-    
+
     async def test_generate_without_provider(self, test_client, auth_headers):
         """Test generation using default provider."""
         async def mock_stream(*args, **kwargs):
@@ -57,7 +57,7 @@ class TestTTSGenerateEndpoint:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -69,9 +69,9 @@ class TestTTSGenerateEndpoint:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
-    
+
     async def test_generate_with_voice_settings(self, test_client, auth_headers):
         """Test generation with voice settings."""
         async def mock_stream(*args, **kwargs):
@@ -79,7 +79,7 @@ class TestTTSGenerateEndpoint:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -94,14 +94,14 @@ class TestTTSGenerateEndpoint:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
-            
+
             # Verify extra params were passed
             mock_generate_speech.assert_called_once()
             call_args = mock_generate_speech.call_args[0][0]
             assert getattr(call_args, 'extra_params', None) is not None
-    
+
     async def test_generate_with_invalid_provider(self, test_client, auth_headers):
         """Test generation with invalid provider."""
         async def mock_stream(*args, **kwargs):
@@ -122,19 +122,19 @@ class TestTTSGenerateEndpoint:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
-    
+
     async def test_generate_with_long_text(self, test_client, auth_headers):
         """Test generation with long text that needs chunking."""
         long_text = " ".join(["This is sentence number {}.".format(i) for i in range(500)])
-        
+
         async def mock_stream(*args, **kwargs):
             yield b"long_audio"
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -145,7 +145,7 @@ class TestTTSGenerateEndpoint:
                 },
                 headers=auth_headers
             )
-            
+
             # Should handle long text appropriately
             assert response.status_code in [status.HTTP_200_OK, status.HTTP_413_CONTENT_TOO_LARGE]
 
@@ -249,7 +249,7 @@ class TestTTSStreamingEndpoint:
 
 class TestProviderManagementEndpoints:
     """Tests for TTS provider management endpoints under /api/v1/audio."""
-    
+
     async def test_list_providers(self, test_client, auth_headers):
         """Test listing available TTS providers."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.get_capabilities') as mock_caps, \
@@ -263,18 +263,18 @@ class TestProviderManagementEndpoints:
                 "openai": [{"id": "alloy"}],
                 "elevenlabs": [{"id": "rachel"}],
             }
-            
+
             response = test_client.get(
                 "/api/v1/audio/providers",
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
             assert "providers" in data and "voices" in data
             assert "openai" in data["providers"]
             assert "elevenlabs" in data["providers"]
-    
+
     async def test_get_provider_info(self, test_client, auth_headers):
         """Test getting specific provider information."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.get_capabilities') as mock_caps:
@@ -291,7 +291,7 @@ class TestProviderManagementEndpoints:
             data = response.json()
             assert "openai" in data["providers"]
             assert "tts-1" in data["providers"]["openai"].get("models", [])
-    
+
     async def test_switch_default_provider(self, test_client, auth_headers):
         """Test switching the default TTS provider."""
         response = test_client.post(
@@ -299,7 +299,7 @@ class TestProviderManagementEndpoints:
             json={"provider": "elevenlabs"},
             headers=auth_headers
         )
-        
+
         if response.status_code == status.HTTP_200_OK:
             data = response.json()
             assert data["message"] == "Default provider updated"
@@ -311,7 +311,7 @@ class TestProviderManagementEndpoints:
 
 class TestVoiceManagementEndpoints:
     """Tests for voice management endpoints under /api/v1/audio."""
-    
+
     async def test_list_voices(self, test_client, auth_headers):
         """Test listing available voices for a provider."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
@@ -322,12 +322,12 @@ class TestVoiceManagementEndpoints:
                     {"id": "nova", "name": "Nova", "gender": "female"}
                 ]
             }
-            
+
             response = test_client.get(
                 "/api/v1/audio/voices/catalog?provider=openai",
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
             assert isinstance(data, dict)
@@ -335,7 +335,7 @@ class TestVoiceManagementEndpoints:
             assert isinstance(data["openai"], list)
             assert len(data["openai"]) == 3
             assert any(v["id"] == "alloy" for v in data["openai"])
-    
+
     async def test_get_voice_details(self, test_client, auth_headers):
         """Test getting details for a specific voice."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
@@ -344,12 +344,12 @@ class TestVoiceManagementEndpoints:
                     {"id": "rachel", "name": "Rachel", "gender": "female"}
                 ]
             }
-            
+
             response = test_client.get(
                 "/api/v1/audio/voices/catalog?provider=elevenlabs",
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
             assert "elevenlabs" in data
@@ -361,7 +361,7 @@ class TestVoiceManagementEndpoints:
 
 class TestFileDownloadEndpoints:
     """Test audio file download endpoints."""
-    
+
     async def test_download_generated_audio(self, test_client, auth_headers, sample_audio_bytes):
         """Test downloading generated audio as file."""
         async def mock_stream(*args, **kwargs):
@@ -369,7 +369,7 @@ class TestFileDownloadEndpoints:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -380,7 +380,7 @@ class TestFileDownloadEndpoints:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_200_OK
             assert response.headers["content-type"] == "audio/wav"
             assert "content-disposition" in response.headers
@@ -392,7 +392,7 @@ class TestFileDownloadEndpoints:
 
 class TestErrorHandling:
     """Test error handling in TTS endpoints."""
-    
+
     async def test_rate_limit_error_handling(self, test_client, auth_headers):
         """Test handling of rate limit errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import rate_limit_error
@@ -401,7 +401,7 @@ class TestErrorHandling:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = rate_limit_error("OpenAITTS", retry_after=60)
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -412,10 +412,10 @@ class TestErrorHandling:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
             assert "detail" in response.json()
-    
+
     async def test_quota_exceeded_error(self, test_client, auth_headers):
         """Test handling of quota exceeded errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSQuotaExceededError
@@ -424,7 +424,7 @@ class TestErrorHandling:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = TTSQuotaExceededError("Character quota exceeded")
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -435,18 +435,18 @@ class TestErrorHandling:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
             data = response.json()
             assert "quota" in str(data).lower()
-    
+
     async def test_provider_not_configured(self, test_client, auth_headers):
         """Test handling of unconfigured provider errors."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSProviderNotConfiguredError
-        
+
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = TTSProviderNotConfiguredError("Provider not configured")
-            
+
             response = test_client.post(
                 "/api/v1/audio/speech",
                 json={
@@ -457,7 +457,7 @@ class TestErrorHandling:
                 },
                 headers=auth_headers
             )
-            
+
             assert response.status_code in [status.HTTP_503_SERVICE_UNAVAILABLE, status.HTTP_429_TOO_MANY_REQUESTS]
 
 # ========================================================================
@@ -466,7 +466,7 @@ class TestErrorHandling:
 
 class TestBatchProcessing:
     """Simulate batch TTS by multiple calls to /api/v1/audio/speech."""
-    
+
     async def test_batch_tts_generation(self, test_client, auth_headers):
         """Test batch generation by issuing multiple requests."""
         async def mock_stream(*args, **kwargs):
@@ -474,7 +474,7 @@ class TestBatchProcessing:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()
-            
+
             payloads = [
                 {"input": "First text", "voice": "alloy", "response_format": "mp3", "stream": False},
                 {"input": "Second text", "voice": "echo", "response_format": "mp3", "stream": False},
@@ -485,7 +485,7 @@ class TestBatchProcessing:
                 for p in payloads
             ]
             assert all(r.status_code in [status.HTTP_200_OK, status.HTTP_429_TOO_MANY_REQUESTS] for r in responses)
-    
+
     async def test_batch_with_partial_failures(self, test_client, auth_headers):
         """Test batch processing with some failures."""
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError
@@ -502,7 +502,7 @@ class TestBatchProcessing:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech:
             mock_generate_speech.side_effect = side_effect
-            
+
             payloads = [
                 {"input": "Success 1", "voice": "alloy", "response_format": "mp3", "stream": False},
                 {"input": "Failure", "voice": "echo", "response_format": "mp3", "stream": False},

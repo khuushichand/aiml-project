@@ -118,4 +118,3 @@ PST specifics:
 - Python `mailbox` docs: https://docs.python.org/3/library/mailbox.html
 - libpff / pypff: https://github.com/libyal/libpff
 - readpst: https://www.five-ten-sg.com/libpst/
-

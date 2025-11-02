@@ -35,4 +35,3 @@ def test_pg_schema_has_aux_tables_and_indexes():
             idxs = {r[0] for r in cur.fetchall()}
             assert "idx_jobs_status_available_at" in idxs
             assert "idx_jobs_idempotent_unique" in idxs
-

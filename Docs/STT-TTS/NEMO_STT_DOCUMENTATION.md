@@ -188,7 +188,7 @@ with open("audio_stream.wav", "rb") as f:
         chunk = f.read(32000)  # Read 2 seconds at 16kHz
         if not chunk:
             break
-        
+
         result = transcriber.process_audio_chunk(chunk)
         if result:
             print(f"Partial: {result['text']}")
@@ -355,7 +355,7 @@ class CustomTranscriptionPipeline:
     def __init__(self, primary_model='parakeet', fallback_model='whisper'):
         self.primary = primary_model
         self.fallback = fallback_model
-    
+
     def transcribe(self, audio_path):
         try:
             # Try primary model
@@ -388,7 +388,7 @@ def process_audio_file(file_path):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
         transcribe_with_parakeet
     )
-    
+
     try:
         text = transcribe_with_parakeet(str(file_path), variant='onnx')
         output_path = file_path.with_suffix('.txt')

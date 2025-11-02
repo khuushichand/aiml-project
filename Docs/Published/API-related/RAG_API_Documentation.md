@@ -1,7 +1,7 @@
 # RAG API Documentation
 
-**Version**: 3.0  
-**Last Updated**: 2025-08-19  
+**Version**: 3.0
+**Last Updated**: 2025-08-19
 **Status**: Production Ready
 
 ## Table of Contents
@@ -436,7 +436,7 @@ async def complex_search(query: str):
         "expansion": {"strategies": ["acronym", "synonym"]},
         "reranking": {"strategy": "cross_encoder"}
     }
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "http://localhost:8000/api/v1/rag/search/complex",
@@ -490,7 +490,7 @@ async function search(request: SearchRequest): Promise<any> {
     },
     body: JSON.stringify(request)
   });
-  
+
   return response.json();
 }
 
@@ -520,7 +520,7 @@ The v3 API uses a functional pipeline architecture. Key changes:
      "search_type": "hybrid",
      "kwargs": {...}
    }
-   
+
    # New (v3)
    {
      "query": "test",

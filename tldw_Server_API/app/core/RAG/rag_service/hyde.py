@@ -100,4 +100,3 @@ async def embed_text(text: str) -> Optional[list]:
     except Exception as e:
         logger.warning(f"HyDE embedding failed: {e}")
         return None
-

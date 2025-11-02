@@ -494,34 +494,34 @@ async def llm_health():
 def parse_model_string(model_value: str) -> List[str]:
     """
     Parse a model string which could be a single model or comma-separated list.
-    
+
     Args:
         model_value: Model string from config
-        
+
     Returns:
         List of model names
     """
     if not model_value:
         return []
-    
+
     # Handle comma-separated lists
     if ',' in model_value:
         return [m.strip() for m in model_value.split(',') if m.strip()]
-    
+
     # Single model
     return [model_value.strip()] if model_value.strip() else []
 
 def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]:
     """
     Get list of configured LLM providers with their models from the config file.
-    
+
     Returns:
         Dictionary containing provider information
     """
     try:
         config_parser = load_comprehensive_config()
         providers = []
-        
+
         # Check if we have the required sections
         if not config_parser.has_section('API') and not config_parser.has_section('Local-API'):
             logger.warning("No API or Local-API sections found in config")
@@ -531,7 +531,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'total_configured': 0,
                 'message': 'No API configuration sections found in config.txt'
             }
-        
+
         # Define provider mappings with their config keys
         provider_mappings = {
             # Commercial APIs (from API section)
@@ -550,7 +550,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'section': 'API'
             },
             'anthropic': {
-                'display_name': 'Anthropic', 
+                'display_name': 'Anthropic',
                 'api_key_field': 'anthropic_api_key',
                 'model_field': 'anthropic_model',
                 'type': 'commercial',
@@ -677,7 +677,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'section': 'API'
             }
         }
-        
+
         # Optional: live health report
         health_report = {}
         try:
@@ -690,14 +690,14 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
         # Process each provider
         for provider_name, provider_info in provider_mappings.items():
             section_name = provider_info.get('section')
-            
+
             # Skip if section doesn't exist
             if not section_name or not config_parser.has_section(section_name):
                 continue
-            
+
             # Check if provider is configured
             is_configured = False
-            
+
             if provider_info['type'] == 'commercial':
                 # Check for API key
                 api_key_field = provider_info.get('api_key_field')
@@ -713,16 +713,16 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                     endpoint_url = config_parser.get(section_name, endpoint_field, fallback='')
                     if endpoint_url and endpoint_url.strip() and not endpoint_url.startswith('<'):
                         is_configured = True
-            
+
             # Always include the provider, but mark if it's configured
             # Get the models from config
             model_field = provider_info.get('model_field')
             models = []
-            
+
             if model_field and config_parser.has_option(section_name, model_field):
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
-            
+
             # If no models found in config, inject safe, current defaults only for Anthropic
             # per project direction to use 4.0/4.1 and avoid deprecated 3.5.
             if not models:
@@ -730,7 +730,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                     models = ['claude-opus-4.1', 'claude-sonnet-4']
                 else:
                     models = []
-            
+
             # Build models and metadata
             models_info = [get_model_metadata(provider_name, m) for m in models]
             if not include_deprecated:
@@ -749,22 +749,22 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'default_model': models[0] if models else None,
                 'is_configured': is_configured  # Add configuration status
             }
-            
+
             # Add endpoint for local providers
             if provider_info['type'] == 'local':
                 endpoint_field = provider_info.get('endpoint_field')
                 if endpoint_field and config_parser.has_option(section_name, endpoint_field):
                     provider_data['endpoint'] = config_parser.get(section_name, endpoint_field, fallback='')
-            
+
             # Add other useful config fields
             temp_field = f'{provider_name}_temperature'
             if config_parser.has_option(section_name, temp_field):
                 provider_data['default_temperature'] = float(config_parser.get(section_name, temp_field, fallback='0.7'))
-            
+
             tokens_field = f'{provider_name}_max_tokens'
             if config_parser.has_option(section_name, tokens_field):
                 provider_data['max_tokens'] = int(config_parser.get(section_name, tokens_field, fallback='4096'))
-            
+
             streaming_field = f'{provider_name}_streaming'
             if config_parser.has_option(section_name, streaming_field):
                 provider_data['supports_streaming'] = config_parser.get(section_name, streaming_field, fallback='False').lower() == 'true'
@@ -779,7 +779,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 provider_data['capabilities'] = capabilities
             except Exception:
                 provider_data['requires_api_key'] = provider_info['type'] == 'commercial'
-            
+
             # Attach live health if available
             try:
                 if provider_name in health_report:
@@ -788,12 +788,12 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 pass
 
             providers.append(provider_data)
-        
+
         # Get the default provider from config
         default_api = 'openai'
         if config_parser.has_section('API') and config_parser.has_option('API', 'default_api'):
             default_api = config_parser.get('API', 'default_api', fallback='openai')
-        
+
         # Also check for additional models that might be listed elsewhere
         # For example, in the RAG or Embeddings sections
         if config_parser.has_section('Embeddings') and config_parser.has_option('Embeddings', 'contextual_llm_model'):
@@ -803,13 +803,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 for p in providers:
                     if p['name'] == 'openai' and contextual_model not in p['models']:
                         p['models'].append(contextual_model)
-        
+
         return {
             'providers': providers,
             'default_provider': default_api,
             'total_configured': len(providers)
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting configured providers: {e}", exc_info=True)
         return {
@@ -823,18 +823,18 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
 def get_all_available_models() -> List[str]:
     """
     Get a flat list of all available models across all configured providers.
-    
+
     Returns:
         List of all available model names
     """
     result = get_configured_providers()
     models = []
-    
+
     for provider in result.get('providers', []):
         for model in provider.get('models', []):
             # Add provider prefix to make models unique
             models.append(f"{provider['name']}/{model}")
-    
+
     return models
 
 #######################################################################################################################
@@ -848,7 +848,7 @@ def get_all_available_models() -> List[str]:
 async def get_llm_providers(include_deprecated: bool = False):
     """
     Get all configured LLM providers and their models.
-    
+
     Returns:
         Dictionary containing:
         - providers: List of provider configurations
@@ -884,7 +884,7 @@ async def get_llm_providers(include_deprecated: bool = False):
         except Exception:
             # Best-effort; omit diagnostics_ui on failure
             pass
-        
+
         if result['total_configured'] == 0:
             logger.warning("No LLM providers are configured")
             return {
@@ -893,10 +893,10 @@ async def get_llm_providers(include_deprecated: bool = False):
                 'total_configured': 0,
                 'message': 'No LLM providers are configured. Please check your config.txt file.'
             }
-        
+
         logger.info(f"Found {result['total_configured']} configured LLM providers")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error in get_llm_providers endpoint: {e}", exc_info=True)
         raise HTTPException(
@@ -937,28 +937,28 @@ async def get_models_metadata(include_deprecated: bool = False):
 async def get_provider_details(provider_name: str, include_deprecated: bool = False):
     """
     Get details for a specific LLM provider.
-    
+
     Args:
         provider_name: Name of the provider (e.g., 'openai', 'anthropic')
-        
+
     Returns:
         Provider details including models and configuration
     """
     try:
         result = get_configured_providers(include_deprecated=include_deprecated)
-        
+
         # Find the specific provider
         for provider in result['providers']:
             if provider['name'] == provider_name:
                 logger.info(f"Retrieved details for provider: {provider_name}")
                 return provider
-        
+
         # Provider not found or not configured
         raise HTTPException(
             status_code=404,
             detail=f"Provider '{provider_name}' is not configured or not found"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -975,7 +975,7 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
 async def get_all_models(include_deprecated: bool = False):
     """
     Get all available models from all configured providers.
-    
+
     Returns:
         List of model names with provider prefix
     """

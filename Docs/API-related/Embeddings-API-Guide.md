@@ -94,7 +94,7 @@ sequenceDiagram
     participant API
     participant Auth
     participant Service
-    
+
     Client->>API: Request + API Key
     API->>Auth: Validate Key
     Auth-->>API: User Context
@@ -351,7 +351,7 @@ x-provider: huggingface
   - `huggingface` → `onnx` → `local_api`
   - `onnx` → `huggingface` → `local_api`
   - `local_api` → `huggingface`
-  
+
 Prometheus counters:
 - `embedding_provider_failures_total{provider,model,reason}`
 - `embedding_fallbacks_total{from_provider,to_provider}`
@@ -374,7 +374,7 @@ graph TB
         GOOGLE[Google<br/>• text-embedding-004]
         MISTRAL[Mistral<br/>• mistral-embed]
     end
-    
+
     subgraph "Open Source"
         HF[HuggingFace<br/>• all-MiniLM-L6-v2<br/>• all-mpnet-base-v2<br/>• bge-large-en]
         ONNX[ONNX Models<br/>• Optimized models]
@@ -400,20 +400,20 @@ Providers such as Cohere/Voyage/Google/Mistral appear in examples for illustrati
 ```python
 def select_provider(requirements):
     """Select best provider based on requirements"""
-    
+
     if requirements["cost"] == "free":
         return "huggingface", "sentence-transformers/all-MiniLM-L6-v2"
-    
+
     if requirements["quality"] == "highest":
         return "openai", "text-embedding-3-large"
-    
+
     if requirements["speed"] == "fastest":
         return "huggingface", "all-MiniLM-L6-v2"
-    
+
     if requirements["multilingual"]:
         # If a commercial multilingual provider isn't wired, prefer open-source multilingual models
         return "huggingface", "intfloat/multilingual-e5-large"
-    
+
     # Default balanced option
     return "openai", "text-embedding-3-small"
 ```
@@ -457,12 +457,12 @@ import time
 from typing import Optional
 
 def create_embeddings_with_retry(
-    text: str, 
+    text: str,
     max_retries: int = 3,
     backoff_factor: float = 2.0
 ) -> Optional[list]:
     """Create embeddings with exponential backoff retry"""
-    
+
     for attempt in range(max_retries):
         try:
             response = requests.post(
@@ -470,32 +470,32 @@ def create_embeddings_with_retry(
                 headers={"Authorization": f"Bearer {API_KEY}"},
                 json={"input": text, "model": "text-embedding-3-small"}
             )
-            
+
             if response.status_code == 200:
                 return response.json()["data"][0]["embedding"]
-            
+
             elif response.status_code == 429:
                 # Rate limited - wait and retry
                 wait_time = backoff_factor ** attempt
                 print(f"Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
-                
+
             elif response.status_code >= 500:
                 # Server error - retry
                 wait_time = backoff_factor ** attempt
                 print(f"Server error. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
-                
+
             else:
                 # Client error - don't retry
                 print(f"Error: {response.json()}")
                 return None
-                
+
         except requests.exceptions.RequestException as e:
             print(f"Network error: {e}")
             if attempt < max_retries - 1:
                 time.sleep(backoff_factor ** attempt)
-            
+
     return None
 ```
 
@@ -519,12 +519,12 @@ async function createEmbeddingsWithRetry(
                     model: 'text-embedding-3-small'
                 })
             });
-            
+
             if (response.ok) {
                 const data = await response.json();
                 return data.data[0].embedding;
             }
-            
+
             if (response.status === 429 || response.status >= 500) {
                 // Retry with backoff
                 const waitTime = Math.pow(backoffFactor, attempt) * 1000;
@@ -535,10 +535,10 @@ async function createEmbeddingsWithRetry(
                 const error = await response.json();
                 throw new Error(error.error.message);
             }
-            
+
         } catch (error) {
             if (attempt === maxRetries - 1) throw error;
-            
+
             const waitTime = Math.pow(backoffFactor, attempt) * 1000;
             await new Promise(resolve => setTimeout(resolve, waitTime));
         }
@@ -558,20 +558,20 @@ class RateLimitHandler:
     def __init__(self, requests_per_minute=60):
         self.requests_per_minute = requests_per_minute
         self.request_times = []
-    
+
     def wait_if_needed(self):
         """Wait if rate limit would be exceeded"""
         now = time.time()
         minute_ago = now - 60
-        
+
         # Remove old requests
         self.request_times = [t for t in self.request_times if t > minute_ago]
-        
+
         if len(self.request_times) >= self.requests_per_minute:
             # Wait until oldest request is > 1 minute old
             wait_time = 60 - (now - self.request_times[0]) + 0.1
             time.sleep(wait_time)
-        
+
         self.request_times.append(now)
 ```
 
@@ -582,7 +582,7 @@ class RateLimitHandler:
 ```python
 class EmbeddingsClient:
     """Python client for Embeddings API"""
-    
+
     def __init__(self, api_url: str, api_key: str):
         self.api_url = api_url
         self.api_key = api_key
@@ -591,7 +591,7 @@ class EmbeddingsClient:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         })
-    
+
     def create_embedding(
         self,
         text: Union[str, List[str]],
@@ -599,11 +599,11 @@ class EmbeddingsClient:
         provider: Optional[str] = None
     ) -> List[List[float]]:
         """Create embeddings for text"""
-        
+
         headers = {}
         if provider:
             headers["x-provider"] = provider
-        
+
         response = self.session.post(
             f"{self.api_url}/embeddings",
             headers=headers,
@@ -612,12 +612,12 @@ class EmbeddingsClient:
                 "model": model
             }
         )
-        
+
         response.raise_for_status()
         data = response.json()
-        
+
         return [item["embedding"] for item in data["data"]]
-    
+
     # Media embeddings are exposed under /media, not generic /embeddings/jobs
 
 # Usage
@@ -657,12 +657,12 @@ interface EmbeddingResponse {
 class EmbeddingsClient {
     private apiUrl: string;
     private apiKey: string;
-    
+
     constructor(apiUrl: string, apiKey: string) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
     }
-    
+
     async createEmbedding(
         input: string | string[],
         model: string = 'text-embedding-3-small',
@@ -672,25 +672,25 @@ class EmbeddingsClient {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json'
         };
-        
+
         if (provider) {
             headers['x-provider'] = provider;
         }
-        
+
         const response = await fetch(`${this.apiUrl}/embeddings`, {
             method: 'POST',
             headers,
             body: JSON.stringify({ input, model })
         });
-        
+
         if (!response.ok) {
             throw new Error(`API error: ${response.statusText}`);
         }
-        
+
         const data: EmbeddingResponse = await response.json();
         return data.data.map(item => item.embedding);
     }
-    
+
     async *streamBatchEmbeddings(
         texts: string[],
         batchSize: number = 10
@@ -783,20 +783,20 @@ curl -X POST "http://localhost:8000/api/v1/embeddings" \
 ```python
 def process_large_dataset(texts: List[str], batch_size: int = 100):
     """Process large dataset efficiently"""
-    
+
     all_embeddings = []
-    
+
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        
+
         # Process batch
         embeddings = client.create_embedding(batch)
         all_embeddings.extend(embeddings)
-        
+
         # Progress tracking
         progress = (i + len(batch)) / len(texts) * 100
         print(f"Progress: {progress:.1f}%")
-    
+
     return all_embeddings
 ```
 
@@ -811,27 +811,27 @@ class EmbeddingCache:
     def __init__(self, cache_dir: str = ".embedding_cache"):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
-    
+
     def _get_cache_key(self, text: str, model: str) -> str:
         """Generate cache key for text and model"""
         content = f"{text}:{model}"
         return hashlib.sha256(content.encode()).hexdigest()
-    
+
     def get(self, text: str, model: str) -> Optional[List[float]]:
         """Get cached embedding"""
         key = self._get_cache_key(text, model)
         cache_file = self.cache_dir / f"{key}.json"
-        
+
         if cache_file.exists():
             with open(cache_file, 'r') as f:
                 return json.load(f)
         return None
-    
+
     def set(self, text: str, model: str, embedding: List[float]):
         """Cache embedding"""
         key = self._get_cache_key(text, model)
         cache_file = self.cache_dir / f"{key}.json"
-        
+
         with open(cache_file, 'w') as f:
             json.dump(embedding, f)
 
@@ -843,7 +843,7 @@ def get_embedding_cached(text: str, model: str) -> List[float]:
     embedding = cache.get(text, model)
     if embedding:
         return embedding
-    
+
     # Create and cache
     embedding = client.create_embedding(text, model)[0]
     cache.set(text, model, embedding)
@@ -861,7 +861,7 @@ async def create_embedding_async(
     text: str
 ) -> List[float]:
     """Async embedding creation"""
-    
+
     async with session.post(
         f"{API_URL}/embeddings",
         json={"input": text, "model": "text-embedding-3-small"}
@@ -871,16 +871,16 @@ async def create_embedding_async(
 
 async def process_parallel(texts: List[str], max_concurrent: int = 10):
     """Process embeddings in parallel"""
-    
+
     headers = {"Authorization": f"Bearer {API_KEY}"}
-    
+
     async with aiohttp.ClientSession(headers=headers) as session:
         semaphore = asyncio.Semaphore(max_concurrent)
-        
+
         async def bounded_create(text):
             async with semaphore:
                 return await create_embedding_async(session, text)
-        
+
         tasks = [bounded_create(text) for text in texts]
         return await asyncio.gather(*tasks)
 
@@ -893,19 +893,19 @@ embeddings = asyncio.run(process_parallel(texts, max_concurrent=10))
 ```python
 def optimize_for_cost(texts: List[str]):
     """Choose most cost-effective approach"""
-    
+
     total_chars = sum(len(text) for text in texts)
-    
+
     # Estimate tokens (rough approximation)
     estimated_tokens = total_chars / 4
-    
+
     # Cost per 1K tokens (example rates)
     costs = {
         "text-embedding-3-small": 0.00002,
         "text-embedding-3-large": 0.00013,
         "huggingface": 0  # Free
     }
-    
+
     # Choose based on requirements
     if estimated_tokens < 10000:
         # Small batch - use best quality
@@ -926,7 +926,7 @@ class UsageTracker:
         self.requests = []
         self.tokens = 0
         self.errors = []
-    
+
     def track_request(self, response: dict):
         """Track API usage"""
         self.requests.append({
@@ -935,14 +935,14 @@ class UsageTracker:
             "tokens": response.get("usage", {}).get("total_tokens", 0)
         })
         self.tokens += response.get("usage", {}).get("total_tokens", 0)
-    
+
     def track_error(self, error: str):
         """Track errors"""
         self.errors.append({
             "timestamp": datetime.now(),
             "error": error
         })
-    
+
     def get_stats(self) -> dict:
         """Get usage statistics"""
         return {
@@ -995,12 +995,12 @@ from typing import List
 
 class TLDWEmbeddings(Embeddings):
     """Custom LangChain embeddings using TLDW API"""
-    
+
     def __init__(self, api_url: str, api_key: str, model: str = "text-embedding-3-small"):
         self.api_url = api_url
         self.api_key = api_key
         self.model = model
-    
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed documents"""
         response = requests.post(
@@ -1010,7 +1010,7 @@ class TLDWEmbeddings(Embeddings):
         )
         data = response.json()
         return [item["embedding"] for item in data["data"]]
-    
+
     def embed_query(self, text: str) -> List[float]:
         """Embed query text"""
         return self.embed_documents([text])[0]
@@ -1038,13 +1038,13 @@ from typing import List
 
 class TLDWEmbedding(BaseEmbedding):
     """LlamaIndex embedding using TLDW API"""
-    
+
     def __init__(self, api_url: str, api_key: str, model: str = "text-embedding-3-small"):
         super().__init__()
         self.api_url = api_url
         self.api_key = api_key
         self.model = model
-    
+
     def _get_embedding(self, text: str) -> List[float]:
         """Get embedding for text"""
         response = requests.post(
@@ -1053,11 +1053,11 @@ class TLDWEmbedding(BaseEmbedding):
             json={"input": text, "model": self.model}
         )
         return response.json()["data"][0]["embedding"]
-    
+
     def _get_text_embedding(self, text: str) -> List[float]:
         """Required by LlamaIndex"""
         return self._get_embedding(text)
-    
+
     def _get_query_embedding(self, query: str) -> List[float]:
         """Required by LlamaIndex"""
         return self._get_embedding(query)

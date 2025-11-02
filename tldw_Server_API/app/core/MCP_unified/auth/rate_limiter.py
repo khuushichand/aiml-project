@@ -29,22 +29,22 @@ class RateLimitExceeded(Exception):
 
 class BaseRateLimiter(ABC):
     """Abstract base class for rate limiters"""
-    
+
     @abstractmethod
     async def is_allowed(self, key: str) -> tuple[bool, int]:
         """
         Check if request is allowed.
-        
+
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
         pass
-    
+
     @abstractmethod
     async def reset(self, key: str):
         """Reset rate limit for a key"""
         pass
-    
+
     @abstractmethod
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics for a key"""
@@ -54,14 +54,14 @@ class BaseRateLimiter(ABC):
 class TokenBucketRateLimiter(BaseRateLimiter):
     """
     Token bucket rate limiter for smooth rate limiting.
-    
+
     Good for allowing burst traffic while maintaining average rate.
     """
-    
+
     def __init__(self, rate: int, per: int, burst: int = None):
         """
         Initialize token bucket rate limiter.
-        
+
         Args:
             rate: Number of requests allowed
             per: Time period in seconds
@@ -73,47 +73,47 @@ class TokenBucketRateLimiter(BaseRateLimiter):
         self.allowance = {}
         self.last_check = {}
         self._lock = asyncio.Lock()
-    
+
     async def is_allowed(self, key: str) -> tuple[bool, int]:
         """Check if request is allowed"""
         async with self._lock:
             current = time.time()
-            
+
             # Initialize for new key
             if key not in self.allowance:
                 self.allowance[key] = self.burst
                 self.last_check[key] = current
                 return (True, 0)
-            
+
             # Calculate time passed
             time_passed = current - self.last_check[key]
             self.last_check[key] = current
-            
+
             # Add tokens based on time passed
             self.allowance[key] += time_passed * (self.rate / self.per)
-            
+
             # Cap at burst limit
             if self.allowance[key] > self.burst:
                 self.allowance[key] = self.burst
-            
+
             # Check if we have tokens
             if self.allowance[key] < 1.0:
                 # Calculate retry after
                 tokens_needed = 1.0 - self.allowance[key]
                 retry_after = int(tokens_needed * (self.per / self.rate)) + 1
                 return (False, retry_after)
-            
+
             # Consume a token
             self.allowance[key] -= 1.0
             return (True, 0)
-    
+
     async def reset(self, key: str):
         """Reset rate limit for a key"""
         async with self._lock:
             if key in self.allowance:
                 del self.allowance[key]
                 del self.last_check[key]
-    
+
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics"""
         async with self._lock:
@@ -122,21 +122,21 @@ class TokenBucketRateLimiter(BaseRateLimiter):
                 "burst_limit": self.burst,
                 "rate": f"{self.rate}/{self.per}s"
             }
-    
+
     async def cleanup_old_entries(self, max_age: int = 3600):
         """Clean up old entries to prevent memory leak"""
         async with self._lock:
             current = time.time()
             keys_to_delete = []
-            
+
             for key, last_check in self.last_check.items():
                 if current - last_check > max_age:
                     keys_to_delete.append(key)
-            
+
             for key in keys_to_delete:
                 del self.allowance[key]
                 del self.last_check[key]
-            
+
             if keys_to_delete:
                 logger.debug(f"Cleaned up {len(keys_to_delete)} old rate limit entries")
 
@@ -144,14 +144,14 @@ class TokenBucketRateLimiter(BaseRateLimiter):
 class SlidingWindowRateLimiter(BaseRateLimiter):
     """
     Sliding window rate limiter for precise rate limiting.
-    
+
     More accurate than token bucket but uses more memory.
     """
-    
+
     def __init__(self, rate: int, window: int):
         """
         Initialize sliding window rate limiter.
-        
+
         Args:
             rate: Number of requests allowed
             window: Time window in seconds
@@ -160,73 +160,73 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
         self.window = window
         self.requests = defaultdict(deque)
         self._lock = asyncio.Lock()
-    
+
     async def is_allowed(self, key: str) -> tuple[bool, int]:
         """Check if request is allowed"""
         async with self._lock:
             current = time.time()
             window_start = current - self.window
-            
+
             # Get request timestamps for this key
             timestamps = self.requests[key]
-            
+
             # Remove old timestamps outside window
             while timestamps and timestamps[0] < window_start:
                 timestamps.popleft()
-            
+
             # Check if under rate limit
             if len(timestamps) >= self.rate:
                 # Calculate retry after (when oldest request exits window)
                 retry_after = int(timestamps[0] + self.window - current) + 1
                 return (False, retry_after)
-            
+
             # Add current timestamp
             timestamps.append(current)
             return (True, 0)
-    
+
     async def reset(self, key: str):
         """Reset rate limit for a key"""
         async with self._lock:
             if key in self.requests:
                 del self.requests[key]
-    
+
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics"""
         async with self._lock:
             current = time.time()
             window_start = current - self.window
-            
+
             # Count requests in current window
             timestamps = self.requests[key]
             count = sum(1 for ts in timestamps if ts >= window_start)
-            
+
             return {
                 "requests_in_window": count,
                 "limit": self.rate,
                 "window": f"{self.window}s",
                 "remaining": max(0, self.rate - count)
             }
-    
+
     async def cleanup_old_entries(self, max_age: int = 3600):
         """Clean up old entries to prevent memory leak"""
         async with self._lock:
             current = time.time()
             empty_keys = []
-            
+
             for key, timestamps in self.requests.items():
                 # Remove old timestamps
                 cutoff = current - max_age
                 while timestamps and timestamps[0] < cutoff:
                     timestamps.popleft()
-                
+
                 # Mark empty keys for deletion
                 if not timestamps:
                     empty_keys.append(key)
-            
+
             # Delete empty keys
             for key in empty_keys:
                 del self.requests[key]
-            
+
             if empty_keys:
                 logger.debug(f"Cleaned up {len(empty_keys)} empty rate limit entries")
 
@@ -234,10 +234,10 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
 class DistributedRateLimiter(BaseRateLimiter):
     """
     Redis-backed distributed rate limiter for multi-instance deployments.
-    
+
     Uses Redis Lua scripts for atomic operations.
     """
-    
+
     def __init__(
         self,
         rate: int,
@@ -249,7 +249,7 @@ class DistributedRateLimiter(BaseRateLimiter):
     ):
         """
         Initialize distributed rate limiter.
-        
+
         Args:
             rate: Number of requests allowed
             window: Time window in seconds
@@ -267,20 +267,20 @@ class DistributedRateLimiter(BaseRateLimiter):
         self._fallback = None  # lazy TokenBucketRateLimiter fallback
         self.script_sha = None
         self._ensure_lock = asyncio.Lock()
-        
+
         # Lua script for atomic rate limit check
         self.lua_script = """
         local key = KEYS[1]
         local limit = tonumber(ARGV[1])
         local window = tonumber(ARGV[2])
         local current_time = tonumber(ARGV[3])
-        
+
         -- Remove old entries
         redis.call('ZREMRANGEBYSCORE', key, 0, current_time - window)
-        
+
         -- Count current entries
         local current_count = redis.call('ZCARD', key)
-        
+
         if current_count < limit then
             -- Add new entry
             redis.call('ZADD', key, current_time, current_time)
@@ -297,7 +297,7 @@ class DistributedRateLimiter(BaseRateLimiter):
             end
         end
         """
-    
+
     async def _ensure_redis(self) -> bool:
         """Ensure Redis client and Lua script are prepared before use."""
         if self.redis and self.script_sha:
@@ -366,7 +366,7 @@ class DistributedRateLimiter(BaseRateLimiter):
         if limiter:
             return await limiter.get_usage(key)
         return {"error": "Redis not available"}
-    
+
     async def is_allowed(self, key: str) -> tuple[bool, int]:
         """Check if request is allowed using Redis"""
         if not await self._ensure_redis() or not self.redis or not self.script_sha:
@@ -388,7 +388,7 @@ class DistributedRateLimiter(BaseRateLimiter):
         except Exception as e:
             logger.error(f"Redis rate limit error: {e}; falling back to in-memory limiter")
             return await self._use_fallback(key)
-    
+
     async def reset(self, key: str):
         """Reset rate limit for a key in Redis"""
         has_redis = await self._ensure_redis()
@@ -398,7 +398,7 @@ class DistributedRateLimiter(BaseRateLimiter):
             except Exception as e:
                 logger.error(f"Redis reset error: {e}")
         await self._fallback_reset(key)
-    
+
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get current usage statistics from Redis"""
         if not await self._ensure_redis() or not self.redis:
@@ -427,10 +427,10 @@ class DistributedRateLimiter(BaseRateLimiter):
 class RateLimiter:
     """
     Main rate limiter that automatically selects appropriate backend.
-    
+
     Uses Redis if available, otherwise falls back to in-memory.
     """
-    
+
     def __init__(self):
         self.config = get_config()
         self.limiters = {}
@@ -489,7 +489,7 @@ class RateLimiter:
                 # No running event loop in this context (e.g., sync test setup)
                 # Defer scheduling until later; functional behavior unaffected.
                 self._defer_cleanup = True  # marker only
-    
+
     def _init_limiters(self):
         """Initialize rate limiters based on configuration"""
         if self.config.rate_limit_use_redis and self.config.redis_url:
@@ -510,7 +510,7 @@ class RateLimiter:
             logger.warning("Redis URL not configured; falling back to in-memory rate limiting")
         self._using_distributed = False
         self._init_memory_limiter()
-    
+
     def _init_memory_limiter(self):
         """Initialize in-memory rate limiter"""
         self._using_distributed = False
@@ -519,7 +519,7 @@ class RateLimiter:
             per=60,
             burst=self.config.rate_limit_burst_size
         )
-    
+
     def _ensure_cleanup_task(self) -> None:
         """Schedule cleanup task once an event loop is available."""
         if self._using_distributed or not self._defer_cleanup:
@@ -534,7 +534,7 @@ class RateLimiter:
         self._cleanup_task_handle = loop.create_task(self._cleanup_task())
         self._defer_cleanup = False
         logger.info("Using in-memory token bucket rate limiting")
-    
+
     async def check_rate_limit(
         self,
         key: str,
@@ -542,37 +542,37 @@ class RateLimiter:
     ) -> None:
         """
         Check rate limit and raise exception if exceeded.
-        
+
         Args:
             key: Unique identifier for rate limiting
             limiter: Optional custom limiter
-        
+
         Raises:
             RateLimitExceeded: If rate limit is exceeded
         """
         if not self.config.rate_limit_enabled:
             return
-        
+
         self._ensure_cleanup_task()
-        
+
         limiter = limiter or self.default_limiter
         allowed, retry_after = await limiter.is_allowed(key)
-        
+
         if not allowed:
             logger.warning(f"Rate limit exceeded for key: {key}")
             raise RateLimitExceeded(retry_after)
-    
+
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get rate limit usage for a key"""
         self._ensure_cleanup_task()
         return await self.default_limiter.get_usage(key)
-    
+
     async def reset(self, key: str):
         """Reset rate limit for a key"""
         self._ensure_cleanup_task()
         await self.default_limiter.reset(key)
         logger.info(f"Rate limit reset for key: {key}", extra={"audit": True})
-    
+
     async def _cleanup_task(self):
         """Background task to clean up old entries"""
         try:

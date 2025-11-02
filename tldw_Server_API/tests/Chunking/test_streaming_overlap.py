@@ -106,4 +106,3 @@ def test_language_autodetect_thai():
     assert out and isinstance(out, list)
     md = out[0].get("metadata", {})
     assert md.get("language") == "th", f"Expected Thai autodetect, got {md.get('language')}"
-

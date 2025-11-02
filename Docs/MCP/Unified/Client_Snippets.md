@@ -90,4 +90,3 @@ print(exec_resp.json())
 - Tool discovery can be narrowed with catalogs: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>`.
 - Results include `canExecute` for each tool; catalog membership doesn’t grant execute permissions.
 - Prefer WS headers/subprotocol for auth; query-param tokens are disabled by default.
-

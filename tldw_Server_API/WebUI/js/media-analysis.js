@@ -18,16 +18,16 @@ class MediaAnalysisManager {
 
     async initialize() {
         console.log('Initializing Media Analysis Manager');
-        
+
         // Load saved prompts
         await this.loadAvailablePrompts();
-        
+
         // Don't automatically load media - let user trigger it
         // await this.loadAllMedia();
-        
+
         // Set up event listeners
         this.setupEventListeners();
-        
+
         // Initialize model dropdown
         if (typeof window.populateModelDropdowns === 'function') {
             await window.populateModelDropdowns();
@@ -80,7 +80,7 @@ class MediaAnalysisManager {
                 maxTokensValue.textContent = e.target.value;
             });
         }
-        
+
         // Don't automatically load media - let user trigger it
         // this.loadAllMedia(1);
     }
@@ -108,7 +108,7 @@ class MediaAnalysisManager {
 
     displaySearchResults(items) {
         const resultsDiv = document.getElementById('analysisMediaResults');
-        
+
         if (items.length === 0) {
             resultsDiv.innerHTML = '<div class="no-results">No media items found</div>';
             return;
@@ -136,7 +136,7 @@ class MediaAnalysisManager {
     async loadAllMedia(page = 1) {
         const mediaListDiv = document.getElementById('allMediaList');
         mediaListDiv.innerHTML = '<div class="loading">Loading media items...</div>';
-        
+
         // Show refresh button and hide load button after first load
         const loadBtn = document.getElementById('loadMediaListBtn');
         const refreshBtn = document.getElementById('refreshMediaListBtn');
@@ -156,15 +156,15 @@ class MediaAnalysisManager {
                     results_per_page: this.itemsPerPage
                 }
             });
-            
+
             // Update pagination state from the pagination object
             this.currentPage = page;
             this.totalItems = data.pagination?.total_items || 0;
             this.totalPages = data.pagination?.total_pages || 1;
-            
+
             // Display media items
             this.displayMediaList(data.items || []);
-            
+
             // Update pagination controls
             this.updatePaginationControls();
         } catch (error) {
@@ -175,7 +175,7 @@ class MediaAnalysisManager {
 
     displayMediaList(items) {
         const mediaListDiv = document.getElementById('allMediaList');
-        
+
         if (!items || items.length === 0) {
             mediaListDiv.innerHTML = '<div class="no-results">No media items available</div>';
             return;
@@ -204,10 +204,10 @@ class MediaAnalysisManager {
         const prevBtn = document.getElementById('mediaPrevPage');
         const nextBtn = document.getElementById('mediaNextPage');
         const pageInfo = document.getElementById('mediaPageInfo');
-        
+
         // Update page info text
         pageInfo.textContent = `Page ${this.currentPage} of ${this.totalPages} (${this.totalItems} items)`;
-        
+
         // Enable/disable buttons
         prevBtn.disabled = this.currentPage <= 1;
         nextBtn.disabled = this.currentPage >= this.totalPages;
@@ -230,12 +230,12 @@ class MediaAnalysisManager {
         const selectedMediaDiv = document.getElementById('selectedMediaForAnalysis');
         const contentSection = document.getElementById('mediaContentSection');
         const contentTextarea = document.getElementById('analysisMediaContent');
-        
+
         selectedMediaDiv.innerHTML = '<div class="loading">Loading media details...</div>';
 
         try {
             const media = await apiClient.get(`/api/v1/media/${mediaId}`);
-            
+
             // Display media info
             selectedMediaDiv.innerHTML = `
                 <div class="selected-media-card">
@@ -275,7 +275,7 @@ class MediaAnalysisManager {
 
             // Load existing analyses for this media
             await this.loadExistingAnalyses(mediaId);
-            
+
             // Clear search results
             document.getElementById('analysisMediaResults').innerHTML = '';
             document.getElementById('analysisMediaSearch').value = '';
@@ -304,7 +304,7 @@ class MediaAnalysisManager {
         if (!select) return;
 
         const html = ['<option value="">Select a saved prompt...</option>'];
-        
+
         this.availablePrompts.forEach(prompt => {
             html.push(`<option value="${prompt.id}">${this.escapeHtml(prompt.name)}</option>`);
         });
@@ -429,7 +429,7 @@ async function byIdentifierSelectForAnalysis() {
         this.isAnalyzing = true;
         const runButton = document.getElementById('runAnalysisBtn');
         const resultsDiv = document.getElementById('analysisResults');
-        
+
         runButton.disabled = true;
         runButton.textContent = 'Analyzing...';
         resultsDiv.innerHTML = '<div class="loading">Running analysis...</div>';
@@ -443,7 +443,7 @@ async function byIdentifierSelectForAnalysis() {
                     content: systemPrompt
                 });
             }
-            
+
             // Combine the user prompt with the media content
             const fullUserMessage = `${userPrompt}\n\nContent to analyze:\n\n${mediaContent}`;
             messages.push({
@@ -514,7 +514,7 @@ async function byIdentifierSelectForAnalysis() {
                     if (line.startsWith('data: ')) {
                         const data = line.substring(6);
                         if (data === '[DONE]') continue;
-                        
+
                         try {
                             const parsed = JSON.parse(data);
                             if (parsed.choices && parsed.choices[0].delta?.content) {
@@ -543,8 +543,8 @@ async function byIdentifierSelectForAnalysis() {
 
     async saveAnalysisVersion(content, userPrompt, systemPrompt, analysisResult) {
         try {
-            const fullPrompt = systemPrompt ? 
-                `System: ${systemPrompt}\n\nUser: ${userPrompt}` : 
+            const fullPrompt = systemPrompt ?
+                `System: ${systemPrompt}\n\nUser: ${userPrompt}` :
                 userPrompt;
 
             const payload = {
@@ -599,7 +599,7 @@ async function byIdentifierSelectForAnalysis() {
             const versions = await apiClient.get(`/api/v1/media/${mediaId}/versions`, {
                 include_content: false
             });
-            
+
             // Filter to show only versions with analysis_content
             const analyses = versions.filter(v => v.analysis_content);
             this.currentAnalyses = analyses;
@@ -612,7 +612,7 @@ async function byIdentifierSelectForAnalysis() {
 
     displayExistingAnalyses(analyses) {
         const container = document.getElementById('existingAnalyses');
-        
+
         if (!analyses || analyses.length === 0) {
             container.innerHTML = '<div class="no-analyses">No analyses found for this media item</div>';
             return;
@@ -655,7 +655,7 @@ async function byIdentifierSelectForAnalysis() {
             const analysis = await apiClient.get(`/api/v1/media/${this.selectedMediaId}/versions/${versionNumber}`, {
                 include_content: true
             });
-            
+
             const resultsDiv = document.getElementById('analysisResults');
             const md = analysis.safe_metadata || {};
             const idLine = [

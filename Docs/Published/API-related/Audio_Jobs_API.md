@@ -16,4 +16,3 @@ Worker flags:
 
 Quotas:
 - Per-user concurrent jobs and daily minutes enforced across HTTP/WS and Jobs worker.
-

@@ -106,4 +106,3 @@ def test_sqlite_evaluations_unified_fallback(tmp_path):
     # Should find a record either in unified table (if created by migrations) or internal_evaluations fallback
     got = db.get_unified_evaluation(eval_id)
     assert got is not None
-

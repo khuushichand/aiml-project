@@ -38,4 +38,3 @@ def test_base64_reduction_is_deterministic():
     b1 = base64.b64encode(a1.tobytes()).decode("utf-8")
     b2 = base64.b64encode(a2.tobytes()).decode("utf-8")
     assert b1 == b2
-

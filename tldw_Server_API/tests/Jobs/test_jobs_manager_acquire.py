@@ -61,4 +61,3 @@ def test_acquire_order_priority_and_availability_sqlite(tmp_path, monkeypatch):
     # Ensure scheduled job remains queued
     queued = jm.list_jobs(domain=domain, queue=queue, status="queued")
     assert any(j.get("job_type") == "scheduled" for j in queued)
-

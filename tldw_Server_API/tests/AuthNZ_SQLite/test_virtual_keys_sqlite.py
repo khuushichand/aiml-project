@@ -87,4 +87,3 @@ async def test_create_virtual_key_and_budget_checks(tmp_path):
     result = await is_key_over_budget(key_id)
     assert result['over'] is True
     assert any(r.startswith('day_tokens_exceeded') for r in result['reasons'])
-

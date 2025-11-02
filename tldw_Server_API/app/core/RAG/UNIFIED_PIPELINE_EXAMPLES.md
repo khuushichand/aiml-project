@@ -130,36 +130,36 @@ POST /api/v1/rag/search
 ```python
 {
     "query": "artificial intelligence applications in healthcare",
-    
+
     # Query Enhancement
     "spell_check": true,
     "expand_query": true,
     "expansion_strategies": ["acronym", "synonym", "domain", "entity"],
-    
+
     # Search Configuration
     "sources": ["media_db", "notes"],
     "search_mode": "hybrid",
     "hybrid_alpha": 0.7,
     "top_k": 30,
-    
+
     # Processing
     "enable_table_processing": true,
     "enable_parent_expansion": true,
-    
+
     # Quality
     "enable_reranking": true,
     "reranking_strategy": "hybrid",
-    
+
     # Output
     "enable_citations": true,
     "citation_style": "apa",
     "enable_generation": true,
     "generation_model": "gpt-4",
-    
+
     # Monitoring
     "enable_monitoring": true,
     "enable_performance_analysis": true,
-    
+
     # User Experience
     "highlight_results": true,
     "highlight_query_terms": true,
@@ -183,24 +183,24 @@ POST /api/v1/rag/search
 ```python
 {
     "query": "company policies",
-    
+
     # Security
     "enable_security_filter": true,
     "detect_pii": true,
     "redact_pii": true,
     "sensitivity_level": "confidential",
     "content_filter": true,
-    
+
     # Resilience
     "enable_resilience": true,
     "retry_attempts": 3,
     "circuit_breaker": true,
-    
+
     # Monitoring
     "enable_monitoring": true,
     "enable_observability": true,
     "trace_id": "trace-123",
-    
+
     # User Context
     "user_id": "employee123",
     "session_id": "session-456"
@@ -211,23 +211,23 @@ POST /api/v1/rag/search
 ```python
 {
     "query": "quantum entanglement experiments",
-    
+
     # Comprehensive search
     "expand_query": true,
     "expansion_strategies": ["domain", "entity"],
     "sources": ["media_db", "notes"],
-    
+
     # Quality focus
     "enable_reranking": true,
     "reranking_strategy": "cross_encoder",
     "top_k": 50,
     "rerank_top_k": 10,
-    
+
     # Academic output
     "enable_citations": true,
     "citation_style": "chicago",
     "include_page_numbers": true,
-    
+
     # No generation - want original sources
     "enable_generation": false
 }
@@ -246,7 +246,7 @@ POST /api/v1/rag/batch
         "Define neural networks"
     ],
     "max_concurrent": 5,
-    
+
     # These settings apply to ALL queries
     "expand_query": true,
     "enable_citations": true,

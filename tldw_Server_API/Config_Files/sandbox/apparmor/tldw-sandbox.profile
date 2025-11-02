@@ -24,4 +24,3 @@ profile tldw-sandbox flags=(attach_disconnected,mediate_deleted) {
   file,
   capability,
 }
-

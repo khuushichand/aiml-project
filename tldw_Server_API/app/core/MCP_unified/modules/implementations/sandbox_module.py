@@ -186,4 +186,3 @@ class SandboxModule(BaseModule):
             for i, f in enumerate(files):
                 if not isinstance(f, dict) or not f.get("path") or not f.get("content_b64"):
                     raise ValueError(f"files[{i}] must include path and content_b64")
-

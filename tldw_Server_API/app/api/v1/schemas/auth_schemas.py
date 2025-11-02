@@ -18,7 +18,7 @@ class LoginRequest(BaseModel):
     """Login request with username and password"""
     username: str = Field(..., min_length=1, max_length=50, description="Username or email")
     password: str = Field(..., min_length=1, description="User password")
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -48,7 +48,7 @@ class RegisterRequest(BaseModel):
         None,
         description="Registration code if required"
     )
-    
+
     @field_validator('username')
     @classmethod
     def username_valid(cls, v):
@@ -56,13 +56,13 @@ class RegisterRequest(BaseModel):
         if v.lower() in ['admin', 'root', 'system', 'api']:
             raise ValueError('Reserved username')
         return v.lower()
-    
+
     @field_validator('email')
     @classmethod
     def email_lowercase(cls, v):
         """Normalize email to lowercase"""
         return v.lower()
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -78,7 +78,7 @@ class RegisterRequest(BaseModel):
 class RefreshTokenRequest(BaseModel):
     """Token refresh request"""
     refresh_token: str = Field(..., description="Valid refresh token")
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -91,7 +91,7 @@ class RefreshTokenRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     """Request model for updating user profile."""
     email: Optional[EmailStr] = Field(None, description="New email address")
-    
+
     @field_validator('email')
     @classmethod
     def email_lowercase(cls, v):
@@ -99,7 +99,7 @@ class UpdateProfileRequest(BaseModel):
         if v:
             return v.lower()
         return v
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -117,7 +117,7 @@ class PasswordChangeRequest(BaseModel):
         min_length=10,
         description="New password"
     )
-    
+
     @field_validator('new_password')
     @classmethod
     def passwords_different(cls, v, info):
@@ -125,7 +125,7 @@ class PasswordChangeRequest(BaseModel):
         if 'current_password' in info.data and v == info.data['current_password']:
             raise ValueError('New password must be different from current password')
         return v
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -139,13 +139,13 @@ class PasswordChangeRequest(BaseModel):
 class PasswordResetRequest(BaseModel):
     """Password reset request"""
     email: EmailStr = Field(..., description="Email address for reset link")
-    
+
     @field_validator('email')
     @classmethod
     def email_lowercase(cls, v):
         """Normalize email to lowercase"""
         return v.lower()
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -163,7 +163,7 @@ class PasswordResetConfirm(BaseModel):
         min_length=10,
         description="New password"
     )
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -184,7 +184,7 @@ class TokenResponse(BaseModel):
     refresh_token: str = Field(..., description="JWT refresh token")
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Access token expiration in seconds")
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -210,7 +210,7 @@ class UserResponse(BaseModel):
     last_login: Optional[datetime] = Field(None, description="Last login time")
     storage_quota_mb: int = Field(..., description="Storage quota in MB")
     storage_used_mb: float = Field(..., description="Storage used in MB")
-    
+
     model_config = {
         "from_attributes": True,
         "json_schema_extra": {
@@ -239,7 +239,7 @@ class SessionResponse(BaseModel):
     created_at: datetime = Field(..., description="Session creation time")
     last_activity: datetime = Field(..., description="Last activity time")
     expires_at: datetime = Field(..., description="Session expiration time")
-    
+
     model_config = {
         "from_attributes": True,
         "json_schema_extra": {
@@ -259,7 +259,7 @@ class MessageResponse(BaseModel):
     """Simple message response"""
     message: str = Field(..., description="Response message")
     details: Optional[Dict[str, Any]] = Field(None, description="Additional details")
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -275,7 +275,7 @@ class ErrorResponse(BaseModel):
     detail: str = Field(..., description="Error message")
     status_code: int = Field(..., description="HTTP status code")
     error_type: Optional[str] = Field(None, description="Error type")
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -298,7 +298,7 @@ class RegistrationResponse(BaseModel):
         default=None,
         description="X-API-KEY for this user (shown once, SQLite multi-user)."
     )
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -320,7 +320,7 @@ class StorageQuotaResponse(BaseModel):
     storage_quota_mb: int = Field(..., description="Storage quota in MB")
     available_mb: float = Field(..., description="Available storage in MB")
     usage_percentage: float = Field(..., description="Usage percentage")
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {

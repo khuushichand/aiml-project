@@ -61,4 +61,3 @@ def test_generate_and_search_runs_in_thread(monkeypatch):
     assert observations.get("has_loop") is False
     # Should run under a different worker thread name
     assert "ThreadPoolExecutor" in observations.get("thread_name", "")
-

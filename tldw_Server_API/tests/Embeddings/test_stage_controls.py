@@ -79,4 +79,3 @@ def test_stage_pause_resume_drain(monkeypatch):
     assert r6.json()["embedding"]["drain"] is False
 
     app.dependency_overrides.pop(get_request_user, None)
-

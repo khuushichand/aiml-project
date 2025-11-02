@@ -90,4 +90,3 @@ class ToolExecutor:
             err = getattr(resp.error, "message", str(resp.error))  # type: ignore[attr-defined]
             raise ToolExecutionError(err)
         return getattr(resp, "result", {}) or {}
-

@@ -52,11 +52,11 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
             def _fn(audio_np: np.ndarray, sr: int) -> str:
                 """
                 Transcribe a NumPy audio buffer using the ONNX Parakeet backend.
-                
+
                 Parameters:
                     audio_np (np.ndarray): Mono float32 audio samples.
                     sr (int): Sample rate in Hertz.
-                
+
                 Returns:
                     str: Transcribed text.
                 """
@@ -75,7 +75,7 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
             def _fn(audio_np: np.ndarray, sr: int) -> str:
                 """
                 Transcribe the given audio using the Parakeet MLX backend.
-                
+
                 Returns:
                     The transcription text produced by the MLX model.
                 """
@@ -95,11 +95,11 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
             def _fn(audio_np: np.ndarray, sr: int) -> str:
                 """
                 Transcribe the given audio array using the Nemo Parakeet "standard" variant.
-                
+
                 Parameters:
                     audio_np (np.ndarray): Mono float32 audio samples to transcribe.
                     sr (int): Sample rate of the audio in Hertz.
-                
+
                 Returns:
                     transcription (str): Decoded text produced from the audio.
                 """
@@ -119,7 +119,7 @@ class ParakeetCoreTranscriber:
     def __post_init__(self) -> None:
         """
         Initialize internal buffers and runtime state for the transcriber.
-        
+
         Sets up the audio buffer using configured sample rate and maximum buffer duration, initializes timing, segment and history counters, and selects a decode function based on the configured model/variant when no decode function was provided.
         """
         self.buffer = AudioBuffer(sample_rate=self.config.sample_rate, max_duration=self.config.max_buffer_duration)
@@ -134,7 +134,7 @@ class ParakeetCoreTranscriber:
     def reset(self) -> None:
         """
         Reset the transcriber to its initial empty state.
-        
+
         Clears the audio buffer and transcript history, and resets partial-timing, total-processed time, and segment index counters to zero.
         """
         self.buffer.clear()
@@ -146,7 +146,7 @@ class ParakeetCoreTranscriber:
     def get_full_transcript(self) -> str:
         """
         Get the entire accumulated transcript as a single string.
-        
+
         Returns:
             A string containing all history entries joined by single spaces; empty string if there are no entries.
         """
@@ -155,11 +155,11 @@ class ParakeetCoreTranscriber:
     async def process_audio_chunk(self, audio: Union[bytes, str, np.ndarray]) -> Optional[Dict[str, Any]]:
         """
         Process an incoming audio chunk and emit a partial or final transcription frame when available.
-        
+
         Accepts audio as raw float32 bytes, a base64 string encoding float32 bytes, or a numpy float32 array. Depending on streaming configuration and buffered audio duration, this may produce:
         - a partial frame (when partials are enabled and the partial cadence has elapsed), or
         - a final frame (when buffered audio reaches the configured chunk duration).
-        
+
         Returned frame structure (when produced):
         - "type": "partial" or "final"
         - "text": transcribed text
@@ -167,7 +167,7 @@ class ParakeetCoreTranscriber:
         - "is_final": boolean indicating finality
         - additional metadata from internal metadata helpers (segment and timing fields)
         - for final frames only: "_audio_chunk": numpy array copy of the audio used for the final transcript
-        
+
         Returns:
             dict: A partial or final frame as described above, or `None` if no frame is emitted for this chunk.
         """
@@ -244,9 +244,9 @@ class ParakeetCoreTranscriber:
     async def flush(self) -> Optional[Dict[str, Any]]:
         """
         Emit any remaining buffered audio as a final transcription frame, clear the buffer, and append the transcript to history.
-        
+
         If there is buffered audio, decode it to text, apply optional post-processing, append the text to the transcriber history, and return a final frame containing transcription, timestamp, is_final=True, and the segment/chunk metadata produced by _prepare_final_metadata. The buffer is cleared regardless of whether decoding yields text.
-        
+
         Returns:
             dict: A final frame with keys including `"type"`, `"text"`, `"timestamp"`, `"is_final"` and segment/chunk metadata (e.g., `segment_id`, `segment_start`, `segment_end`, `chunk_duration`, `overlap`, `chunk_start`, `chunk_end`, `new_audio_duration`, `cumulative_audio`) when a transcript was produced.
             None: If there is no buffered audio or decoding produced no text.
@@ -288,13 +288,13 @@ class ParakeetCoreTranscriber:
     def _coerce_to_np(self, audio: Union[bytes, str, np.ndarray]) -> Optional[np.ndarray]:
         """
         Convert an audio input into a mono float32 NumPy array suitable for decoding.
-        
+
         Parameters:
             audio (bytes | str | numpy.ndarray): Input audio as one of:
                 - a NumPy array (any dtype/shape), which will be converted to float32 and averaged to mono if multi-channel;
                 - a base64-encoded string containing raw float32 samples;
                 - raw bytes or bytearray containing either ASCII/base64 text (will be decoded) or raw float32 bytes.
-        
+
         Returns:
             numpy.ndarray | None: A 1-D NumPy array of dtype float32 with mono audio samples, or `None` if the input type or conversion fails. The function aligns raw byte input to 4-byte (float32) boundaries and averages channels to produce mono.
         """
@@ -347,10 +347,10 @@ class ParakeetCoreTranscriber:
         # (Re)select decoder if needed (model/variant may have been updated externally)
         """
         Attempt to decode a mono float32 audio numpy array into text using the configured decode function.
-        
+
         Parameters:
             audio_np (np.ndarray): Mono float32 audio samples to decode.
-        
+
         Returns:
             str: Decoded transcription as a string, or an empty string if no decoder is available or decoding fails.
         """
@@ -367,10 +367,10 @@ class ParakeetCoreTranscriber:
     async def _decode_async(self, audio_np: np.ndarray) -> str:
         """
         Decode the given mono float32 audio array to text using the configured decode function in a worker thread.
-        
+
         If no decode function is set, attempts to select one based on the current model/variant; on any error or if no decoder is available, returns an empty string. Parameters:
             audio_np (np.ndarray): Mono float32 audio samples to decode.
-        
+
         Returns:
             str: Decoded transcript, or an empty string on failure or when no decoder is available.
         """
@@ -387,10 +387,10 @@ class ParakeetCoreTranscriber:
     def _prepare_partial_metadata(self, buffer_duration: float) -> Dict[str, float]:
         """
         Compute metadata for a partial transcription frame based on the current buffered audio.
-        
+
         Parameters:
             buffer_duration (float): Duration of audio currently buffered, in seconds.
-        
+
         Returns:
             dict: Mapping with the following keys:
                 - segment_id: The 1-based index of the upcoming segment.
@@ -411,10 +411,10 @@ class ParakeetCoreTranscriber:
     def _prepare_final_metadata(self, chunk_duration: float) -> Dict[str, float]:
         """
         Compute metadata for a finalized audio segment including timing, overlap, and cumulative totals.
-        
+
         Parameters:
             chunk_duration (float): Duration in seconds of the chunk being finalized.
-        
+
         Returns:
             Dict[str, float]: Metadata for the finalized segment containing:
                 - segment_id: Sequential segment index (1-based after update).

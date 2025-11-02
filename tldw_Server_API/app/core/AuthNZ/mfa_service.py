@@ -48,14 +48,14 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 class MFAService:
     """
     Multi-Factor Authentication service supporting TOTP (Time-based One-Time Passwords)
-    
+
     Features:
     - TOTP generation and validation
     - QR code generation for authenticator apps
     - Backup codes generation and validation
     - Recovery options
     """
-    
+
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
@@ -68,25 +68,25 @@ class MFAService:
         self._cipher: Optional[Fernet] = None
         self._cipher_candidates: List[Fernet] = []
         self._cipher_key_material: Tuple[bytes, ...] = tuple()
-        
+
         # TOTP configuration
         self.issuer_name = self.settings.APP_NAME if hasattr(self.settings, 'APP_NAME') else "TLDW Server"
         self.totp_digits = 6
         self.totp_interval = 30  # seconds
         self.backup_codes_count = 8
-        
+
         # Window for TOTP validation (allows for time drift)
         self.validation_window = 1  # Allow 1 interval before/after
-        
+
     async def initialize(self):
         """Initialize MFA service"""
         if self._initialized:
             return
-        
+
         # Get database pool
         if not self.db_pool:
             self.db_pool = await get_db_pool()
-        
+
         self._initialized = True
         logger.info("MFAService initialized")
 
@@ -152,11 +152,11 @@ class MFAService:
             if digest not in digests:
                 digests.append(digest)
         return digests
-    
+
     def generate_secret(self) -> str:
         """
         Generate a new TOTP secret
-        
+
         Returns:
             Base32-encoded secret key
         """
@@ -165,7 +165,7 @@ class MFAService:
         # Encode as base32 for TOTP compatibility
         secret = base64.b32encode(random_bytes).decode('utf-8')
         return secret
-    
+
     def generate_totp_uri(
         self,
         secret: str,
@@ -174,12 +174,12 @@ class MFAService:
     ) -> str:
         """
         Generate TOTP URI for QR code
-        
+
         Args:
             secret: Base32-encoded secret
             username: User's username/email
             issuer: Application name
-            
+
         Returns:
             TOTP URI string
         """
@@ -189,14 +189,14 @@ class MFAService:
             name=username,
             issuer_name=issuer
         )
-    
+
     def generate_qr_code(self, totp_uri: str) -> bytes:
         """
         Generate QR code image for TOTP URI
-        
+
         Args:
             totp_uri: TOTP URI string
-            
+
         Returns:
             PNG image bytes
         """
@@ -206,7 +206,7 @@ class MFAService:
                 "Install the 'qrcode' extra for generated QR codes."
             )
             return _FALLBACK_QR_PNG or b""
-        
+
         qr = qrcode.QRCode(
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -215,36 +215,36 @@ class MFAService:
         )
         qr.add_data(totp_uri)
         qr.make(fit=True)
-        
+
         img = qr.make_image(fill_color="black", back_color="white")
-        
+
         # Convert to bytes
         buffer = BytesIO()
         img.save(buffer, format='PNG')
         return buffer.getvalue()
-    
+
     def generate_backup_codes(self, count: Optional[int] = None) -> List[str]:
         """
         Generate backup codes for account recovery
-        
+
         Args:
             count: Number of codes to generate
-            
+
         Returns:
             List of backup codes
         """
         count = count or self.backup_codes_count
         codes = []
-        
+
         for _ in range(count):
             # Generate 8-character alphanumeric codes
             code = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(8))
             # Format as XXXX-XXXX for readability
             formatted_code = f"{code[:4]}-{code[4:]}"
             codes.append(formatted_code)
-        
+
         return codes
-    
+
     def verify_totp(
         self,
         secret: str,
@@ -253,37 +253,37 @@ class MFAService:
     ) -> bool:
         """
         Verify a TOTP token
-        
+
         Args:
             secret: User's TOTP secret
             token: 6-digit token to verify
             window: Validation window (intervals before/after)
-            
+
         Returns:
             True if token is valid
         """
         if not secret or not token:
             return False
-        
+
         # Remove any spaces or hyphens from token
         token = token.replace(' ', '').replace('-', '')
-        
+
         # Validate token format
         if not token.isdigit() or len(token) != self.totp_digits:
             return False
-        
+
         try:
             totp = pyotp.TOTP(secret)
             # Use custom window or default
             validation_window = window if window is not None else self.validation_window
-            
+
             # Verify with time window to account for clock drift
             return totp.verify(token, valid_window=validation_window)
-            
+
         except Exception as e:
             logger.error(f"TOTP verification error: {e}")
             return False
-    
+
     async def enable_mfa(
         self,
         user_id: int,
@@ -292,29 +292,29 @@ class MFAService:
     ) -> bool:
         """
         Enable MFA for a user
-        
+
         Args:
             user_id: User's ID
             secret: TOTP secret
             backup_codes: List of backup codes
-            
+
         Returns:
             True if successfully enabled
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             encrypted_secret = self._encrypt_secret(secret)
             hashed_codes = [self._hash_backup_code(user_id, code) for code in backup_codes]
             backup_codes_json = json.dumps(hashed_codes)
-            
+
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute("""
-                        UPDATE users 
-                        SET totp_secret = $1, 
+                        UPDATE users
+                        SET totp_secret = $1,
                             two_factor_enabled = true,
                             backup_codes = $2,
                             updated_at = $3
@@ -323,42 +323,42 @@ class MFAService:
                 else:
                     # SQLite
                     await conn.execute("""
-                        UPDATE users 
-                        SET totp_secret = ?, 
+                        UPDATE users
+                        SET totp_secret = ?,
                             two_factor_enabled = 1,
                             backup_codes = ?,
                             updated_at = ?
                         WHERE id = ?
                     """, (encrypted_secret, backup_codes_json, datetime.utcnow().isoformat(), user_id))
                     await conn.commit()
-            
+
             logger.info(f"MFA enabled for user {user_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to enable MFA: {e}")
             return False
-    
+
     async def disable_mfa(self, user_id: int) -> bool:
         """
         Disable MFA for a user
-        
+
         Args:
             user_id: User's ID
-            
+
         Returns:
             True if successfully disabled
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     await conn.execute("""
-                        UPDATE users 
-                        SET totp_secret = NULL, 
+                        UPDATE users
+                        SET totp_secret = NULL,
                             two_factor_enabled = false,
                             backup_codes = NULL,
                             updated_at = $1
@@ -367,18 +367,18 @@ class MFAService:
                 else:
                     # SQLite
                     await conn.execute("""
-                        UPDATE users 
-                        SET totp_secret = NULL, 
+                        UPDATE users
+                        SET totp_secret = NULL,
                             two_factor_enabled = 0,
                             backup_codes = NULL,
                             updated_at = ?
                         WHERE id = ?
                     """, (datetime.utcnow().isoformat(), user_id))
                     await conn.commit()
-            
+
             logger.info(f"MFA disabled for user {user_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to disable MFA: {e}")
             return False
@@ -408,20 +408,20 @@ class MFAService:
         except Exception as exc:
             logger.error(f"Failed to load MFA secret for user {user_id}: {exc}")
             raise DatabaseError("Failed to load MFA secret") from exc
-    
+
     async def get_user_mfa_status(self, user_id: int) -> Dict[str, Any]:
         """
         Get MFA status for a user
-        
+
         Args:
             user_id: User's ID
-            
+
         Returns:
             Dictionary with MFA status information
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             async with self.db_pool.acquire() as conn:
                 if hasattr(conn, 'fetchrow'):
@@ -434,13 +434,13 @@ class MFAService:
                 else:
                     # SQLite
                     cursor = await conn.execute("""
-                        SELECT two_factor_enabled, 
+                        SELECT two_factor_enabled,
                                totp_secret IS NOT NULL as has_secret,
                                backup_codes IS NOT NULL as has_backup_codes
                         FROM users WHERE id = ?
                     """, (user_id,))
                     result = await cursor.fetchone()
-                
+
                 if result:
                     return {
                         "enabled": bool(result[0] if isinstance(result, tuple) else result['two_factor_enabled']),
@@ -448,17 +448,17 @@ class MFAService:
                         "has_backup_codes": bool(result[2] if isinstance(result, tuple) else result['has_backup_codes']),
                         "method": "totp" if result[0] else None
                     }
-                    
+
         except Exception as e:
             logger.error(f"Failed to get MFA status: {e}")
-        
+
         return {
             "enabled": False,
             "has_secret": False,
             "has_backup_codes": False,
             "method": None
         }
-    
+
     async def verify_backup_code(
         self,
         user_id: int,
@@ -466,17 +466,17 @@ class MFAService:
     ) -> bool:
         """
         Verify and consume a backup code
-        
+
         Args:
             user_id: User's ID
             code: Backup code to verify
-            
+
         Returns:
             True if code is valid and was consumed
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 # Get backup codes
@@ -494,10 +494,10 @@ class MFAService:
                     )
                     result = await cursor.fetchone()
                     backup_codes_json = result[0] if result else None
-                
+
                 if not backup_codes_json:
                     return False
-                
+
                 backup_codes = json.loads(backup_codes_json)
                 hash_candidates = self._hash_backup_code_candidates(user_id, code)
                 normalized_input = self._normalize_backup_code(code)
@@ -530,7 +530,7 @@ class MFAService:
                         normalized_codes.append(self._hash_backup_code(user_id, candidate))
 
                 updated_codes_json = json.dumps(normalized_codes)
-                
+
                 # Update database
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
@@ -545,36 +545,36 @@ class MFAService:
                         (updated_codes_json, user_id)
                     )
                     await conn.commit()
-                
+
                 logger.info(f"Backup code used for user {user_id}")
                 return True
-                
+
         except Exception as e:
             logger.error(f"Failed to verify backup code: {e}")
             return False
-    
+
     async def regenerate_backup_codes(
         self,
         user_id: int
     ) -> Optional[List[str]]:
         """
         Generate new backup codes for a user
-        
+
         Args:
             user_id: User's ID
-            
+
         Returns:
             List of new backup codes or None on failure
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Generate new codes
             new_codes = self.generate_backup_codes()
             hashed_codes = [self._hash_backup_code(user_id, code) for code in new_codes]
             backup_codes_json = json.dumps(hashed_codes)
-            
+
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
@@ -589,10 +589,10 @@ class MFAService:
                         (backup_codes_json, datetime.utcnow().isoformat(), user_id)
                     )
                     await conn.commit()
-            
+
             logger.info(f"Regenerated backup codes for user {user_id}")
             return new_codes
-            
+
         except Exception as e:
             logger.error(f"Failed to regenerate backup codes: {e}")
             return None

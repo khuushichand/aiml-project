@@ -133,13 +133,13 @@ async def create_test_case(
 ) -> StandardResponse:
     """
     Create a new test case.
-    
+
     Args:
         test_case_data: Test case creation data
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         Created test case details
     """
@@ -150,13 +150,13 @@ async def create_test_case(
         # Check test case limit
         manager = TestCaseManager(db)
         current_count = manager.get_test_case_stats(test_case_data.project_id)["total"]
-        
+
         if current_count >= security_config.max_test_cases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Project has reached maximum of {security_config.max_test_cases} test cases"
             )
-        
+
         # Create test case
         test_case = manager.create_test_case(
             project_id=test_case_data.project_id,
@@ -168,14 +168,14 @@ async def create_test_case(
             is_golden=test_case_data.is_golden,
             signature_id=test_case_data.signature_id
         )
-        
+
         logger.info(f"User {user_context['user_id']} created test case: {test_case.get('name', 'Unnamed')}")
-        
+
         return StandardResponse(
             success=True,
             data=TestCaseResponse(**test_case)
         )
-        
+
     except ConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -236,13 +236,13 @@ async def create_bulk_test_cases(
 ) -> StandardResponse:
     """
     Create multiple test cases at once.
-    
+
     Args:
         bulk_data: Bulk test case creation data
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         List of created test cases
     """
@@ -251,17 +251,17 @@ async def create_bulk_test_cases(
         await require_project_write_access(bulk_data.project_id, user_context=user_context, db=db)
 
         manager = TestCaseManager(db)
-        
+
         # Check test case limit
         current_count = manager.get_test_case_stats(bulk_data.project_id)["total"]
         new_total = current_count + len(bulk_data.test_cases)
-        
+
         if new_total > security_config.max_test_cases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Would exceed maximum of {security_config.max_test_cases} test cases"
             )
-        
+
         # Create test cases
         serialized_cases: List[Dict[str, Any]] = []
         for tc in bulk_data.test_cases:
@@ -281,14 +281,14 @@ async def create_bulk_test_cases(
             test_cases=serialized_cases,
             signature_id=bulk_data.signature_id
         )
-        
+
         logger.info(f"User {user_context['user_id']} created {len(test_cases)} test cases in bulk")
-        
+
         return StandardResponse(
             success=True,
             data=[TestCaseResponse(**tc) for tc in test_cases]
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error creating bulk test cases: {e}")
         raise HTTPException(
@@ -341,7 +341,7 @@ async def list_test_cases(
 ) -> ListResponse:
     """
     List test cases in a project.
-    
+
     Args:
         project_id: Project ID
         page: Page number
@@ -351,18 +351,18 @@ async def list_test_cases(
         search: Search query
         signature_id: Filter by signature
         db: Database instance
-        
+
     Returns:
         Paginated list of test cases
     """
     try:
         manager = TestCaseManager(db)
-        
+
         # Parse tags
         tag_list = None
         if tags:
             tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        
+
         # Get test cases
         result = manager.list_test_cases(
             project_id=project_id,
@@ -374,13 +374,13 @@ async def list_test_cases(
             per_page=per_page,
             return_pagination=True
         )
-        
+
         return ListResponse(
             success=True,
             data=[TestCaseResponse(**tc) for tc in result["test_cases"]],
             metadata=result["pagination"]
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error listing test cases: {e}")
         raise HTTPException(
@@ -398,32 +398,32 @@ async def get_test_case(
 ) -> StandardResponse:
     """
     Get a specific test case by ID.
-    
+
     Args:
         test_case_id: Test case ID
         db: Database instance
-        
+
     Returns:
         Test case details
     """
     try:
         manager = TestCaseManager(db)
         test_case = manager.get_test_case(test_case_id)
-        
+
         if not test_case:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Test case {test_case_id} not found"
             )
-        
+
         # Check project access
         await require_project_access(test_case["project_id"], user_context=user_context, db=db)
-        
+
         return StandardResponse(
             success=True,
             data=TestCaseResponse(**test_case)
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error getting test case: {e}")
         raise HTTPException(
@@ -445,13 +445,13 @@ async def update_test_case(
 ) -> StandardResponse:
     """
     Update a test case.
-    
+
     Args:
         test_case_id: Test case ID
         updates: Fields to update
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Updated test case details
     """
@@ -515,19 +515,19 @@ async def delete_test_case(
 ) -> StandardResponse:
     """
     Delete a test case.
-    
+
     Args:
         test_case_id: Test case ID
         permanent: If True, permanently delete
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Success response
     """
     try:
         manager = TestCaseManager(db)
-        
+
         # Get test case to check project
         test_case = manager.get_test_case(test_case_id)
         if not test_case:
@@ -535,29 +535,29 @@ async def delete_test_case(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Test case {test_case_id} not found"
             )
-        
+
         # Check project access
         await require_project_write_access(test_case["project_id"], user_context=user_context, db=db)
-        
+
         # Delete test case
         success = manager.delete_test_case(test_case_id, hard_delete=permanent)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Test case not found or already deleted"
             )
-        
+
         logger.info(
             f"User {user_context['user_id']} {'permanently' if permanent else 'soft'} "
             f"deleted test case {test_case_id}"
         )
-        
+
         return StandardResponse(
             success=True,
             data={"message": f"Test case {'permanently' if permanent else 'soft'} deleted"}
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error deleting test case: {e}")
         raise HTTPException(
@@ -622,13 +622,13 @@ async def import_test_cases(
 ) -> StandardResponse:
     """
     Import test cases from CSV or JSON.
-    
+
     Args:
         import_data: Import request data
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         Import results
     """
@@ -638,10 +638,10 @@ async def import_test_cases(
 
         manager = TestCaseManager(db)
         io_manager = TestCaseIO(manager)
-        
+
         # Check test case limit
         current_count = manager.get_test_case_stats(import_data.project_id)["total"]
-        
+
         # Import based on format
         if import_data.format == "csv":
             imported, errors = io_manager.import_from_csv(
@@ -657,14 +657,14 @@ async def import_test_cases(
                 signature_id=import_data.signature_id,
                 auto_generate_names=import_data.auto_generate_names
             )
-        
+
         # Check if we exceeded the limit
         new_total = current_count + imported
         if new_total > security_config.max_test_cases:
             logger.warning(f"Import would exceed test case limit for project {import_data.project_id}")
-        
+
         logger.info(f"User {user_context['user_id']} imported {imported} test cases")
-        
+
         return StandardResponse(
             success=True,
             data={
@@ -673,7 +673,7 @@ async def import_test_cases(
                 "total_test_cases": new_total
             }
         )
-        
+
     except Exception as e:
         logger.error(f"Error importing test cases: {e}")
         raise HTTPException(
@@ -869,12 +869,12 @@ async def export_test_cases(
 ) -> StandardResponse:
     """
     Export test cases to CSV or JSON.
-    
+
     Args:
         project_id: Project ID
         export_request: Export configuration
         db: Database instance
-        
+
     Returns:
         Exported data
     """
@@ -884,7 +884,7 @@ async def export_test_cases(
 
         manager = TestCaseManager(db)
         io_manager = TestCaseIO(manager)
-        
+
         # Export based on format
         if export_request.format == "csv":
             data = io_manager.export_to_csv(
@@ -898,7 +898,7 @@ async def export_test_cases(
                 include_golden_only=export_request.include_golden_only,
                 tag_filter=export_request.tag_filter
             )
-        
+
         return StandardResponse(
             success=True,
             data={
@@ -907,7 +907,7 @@ async def export_test_cases(
                 "content_type": "text/csv" if export_request.format == "csv" else "application/json"
             }
         )
-        
+
     except Exception as e:
         logger.error(f"Error exporting test cases: {e}")
         raise HTTPException(
@@ -971,13 +971,13 @@ async def generate_test_cases(
 ) -> StandardResponse:
     """
     Auto-generate test cases.
-    
+
     Args:
         generate_request: Generation configuration
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         Generated test cases
     """
@@ -987,17 +987,17 @@ async def generate_test_cases(
 
         manager = TestCaseManager(db)
         generator = TestCaseGenerator(manager)
-        
+
         # Check test case limit
         current_count = manager.get_test_case_stats(generate_request.project_id)["total"]
         new_total = current_count + generate_request.num_cases
-        
+
         if new_total > security_config.max_test_cases:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Would exceed maximum of {security_config.max_test_cases} test cases"
             )
-        
+
         # Generate based on strategy
         if generate_request.generation_strategy == "diverse" and generate_request.signature_id:
             generated = generator.generate_diverse_cases(
@@ -1018,14 +1018,14 @@ async def generate_test_cases(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Must provide either signature_id for diverse generation or base_on_description"
             )
-        
+
         logger.info(f"User {user_context['user_id']} generated {len(generated)} test cases")
-        
+
         return StandardResponse(
             success=True,
             data=[TestCaseResponse(**tc) for tc in generated]
         )
-        
+
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

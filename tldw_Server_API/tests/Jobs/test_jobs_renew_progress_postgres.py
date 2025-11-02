@@ -59,4 +59,3 @@ def test_renew_progress_persists_with_enforcement_postgres(monkeypatch):
     got = jm.get_job(int(acq["id"]))
     assert float(got.get("progress_percent")) == pytest.approx(90.0)
     assert got.get("progress_message") == "almost"
-

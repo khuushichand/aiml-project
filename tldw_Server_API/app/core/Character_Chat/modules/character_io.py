@@ -80,7 +80,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         # Also check for 'character', 'tEXt' and other common metadata fields
         metadata_found = False
         chara_base64_str = None
-        
+
         if hasattr(img_obj, 'info') and isinstance(img_obj.info, dict):
             # Check multiple possible metadata keys
             for metadata_key in ['chara', 'character', 'tEXt']:
@@ -89,7 +89,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     metadata_found = True
                     logger.debug(f"Found character data in '{metadata_key}' field")
                     break
-        
+
         if metadata_found and chara_base64_str:
             try:
                 decoded_chara_json_str = base64.b64decode(chara_base64_str).decode('utf-8')
@@ -163,16 +163,16 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
         is_explicit_v2_spec = card_data_dict.get('spec') == 'chara_card_v2'
         is_explicit_v2_version_str = str(card_data_dict.get('spec_version', ''))
         is_explicit_v2_version = is_explicit_v2_version_str.startswith("2.")
-        
+
         # Check for Tavern/SillyTavern format
         has_tavern_fields = all(field in card_data_dict for field in ['name', 'description', 'first_mes'])
-        
+
         # Check for Pygmalion format
         has_pygmalion_fields = 'char_name' in card_data_dict and 'char_persona' in card_data_dict
-        
+
         # Check for Text Generation WebUI format
         has_textgen_fields = 'context' in card_data_dict and 'greeting' in card_data_dict
-        
+
         # Check for Alpaca/instruction format
         has_alpaca_fields = 'instruction' in card_data_dict or 'input' in card_data_dict
 
@@ -226,17 +226,17 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
             if has_pygmalion_fields:
                 logger.info("Attempting to parse as Pygmalion format character card.")
                 parsed_card = _character_validation.parse_pygmalion_card(card_data_dict)
-            
+
             # Try Text Generation WebUI format
             elif has_textgen_fields:
                 logger.info("Attempting to parse as Text Generation WebUI format character card.")
                 parsed_card = _character_validation.parse_textgen_card(card_data_dict)
-            
+
             # Try Alpaca/instruction format
             elif has_alpaca_fields:
                 logger.info("Attempting to parse as Alpaca/instruction format.")
                 parsed_card = _character_validation.parse_alpaca_card(card_data_dict)
-        
+
         # Fallback to V1 if other formats didn't work
         if parsed_card is None:
             logger.info("Attempting to parse as V1 character card.")
@@ -267,10 +267,10 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
 
 def load_character_card_from_string_content(content_str: str) -> Optional[Dict[str, Any]]:
     """Load a character card from a string (JSON or YAML format).
-    
+
     Args:
         content_str: The string content containing character data
-        
+
     Returns:
         Parsed character data dictionary, or None on error
     """
@@ -331,19 +331,19 @@ def import_and_save_character_from_file(
     file_type: Optional[str] = None
 ) -> Tuple[bool, str, Optional[int]]:
     """Import and save a character from a file.
-    
+
     Args:
         db: Database instance
         file_path: Path to the file (optional if file_content provided)
         file_content: File content (optional if file_path provided)
         file_type: File type hint ('json', 'png', 'yaml', etc.)
-        
+
     Returns:
         Tuple of (success, message, character_id)
     """
     try:
         parsed_card = None
-        
+
         # Determine file type
         if file_path:
             file_ext = os.path.splitext(file_path)[1].lower()
@@ -353,7 +353,7 @@ def import_and_save_character_from_file(
                 file_type = 'json'
             elif file_ext in ['.yaml', '.yml']:
                 file_type = 'yaml'
-        
+
         # Handle different file types
         if file_type == 'image' or (file_path and file_path.lower().endswith(('.png', '.webp'))):
             # Try to extract JSON from image metadata
@@ -369,7 +369,7 @@ def import_and_save_character_from_file(
                 original_image_bytes = file_content
             else:
                 return False, "Image file requires bytes content or file path", None
-            
+
             if json_str:
                 parsed_card = import_character_card_from_json_string(json_str)
                 if parsed_card is not None and original_image_bytes:
@@ -379,7 +379,7 @@ def import_and_save_character_from_file(
                         parsed_card.pop("image_base64", None)
             else:
                 return False, "No character data found in image metadata", None
-        
+
         elif file_type in ['json', 'yaml', 'text'] or file_content:
             # Handle text-based formats
             if file_content:
@@ -392,12 +392,12 @@ def import_and_save_character_from_file(
                     content_str = f.read()
             else:
                 return False, "No file content or path provided", None
-            
+
             parsed_card = load_character_card_from_string_content(content_str)
-        
+
         else:
             return False, f"Unsupported file type: {file_type}", None
-        
+
         # Save to database if parsing successful
         if parsed_card:
             character_id = create_new_character_from_data(db, parsed_card)
@@ -408,7 +408,7 @@ def import_and_save_character_from_file(
                 return False, "Failed to save character to database", None
         else:
             return False, "Failed to parse character data from file", None
-    
+
     except FileNotFoundError:
         return False, f"File not found: {file_path}", None
     except UnicodeDecodeError as e:

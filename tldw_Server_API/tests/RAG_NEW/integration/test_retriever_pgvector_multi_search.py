@@ -79,4 +79,3 @@ def test_retriever_multi_search_with_jsonb_filter(pgvector_dsn):
         await adapter.delete_collection(coll_b)
 
     asyncio.run(_run())
-

@@ -201,18 +201,18 @@ _service_initialization_lock = asyncio.Lock()
 async def _create_audit_service_for_user(user_id: int) -> UnifiedAuditService:
     """
     Create a new audit service instance for a specific user.
-    
+
     Args:
         user_id: The user's ID
-        
+
     Returns:
         Initialized UnifiedAuditService instance
     """
     # Get the user-specific audit database path
     db_path = DatabasePaths.get_audit_db_path(user_id)
-    
+
     logger.info(f"Creating audit service for user {user_id} at path: {db_path}")
-    
+
     # Create the service with user-specific database
     service = UnifiedAuditService(
         db_path=str(db_path),
@@ -222,10 +222,10 @@ async def _create_audit_service_for_user(user_id: int) -> UnifiedAuditService:
         buffer_size=settings.get("AUDIT_BUFFER_SIZE", 100),
         flush_interval=settings.get("AUDIT_FLUSH_INTERVAL", 5.0)
     )
-    
+
     # Initialize the service (creates database, starts background tasks)
     await service.initialize()
-    
+
     logger.info(f"Audit service initialized successfully for user {user_id}")
     return service
 
@@ -236,42 +236,42 @@ async def get_audit_service_for_user(
 ) -> UnifiedAuditService:
     """
     FastAPI dependency to get the UnifiedAuditService instance for the identified user.
-    
+
     Handles caching, initialization, and lifecycle management.
     Uses configuration values from the 'settings' dictionary.
-    
+
     Args:
         current_user: The User object provided by `get_request_user`.
-        
+
     Returns:
         A UnifiedAuditService instance for the user.
-        
+
     Raises:
         HTTPException: If the service cannot be initialized.
     """
     if not current_user or not isinstance(current_user.id, int):
         logger.error("get_audit_service_for_user called without a valid User object/ID.")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="User identification failed for audit service."
         )
-    
+
     user_id = current_user.id
     service_instance: Optional[UnifiedAuditService] = None
-    
+
     # Check cache
     with _audit_service_lock:
         service_instance = _user_audit_instances.get(user_id)
-    
+
     if service_instance:
         # Verify the service is still healthy
         # The UnifiedAuditService should handle its own health checks
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
-    
+
     # Instance not cached or unhealthy: create new one
     logger.info(f"No cached audit service found for user_id: {user_id}. Initializing.")
-    
+
     # Use async lock for initialization to prevent concurrent creation
     async with _service_initialization_lock:
         # Double-check cache in case another request created it
@@ -280,24 +280,24 @@ async def get_audit_service_for_user(
             if service_instance:
                 logger.debug(f"Audit service for user {user_id} created concurrently.")
                 return service_instance
-        
+
         try:
             # Create and initialize the service
             service_instance = await _create_audit_service_for_user(user_id)
-            
+
             # Store in cache
             with _audit_service_lock:
                 _user_audit_instances[user_id] = service_instance
-            
+
             logger.info(f"Audit service created and cached successfully for user {user_id}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize audit service for user {user_id}: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not initialize audit service: {str(e)}"
             ) from e
-    
+
     return service_instance
 
 # --- Cleanup Functions ---
@@ -305,7 +305,7 @@ async def get_audit_service_for_user(
 async def shutdown_user_audit_service(user_id: int):
     """
     Shutdown audit service for a specific user.
-    
+
     Args:
         user_id: The user's ID
     """
@@ -319,10 +319,10 @@ async def shutdown_user_audit_service(user_id: int):
             if service is None:
                 with _services_stopping_lock:
                     _services_stopping.discard(user_id)
-    
+
     if not service:
         return
-    
+
     owner_loop = getattr(service, "owner_loop", None)
     if owner_loop and owner_loop.is_closed():
         owner_loop = None
@@ -356,10 +356,10 @@ async def shutdown_all_audit_services():
     with _audit_service_lock:
         user_ids = list(_user_audit_instances.keys())
         logger.info(f"Shutting down audit services for {len(user_ids)} users...")
-    
+
     for user_id in user_ids:
         await shutdown_user_audit_service(user_id)
-    
+
     logger.info("All audit services shut down successfully.")
 
 # Example of how to register for shutdown event in FastAPI:

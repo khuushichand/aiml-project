@@ -118,7 +118,7 @@ def get_consolidation_service() -> PersonalizationConsolidationService:
     return _singleton
 
 
-    
+
 def _iter_recent_events(db: PersonalizationDB, user_id: str, window: int = 500) -> list[dict]:
     """Return recent usage events (scaffold: last N by timestamp)."""
     # SQLite simple query
@@ -189,7 +189,7 @@ def PersonalizationConsolidationService__consolidate_user(self, user_id: str) ->
     except Exception:
         pass
 
-    
+
 def _service_status(self) -> dict:
     """Return service status including last consolidation ticks (in-memory)."""
     running = bool(self._task and not self._task.done())

@@ -22,7 +22,7 @@ This page serves as documentation regarding the structured outputs within tldw a
    - .xml file
    - .yaml file
    - .toml file
-   - 
+   -
 2. Data Extraction
    - https://github.com/yobix-ai/extractous
    - Can use structured outputs for data extraction from unstructured text. Though why isn't this talked about/even mentioned in any of the papers about RAG or writeups on RAG implementations? hmmmm......

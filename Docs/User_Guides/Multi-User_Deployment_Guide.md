@@ -1,6 +1,6 @@
 # Multi-User Deployment Guide for tldw_server
 
-**Version**: 1.0.0  
+**Version**: 1.0.0
 **Last Updated**: January 14, 2025
 
 ---
@@ -414,7 +414,7 @@ upstream tldw_backend {
 server {
     listen 80;
     server_name yourdomain.com;
-    
+
     # Redirect to HTTPS
     return 301 https://$server_name$request_uri;
 }
@@ -422,30 +422,30 @@ server {
 server {
     listen 443 ssl http2;
     server_name yourdomain.com;
-    
+
     # SSL Configuration
     ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
-    
+
     # Security Headers
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options DENY;
     add_header X-XSS-Protection "1; mode=block";
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    
+
     # Request size limits
     client_max_body_size 500M;
     client_body_buffer_size 128k;
-    
+
     # Timeouts
     proxy_connect_timeout 600;
     proxy_send_timeout 600;
     proxy_read_timeout 600;
     send_timeout 600;
-    
+
     # Main application
     location / {
         proxy_pass http://tldw_backend;
@@ -459,7 +459,7 @@ server {
         proxy_cache_bypass $http_upgrade;
         proxy_buffering off;
     }
-    
+
     # WebSocket support for real-time features
     location /ws {
         proxy_pass http://tldw_backend;
@@ -470,14 +470,14 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
-    
+
     # Static files (if applicable)
     location /static {
         alias /opt/tldw_server/static;
         expires 30d;
         add_header Cache-Control "public, immutable";
     }
-    
+
     # Media files
     location /media {
         alias /var/lib/tldw/media;
@@ -486,7 +486,7 @@ server {
         # Require authentication for media files
         auth_request /auth/verify;
     }
-    
+
     # Internal auth verification endpoint
     location = /auth/verify {
         internal;
@@ -697,7 +697,7 @@ services:
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
-  
+
   grafana:
     image: grafana/grafana
     volumes:
@@ -730,7 +730,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 # Export audit logs
 psql -U tldw_user -d tldw_multiuser -c \
-  "COPY (SELECT * FROM audit_log WHERE created_at > NOW() - INTERVAL '30 days') 
+  "COPY (SELECT * FROM audit_log WHERE created_at > NOW() - INTERVAL '30 days')
    TO '/tmp/audit_export.csv' CSV HEADER;"
 ```
 

@@ -54,4 +54,3 @@ def test_opml_nested_and_case_variations(client_with_user):
     data = r.json()
     # Expect 3 unique feeds created
     assert data["created"] >= 3
-

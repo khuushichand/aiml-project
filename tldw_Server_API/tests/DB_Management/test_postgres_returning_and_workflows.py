@@ -55,4 +55,3 @@ def test_validate_postgres_content_backend_smoke():
 
     # Should not raise when backend and policies are provisioned correctly.
     validate_postgres_content_backend()
-

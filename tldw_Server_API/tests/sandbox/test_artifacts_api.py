@@ -53,4 +53,3 @@ def test_artifacts_list_and_download_roundtrip() -> None:
         dr = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/results.txt")
         assert dr.status_code == 200
         assert dr.content == b"hello world"
-

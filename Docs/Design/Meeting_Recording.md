@@ -17,6 +17,3 @@ https://github.com/murtaza-nasir/speakr
 - Configurable cadence via `summary_interval_seconds` and `context_window_segments`, with provider/model defaults resolved from the primary chat settings.
 - Backward-compatible behavior when insights are disabled-clients see the original transcript messages without additional payloads.
 - Speaker diarization toggle that annotates each finalized segment with `speaker_id`/`speaker_label` and can persist a session WAV for replay or downstream processing.
-
-
-

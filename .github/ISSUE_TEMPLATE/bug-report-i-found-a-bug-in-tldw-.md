@@ -33,7 +33,7 @@ If applicable, please add screenshots to help explain your problem.
 **Desktop (please complete the following information):**
  - OS: [Linux/MacOS/Windows]
  - Browser [Chrome/Firefox/Safari]
- - Date you performed the last git pull: 
+ - Date you performed the last git pull:
 
 **Any Additional context**
 Please add any other context about the problem here. Thank you!

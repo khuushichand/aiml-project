@@ -480,7 +480,7 @@ Error responses include detailed messages. For some validation cases, a top-leve
 2. **Dimension Reduction**: Reduce dimensions when full precision isn't needed
 3. **Caching**: Frequently requested embeddings are cached automatically
 4. **Token Arrays**: Pre-tokenize when processing large volumes
-5. **Model Selection**: 
+5. **Model Selection**:
    - `text-embedding-3-small`: Best for most use cases
    - `text-embedding-3-large`: When highest quality is needed
    - `text-embedding-ada-002`: Legacy compatibility
@@ -551,30 +551,30 @@ class EmbeddingsClient:
         self.base_url = base_url
         # For single-user mode, use X-API-KEY. For multi-user, use Bearer JWT.
         self.headers = {"Authorization": f"Bearer {api_key}", "X-API-KEY": api_key}
-    
+
     def create_embeddings(
-        self, 
+        self,
         input: Union[str, List[str], List[int], List[List[int]]],
         model: str = "text-embedding-3-small",
         dimensions: int = None
     ) -> List[List[float]]:
         """Create embeddings for input text or token arrays."""
-        
+
         payload = {
             "input": input,
             "model": model
         }
-        
+
         if dimensions:
             payload["dimensions"] = dimensions
-        
+
         response = requests.post(
             f"{self.base_url}/api/v1/embeddings",
             json=payload,
             headers=self.headers
         )
         response.raise_for_status()
-        
+
         data = response.json()
         return [item["embedding"] for item in data["data"]]
 

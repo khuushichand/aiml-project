@@ -122,7 +122,7 @@ class ElevenLabsAdapter(TTSAdapter):
             description="American male voice"
         )
     }
-    
+
     # Model configurations
     MODELS = {
         "eleven_monolingual_v1": {

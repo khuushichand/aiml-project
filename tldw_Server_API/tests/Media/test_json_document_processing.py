@@ -35,4 +35,3 @@ def test_process_documents_accepts_json(client_with_single_user):
     # json_top_type may be present when JSON parsed successfully
     if isinstance(raw, dict):
         assert raw.get("json_top_type") in (None, "object", "array")
-

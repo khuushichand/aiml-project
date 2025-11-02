@@ -67,4 +67,3 @@ export function useVlmBackends(): UseVlmBackendsResult {
 }
 
 export default useVlmBackends;
-

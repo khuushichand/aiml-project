@@ -42,4 +42,3 @@ def test_osf_ingest_lenient(client_with_auth):
         params={"osf_id": "zzznotreal", "perform_chunking": "false", "perform_analysis": "false"},
     )
     assert resp.status_code in (404, 500, 502, 504), resp.text
-

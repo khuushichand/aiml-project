@@ -3521,13 +3521,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     Extends PromptsDatabase with Prompt Studio specific functionality.
     Manages projects, signatures, test cases, evaluations, and optimizations.
     """
-    
+
     _PROMPT_STUDIO_SCHEMA_VERSION = 1
-    
+
     def __init__(self, db_path: Union[str, Path], client_id: str):
         """
         Initialize PromptStudioDatabase with path and client ID.
-        
+
         Args:
             db_path: Path to the database file
             client_id: Client identifier for sync logging
@@ -3536,13 +3536,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         super().__init__(db_path, client_id)
         # Mark backend type for helper branches reused from backend-aware implementation
         self.backend_type = BackendType.SQLITE
-        
+
         # Create a write lock for serializing write operations
         self._write_lock = threading.RLock()
-        
+
         # Initialize prompt studio schema
         self._init_prompt_studio_schema()
-        
+
         # Set pragmas for better reliability
         try:
             conn = self.get_connection()
@@ -3561,21 +3561,21 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             conn.commit()
         except Exception as e:
             logger.debug(f"Could not set pragmas: {e}")
-        
+
         logger.info(f"PromptStudioDatabase initialized for {db_path} with client {client_id}")
-    
+
     def _init_prompt_studio_schema(self):
         """Initialize Prompt Studio specific schema."""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            
+
             # Check if prompt studio tables exist
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='table' AND name='prompt_studio_projects'
             """)
-            
+
             if not cursor.fetchone():
                 logger.info("Initializing Prompt Studio schema...")
                 self._apply_prompt_studio_migrations(conn)
@@ -3634,11 +3634,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         else:
             cursor.execute(query)
         return cursor
-    
+
     def _apply_prompt_studio_migrations(self, conn: sqlite3.Connection):
         """Apply Prompt Studio migration scripts."""
         migrations_dir = Path(__file__).parent / "migrations"
-        
+
         # List of migration files in order (ensure iterations table exists before indexes)
         migration_files = [
             "001_prompt_studio_schema.sql",
@@ -3654,14 +3654,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 migration_files = [mf for mf in migration_files if not mf.startswith("004_")]
         except Exception:
             pass
-        
+
         for migration_file in migration_files:
             migration_path = migrations_dir / migration_file
             if migration_path.exists():
                 logger.info(f"Applying migration: {migration_file}")
                 with open(migration_path, 'r') as f:
                     migration_sql = f.read()
-                    
+
                 # Execute migration statements
                 try:
                     conn.executescript(migration_sql)
@@ -3707,69 +3707,69 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             conn.commit()
         except Exception:
             pass
-    
+
     ####################################################################################################################
     # Project Management
-    
-    def create_project(self, name: str, description: Optional[str] = None, 
+
+    def create_project(self, name: str, description: Optional[str] = None,
                       status: str = "draft", metadata: Optional[Dict] = None,
                       user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Create a new prompt studio project.
-        
+
         Args:
             name: Project name
             description: Project description
             status: Project status (draft, active, archived)
             metadata: Additional metadata
-            
+
         Returns:
             Created project record
         """
         import time
         import sqlite3
         import random
-        
+
         project_id = None
         # Get connection before acquiring lock to avoid deadlock
         conn = self.get_connection()
-        
+
         max_retries = 5
         base_delay = 0.1  # 100ms
-        
+
         for attempt in range(max_retries):
             should_retry = False
             retry_delay = 0
-            
+
             # Use write lock to serialize write operations
             with self._write_lock:
                 try:
                     cursor = conn.cursor()
-                    
+
                     # Generate UUID
                     project_uuid = str(uuid.uuid4())
-                    
+
                     # Insert project
                     cursor.execute("""
-                        INSERT INTO prompt_studio_projects 
+                        INSERT INTO prompt_studio_projects
                         (uuid, name, description, user_id, client_id, status, metadata)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (project_uuid, name, description, user_id or self.client_id, self.client_id, 
+                    """, (project_uuid, name, description, user_id or self.client_id, self.client_id,
                           status, json.dumps(metadata) if metadata else None))
-                    
+
                     project_id = cursor.lastrowid
                     conn.commit()
-                    
+
                     # Log to sync_log
                     self._log_sync_event("prompt_studio_project", project_uuid, "create", {
                         "name": name,
                         "description": description,
                         "status": status
                     })
-                    
+
                     logger.info(f"Created project: {name} (ID: {project_id})")
                     break  # Success, exit retry loop
-                    
+
                 except sqlite3.OperationalError as e:
                     if "database is locked" in str(e) and attempt < max_retries - 1:
                         # Database locked, will retry
@@ -3783,22 +3783,22 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     raise DatabaseError(f"Failed to create project: {e}")
                 except Exception as e:
                     raise DatabaseError(f"Failed to create project: {e}")
-            
+
             # Sleep outside the lock if we need to retry
             if should_retry:
                 time.sleep(retry_delay)
-        
+
         # Get the project after releasing the lock
         return self.get_project(project_id)
-    
+
     def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         """
         Get a project by ID.
-        
+
         Args:
             project_id: Project ID
             include_deleted: Include soft-deleted projects
-            
+
         Returns:
             Project record or None
         """
@@ -3806,7 +3806,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         conn = self.get_connection()
         cursor = conn.cursor()
         query = """
-            SELECT 
+            SELECT
                 id, uuid, name, description, user_id, client_id, status,
                 deleted, deleted_at, created_at, updated_at, last_modified,
                 version, metadata
@@ -3833,20 +3833,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 raise DatabaseError(f"Failed to get project: {e}")
             except sqlite3.Error as e:
                 raise DatabaseError(f"Failed to get project: {e}")
-    
+
     def list_projects(self, user_id: Optional[str] = None, status: Optional[str] = None,
                      include_deleted: bool = False, page: int = 1, per_page: int = 20,
                      search: Optional[str] = None) -> Dict[str, Any]:
         """
         List projects with optional filtering.
-        
+
         Args:
             user_id: Filter by user ID
             status: Filter by status
             include_deleted: Include soft-deleted projects
             page: Page number
             per_page: Items per page
-            
+
         Returns:
             Dictionary with projects list and pagination metadata
         """
@@ -3893,7 +3893,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         # Get projects with pagination (retry)
         offset = (page - 1) * per_page
         query = f"""
-            SELECT 
+            SELECT
                 p.*,
                 (SELECT COUNT(*) FROM prompt_studio_prompts WHERE project_id = p.id AND deleted = 0) as prompt_count,
                 (SELECT COUNT(*) FROM prompt_studio_test_cases WHERE project_id = p.id AND deleted = 0) as test_case_count
@@ -3924,22 +3924,22 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 raise DatabaseError(f"Failed to list projects: {e}")
             except sqlite3.Error as e:
                 raise DatabaseError(f"Failed to list projects: {e}")
-    
+
     def update_project(self, project_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update a project.
-        
+
         Args:
             project_id: Project ID
             updates: Fields to update
-            
+
         Returns:
             Updated project record
         """
         import time
         import sqlite3
         import random
-        
+
         conn = self.get_connection()
         max_retries = 5
         base_delay = 0.05
@@ -4766,11 +4766,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def delete_project(self, project_id: int, hard_delete: bool = False) -> bool:
         """
         Delete a project (soft delete by default).
-        
+
         Args:
             project_id: Project ID
             hard_delete: Permanently delete if True
-            
+
         Returns:
             True if deleted
         """
@@ -4820,37 +4820,37 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 break
 
         return False
-    
+
     ####################################################################################################################
     # Helper Methods
-    
+
     def _row_to_dict(self, cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
         """Convert a database row to dictionary."""
         if not row:
             return None
-        
+
         columns = [description[0] for description in cursor.description]
         result = dict(zip(columns, row))
-        
+
         # Parse JSON fields
-        json_fields = ["metadata", "input_schema", "output_schema", "constraints", 
+        json_fields = ["metadata", "input_schema", "output_schema", "constraints",
                       "validation_rules", "few_shot_examples", "modules_config",
                       "model_params", "inputs", "outputs", "expected_outputs",
                       "actual_outputs", "scores", "test_case_ids", "test_run_ids",
                       "aggregate_metrics", "model_configs", "payload", "result",
                       "initial_metrics", "final_metrics", "optimization_config"]
-        
+
         for field in json_fields:
             if field in result and result[field]:
                 try:
                     result[field] = json.loads(result[field])
                 except (json.JSONDecodeError, TypeError):
                     pass
-        
+
         # Parse datetime fields
         datetime_fields = ["created_at", "updated_at", "deleted_at", "last_modified",
                           "started_at", "completed_at"]
-        
+
         for field in datetime_fields:
             if field in result and result[field]:
                 try:
@@ -4858,9 +4858,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         result[field] = datetime.fromisoformat(result[field])
                 except (ValueError, TypeError):
                     pass
-        
+
         return result
-    
+
     def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]):
         """Log an event to sync_log table if it exists."""
         try:
@@ -5880,7 +5880,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
             cursor.execute(
                 """
-                SELECT 
+                SELECT
                     COUNT(CASE WHEN status = 'completed' THEN 1 END) * 100.0 /
                     COUNT(CASE WHEN status IN ('completed', 'failed') THEN 1 END)
                 FROM prompt_studio_job_queue
@@ -6728,7 +6728,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
     ####################################################################################################################
     # Transaction Management
-    
+
     @contextmanager
     def transaction(self):
         """

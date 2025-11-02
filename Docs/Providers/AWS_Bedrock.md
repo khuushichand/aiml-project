@@ -56,4 +56,3 @@ Troubleshooting
 - 401/403: Verify `BEDROCK_API_KEY` (or `AWS_BEARER_TOKEN_BEDROCK`) and model access in the target region.
 - 404: Check the `BEDROCK_REGION` vs `BEDROCK_RUNTIME_ENDPOINT` and the `model` name.
 - 429: Backoff; the server retries common retriable errors, but noisy requests may still rate-limit.
-

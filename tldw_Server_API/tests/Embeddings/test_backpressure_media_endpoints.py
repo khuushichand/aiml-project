@@ -44,4 +44,3 @@ def test_backpressure_blocks_paper_arxiv_ingest(monkeypatch):
     r = client.post("/api/v1/paper-search/arxiv/ingest", params={"arxiv_id": "1706.03762"})
     assert r.status_code == 429
     app.dependency_overrides.pop(get_request_user, None)
-

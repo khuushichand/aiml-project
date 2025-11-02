@@ -45,4 +45,3 @@ def test_orchestrator_maps_bedrock_extras(monkeypatch):
     assert 'input_data' in captured
     assert captured.get('extra_headers') == extra_headers
     assert captured.get('extra_body') == extra_body
-

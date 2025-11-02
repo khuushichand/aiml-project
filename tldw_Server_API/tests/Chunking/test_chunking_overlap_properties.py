@@ -48,4 +48,3 @@ def test_words_overlap_property(total_words, max_size, overlap):
         b = chunks[i+1].split()
         if len(a) >= overlap and len(b) >= overlap:
             assert a[-overlap:] == b[:overlap]
-

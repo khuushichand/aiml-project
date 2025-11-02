@@ -48,11 +48,11 @@ async def test_transcriber_metadata_and_vocab(monkeypatch, tmp_path):
     def _decode(audio_np, sr):
         """
         Return a placeholder transcription for the provided audio.
-        
+
         Parameters:
             audio_np (ndarray): Audio samples as a 1-D NumPy array.
             sr (int): Sample rate of the audio in Hz.
-        
+
         Returns:
             str: The transcription string "foo".
         """
@@ -101,12 +101,12 @@ def test_variant_decode_selection(monkeypatch):
     def _tx_parakeet(audio_np, sample_rate, variant="standard"):
         """
         Create a placeholder transcription label that encodes the Parakeet variant.
-        
+
         Parameters:
         	audio_np (numpy.ndarray): Array of audio samples.
         	sample_rate (int): Sample rate of the audio in Hz.
         	variant (str): Variant identifier to include in the label (default: "standard").
-        
+
         Returns:
         	transcription (str): String in the form `nemo:{variant}`.
         """
@@ -166,11 +166,11 @@ async def test_decode_offloaded_to_thread():
     def _slow_decode(audio_np, sr):
         """
         Simulates a slow synchronous decode operation for an audio buffer.
-        
+
         Parameters:
             audio_np (ndarray): Array of audio samples to decode.
             sr (int): Sample rate of the audio in Hz.
-        
+
         Returns:
             str: The decoded text `"ok"`.
         """
@@ -193,7 +193,7 @@ async def test_decode_offloaded_to_thread():
     async def _ticker():
         """
         Continuously increments the shared ticks counter until the stop flag is set.
-        
+
         This coroutine repeatedly increments ticks["n"] and yields control to the event loop on each iteration by awaiting asyncio.sleep(0), stopping when ticks["stop"] becomes truthy.
         """
         while not ticks["stop"]:

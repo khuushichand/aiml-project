@@ -75,4 +75,3 @@ Response includes per-item `decision` (ingest|filtered) and `matched_action` (in
 
 - YouTube links must be canonical RSS feeds. The server normalizes common channel/user/playlist forms and rejects unsupported forms with `400 invalid_youtube_rss_url`.
 - Per-run stats include filter counters and optional `filter_tallies`; see API docs for details.
-

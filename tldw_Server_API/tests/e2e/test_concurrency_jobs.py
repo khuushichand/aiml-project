@@ -65,5 +65,3 @@ def test_chatbooks_async_cancel(api_client):
         assert s.status_code in (200, 404)
     except httpx.HTTPError as e:
         pytest.skip(f"Chatbooks cancel path unavailable: {e}")
-
-

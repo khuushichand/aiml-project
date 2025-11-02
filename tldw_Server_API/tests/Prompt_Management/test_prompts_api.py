@@ -587,13 +587,13 @@ class TestPromptEndpoints:
         update_payload = get_sample_prompt_payload("UpdateNotFound")
         response_id = client.put(f"{API_V1_PROMPTS_PREFIX}/999999", json=update_payload)
         assert response_id.status_code == status.HTTP_404_NOT_FOUND, response_id.text
-        
+
         response_uuid = client.put(f"{API_V1_PROMPTS_PREFIX}/00000000-0000-0000-0000-000000000000", json=update_payload)
         assert response_uuid.status_code == status.HTTP_404_NOT_FOUND, response_uuid.text
 
     def test_update_prompt_name_conflict(self, client: TestClient):
         prompt1 = create_prompt_utility(client, "Prompt1ForConflict")
-        prompt2 = create_prompt_utility(client, "Prompt2ForConflict") 
+        prompt2 = create_prompt_utility(client, "Prompt2ForConflict")
 
         update_payload = get_sample_prompt_payload("UpdatedToConflict")
         update_payload["name"] = prompt1["name"]  # Try to rename prompt2 to prompt1's name
@@ -873,9 +873,9 @@ class TestSyncLogEndpoint:
         original_overrides = fastapi_app.dependency_overrides.copy()
         mock_db = MagicMock(spec=PromptsDatabase)
         mock_db.get_sync_log_entries.return_value = []
-        
+
         fastapi_app.dependency_overrides[get_prompts_db_for_user] = lambda: mock_db
-        
+
         try:
             response = client.get(f"{API_V1_PROMPTS_PREFIX}/sync-log")
             assert response.status_code == status.HTTP_200_OK, response.text
@@ -919,7 +919,7 @@ class TestSyncLogEndpoint:
         mock_db.get_sync_log_entries.side_effect = DatabaseError("Sync log query failed")
 
         fastapi_app.dependency_overrides[get_prompts_db_for_user] = lambda: mock_db
-        
+
         try:
             response = client.get(f"{API_V1_PROMPTS_PREFIX}/sync-log")
             assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR

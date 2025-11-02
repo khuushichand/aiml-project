@@ -34,55 +34,55 @@ class TaskPriority(Enum):
 class Task:
     """
     Complete task definition with metadata and lifecycle tracking.
-    
+
     This class represents a unit of work in the scheduler system.
     Tasks can have dependencies, priorities, and retry policies.
     """
-    
+
     # Identifiers
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     queue_name: str = "default"
     idempotency_key: Optional[str] = None
-    
+
     # Handler
     handler: str = ""  # Registry key for handler function
     payload: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Scheduling
     priority: int = TaskPriority.NORMAL.value
     scheduled_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
-    
+
     # Execution control
     max_retries: int = 3
     retry_count: int = 0
     retry_delay: int = 60  # seconds, with exponential backoff
     timeout: int = 300  # seconds
-    
+
     # Dependencies
     depends_on: List[str] = field(default_factory=list)
-    
+
     # State
     status: TaskStatus = TaskStatus.PENDING
     result: Optional[Any] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
     queued_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    
+
     # Tracking
     worker_id: Optional[str] = None
     lease_id: Optional[str] = None
     execution_time: Optional[float] = None
-    
+
     # Payload reference (for large payloads)
     payload_ref: Optional[str] = None
     result_ref: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for serialization"""
         return {
@@ -113,12 +113,12 @@ class Task:
             'payload_ref': self.payload_ref,
             'result_ref': self.result_ref
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Task':
         """Create task from dictionary"""
         task = cls()
-        
+
         # Simple fields
         for field_name in ['id', 'queue_name', 'idempotency_key', 'handler',
                           'payload', 'priority', 'max_retries', 'retry_count',
@@ -127,11 +127,11 @@ class Task:
                           'payload_ref', 'result_ref', 'metadata']:
             if field_name in data:
                 setattr(task, field_name, data[field_name])
-        
+
         # Status enum
         if 'status' in data:
             task.status = TaskStatus(data['status'])
-        
+
         # Datetime fields
         datetime_fields = ['scheduled_at', 'expires_at', 'created_at',
                           'queued_at', 'started_at', 'completed_at']
@@ -142,32 +142,32 @@ class Task:
                     setattr(task, field_name, datetime.fromisoformat(value))
                 elif isinstance(value, datetime):
                     setattr(task, field_name, value)
-        
+
         if task.metadata is None:
             task.metadata = {}
-        
+
         return task
-    
+
     def is_ready(self) -> bool:
         """Check if task is ready to run (no pending dependencies)"""
         return not self.depends_on or len(self.depends_on) == 0
-    
+
     def is_expired(self) -> bool:
         """Check if task has expired"""
         if not self.expires_at:
             return False
         return datetime.now(timezone.utc).replace(tzinfo=None) > self.expires_at
-    
+
     def is_scheduled(self) -> bool:
         """Check if task is scheduled for future execution"""
         if not self.scheduled_at:
             return False
         return datetime.now(timezone.utc).replace(tzinfo=None) < self.scheduled_at
-    
+
     def should_retry(self) -> bool:
         """Check if task should be retried after failure"""
         return self.retry_count < self.max_retries
-    
+
     def calculate_retry_delay(self) -> int:
         """Calculate delay before next retry (exponential backoff)"""
         base_delay = self.retry_delay

@@ -78,15 +78,15 @@ For more control over what to export:
    - Characters
    - World Books
    - Dictionaries
-   
-2. **Select Specific Items**: 
+
+2. **Select Specific Items**:
    - Click "Select Items" for each content type
    - Use checkboxes to choose individual items
    - Or leave empty to include all items of that type
 
 3. **Configure Options**:
    - **Include Media**: Adds images, audio, video (increases file size)
-   - **Media Quality**: 
+   - **Media Quality**:
      - `thumbnail`: Smallest size, preview quality
      - `compressed`: Balanced size and quality (recommended)
      - `original`: Full quality, largest size
@@ -190,11 +190,11 @@ When importing content that already exists:
 - **Prefix Imported**: Adds prefix to all imported item names
   - Example: "Research Note" becomes "[Imported] Research Note"
   - Useful for identifying imported content
-  
+
 - **Import Media**: Include media files from the chatbook
   - Default: true (recommended)
   - Set to false to save space
-  
+
 - **Import Embeddings**: Include vector embeddings
   - Default: false (recreated as needed)
   - Set to true for exact search behavior
@@ -257,14 +257,14 @@ To cancel a running job:
 1. **Regular Backups**: Weekly or monthly full exports
 2. **Project Archives**: Export completed projects
 3. **Before Major Changes**: Export before bulk operations
-4. **3-2-1 Rule**: 
+4. **3-2-1 Rule**:
    - 3 copies of important data
    - 2 different storage media
    - 1 offsite backup
 
 ### Organization Tips
 
-1. **Naming Convention**: 
+1. **Naming Convention**:
    - Include date: "Backup_2024-01-15"
    - Include purpose: "ProjectX_Final"
    - Include version: "Research_v2"
@@ -323,7 +323,7 @@ To cancel a running job:
 
 #### Export Takes Too Long
 - **Cause**: Large amount of content
-- **Solution**: 
+- **Solution**:
   - Use async mode
   - Exclude media files
   - Export in smaller chunks

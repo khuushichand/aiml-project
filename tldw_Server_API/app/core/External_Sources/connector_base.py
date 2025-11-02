@@ -37,4 +37,3 @@ class BaseConnector(ABC):
     async def download_file(self, account: Dict[str, Any], file_id: str) -> bytes:
         """Download file contents; scaffold returns empty bytes."""
         return b""
-

@@ -58,18 +58,18 @@ graph TD
     B --> D[Session Manager]
     B --> E[API Key Manager]
     B --> F[Rate Limiter]
-    
+
     G[JWT Service] --> D
     H[Password Service] --> C
-    
+
     I[CSRF Protection] --> J[Middleware Stack]
     K[Security Headers] --> J
     F --> J
-    
+
     L[Scheduler] --> D
     L --> E
     L --> F
-    
+
     M[Monitor] --> N[Metrics/Alerts]
 ```
 
@@ -224,7 +224,7 @@ sequenceDiagram
     AuthNZ->>SessionManager: Create session
     AuthNZ-->>API: Tokens
     API-->>Client: Access & Refresh tokens
-    
+
     Client->>API: Request with Bearer token
     API->>AuthNZ: Validate JWT
     AuthNZ->>JWTService: Decode token
@@ -436,11 +436,11 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 async def test_password_hashing():
     service = PasswordService()
     password = "SecurePassword123!"
-    
+
     # Test hashing
     hash = service.hash_password(password)
     assert hash != password
-    
+
     # Test verification
     is_valid, needs_rehash = service.verify_password(password, hash)
     assert is_valid
@@ -456,7 +456,7 @@ from authlib.integrations.fastapi_client import OAuth
 class OAuth2Service:
     def __init__(self):
         self.oauth = OAuth()
-        
+
     def register_provider(self, name, client_id, client_secret, ...):
         # Register OAuth provider
         pass
@@ -470,7 +470,7 @@ import pyotp
 class TwoFactorService:
     def generate_secret(self, user_id: int) -> str:
         return pyotp.random_base32()
-    
+
     def verify_totp(self, secret: str, token: str) -> bool:
         totp = pyotp.TOTP(secret)
         return totp.verify(token, valid_window=1)
@@ -488,7 +488,7 @@ class CustomRateLimiter(RateLimiter):
             limit = kwargs.get('limit', 1000)  # Higher limit
         else:
             limit = kwargs.get('limit', 60)
-        
+
         return await super().check_rate_limit(
             identifier, endpoint, limit=limit, **kwargs
         )

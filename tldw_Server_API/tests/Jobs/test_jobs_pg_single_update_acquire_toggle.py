@@ -54,4 +54,3 @@ def test_pg_single_update_acquire_toggle(monkeypatch, pg_schema_and_cleanup):
     g2 = jm.get_job(int(j2["id"]))
     assert g1["status"] == "processing"
     assert g2["status"] == "processing"
-

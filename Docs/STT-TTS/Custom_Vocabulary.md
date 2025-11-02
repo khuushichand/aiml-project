@@ -72,4 +72,3 @@ Troubleshooting
 ---------------
 - No effect on Whisper? Ensure `custom_vocab_initial_prompt_enable=True` and the terms file path is correct.
 - Replacements not applying? Check `custom_vocab_postprocess_enable=True` and that keys match whole words (or set case-sensitive behavior).
-

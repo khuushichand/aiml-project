@@ -169,17 +169,17 @@ CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_token ON email_verifica
 CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_expires_at ON email_verification_tokens(expires_at);
 
 -- Update trigger for users table
-CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
-    AFTER UPDATE ON users 
-    FOR EACH ROW 
-BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_users_timestamp
+    AFTER UPDATE ON users
+    FOR EACH ROW
+BEGIN
     UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
 -- Update trigger for session activity
-CREATE TRIGGER IF NOT EXISTS update_session_activity 
-    AFTER UPDATE ON user_sessions 
-    FOR EACH ROW 
-BEGIN 
+CREATE TRIGGER IF NOT EXISTS update_session_activity
+    AFTER UPDATE ON user_sessions
+    FOR EACH ROW
+BEGIN
     UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;

@@ -6,12 +6,12 @@
             <span class="endpoint-path">/api/v1/embeddings - Create Embeddings</span>
         </h2>
         <p>Create embeddings with circuit breaker protection and caching.</p>
-        
+
         <div class="form-group">
             <label for="embeddingsCreate_input">Input Text <span class="required">*</span>:</label>
             <textarea id="embeddingsCreate_input" rows="5" placeholder="Enter text to embed...">This is a sample text to create embeddings for semantic search and similarity matching.</textarea>
         </div>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -21,7 +21,7 @@
                     </select>
                 </div>
             </div>
-            
+
             <div class="column">
                 <div class="form-group">
                     <label for="embeddingsCreate_encoding_format">Encoding Format:</label>
@@ -32,14 +32,14 @@
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('embeddingsCreate', 'POST', '/api/v1/embeddings', 'json')">
             Create Embeddings
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="embeddingsCreate_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsCreate_response">---</pre>
     </div>
@@ -77,41 +77,41 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
             <span class="endpoint-path">/api/v1/embeddings/health - Health Check</span>
         </h2>
         <p>Check embeddings service health with circuit breaker status.</p>
-        
+
         <button class="api-button" onclick="makeRequest('embeddingsHealth', 'GET', '/api/v1/embeddings/health', 'none')">
             Check Health
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsHealth_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="embeddingsCache">
         <h2>
             <span class="endpoint-method delete">DELETE</span>
             <span class="endpoint-path">/api/v1/embeddings/cache - Clear Cache</span>
         </h2>
         <p>Clear embedding cache (admin only).</p>
-        
+
         <button class="api-button btn-danger" onclick="if(confirm('Clear embedding cache?')) makeRequest('embeddingsCache', 'DELETE', '/api/v1/embeddings/cache', 'none')">
             Clear Cache
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsCache_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="embeddingsMetrics">
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/embeddings/metrics - Service Metrics</span>
         </h2>
         <p>Get service metrics (admin only).</p>
-        
+
         <button class="api-button" onclick="makeRequest('embeddingsMetrics', 'GET', '/api/v1/embeddings/metrics', 'none')">
             Get Metrics
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsMetrics_response">---</pre>
     </div>
@@ -154,11 +154,11 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
             <span class="endpoint-path">/api/v1/embeddings/models - List Embedding Models</span>
         </h2>
         <p>List available/known embedding models and which are allowed by policy.</p>
-        
+
         <button class="api-button" onclick="makeRequest('embeddingsModelsList', 'GET', '/api/v1/embeddings/models', 'none')">
             List Models
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsModelsList_response">---</pre>
         <div class="columns" style="margin-top:10px;">
@@ -179,7 +179,7 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
             <span class="endpoint-path">/api/v1/embeddings/models/warmup - Warmup Model (Admin)</span>
         </h2>
         <p>Preload a model into the embeddings service (admin only).</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -194,11 +194,11 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" onclick="embeddingsAdminSubmit('embeddingsModelsAdmin','/api/v1/embeddings/models/warmup')">Warmup Model</button>
-        
+
         <textarea id="embeddingsModelsAdmin_payload" class="code-input" style="display:none"></textarea>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsModelsAdmin_response">---</pre>
     </div>
@@ -209,7 +209,7 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
             <span class="endpoint-path">/api/v1/embeddings/models/download - Download Model (Admin)</span>
         </h2>
         <p>Download/prepare a model (admin only). The API infers the provider if omitted.</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -224,11 +224,11 @@ See Deployment Guide → Backpressure & Quotas for details.">?</span>
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" onclick="embeddingsAdminSubmit('embeddingsModelsDownload','/api/v1/embeddings/models/download')">Download Model</button>
-        
+
         <textarea id="embeddingsModelsDownload_payload" class="code-input" style="display:none"></textarea>
-        
+
         <h3>Response:</h3>
         <pre id="embeddingsModelsDownload_response">---</pre>
     </div>

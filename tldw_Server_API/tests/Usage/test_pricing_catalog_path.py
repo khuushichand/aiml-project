@@ -17,4 +17,3 @@ def test_pricing_catalog_loads_from_config_file(monkeypatch):
     assert round(out_per_1k, 6) == 0.015
     # File override yields exact match, not estimated
     assert estimated is False
-

@@ -49,14 +49,14 @@ def print_json(data: Any, title: Optional[str] = None):
     """Print data as formatted JSON."""
     if title:
         console.print(f"\n[bold]{title}[/bold]")
-    
+
     if isinstance(data, str):
         try:
             data = json.loads(data)
         except json.JSONDecodeError:
             console.print(data)
             return
-    
+
     json_str = json.dumps(data, indent=2, default=str)
     json_renderable = JSON(json_str)
     console.print(json_renderable)
@@ -65,7 +65,7 @@ def print_json(data: Any, title: Optional[str] = None):
 def print_table(data: List[Dict[str, Any]], title: Optional[str] = None, format_style: str = "rich"):
     """
     Print data as a formatted table.
-    
+
     Args:
         data: List of dictionaries to display
         title: Optional table title
@@ -74,7 +74,7 @@ def print_table(data: List[Dict[str, Any]], title: Optional[str] = None, format_
     if not data:
         print_info("No data to display")
         return
-    
+
     if format_style == "rich":
         _print_rich_table(data, title)
     else:
@@ -85,18 +85,18 @@ def _print_rich_table(data: List[Dict[str, Any]], title: Optional[str] = None):
     """Print table using Rich formatting."""
     if not data:
         return
-    
+
     table = Table(show_header=True, header_style="bold magenta")
-    
+
     # Add columns
     columns = list(data[0].keys())
     for column in columns:
         table.add_column(column.replace('_', ' ').title())
-    
+
     # Add rows
     for row in data:
         table.add_row(*[str(row.get(col, '')) for col in columns])
-    
+
     if title:
         console.print(f"\n[bold]{title}[/bold]")
     console.print(table)
@@ -106,18 +106,18 @@ def _print_simple_table(data: List[Dict[str, Any]], title: Optional[str] = None)
     """Print table using tabulate."""
     if not data:
         return
-    
+
     if title:
         print(f"\n{title}")
         print("=" * len(title))
-    
+
     print(tabulate(data, headers="keys", tablefmt="grid"))
 
 
 def print_health_status(health_data: Dict[str, Any]):
     """Print health status with color coding."""
     status = health_data.get("status", "unknown")
-    
+
     # Color coding based on status
     if status == "healthy":
         status_color = "bold green"
@@ -127,18 +127,18 @@ def print_health_status(health_data: Dict[str, Any]):
         status_color = "bold red"
     else:
         status_color = "bold white"
-    
+
     console.print(f"Overall Status: [{status_color}]{status.upper()}[/{status_color}]")
-    
+
     # Print timestamp if available
     if "timestamp" in health_data:
         console.print(f"Checked at: {health_data['timestamp']}")
-    
+
     # Print components if available
     if "components" in health_data:
         console.print("\n[bold]Component Status:[/bold]")
         components_tree = Tree("Components")
-        
+
         for component, info in health_data["components"].items():
             comp_status = info.get("status", "unknown")
             if comp_status == "ok" or comp_status == "healthy":
@@ -147,26 +147,26 @@ def print_health_status(health_data: Dict[str, Any]):
                 comp_color = "yellow"
             else:
                 comp_color = "red"
-            
+
             branch = components_tree.add(f"[{comp_color}]{component}[/{comp_color}]")
-            
+
             # Add component details
             for key, value in info.items():
                 if key != "status":
                     branch.add(f"{key}: {value}")
-        
+
         console.print(components_tree)
 
 
 def print_metrics_summary(metrics: Dict[str, Any]):
     """Print metrics in a formatted summary."""
     console.print("\n[bold]Metrics Summary[/bold]")
-    
+
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Metric")
     table.add_column("Value")
     table.add_column("Description")
-    
+
     for key, value in metrics.items():
         if isinstance(value, dict):
             for subkey, subvalue in value.items():
@@ -177,7 +177,7 @@ def print_metrics_summary(metrics: Dict[str, Any]):
                 )
         else:
             table.add_row(key, str(value), "")
-    
+
     console.print(table)
 
 
@@ -193,7 +193,7 @@ def print_config_section(config: Dict[str, Any], section: Optional[str] = None):
     else:
         data = config
         console.print("\n[bold]Full Configuration[/bold]")
-    
+
     yaml_content = json.dumps(data, indent=2, default=str)
     syntax = Syntax(yaml_content, "yaml", theme="monokai", line_numbers=True)
     console.print(syntax)
@@ -212,12 +212,12 @@ def print_progress_bar(total: int, description: str = "Processing"):
 def print_evaluation_results(results: Dict[str, Any]):
     """Print evaluation results in a formatted way."""
     console.print("\n[bold]Evaluation Results[/bold]")
-    
+
     # Basic info
     info_table = Table(show_header=False)
     info_table.add_column("Field", style="cyan")
     info_table.add_column("Value")
-    
+
     if "evaluation_id" in results:
         info_table.add_row("Evaluation ID", str(results["evaluation_id"]))
     if "evaluation_type" in results:
@@ -226,9 +226,9 @@ def print_evaluation_results(results: Dict[str, Any]):
         info_table.add_row("Provider", str(results["provider"]))
     if "timestamp" in results:
         info_table.add_row("Timestamp", str(results["timestamp"]))
-    
+
     console.print(info_table)
-    
+
     # Metrics/scores
     if "metrics" in results:
         console.print("\n[bold]Scores:[/bold]")
@@ -236,7 +236,7 @@ def print_evaluation_results(results: Dict[str, Any]):
         metrics_table.add_column("Metric")
         metrics_table.add_column("Score")
         metrics_table.add_column("Explanation")
-        
+
         for metric_name, metric_data in results["metrics"].items():
             if isinstance(metric_data, dict):
                 score = metric_data.get("score", "N/A")
@@ -244,7 +244,7 @@ def print_evaluation_results(results: Dict[str, Any]):
             else:
                 score = metric_data
                 explanation = ""
-            
+
             # Color code scores
             if isinstance(score, (int, float)):
                 if score >= 0.8:
@@ -256,11 +256,11 @@ def print_evaluation_results(results: Dict[str, Any]):
                 score_display = f"[{score_color}]{score:.3f}[/{score_color}]"
             else:
                 score_display = str(score)
-            
+
             metrics_table.add_row(metric_name, score_display, explanation[:100] + "..." if len(explanation) > 100 else explanation)
-        
+
         console.print(metrics_table)
-    
+
     # Additional details
     if "details" in results:
         console.print(f"\n[bold]Details:[/bold]")
@@ -272,7 +272,7 @@ def print_banner(title: str, subtitle: Optional[str] = None):
     content = f"[bold cyan]{title}[/bold cyan]"
     if subtitle:
         content += f"\n[dim]{subtitle}[/dim]"
-    
+
     panel = Panel(content, expand=False, border_style="cyan")
     console.print(panel)
 
@@ -284,10 +284,10 @@ def format_timestamp(timestamp) -> str:
             timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
         except ValueError:
             return str(timestamp)
-    
+
     if isinstance(timestamp, datetime):
         return timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    
+
     return str(timestamp)
 
 

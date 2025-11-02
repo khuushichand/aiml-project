@@ -236,17 +236,17 @@ def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any
         # TextGen cards typically have a 'char_name' field instead of 'name'
         if 'char_name' in card_data_json and 'name' not in card_data_json:
             card_data_json['name'] = card_data_json['char_name']
-        
+
         # Map TextGen-specific fields
         if 'char_persona' in card_data_json and 'personality' not in card_data_json:
             card_data_json['personality'] = card_data_json['char_persona']
-        
+
         if 'char_greeting' in card_data_json and 'first_mes' not in card_data_json:
             card_data_json['first_mes'] = card_data_json['char_greeting']
-        
+
         if 'example_dialogue' in card_data_json and 'mes_example' not in card_data_json:
             card_data_json['mes_example'] = card_data_json['example_dialogue']
-        
+
         return parse_v1_card(card_data_json)
     except Exception as e:
         logger.error(f"Error parsing TextGen card: {e}", exc_info=True)
@@ -259,22 +259,22 @@ def parse_alpaca_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]
         # Alpaca cards may have different field names
         if 'char_name' in card_data_json and 'name' not in card_data_json:
             card_data_json['name'] = card_data_json['char_name']
-        
+
         if 'char_description' in card_data_json and 'description' not in card_data_json:
             card_data_json['description'] = card_data_json['char_description']
-        
+
         if 'char_personality' in card_data_json and 'personality' not in card_data_json:
             card_data_json['personality'] = card_data_json['char_personality']
-        
+
         if 'world_scenario' in card_data_json and 'scenario' not in card_data_json:
             card_data_json['scenario'] = card_data_json['world_scenario']
-        
+
         if 'char_greeting' in card_data_json and 'first_mes' not in card_data_json:
             card_data_json['first_mes'] = card_data_json['char_greeting']
-        
+
         if 'example_dialogue' in card_data_json and 'mes_example' not in card_data_json:
             card_data_json['mes_example'] = card_data_json['example_dialogue']
-        
+
         return parse_v1_card(card_data_json)
     except Exception as e:
         logger.error(f"Error parsing Alpaca card: {e}", exc_info=True)

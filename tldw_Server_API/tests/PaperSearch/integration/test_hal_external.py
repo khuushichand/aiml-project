@@ -76,4 +76,3 @@ def test_hal_ingest_lenient(client_with_auth):
         params={"docid": docid, "perform_chunking": "false", "perform_analysis": "false"},
     )
     assert resp.status_code in (200, 404, 500, 502, 504), resp.text
-

@@ -65,4 +65,3 @@ def test_pg_max_inflight_quota(monkeypatch):
     jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="2")
     acq_other = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w3", owner_user_id="2")
     assert acq_other is not None
-

@@ -45,14 +45,14 @@ def _window_key(timestamp: datetime) -> str:
 class RateLimiter:
     """
     Token bucket rate limiter with database backend and optional Redis caching
-    
+
     Implements a sliding window rate limiter that:
     - Tracks requests per identifier (IP, user_id, API key)
     - Supports burst traffic handling
     - Uses database as source of truth
     - Optionally uses Redis for performance
     """
-    
+
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
@@ -64,23 +64,23 @@ class RateLimiter:
         self.redis_client: Optional[redis_async.Redis] = None
         self.enabled = self.settings.RATE_LIMIT_ENABLED
         self._initialized = False
-        
+
         # Default limits
         self.default_limit = self.settings.RATE_LIMIT_PER_MINUTE
         self.default_burst = self.settings.RATE_LIMIT_BURST
-        
+
         # Service account limits
         self.service_limit = self.settings.SERVICE_ACCOUNT_RATE_LIMIT
-        
+
     async def initialize(self):
         """Initialize rate limiter"""
         if self._initialized:
             return
-        
+
         # Get database pool
         if not self.db_pool:
             self.db_pool = await get_db_pool()
-        
+
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
@@ -94,7 +94,7 @@ class RateLimiter:
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis unavailable for rate limiting: {e}")
                 self.redis_client = None
-        
+
         # Ensure required schema exists for the backend
         try:
             # If using SQLite (db_pool.pool is None), create required tables
@@ -222,26 +222,26 @@ class RateLimiter:
     ) -> Dict[str, Any]:
         """
         Record a failed authentication attempt and check for lockout
-        
+
         Args:
             identifier: Unique identifier (IP, username, etc.)
             attempt_type: Type of attempt (login, password_reset, etc.)
             lockout_threshold: Number of failures before lockout
             lockout_duration_minutes: Duration of lockout in minutes
-            
+
         Returns:
             Dict with attempt count, lockout status, and reset time
         """
         if not self._initialized:
             await self.initialize()
-        
+
         # Use settings defaults if not provided
         lockout_threshold = lockout_threshold or self.settings.MAX_LOGIN_ATTEMPTS
         lockout_duration_minutes = lockout_duration_minutes or self.settings.LOCKOUT_DURATION_MINUTES
-        
+
         key = f"failed_{attempt_type}:{identifier}"
         now = datetime.utcnow()
-        
+
         # Try Redis first if available
         if self.redis_client:
             try:
@@ -250,9 +250,9 @@ class RateLimiter:
                 pipe.incr(key)
                 pipe.expire(key, lockout_duration_minutes * 60)
                 results = await pipe.execute()
-                
+
                 attempt_count = results[0]
-                
+
                 if attempt_count >= lockout_threshold:
                     # Set lockout key
                     lockout_key = f"lockout:{identifier}"
@@ -265,28 +265,28 @@ class RateLimiter:
                             "reason": f"Too many failed {attempt_type} attempts"
                         })
                     )
-                    
+
                     if self.settings.PII_REDACT_LOGS:
                         logger.warning("Account locked after failed attempts [redacted]")
                     else:
                         logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
-                    
+
                     return {
                         "attempt_count": attempt_count,
                         "is_locked": True,
                         "lockout_expires": (now + timedelta(minutes=lockout_duration_minutes)).isoformat(),
                         "remaining_attempts": 0
                     }
-                
+
                 return {
                     "attempt_count": attempt_count,
                     "is_locked": False,
                     "remaining_attempts": lockout_threshold - attempt_count
                 }
-                
+
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis error in record_failed_attempt: {e}")
-        
+
         # Database fallback
         async with self.db_pool.transaction() as conn:
             if hasattr(conn, 'fetchrow'):
@@ -296,7 +296,7 @@ class RateLimiter:
                     INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
                     VALUES ($1, $2, 1, $3)
                     ON CONFLICT (identifier, attempt_type)
-                    DO UPDATE SET 
+                    DO UPDATE SET
                         attempt_count = CASE
                             WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
                             THEN 1
@@ -314,9 +314,9 @@ class RateLimiter:
                     now,
                     int(lockout_duration_minutes),
                 )
-                
+
                 attempt_count = result['attempt_count']
-                
+
             else:
                 # SQLite
                 cursor = await conn.execute(
@@ -324,7 +324,7 @@ class RateLimiter:
                     INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
                     VALUES (?, ?, 1, ?)
                     ON CONFLICT (identifier, attempt_type)
-                    DO UPDATE SET 
+                    DO UPDATE SET
                         attempt_count = CASE
                             WHEN datetime(window_start, '+' || ? || ' minutes') < ?
                             THEN 1
@@ -347,7 +347,7 @@ class RateLimiter:
                         now.isoformat(),
                     )
                 )
-                
+
                 # Get the updated count
                 cursor = await conn.execute(
                     "SELECT attempt_count FROM failed_attempts WHERE identifier = ? AND attempt_type = ?",
@@ -355,11 +355,11 @@ class RateLimiter:
                 )
                 row = await cursor.fetchone()
                 attempt_count = row[0] if row else 1
-            
+
             # Check for lockout
             if attempt_count >= lockout_threshold:
                 lockout_expires = now + timedelta(minutes=lockout_duration_minutes)
-                
+
                 # Record lockout
                 if hasattr(conn, 'fetchrow'):
                     await conn.execute(
@@ -380,41 +380,41 @@ class RateLimiter:
                         """,
                         (identifier, lockout_expires.isoformat(), f"Too many failed {attempt_type} attempts")
                     )
-                
+
                 if self.settings.PII_REDACT_LOGS:
                     logger.warning("Account locked after failed attempts [redacted]")
                 else:
                     logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
                 log_counter("auth_rate_limit_lockout", labels={"attempt_type": attempt_type})
-                
+
                 return {
                     "attempt_count": attempt_count,
                     "is_locked": True,
                     "lockout_expires": lockout_expires.isoformat(),
                     "remaining_attempts": 0
                 }
-        
+
         return {
             "attempt_count": attempt_count,
             "is_locked": False,
             "remaining_attempts": lockout_threshold - attempt_count
         }
-    
+
     async def check_lockout(self, identifier: str) -> Tuple[bool, Optional[datetime]]:
         """
         Check if an identifier is currently locked out
-        
+
         Args:
             identifier: Unique identifier to check
-            
+
         Returns:
             Tuple of (is_locked, lockout_expires)
         """
         if not self._initialized:
             await self.initialize()
-        
+
         now = datetime.utcnow()
-        
+
         # Check Redis first
         if self.redis_client:
             try:
@@ -431,7 +431,7 @@ class RateLimiter:
                 return False, None
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis error in check_lockout: {e}")
-        
+
         # Database fallback
         async with self.db_pool.acquire() as conn:
             if hasattr(conn, 'fetchrow'):
@@ -464,22 +464,22 @@ class RateLimiter:
                     await conn.commit()
                 except Exception:
                     pass
-        
+
         return False, None
-    
+
     async def reset_failed_attempts(self, identifier: str, attempt_type: str = "login"):
         """
         Reset failed attempt counter for an identifier
-        
+
         Args:
             identifier: Unique identifier
             attempt_type: Type of attempt to reset
         """
         if not self._initialized:
             await self.initialize()
-        
+
         key = f"failed_{attempt_type}:{identifier}"
-        
+
         # Clear from Redis
         if self.redis_client:
             try:
@@ -487,7 +487,7 @@ class RateLimiter:
                 await self.redis_client.delete(f"lockout:{identifier}")
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis error in reset_failed_attempts: {e}")
-        
+
         # Clear from database
         async with self.db_pool.transaction() as conn:
             if hasattr(conn, 'fetchrow'):
@@ -510,7 +510,7 @@ class RateLimiter:
                     "DELETE FROM account_lockouts WHERE identifier = ?",
                     (identifier,)
                 )
-    
+
     async def check_rate_limit(
         self,
         identifier: str,
@@ -521,14 +521,14 @@ class RateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Check if request is within rate limit
-        
+
         Args:
             identifier: Unique identifier (IP, user_id, etc.)
             endpoint: API endpoint being accessed
             limit: Requests allowed per window (default from settings)
             burst: Burst requests allowed
             window_minutes: Time window in minutes
-            
+
         Returns:
             Tuple of (is_allowed, metadata)
             - is_allowed: True if request is allowed
@@ -536,10 +536,10 @@ class RateLimiter:
         """
         if not self.enabled:
             return True, {"rate_limit_enabled": False}
-        
+
         if not self._initialized:
             await self.initialize()
-        
+
         # Use provided limits or defaults; treat zero values as intentional
         if limit is None:
             limit = self.default_limit
@@ -555,10 +555,10 @@ class RateLimiter:
                 "rate_limit_enabled": True,
                 "unbounded": True,
             }
-        
+
         # Create unique key for rate limiting
         key = self._create_key(identifier, endpoint)
-        
+
         # Try Redis first if available
         if self.redis_client:
             result = await self._check_redis_rate_limit(
@@ -566,12 +566,12 @@ class RateLimiter:
             )
             if result is not None:
                 return result
-        
+
         # Fallback to database
         return await self._check_database_rate_limit(
             identifier, endpoint, limit, burst, window_minutes
         )
-    
+
     async def _check_redis_rate_limit(
         self,
         key: str,
@@ -582,7 +582,7 @@ class RateLimiter:
         """Check rate limit using Redis"""
         if not self.redis_client:
             return None
-        
+
         try:
             # Use Redis pipeline for atomic operations
             pipe = self.redis_client.pipeline()
@@ -626,7 +626,7 @@ class RateLimiter:
         except RedisError as e:
             logger.warning(f"Redis rate limit check failed: {e}")
             return None
-    
+
     async def _check_database_rate_limit(
         self,
         identifier: str,
@@ -638,7 +638,7 @@ class RateLimiter:
         """Check rate limit using database"""
         now = datetime.utcnow()
         window_start = _compute_window_start(now, window_minutes)
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchval'):
@@ -647,14 +647,14 @@ class RateLimiter:
                         """
                         INSERT INTO rate_limits (identifier, endpoint, request_count, window_start)
                         VALUES ($1, $2, 1, $3)
-                        ON CONFLICT (identifier, endpoint, window_start) 
+                        ON CONFLICT (identifier, endpoint, window_start)
                         DO UPDATE SET request_count = rate_limits.request_count + 1
                         RETURNING request_count
                         """,
                         identifier, endpoint, window_start
                     )
                     current_count = result
-                    
+
                     # Check burst with previous window
                     if current_count > limit - burst:
                         prev_window = window_start - timedelta(minutes=window_minutes)
@@ -666,7 +666,7 @@ class RateLimiter:
                             identifier, endpoint, prev_window
                         )
                         prev_count = prev_count or 0
-                        
+
                         if prev_count + current_count > limit + burst:
                             # Rate limit exceeded
                             reset_time = window_start + timedelta(minutes=window_minutes)
@@ -677,7 +677,7 @@ class RateLimiter:
                                 "reset_time": reset_time.isoformat(),
                                 "retry_after": retry_after,
                             }
-                    
+
                 else:
                     # SQLite - manual upsert
                     cursor = await conn.execute(
@@ -688,7 +688,7 @@ class RateLimiter:
                         (identifier, endpoint, window_start.isoformat())
                     )
                     row = await cursor.fetchone()
-                    
+
                     if row:
                         current_count = row[0] + 1
                         await conn.execute(
@@ -708,7 +708,7 @@ class RateLimiter:
                             """,
                             (identifier, endpoint, 1, window_start.isoformat())
                         )
-                    
+
                     # Check burst
                     if current_count > limit - burst:
                         prev_window = window_start - timedelta(minutes=window_minutes)
@@ -721,7 +721,7 @@ class RateLimiter:
                         )
                         row = await cursor.fetchone()
                         prev_count = row[0] if row else 0
-                        
+
                         if prev_count + current_count > limit + burst:
                             # Rate limit exceeded
                             reset_time = window_start + timedelta(minutes=window_minutes)
@@ -733,16 +733,16 @@ class RateLimiter:
                                 "reset_time": reset_time.isoformat(),
                                 "retry_after": retry_after,
                             }
-                    
+
                     await conn.commit()
-                
+
                 # Request allowed
                 return True, {
                     "limit": limit,
                     "remaining": max(0, limit - current_count),
                     "reset_time": (window_start + timedelta(minutes=window_minutes)).isoformat(),
                 }
-                
+
         except Exception as e:
             logger.error(f"Database rate limit check failed: {e}")
             # In test mode, fail open to avoid spurious 429s when tables
@@ -763,7 +763,7 @@ class RateLimiter:
                 "remaining": 0,
                 "retry_after": 60  # Conservative retry time
             }
-    
+
     async def check_user_rate_limit(
         self,
         user_id: int,
@@ -772,12 +772,12 @@ class RateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Check rate limit for authenticated user
-        
+
         Args:
             user_id: User's database ID
             endpoint: API endpoint
             role: User's role (affects limits)
-            
+
         Returns:
             Rate limit check result
         """
@@ -794,12 +794,12 @@ class RateLimiter:
         else:
             limit = self.default_limit
             burst = self.default_burst
-        
+
         identifier = f"user:{user_id}"
         return await self.check_rate_limit(
             identifier, endpoint, limit, burst
         )
-    
+
     async def check_ip_rate_limit(
         self,
         ip_address: str,
@@ -807,17 +807,17 @@ class RateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Check rate limit for IP address
-        
+
         Args:
             ip_address: Client IP address
             endpoint: API endpoint
-            
+
         Returns:
             Rate limit check result
         """
         identifier = f"ip:{ip_address}"
         return await self.check_rate_limit(identifier, endpoint)
-    
+
     async def check_api_key_rate_limit(
         self,
         api_key_hash: str,
@@ -826,28 +826,28 @@ class RateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Check rate limit for API key
-        
+
         Args:
             api_key_hash: Hashed API key
             endpoint: API endpoint
             is_service_account: Whether this is a service account
-            
+
         Returns:
             Rate limit check result
         """
         identifier = f"api:{api_key_hash[:16]}"  # Use first 16 chars of hash
-        
+
         if is_service_account:
             limit = self.service_limit
             burst = self.service_limit // 10
         else:
             limit = self.default_limit
             burst = self.default_burst
-        
+
         return await self.check_rate_limit(
             identifier, endpoint, limit, burst
         )
-    
+
     async def reset_rate_limit(
         self,
         identifier: str,
@@ -855,14 +855,14 @@ class RateLimiter:
     ):
         """
         Reset rate limit for an identifier
-        
+
         Args:
             identifier: Identifier to reset
             endpoint: Specific endpoint or all if None
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Collect distinct endpoints for Redis cleanup before DB deletion when endpoint is None
             endpoints_for_cleanup: Optional[list[str]] = None
@@ -911,7 +911,7 @@ class RateLimiter:
                             (identifier,)
                         )
                     await conn.commit()
-                
+
                 # Clear Redis cache if available
                 if self.redis_client:
                     # Keys are stored as rate:{md5(identifier:endpoint)}:{window}
@@ -925,28 +925,28 @@ class RateLimiter:
                             pattern = f"rate:{self._create_key(identifier, ep)}:*"
                             async for key in self.redis_client.scan_iter(pattern):
                                 await self.redis_client.delete(key)
-                
+
                 if self.settings.PII_REDACT_LOGS:
                     logger.info("Reset rate limit [redacted]")
                 else:
                     logger.info(f"Reset rate limit for {identifier}")
-                
+
         except Exception as e:
             logger.error(f"Failed to reset rate limit: {e}")
-    
+
     async def cleanup_old_entries(self, hours: int = 1):
         """
         Clean up old rate limit entries
-        
+
         Args:
             hours: Remove entries older than this many hours
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
-            
+
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetch'):
                     # PostgreSQL
@@ -970,18 +970,18 @@ class RateLimiter:
                     )
                     deleted = cursor.rowcount
                     await conn.commit()
-                
+
                 if deleted:
                     logger.info(f"Cleaned up {deleted} old rate limit entries")
-                    
+
         except Exception as e:
             logger.error(f"Rate limit cleanup failed: {e}")
-    
+
     def _create_key(self, identifier: str, endpoint: str) -> str:
         """Create a unique key for rate limiting"""
         combined = f"{identifier}:{endpoint}"
         return hashlib.md5(combined.encode()).hexdigest()
-    
+
     async def get_current_usage(
         self,
         identifier: str,
@@ -989,20 +989,20 @@ class RateLimiter:
     ) -> Dict[str, Any]:
         """
         Get current rate limit usage for an identifier
-        
+
         Args:
             identifier: Identifier to check
             endpoint: API endpoint
-            
+
         Returns:
             Current usage statistics
         """
         if not self._initialized:
             await self.initialize()
-        
+
         now = datetime.utcnow()
         window_start = now.replace(second=0, microsecond=0)
-        
+
         try:
             # SQLite stores window_start as TEXT; pass ISO string in that case.
             is_postgres = bool(getattr(self.db_pool, "pool", None))
@@ -1014,9 +1014,9 @@ class RateLimiter:
                 """,
                 identifier, endpoint, win_param
             )
-            
+
             current_count = result['request_count'] if result else 0
-            
+
             return {
                 "identifier": identifier,
                 "endpoint": endpoint,
@@ -1026,7 +1026,7 @@ class RateLimiter:
                 "window_start": window_start.isoformat(),
                 "window_end": (window_start + timedelta(minutes=1)).isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get rate limit usage: {e}")
             return {"error": "Failed to retrieve usage"}

@@ -50,4 +50,3 @@ def test_failure_timeline_append_and_jsonb_postgres(monkeypatch):
     assert isinstance(tl, list)
     assert len(tl) >= 1
     assert all("error_code" in e for e in tl)
-

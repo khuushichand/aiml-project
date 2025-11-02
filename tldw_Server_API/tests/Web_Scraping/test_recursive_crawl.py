@@ -86,4 +86,3 @@ async def test_max_pages_and_visited(monkeypatch):
     assert urls[0] == base
     # The second URL should be the canonical child
     assert urls[1].startswith("http://example.com/x")
-

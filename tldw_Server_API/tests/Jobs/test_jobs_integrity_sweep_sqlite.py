@@ -21,4 +21,3 @@ def test_integrity_sweep_clears_non_processing_lease(tmp_path, monkeypatch):
     assert stats["fixed"] >= 1
     j2 = jm.get_job(int(j["id"]))
     assert j2 and not j2.get("lease_id") and not j2.get("worker_id")
-

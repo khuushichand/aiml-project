@@ -86,4 +86,3 @@ def test_reranker_toggle_controls_reranking(monkeypatch):
 
     assert not _has_rerank(baseline), "Baseline without reranker should not have rerank_scores"
     assert _has_rerank(after), "With apply_reranker=true, rerank_scores should be present"
-

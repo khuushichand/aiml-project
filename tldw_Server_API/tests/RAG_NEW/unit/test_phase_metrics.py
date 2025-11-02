@@ -10,4 +10,3 @@ def test_phase_metrics_recording():
     reg = get_metrics_registry()
     assert "rag_phase_duration_seconds" in reg.metrics
     assert "rag_reranking_duration_seconds" in reg.metrics
-

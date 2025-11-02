@@ -1,7 +1,7 @@
 # Prompt Studio Module PRD
 
-Status: Phase 1 complete; Phase 2 in progress; Phase 3 planned  
-Owner: Prompt Studio maintainers  
+Status: Phase 1 complete; Phase 2 in progress; Phase 3 planned
+Owner: Prompt Studio maintainers
 Audience: Backend contributors, infra/testing owners
 
 ## 1. Summary
@@ -133,7 +133,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 
 ---
 
-Maintainer Checklist  
-- [x] Phase 1 delivered and documented  
-- [~] Phase 2: advisory locks + scoped idempotency done; validation expansion outstanding  
+Maintainer Checklist
+- [x] Phase 1 delivered and documented
+- [~] Phase 2: advisory locks + scoped idempotency done; validation expansion outstanding
 - [ ] Phase 3: CI & performance tuning pending

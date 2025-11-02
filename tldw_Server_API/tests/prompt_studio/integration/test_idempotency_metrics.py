@@ -59,4 +59,3 @@ def test_optimization_idempotency_metrics(prompt_studio_dual_backend_client, mon
     names = [n for (n, _, _) in stub.metrics_manager.increments]
     assert "prompt_studio.idempotency.miss_total" in names, "idempotency miss counter not incremented"
     assert "prompt_studio.idempotency.hit_total" in names, "idempotency hit counter not incremented"
-

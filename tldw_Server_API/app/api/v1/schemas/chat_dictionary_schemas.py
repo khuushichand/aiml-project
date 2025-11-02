@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 class TimedEffects(BaseModel):
     """Timed effects configuration for dictionary entries."""
     sticky: int = Field(0, ge=0, description="Sticky duration in seconds")
-    cooldown: int = Field(0, ge=0, description="Cooldown between triggers in seconds") 
+    cooldown: int = Field(0, ge=0, description="Cooldown between triggers in seconds")
     delay: int = Field(0, ge=0, description="Initial delay before first trigger in seconds")
 
 

@@ -5,10 +5,10 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/audio/speech - Text to Speech</span>
         </h2>
-        <p>Generate audio from text using various TTS providers including commercial APIs and local models. 
+        <p>Generate audio from text using various TTS providers including commercial APIs and local models.
            <a href="/docs-static/Code_Documentation/Ingestion_Pipeline_Audio.md" target="_blank">Docs</a>
         </p>
-        
+
         <!-- Provider Status Indicators -->
         <div class="provider-status-bar" id="tts-provider-status">
             <h4>Provider Status</h4>
@@ -36,7 +36,7 @@
                 <i class="icon-refresh"></i> Refresh Status
             </button>
         </div>
-        
+
         <!-- Input Text -->
         <div class="form-group">
             <label for="audioTTS_input">Input Text <span class="required">*</span>:</label>
@@ -45,7 +45,7 @@
                 <span id="audioTTS_charCount">0</span> characters
             </div>
         </div>
-        
+
         <!-- Main Configuration -->
         <div class="columns">
             <div class="column">
@@ -65,7 +65,7 @@
                         </optgroup>
                     </select>
                 </div>
-                
+
                 <!-- Model Selection (dynamic based on provider) -->
                 <div class="form-group" id="audioTTS_model_group">
                     <label for="audioTTS_model">Model:</label>
@@ -74,7 +74,7 @@
                         <option value="tts-1-hd">tts-1-hd (High Definition)</option>
                     </select>
                 </div>
-                
+
                 <!-- Voice Selection (dynamic based on provider) -->
                 <div class="form-group">
                     <label for="audioTTS_voice">Voice:</label>
@@ -95,7 +95,7 @@
                     <div id="audioTTS_voiceList" class="mt-1" style="max-height:140px; overflow:auto; border:1px solid var(--color-border); border-radius:6px; padding:6px; display:none;"></div>
                 </div>
             </div>
-            
+
             <div class="column">
                 <!-- Audio Format -->
                 <div class="form-group">
@@ -109,14 +109,14 @@
                         <option value="pcm">PCM</option>
                     </select>
                 </div>
-                
+
                 <!-- Speed Control -->
                 <div class="form-group">
                     <label for="audioTTS_speed">Speed:</label>
                     <input type="range" id="audioTTS_speed" value="1.0" min="0.25" max="4.0" step="0.1">
                     <span id="audioTTS_speed_value">1.0x</span>
                 </div>
-                
+
                 <!-- Pitch Control (for supported providers) -->
                 <div class="form-group" id="audioTTS_pitch_group" style="display: none;">
                     <label for="audioTTS_pitch">Pitch:</label>
@@ -125,7 +125,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Voice Cloning Section -->
         <div class="voice-cloning-section" id="voiceCloning" style="display: none;">
             <h3>Voice Cloning</h3>
@@ -133,7 +133,7 @@
                 <i class="icon-info"></i>
                 <span>Upload a reference audio file to clone the voice. Supported by: Higgs, VibeVoice, Chatterbox</span>
             </div>
-            
+
             <div class="form-group">
                 <label for="audioTTS_voiceReference">Voice Reference Audio:</label>
                 <div class="file-upload-area" id="voiceUploadArea">
@@ -185,11 +185,11 @@
                     </div>
                 </div>
         </div>
-        
+
         <!-- Advanced Options (provider-specific) -->
         <details class="advanced-options">
             <summary>Advanced Options</summary>
-            
+
             <!-- Higgs-specific options -->
             <div class="provider-options" id="higgs_options" style="display: none;">
                 <h4>Higgs Audio Options</h4>
@@ -214,7 +214,7 @@
                     </label>
                 </div>
             </div>
-            
+
             <!-- VibeVoice-specific options -->
             <div class="provider-options" id="vibevoice_options" style="display: none;">
                 <h4>VibeVoice Options</h4>
@@ -233,7 +233,7 @@
                     <input type="number" id="vibevoice_cfg" value="1.3" min="0.5" max="3.0" step="0.1">
                 </div>
             </div>
-            
+
             <!-- Chatterbox-specific options -->
             <div class="provider-options" id="chatterbox_options" style="display: none;">
                 <h4>Chatterbox Options</h4>
@@ -260,7 +260,7 @@
                     </label>
                 </div>
             </div>
-            
+
             <!-- ElevenLabs-specific options -->
             <div class="provider-options" id="elevenlabs_options" style="display: none;">
                 <h4>ElevenLabs Options</h4>
@@ -286,7 +286,7 @@
                 </div>
             </div>
         </details>
-        
+
         <!-- Generation Options -->
         <div class="generation-options">
             <div class="form-group">
@@ -302,7 +302,7 @@
                 </label>
             </div>
         </div>
-        
+
         <!-- Action Buttons -->
         <div class="button-group">
             <button class="api-button primary" onclick="generateTTS()">
@@ -315,13 +315,13 @@
                 <i class="icon-download"></i> Download
             </button>
         </div>
-        
+
         <!-- Progress Bar -->
         <div class="progress-bar" id="ttsProgress" style="display: none;">
             <div class="progress-fill" id="ttsProgressFill"></div>
             <span class="progress-text" id="ttsProgressText">Generating...</span>
         </div>
-        
+
         <!-- Audio Player with Waveform -->
         <div class="audio-player-section mt-3">
             <h3>Generated Audio</h3>
@@ -336,7 +336,7 @@
             </div>
             <p id="audioTTS_status" class="text-muted">Generate speech to play audio...</p>
         </div>
-        
+
         <!-- Generation History -->
         <details class="generation-history mt-3">
             <summary>Generation History</summary>
@@ -344,16 +344,16 @@
                 <p class="text-muted">No generations yet...</p>
             </div>
         </details>
-        
+
         <!-- Technical Details -->
         <details class="technical-details mt-3">
             <summary>Technical Details</summary>
             <h4>cURL Command:</h4>
             <pre id="audioTTS_curl">---</pre>
-            
+
             <h4>API Response:</h4>
             <pre id="audioTTS_response">---</pre>
-            
+
             <h4>Performance Metrics:</h4>
             <div id="performanceMetrics">
                 <p>Generation Time: <span id="genTime">--</span></p>
@@ -521,20 +521,20 @@
             <span class="endpoint-method websocket">WS</span>
             <span class="endpoint-path">/api/v1/audio/stream/transcribe - Real-time Streaming Transcription</span>
         </h2>
-        <p>Stream audio from your microphone for real-time transcription using Nemo STT models. 
+        <p>Stream audio from your microphone for real-time transcription using Nemo STT models.
            <a href="/docs-static/API-related/Audio_Transcription_API.md" target="_blank">API Docs</a>
         </p>
-        
+
         <!-- Connection Status -->
         <div class="status-bar" id="streamingStatus">
             <div class="status-indicator disconnected" id="streamingStatusIndicator"></div>
             <span id="streamingStatusText">Disconnected</span>
         </div>
-        
+
         <!-- Configuration Section -->
         <div class="config-section">
             <h3>Configuration</h3>
-            
+
             <!-- API Key Section -->
             <div class="form-group">
                 <label for="streamingApiKey">API Key:</label>
@@ -545,7 +545,7 @@
                 </div>
                 <small style="color: var(--color-text-muted);">API key is required for authentication. It will be saved in your browser's local storage.</small>
             </div>
-            
+
             <div class="columns">
                 <div class="column">
                     <div class="form-group">
@@ -556,7 +556,7 @@
                             <option value="whisper">Whisper (Accurate)</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="variantGroup">
                         <label for="streamingVariant">Variant:</label>
                         <select id="streamingVariant">
@@ -565,7 +565,7 @@
                             <option value="mlx">MLX (Apple Silicon)</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="whisperModelGroup" style="display: none;">
                         <label for="whisperModelSize">Whisper Model:</label>
                         <select id="whisperModelSize">
@@ -596,7 +596,7 @@
                             </optgroup>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="whisperTaskGroup" style="display: none;">
                         <label for="whisperTask">Task:</label>
                         <select id="whisperTask">
@@ -604,7 +604,7 @@
                             <option value="translate">Translate to English</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="languageGroup" style="display: none;">
                         <label for="streamingLanguage">Language:</label>
                         <select id="streamingLanguage">
@@ -625,7 +625,7 @@
                         <small style="color: var(--color-text-muted);">Select Other to provide a specific code.</small>
                     </div>
                 </div>
-                
+
                 <div class="column">
                     <div class="form-group">
                         <label for="streamingSampleRate">Sample Rate:</label>
@@ -636,12 +636,12 @@
                             <option value="48000">48000 Hz</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="streamingChunkDuration">Chunk Duration (seconds):</label>
                         <input type="number" id="streamingChunkDuration" value="2.0" min="0.5" max="5.0" step="0.5">
                     </div>
-                    
+
                     <div class="form-group">
                         <label>
                             <input type="checkbox" id="streamingEnablePartial" checked>
@@ -651,7 +651,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Control Buttons -->
         <div class="button-group">
             <button id="connectStreamingBtn" class="api-button" onclick="toggleStreamingConnection()">
@@ -671,7 +671,7 @@
                 <span class="config-text">Waiting for server configuration…</span>
             </span>
         </div>
-        
+
         <!-- Audio Visualizer -->
         <div class="visualizer-section">
             <h3>Audio Input</h3>
@@ -683,28 +683,28 @@
                 <span>Responses: <span id="streamingResponses">0</span></span>
             </div>
         </div>
-        
+
         <!-- Transcript Display -->
         <div class="transcript-section">
             <h3>Transcript</h3>
             <div id="streamingTranscript" class="transcript-box">
                 <div class="transcript-placeholder">Connect and start recording to see transcript...</div>
             </div>
-            
+
             <!-- Partial Result Display -->
             <div id="streamingPartial" class="partial-box" style="display: none;">
                 <span class="partial-indicator">Partial:</span>
                 <span id="streamingPartialText"></span>
             </div>
         </div>
-        
+
         <!-- Debug Information -->
         <details class="debug-section">
             <summary>Debug Information</summary>
             <div class="debug-content">
                 <h4>WebSocket Messages</h4>
                 <pre id="streamingDebug">No messages yet...</pre>
-                
+
                 <h4>Connection Details</h4>
                 <pre id="streamingConnectionInfo">Not connected</pre>
             </div>

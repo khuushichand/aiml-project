@@ -53,7 +53,7 @@ class ChunkingWorker(BaseWorker):
     - Gracefully falls back to simple character-based chunking with optional
       separator-aware splits if Chunker is unavailable.
     """
-    
+
     def __init__(self, config: WorkerConfig):
         super().__init__(config)
         self.embedding_queue = config.queue_name.replace("chunking", "embedding")
@@ -71,18 +71,18 @@ class ChunkingWorker(BaseWorker):
                 self._template_mgr = TemplateManager()
             except Exception as e:
                 logger.warning(f"Failed to initialize TemplateManager; templates will be unavailable. Error: {e}")
-        
+
     def _parse_message(self, data: Dict[str, Any]) -> ChunkingMessage:
         """Parse raw message data into ChunkingMessage"""
         norm = normalize_message("chunking", data)
         return ChunkingMessage(**norm)
-    
+
     async def process_message(self, message: ChunkingMessage) -> Optional[EmbeddingMessage]:
         """Process chunking message and create chunks"""
         logger.bind(job_id=message.job_id, stage="chunking").info(
             f"Processing chunking job {message.job_id} for media {message.media_id}"
         )
-        
+
         source_metadata: Dict[str, Any] = {}
         if isinstance(message.source_metadata, dict):
             source_metadata = ensure_frontmatter_metadata(message.source_metadata)
@@ -90,13 +90,13 @@ class ChunkingWorker(BaseWorker):
         try:
             # Update job status
             await self._update_job_status(message.job_id, JobStatus.CHUNKING)
-            
+
             # Perform chunking
             chunks = self._chunk_text(
                 prepend_frontmatter(message.content, source_metadata),
                 message.chunking_config,
             )
-            
+
             # Create chunk data objects
             chunk_data_list = []
             for i, (chunk_text, start_idx, end_idx) in enumerate(chunks):
@@ -104,7 +104,7 @@ class ChunkingWorker(BaseWorker):
                 # Compute normalized content hash to enable cross-run embedding caching
                 norm_txt = self._normalize_for_hash(chunk_text)
                 content_hash = hashlib.sha256(norm_txt.encode('utf-8')).hexdigest()
-                
+
                 chunk_data = ChunkData(
                     chunk_id=chunk_id,
                     content=chunk_text,
@@ -121,10 +121,10 @@ class ChunkingWorker(BaseWorker):
                     sequence_number=i
                 )
                 chunk_data_list.append(chunk_data)
-            
+
             # Update job progress
             await self._update_job_progress(message.job_id, 25, len(chunks))
-            
+
             # Create embedding message for next stage
             embedding_message = EmbeddingMessage(
                 job_id=message.job_id,
@@ -141,16 +141,16 @@ class ChunkingWorker(BaseWorker):
                 embedding_model_config={},  # Populated later by embedding worker
                 model_provider=""  # Populated later by embedding worker
             )
-            
+
             logger.bind(job_id=message.job_id, stage="chunking").info(
                 f"Created {len(chunks)} chunks for job {message.job_id}"
             )
             return embedding_message
-            
+
         except Exception as e:
             logger.error(f"Error chunking content for job {message.job_id}: {e}")
             raise
-    
+
     async def _send_to_next_stage(self, result: EmbeddingMessage):
         """Send chunked data to embedding queue"""
         # Priority routing: optional
@@ -184,7 +184,7 @@ class ChunkingWorker(BaseWorker):
             fields = {k: str(v) for k, v in payload.items()}
         await self.redis_client.xadd(target_queue, fields)
         logger.debug(f"Sent job {result.job_id} to embedding queue")
-    
+
     def _chunk_text(self, text: str, *args, **kwargs) -> List[tuple[str, int, int]]:
         """Chunk helper supporting both legacy and v2-config signatures.
 
@@ -390,7 +390,7 @@ class ChunkingWorker(BaseWorker):
                 chunks.append((_ChunkString(chunk, leading_flag, trailing_flag), adj_start, adj_end))
             cursor = adj_end - max(0, overlap) if adj_end < text_length else text_length
         return chunks
-    
+
     def _generate_chunk_id(self, job_id: str, chunk_index: int) -> str:
         """Generate unique chunk ID"""
         data = f"{job_id}:{chunk_index}"
@@ -425,7 +425,7 @@ class ChunkingWorker(BaseWorker):
         if not preserve_boundary_whitespace and not leading_hint and not trailing_hint:
             t = t.strip()
         return t
-    
+
     async def _update_job_progress(self, job_id: str, percentage: float, total_chunks: int):
         """Update job progress information"""
         job_key = f"job:{job_id}"

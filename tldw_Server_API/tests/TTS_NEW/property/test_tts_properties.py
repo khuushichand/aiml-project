@@ -87,7 +87,7 @@ def valid_tts_request(draw):
 
 class TestRequestValidationProperties:
     """Test properties of request validation."""
-    
+
     @pytest.mark.property
     @given(text=valid_tts_text())
     def test_valid_text_always_accepted(self, text):
@@ -99,7 +99,7 @@ class TestRequestValidationProperties:
         )
         # Should not raise
         assert request.text == text
-    
+
     @pytest.mark.property
     @given(length=st.integers(min_value=5001, max_value=6000))
     def test_long_text_handling(self, length):
@@ -138,17 +138,17 @@ class TestRequestValidationProperties:
             except (TTSValidationError, ValueError):
                 # Rejection is also valid
                 pass
-    
+
     @pytest.mark.property
     @given(request=valid_tts_request())
     def test_request_serialization_roundtrip(self, request):
         """Property: Requests should survive serialization roundtrip."""
         # Serialize to dict
         data = request.dict()
-        
+
         # Recreate from dict
         request2 = TTSRequest(**data)
-        
+
         # Should be equivalent
         assert request2.text == request.text
         assert request2.voice == request.voice
@@ -161,7 +161,7 @@ class TestRequestValidationProperties:
 
 class TestAudioOutputProperties:
     """Test properties of audio output."""
-    
+
     @pytest.mark.property
     @given(audio_bytes=st.binary(min_size=100, max_size=10000))
     def test_audio_bytes_are_valid(self, audio_bytes):
@@ -172,11 +172,11 @@ class TestAudioOutputProperties:
             provider="test",
             model="test-model"
         )
-        
+
         # Audio content should be preserved
         assert response.audio_content == audio_bytes
         assert len(response.audio_content) > 0
-    
+
     @pytest.mark.property
     @given(
         sample_rate=st.sampled_from([8000, 16000, 22050, 24000, 44100, 48000]),
@@ -192,19 +192,19 @@ class TestAudioOutputProperties:
             provider="test",
             model="test"
         )
-        
+
         # Sample rate should be standard
         assert response.sample_rate in [8000, 16000, 22050, 24000, 44100, 48000]
-        
+
         # Duration should be positive
         assert response.duration > 0
-        
+
         # Approximate size calculation (for uncompressed)
         if response.format == AudioFormat.WAV:
             expected_size = sample_rate * duration * 2  # 16-bit mono
             # Allow for headers and some variance
             assert len(response.audio_content) < expected_size * 10
-    
+
     @pytest.mark.property
     @given(format=st.sampled_from(list(AudioFormat)))
     def test_format_preservation(self, format):
@@ -215,7 +215,7 @@ class TestAudioOutputProperties:
             provider="test",
             model="test"
         )
-        
+
         assert response.format == format
         assert response.format in AudioFormat
 
@@ -225,7 +225,7 @@ class TestAudioOutputProperties:
 
 class TestProviderBehaviorProperties:
     """Test properties of provider behavior."""
-    
+
     @pytest.mark.property
     @given(
         providers=st.lists(
@@ -245,15 +245,15 @@ class TestProviderBehaviorProperties:
                 voice="alloy" if provider == "openai" else "rachel",
                 provider=provider
             )
-            
+
             # Provider should match request
             assert request.provider == provider
-            
+
             # Should be different from previous
             if previous:
                 assert provider != previous or len(providers) == 1
             previous = provider
-    
+
     @pytest.mark.property
     @given(
         text=valid_tts_text(),
@@ -262,10 +262,10 @@ class TestProviderBehaviorProperties:
     def test_same_text_deterministic_output(self, text, provider):
         """Property: Same text with same settings should give consistent results."""
         voice = "alloy" if provider == "openai" else "rachel"
-        
+
         request1 = TTSRequest(text=text, voice=voice, provider=provider)
         request2 = TTSRequest(text=text, voice=voice, provider=provider)
-        
+
         # Requests should be equivalent
         assert request1.text == request2.text
         assert request1.voice == request2.voice
@@ -277,7 +277,7 @@ class TestProviderBehaviorProperties:
 
 class TestChunkingProperties:
     """Test properties of text chunking for TTS."""
-    
+
     @pytest.mark.property
     @given(
         text=st.text(min_size=100, max_size=10000),
@@ -286,18 +286,18 @@ class TestChunkingProperties:
     def test_chunking_preserves_text(self, text, chunk_size):
         """Property: Chunking should preserve all text."""
         assume(text.strip())
-        
+
         # Simple chunking simulation
         chunks = []
         for i in range(0, len(text), chunk_size):
             chunks.append(text[i:i+chunk_size])
-        
+
         # Reassemble
         reassembled = "".join(chunks)
-        
+
         # Should match original
         assert reassembled == text
-    
+
     @pytest.mark.property
     @given(
         sentences=st.lists(
@@ -310,10 +310,10 @@ class TestChunkingProperties:
         """Property: Sentence-based chunking should preserve boundaries."""
         # Join with proper punctuation
         text = ". ".join(sentences) + "."
-        
+
         # Simple sentence detection
         detected_sentences = text.split(". ")
-        
+
         # Should preserve sentence count (roughly)
         assert abs(len(detected_sentences) - len(sentences)) <= 1
 
@@ -323,14 +323,14 @@ class TestChunkingProperties:
 
 class TTSStateMachine(RuleBasedStateMachine):
     """Stateful testing for TTS service lifecycle."""
-    
+
     def __init__(self):
         super().__init__()
         self.service = None
         self.active_providers = set()
         self.generated_audio = []
         self.current_provider = "openai"
-    
+
     @initialize()
     def setup(self):
         """Initialize the TTS service."""
@@ -338,7 +338,7 @@ class TTSStateMachine(RuleBasedStateMachine):
         self.active_providers = {"openai"}  # Start with default
         self.generated_audio = []
         self.current_provider = "openai"
-    
+
     @rule(
         text=valid_tts_text(),
         voice=st.sampled_from(["alloy", "echo", "nova"])
@@ -350,7 +350,7 @@ class TTSStateMachine(RuleBasedStateMachine):
             voice=voice,
             provider=self.current_provider
         )
-        
+
         # Mock generation
         audio = f"audio_{len(self.generated_audio)}".encode()
         self.generated_audio.append({
@@ -359,30 +359,30 @@ class TTSStateMachine(RuleBasedStateMachine):
             "provider": self.current_provider,
             "audio": audio
         })
-    
+
     @rule(provider=st.sampled_from(["openai", "elevenlabs", "kokoro"]))
     def switch_provider(self, provider):
         """Rule: Switch to a different provider."""
         self.current_provider = provider
         self.active_providers.add(provider)
-    
+
     @rule()
     def clear_cache(self):
         """Rule: Clear any caches."""
         # This would clear provider caches in real implementation
         pass
-    
+
     @invariant()
     def audio_count_increases(self):
         """Invariant: Audio count never decreases."""
         # Count should only increase or stay same
         assert len(self.generated_audio) >= 0
-    
+
     @invariant()
     def provider_always_valid(self):
         """Invariant: Current provider is always valid."""
         assert self.current_provider in ["openai", "elevenlabs", "kokoro"]
-    
+
     @invariant()
     def active_providers_tracked(self):
         """Invariant: Active providers are tracked correctly."""
@@ -398,7 +398,7 @@ TestTTSStateMachine = TTSStateMachine.TestCase
 
 class TestErrorInjectionProperties:
     """Test properties under error conditions."""
-    
+
     @pytest.mark.property
     @given(
         error_rate=st.floats(min_value=0.0, max_value=1.0),
@@ -408,20 +408,20 @@ class TestErrorInjectionProperties:
         """Property: Error rate should match configuration."""
         errors = 0
         successes = 0
-        
+
         for _ in range(num_requests):
             import random
             if random.random() < error_rate:
                 errors += 1
             else:
                 successes += 1
-        
+
         actual_rate = errors / num_requests if num_requests > 0 else 0
-        
+
         # Should be within reasonable bounds
         if num_requests > 10:
             assert abs(actual_rate - error_rate) < 0.3
-    
+
     @pytest.mark.property
     @given(
         retry_count=st.integers(min_value=0, max_value=5),
@@ -431,16 +431,16 @@ class TestErrorInjectionProperties:
         """Property: Retry logic should be bounded."""
         attempts = 0
         max_retries = retry_count
-        
+
         while attempts <= max_retries:
             attempts += 1
             if attempts == success_on_retry:
                 # Success
                 break
-        
+
         # Should not exceed max retries
         assert attempts <= max_retries + 1
-        
+
         # Should succeed if success_on_retry is within bounds
         if 0 < success_on_retry <= retry_count:
             assert attempts == success_on_retry
@@ -451,7 +451,7 @@ class TestErrorInjectionProperties:
 
 class TestPerformanceProperties:
     """Test performance-related properties."""
-    
+
     @pytest.mark.property
     @given(
         num_concurrent=st.integers(min_value=1, max_value=10),
@@ -468,12 +468,12 @@ class TestPerformanceProperties:
                 voice="alloy",
                 provider="openai"
             ))
-        
+
         # All requests should be valid
         assert len(requests) == num_concurrent
         for req in requests:
             assert len(req.text) > 10
-    
+
     @pytest.mark.property
     @given(
         cache_size=st.integers(min_value=0, max_value=100),
@@ -482,7 +482,7 @@ class TestPerformanceProperties:
     def test_cache_behavior(self, cache_size, num_requests):
         """Property: Cache should respect size limits."""
         cache = {}
-        
+
         for i in range(num_requests):
             key = f"request_{i % (cache_size + 1)}"  # Create some duplicates
 

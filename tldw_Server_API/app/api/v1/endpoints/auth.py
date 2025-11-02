@@ -246,16 +246,16 @@ async def login(
 ) -> TokenResponse:
     """
     OAuth2 compatible login endpoint
-    
+
     Authenticates user with username/password and returns JWT tokens.
     Compatible with OAuth2PasswordRequestForm for standard OAuth2 clients.
-    
+
     Args:
         form_data: OAuth2 form with username and password
-        
+
     Returns:
         TokenResponse with access_token, refresh_token, and expiry
-        
+
     Raises:
         HTTPException: 401 if credentials invalid, 403 if account inactive
     """
@@ -270,7 +270,7 @@ async def login(
             logger.info("Login attempt [redacted]")
         else:
             logger.info(f"Login attempt for user: {form_data.username} from IP: {client_ip}")
-        
+
         # Check if IP is locked out (only when rate limiting is enabled)
         is_locked = False
         lockout_expires = None
@@ -284,11 +284,11 @@ async def login(
                 detail=f"Too many failed login attempts. Please try again later.",
                 headers={"Retry-After": str(int((lockout_expires - datetime.utcnow()).total_seconds()))}
             )
-        
+
         # Sanitize input (lightweight). For login, avoid strict validation to not block
         # legitimate existing accounts (e.g., reserved usernames like 'admin').
         login_identifier = form_data.username.strip()
-        
+
         # Helper to attempt audit logging without hard dependency (safe no-op in tests)
         async def _safe_audit_log_login(user_id: int, username: str, ip: str, ua: str, success: bool):
             try:
@@ -306,10 +306,10 @@ async def login(
             except Exception:
                 # Never block auth on audit issues
                 pass
-        
+
         # Fetch user from database using sanitized identifier
         user = await fetch_user_by_login_identifier(db, login_identifier)
-        
+
         # Check if user exists
         if not user:
             # Log failed attempt
@@ -317,14 +317,14 @@ async def login(
                 logger.warning("Failed login: user not found [redacted]")
             else:
                 logger.warning(f"Failed login: User not found - {login_identifier}")
-            
+
             # Track failed attempt by IP (only when rate limiting is enabled)
             if getattr(rate_limiter, 'enabled', False):
                 await rate_limiter.record_failed_attempt(
                     identifier=client_ip,
                     attempt_type="login"
                 )
-            
+
             log_counter("auth_login_user_not_found")
             # finalize diag headers in test mode for visibility
             try:
@@ -341,7 +341,7 @@ async def login(
                 detail="Incorrect username or password",
                 headers=extra_headers
             )
-        
+
         # Convert to dict if needed; guard against stray AsyncMock/awaitables in tests
         import inspect as _inspect
         if _inspect.isawaitable(user):
@@ -350,7 +350,7 @@ async def login(
             except Exception:
                 pass
         # user already normalized to dict in service
-        
+
         # Verify password
         is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
         is_valid, needs_rehash = password_service.verify_password(form_data.password, user['password_hash'])
@@ -377,7 +377,7 @@ async def login(
                 logger.warning("Failed login: invalid password [redacted]")
             else:
                 logger.warning(f"Failed login: Invalid password for user {user['username']}")
-            
+
             # Audit log failed login
             await _safe_audit_log_login(
                 user_id=user['id'],
@@ -386,7 +386,7 @@ async def login(
                 ua=user_agent,
                 success=False,
             )
-            
+
             # Track failed attempt by IP and username
             ip_result = {"is_locked": False, "remaining_attempts": 5}
             user_result = {"is_locked": False, "remaining_attempts": 5}
@@ -399,7 +399,7 @@ async def login(
                     identifier=user['username'],
                     attempt_type="login"
                 )
-            
+
             # Provide informative error if locked out
             if ip_result['is_locked'] or user_result['is_locked']:
                 log_counter("auth_login_locked_user")
@@ -408,11 +408,11 @@ async def login(
                     detail="Too many failed login attempts. Account temporarily locked.",
                     headers={"Retry-After": "900"}  # 15 minutes
                 )
-            
+
             # Otherwise generic error
             remaining = min(ip_result.get('remaining_attempts', 5), user_result.get('remaining_attempts', 5))
             logger.info(f"Remaining login attempts: {remaining}")
-            
+
             log_counter("auth_login_invalid_password")
             try:
                 _finalize_login_diag(request, response)
@@ -428,7 +428,7 @@ async def login(
                 detail="Incorrect username or password",
                 headers=extra_headers
             )
-        
+
         # Check if account is active
         if not user['is_active']:
             logger.warning(f"Failed login: Inactive account - {user['username']}")
@@ -437,22 +437,22 @@ async def login(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account is inactive. Please contact support."
             )
-        
+
         # If password needs rehashing, update it
         if needs_rehash:
             new_hash = password_service.hash_password(form_data.password)
             await update_user_password_hash(db, int(user['id']), new_hash)
             logger.info(f"Updated password hash for user {user['username']} with new parameters")
-        
+
         # Create session first to get session_id
         user_agent = request.headers.get("User-Agent", "Unknown")
-        
+
         # Generate tokens based on auth mode
         if settings.AUTH_MODE == "single_user":
             # For single-user mode, return simple tokens
             access_token = f"single-user-token-{user['id']}"
             refresh_token = f"single-user-refresh-{user['id']}"
-            
+
             # Create session with tokens
             session_info = await session_manager.create_session(
                 user_id=user['id'],
@@ -467,7 +467,7 @@ async def login(
             import secrets
             temp_access = f"temp_access_{secrets.token_urlsafe(16)}"
             temp_refresh = f"temp_refresh_{secrets.token_urlsafe(16)}"
-            
+
             temp_session_info = await session_manager.create_session(
                 user_id=user['id'],
                 access_token=temp_access,  # Will update with actual token
@@ -475,9 +475,9 @@ async def login(
                 ip_address=client_ip,
                 user_agent=user_agent
             )
-            
+
             session_id = temp_session_info['session_id']
-            
+
             # Create JWT tokens with session_id
             access_token = jwt_service.create_access_token(
                 user_id=user['id'],
@@ -485,36 +485,36 @@ async def login(
                 role=user['role'],
                 additional_claims={"session_id": session_id}
             )
-            
+
             refresh_token = jwt_service.create_refresh_token(
                 user_id=user['id'],
                 username=user['username'],
                 additional_claims={"session_id": session_id}
             )
-            
+
             # Update session with actual tokens
             await session_manager.update_session_tokens(
                 session_id=session_id,
                 access_token=access_token,
                 refresh_token=refresh_token
             )
-            
+
             session_info = temp_session_info
-        
+
         # Update last login time
         await update_user_last_login(db, int(user['id']), datetime.utcnow())
-        
+
         # Log successful login
         if settings.PII_REDACT_LOGS:
             logger.info("Successful login [redacted]")
         else:
             logger.info(f"Successful login for user: {user['username']} (ID: {user['id']})")
-        
+
         # Reset failed login attempts on successful login
         if getattr(rate_limiter, 'enabled', False):
             await rate_limiter.reset_failed_attempts(client_ip, "login")
             await rate_limiter.reset_failed_attempts(user['username'], "login")
-        
+
         # Audit log successful login
         await _safe_audit_log_login(
             user_id=user['id'],
@@ -523,7 +523,7 @@ async def login(
             ua=user_agent,
             success=True,
         )
-        
+
         log_counter("auth_login_success")
         log_histogram("auth_login_duration", time.perf_counter() - start_time)
         result = TokenResponse(
@@ -537,7 +537,7 @@ async def login(
         except Exception:
             pass
         return result
-        
+
     except HTTPException:
         log_counter("auth_login_http_error")
         log_histogram("auth_login_duration", time.perf_counter() - start_time)
@@ -574,9 +574,9 @@ async def logout(
 ) -> MessageResponse:
     """
     Logout current user and invalidate tokens
-    
+
     Invalidates the current session and blacklists the tokens.
-    
+
     Returns:
         MessageResponse confirming logout
     """
@@ -587,7 +587,7 @@ async def logout(
         # Note: We'll need to pass session_id in JWT payload
         # For now, invalidate all sessions for the user
         await session_manager.revoke_all_user_sessions(current_user['id'])
-        
+
         # PII-aware logging
         try:
             _settings = get_settings()
@@ -597,14 +597,14 @@ async def logout(
             logger.info("User logged out [redacted]")
         else:
             logger.info(f"User logged out: {current_user['username']} (ID: {current_user['id']})")
-        
+
         log_counter("auth_logout_success")
         log_histogram("auth_logout_duration", time.perf_counter() - start_time)
         return MessageResponse(
             message="Successfully logged out",
             details={"user_id": current_user['id']}
         )
-        
+
     except Exception as e:
         logger.error(f"Logout error: {e}")
         log_counter("auth_logout_error")
@@ -630,13 +630,13 @@ async def refresh_token(
 ) -> TokenResponse:
     """
     Refresh access token using refresh token
-    
+
     Args:
         request: RefreshTokenRequest with refresh token
-        
+
     Returns:
         TokenResponse with new access_token
-        
+
     Raises:
         HTTPException: 401 if refresh token invalid or expired
     """
@@ -679,7 +679,7 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise
-            
+
             # Check if token is blacklisted
             if await session_manager.is_token_blacklisted(request.refresh_token, payload.get("jti")):
                 if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
@@ -689,7 +689,7 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise InvalidTokenError("Refresh token has been revoked")
-            
+
             # JWT standard uses 'sub' for subject (user ID)
             user_id = payload.get("sub") or payload.get("user_id")
             if not user_id:
@@ -700,7 +700,7 @@ async def refresh_token(
                     except Exception:
                         pass
                 raise InvalidTokenError("Invalid refresh token payload")
-            
+
             # Convert to int if it's a string
             try:
                 user_id = int(user_id)
@@ -714,10 +714,10 @@ async def refresh_token(
                 raise InvalidTokenError("Invalid user ID in refresh token")
             # Capture session association when present
             session_id = payload.get("session_id")
-        
+
         # Fetch user
         user = await fetch_active_user_by_id(db, user_id)
-        
+
         if not user:
             if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                 try:
@@ -726,7 +726,7 @@ async def refresh_token(
                 except Exception:
                     pass
             raise UserNotFoundError(f"User {user_id}")
-        
+
         # Convert to dict
         if not isinstance(user, dict):
             if hasattr(user, 'keys'):
@@ -734,7 +734,7 @@ async def refresh_token(
             else:
                 columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role']
                 user = dict(zip(columns[:len(user)], user))
-        
+
         # Generate new tokens based on auth mode and session linkage
         if settings.AUTH_MODE == "single_user":
             new_access_token = f"single-user-token-{user['id']}"
@@ -797,12 +797,12 @@ async def refresh_token(
                     logger.debug(f"Refresh: blacklist prior token best-effort failed: {_bl_e}")
                 except Exception:
                     pass
-        
+
         if settings.PII_REDACT_LOGS:
             logger.info("Token refreshed [redacted]")
         else:
             logger.info(f"Token refreshed for user: {user['username']} (ID: {user['id']})")
-        
+
         log_counter("auth_refresh_success")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
         # TEST_MODE: include simple duration metric header (non-breaking)
@@ -817,7 +817,7 @@ async def refresh_token(
             token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
-        
+
     except (TokenExpiredError, InvalidTokenError) as e:
         logger.warning(f"Token refresh failed: {e}")
         log_counter("auth_refresh_token_error", labels={"type": type(e).__name__})
@@ -863,16 +863,16 @@ async def register(
 ) -> RegistrationResponse:
     """
     Register a new user
-    
+
     Creates a new user account with the provided credentials.
     May require a registration code if configured.
-    
+
     Args:
         request: RegisterRequest with user details
-        
+
     Returns:
         RegistrationResponse with user information
-        
+
     Raises:
         HTTPException: 400 if validation fails, 409 if user exists
     """
@@ -886,9 +886,9 @@ async def register(
             password=request.password,
             registration_code=request.registration_code
         )
-        
+
         logger.info(f"New user registered: {user_info['username']} (ID: {user_info['user_id']})")
-        
+
         # If using SQLite for AuthNZ, generate a per-user API key so UI can present it
         api_key_value = None
         try:
@@ -918,7 +918,7 @@ async def register(
             requires_verification=not user_info['is_verified'],
             api_key=api_key_value
         )
-        
+
     except DuplicateUserError as e:
         logger.warning(f"Registration failed - duplicate user: {e}")
         log_counter("auth_register_duplicate")
@@ -997,7 +997,7 @@ async def register(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=detail
             )
-        
+
         logger.error(f"Unexpected registration error: {e}")
         log_counter("auth_register_unexpected_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
@@ -1041,7 +1041,7 @@ async def get_current_user_info(
 ) -> UserResponse:
     """
     Get current user information
-    
+
     Returns:
         UserResponse with current user details
     """
@@ -1049,7 +1049,7 @@ async def get_current_user_info(
     user_uuid = current_user.get('uuid')
     if user_uuid and not isinstance(user_uuid, str):
         user_uuid = str(user_uuid)
-    
+
     return UserResponse(
         id=current_user['id'],
         uuid=user_uuid or '',  # Provide empty string if missing

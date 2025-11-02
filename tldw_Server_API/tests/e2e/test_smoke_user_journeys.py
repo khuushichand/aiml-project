@@ -120,5 +120,3 @@ def test_smoke_basic_user_journey(api_client, data_tracker):
     except httpx.HTTPStatusError as e:
         # Treat missing/disabled TTS as optional in smoke
         pytest.skip(f"TTS endpoints not available/configured: {e}")
-
-

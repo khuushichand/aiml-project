@@ -194,4 +194,3 @@ WebSocket clients follow the JSON-RPC flow:
 - If you expect concurrent ingest jobs, monitor `/api/v1/mcp/tools/execute` with `tool=media.get_media_metadata` to verify job completion.
 
 You now have a repeatable pipeline: drop updated docs in, re-run the ingest script, and let your MCP client surface relevant pages on demand. If you automate this in CI, commit the manifest and ingestion script alongside the codebase so teammates can rebuild the knowledge base quickly.
-

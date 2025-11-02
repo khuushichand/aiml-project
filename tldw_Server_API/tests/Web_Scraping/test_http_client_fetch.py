@@ -44,4 +44,3 @@ def test_fetch_egress_denied_raises(monkeypatch):
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: False)
     with pytest.raises(ValueError):
         hc.fetch("https://example.com/")
-

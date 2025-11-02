@@ -560,13 +560,13 @@ the chat_api_call function to provider-specific parameter names.
 def get_provider_handler(provider: str) -> Callable:
     """
     Get the handler function for a specific provider.
-    
+
     Args:
         provider: The provider name
-        
+
     Returns:
         The handler function for the provider
-        
+
     Raises:
         KeyError: If the provider is not supported
     """
@@ -577,13 +577,13 @@ def get_provider_handler(provider: str) -> Callable:
 def get_provider_params(provider: str) -> Dict[str, str]:
     """
     Get the parameter mapping for a specific provider.
-    
+
     Args:
         provider: The provider name
-        
+
     Returns:
         The parameter mapping dictionary for the provider
-        
+
     Raises:
         KeyError: If the provider is not supported
     """

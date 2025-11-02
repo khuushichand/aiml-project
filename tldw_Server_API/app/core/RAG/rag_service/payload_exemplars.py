@@ -85,4 +85,3 @@ def maybe_record_exemplar(
             f.write(json.dumps(sample) + "\n")
     except Exception as e:
         logger.debug(f"Failed to write exemplar: {e}")
-

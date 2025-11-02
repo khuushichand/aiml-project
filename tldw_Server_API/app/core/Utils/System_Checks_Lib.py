@@ -153,7 +153,7 @@ def check_ffmpeg():
                 return False
             if exit_script.lower() in ["y", "yes", "1"]:  # Handles 'Y' or 'y'
                 return False
-            return False 
+            return False
 
 
 # Download ffmpeg
@@ -195,7 +195,7 @@ def download_ffmpeg():
                 os.makedirs(bin_folder)
 
             zip_ref.extract(ffmpeg_path, path=bin_folder)
-            
+
             src_path = os.path.join(bin_folder, ffmpeg_path)
             dst_path = os.path.join(bin_folder, "ffmpeg.exe")
             shutil.move(src_path, dst_path)  # Move to the correct location (./Bin/ffmpeg.exe).

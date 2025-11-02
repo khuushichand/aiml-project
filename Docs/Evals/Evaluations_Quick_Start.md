@@ -132,7 +132,7 @@ if status_data["status"] == "completed":
         f"{BASE_URL}/api/v1/runs/{run_id}/results",
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
-    
+
     if results_response.status_code == 200:
         results = results_response.json()
         aggregate = results["results"]["aggregate"]
@@ -196,10 +196,10 @@ summary_eval = {
         {
             "input": {
                 "source_text": """
-                The James Webb Space Telescope has captured unprecedented images 
-                of distant galaxies, revealing details about the early universe 
-                that were previously impossible to observe. The telescope's infrared 
-                capabilities allow it to see through cosmic dust and detect light 
+                The James Webb Space Telescope has captured unprecedented images
+                of distant galaxies, revealing details about the early universe
+                that were previously impossible to observe. The telescope's infrared
+                capabilities allow it to see through cosmic dust and detect light
                 from the first stars and galaxies that formed after the Big Bang.
                 Scientists are particularly excited about the discovery of several
                 galaxies that appear to be much larger and more mature than expected
@@ -220,7 +220,7 @@ response = requests.post(
 if response.status_code == 201:
     eval_id = response.json()["id"]
     print(f"Created G-Eval evaluation: {eval_id}")
-    
+
     # Run the evaluation
     run_response = requests.post(
         f"{BASE_URL}/api/v1/evals/{eval_id}/runs",
@@ -372,11 +372,11 @@ def print_results(run_id):
         f"{BASE_URL}/api/v1/runs/{run_id}/results",
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
-    
+
     if response.status_code == 200:
         data = response.json()
         results = data["results"]["aggregate"]
-        
+
         print(f"""
 📊 Evaluation Results:
   ✅ Pass Rate: {results['pass_rate']:.1%}
@@ -385,7 +385,7 @@ def print_results(run_id):
   📋 Total Samples: {results['total_samples']}
   ❌ Failed: {results['failed_samples']}
         """)
-        
+
         # Show metric breakdown if available
         if "by_metric" in data["results"]:
             print("\n📊 Metrics Breakdown:")
@@ -403,30 +403,30 @@ def print_results(run_id):
 def wait_for_completion(run_id, max_wait=60):
     """Poll for run completion"""
     start_time = time.time()
-    
+
     while time.time() - start_time < max_wait:
         response = requests.get(
             f"{BASE_URL}/api/v1/runs/{run_id}",
             headers={"Authorization": f"Bearer {API_KEY}"}
         )
-        
+
         data = response.json()
         status = data["status"]
-        
+
         if status == "completed":
             return True
         elif status == "failed":
             print(f"Run failed: {data.get('error_message', 'Unknown error')}")
             return False
-        
+
         # Show progress
         progress = data.get("progress", {})
         if progress.get("total_samples", 0) > 0:
             percent = (progress.get("completed_samples", 0) / progress["total_samples"]) * 100
             print(f"Progress: {percent:.0f}% ({progress['completed_samples']}/{progress['total_samples']})")
-        
+
         time.sleep(2)
-    
+
     print("Timeout waiting for completion")
     return False
 ```
@@ -444,11 +444,11 @@ def stream_progress(run_id):
         headers={"Authorization": f"Bearer {API_KEY}"},
         stream=True
     )
-    
+
     client = sseclient.SSEClient(response)
     for event in client.events():
         print(f"{event.event}: {event.data}")
-        
+
         if event.event in ["completed", "failed", "cancelled"]:
             break
 ```
@@ -462,9 +462,9 @@ def handle_api_error(response):
     """Handle API errors consistently"""
     if response.status_code == 200 or response.status_code == 201:
         return response.json()
-    
+
     error_data = response.json()
-    
+
     # Handle different error response formats
     if "error" in error_data:
         error = error_data["error"]
@@ -475,13 +475,13 @@ def handle_api_error(response):
             error = {"message": str(error_data["detail"])}
     else:
         error = {"message": f"Unknown error: {error_data}"}
-    
+
     print(f"❌ Error {response.status_code}: {error.get('message', 'Unknown error')}")
     if "type" in error:
         print(f"   Type: {error['type']}")
     if "code" in error:
         print(f"   Code: {error['code']}")
-    
+
     return None
 ```
 
@@ -540,7 +540,7 @@ eval_data = {
 ### Issue: Rate limiting (429 Too Many Requests)
 **Solution**: The default rate limits are:
 - Create operations: 100/minute
-- Read operations: 100/minute  
+- Read operations: 100/minute
 - Run operations: 50/minute
 
 Add delays between requests or batch operations.
@@ -567,7 +567,7 @@ if "error_message" in data:
 ## Next Steps
 
 - **[User Guide](./User_Guides/Evaluations_User_Guide.md)** - Detailed usage patterns and examples
-- **[API Reference](./API-related/Evaluations_API_Reference.md)** - Complete endpoint documentation  
+- **[API Reference](./API-related/Evaluations_API_Reference.md)** - Complete endpoint documentation
 - **[Developer Guide](./Code_Documentation/Evaluations_Developer_Guide.md)** - Extend the evaluation system
 - **Interactive API Docs** - http://localhost:8000/docs when server is running
 

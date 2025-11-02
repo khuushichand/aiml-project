@@ -71,11 +71,11 @@ _redis_client = None
 def _get_stream_ttl_seconds() -> int:
     """
     Determine the TTL (in seconds) to use for Redis stream counters.
-    
+
     Checks for a value in this order: the AUDIO_STREAM_TTL_SECONDS environment variable, the
     Audio-Quota stream_ttl_seconds config setting, then a hard default of 120. The resulting
     value is clamped to the inclusive range 30-3600.
-    
+
     Returns:
         int: TTL in seconds (clamped to 30-3600).
     """
@@ -119,9 +119,9 @@ def clear_stream_ttl_cache() -> None:
 def _use_redis() -> bool:
     """
     Determine whether Redis should be used for audio quota operations.
-    
+
     Checks whether the redis_async package is available, a Redis URL is configured in settings, and the AUDIO_QUOTA_USE_REDIS environment flag does not disable Redis.
-    
+
     Returns:
         bool: `True` if Redis is available and enabled by configuration and environment, `False` otherwise.
     """
@@ -158,7 +158,7 @@ async def _get_redis():
 def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
     """
     Register and update a gauge metric under both underscore and dot-name variants and set its value with provided labels.
-    
+
     Attempts to register and set the gauge for the canonical metric name (underscores) and a backward-compatible alias (dots). Any errors during registration or setting are suppressed so the call never raises. `labels` must map label names to their string values; `value` is converted to float before setting.
     """
     try:
@@ -189,9 +189,9 @@ def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
 def _metrics_increment(name: str, labels: Dict[str, str]) -> None:
     """
     Increment a counter metric in the metrics registry for a given metric name and label set.
-    
+
     Attempts to register and increment two metric name variants: the provided name and a dot-separated alias (underscores replaced with dots). If a metrics registry is unavailable or any error occurs, the function does nothing and does not raise.
-    
+
     Parameters:
         name (str): Base metric name to increment (e.g., "audio_jobs_active").
         labels (Dict[str, str]): Mapping of label names to values to attach to the metric.
@@ -376,9 +376,9 @@ async def increment_jobs_started(user_id: int) -> None:
 async def can_start_job(user_id: int) -> Tuple[bool, str]:
     """
     Determine whether a new concurrent audio job may be started for the given user and, if allowed, increment the active-job counter.
-    
+
     If a concurrency limit exists for the user's tier the function enforces it using Redis when available (falling back to an in-process counter). It also emits quota and active-job metrics. When the limit is exceeded the function does not increment the counter and reports a descriptive message.
-    
+
     Returns:
         (bool, str): `True` and `"OK"` if the job may start and the active-job counter was incremented; `False` and an explanatory message like `"Concurrent job limit reached (<max>)"` if starting the job would exceed the user's concurrency limit.
     """
@@ -411,9 +411,9 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
 async def finish_job(user_id: int) -> None:
     """
     Decrement the user's active audio job counter and update metrics.
-    
+
     If a Redis client is available, decrement the per-user Redis counter and clamp it to zero; otherwise decrement the in-process counter protected by the module lock. Updates the `audio_jobs_active` gauge with the new value.
-    
+
     Parameters:
         user_id (int): Numeric identifier of the user whose active-job count should be decremented.
     """
@@ -439,9 +439,9 @@ async def finish_job(user_id: int) -> None:
 async def can_start_stream(user_id: int) -> Tuple[bool, str]:
     """
     Determines whether the user may start a new concurrent audio stream and reserves a slot if allowed.
-    
+
     Attempts to allocate a concurrent-stream slot for the given user; if a slot is available the function records the reservation and returns success, otherwise it reports the denial reason.
-    
+
     Returns:
         (bool, str): `True` and `"OK"` if a slot was reserved and the stream may start, `False` and a human-readable reason (e.g., "Concurrent streams limit reached (<n>)") otherwise.
     """
@@ -479,7 +479,7 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
 async def finish_stream(user_id: int) -> None:
     """
     Decrement the user's active audio stream count and update the corresponding metric.
-    
+
     If a Redis client is available, the Redis counter for the user is decremented and clamped to zero; otherwise an in-process counter protected by an async lock is decremented and clamped to zero. Always emits the updated `audio_streaming_active` gauge with the user's id as a label.
     """
     r = await _get_redis()
@@ -504,16 +504,16 @@ async def finish_stream(user_id: int) -> None:
 async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> Tuple[bool, Optional[float]]:
     """
     Check whether the requested daily transcription minutes can be consumed and report the remaining minutes.
-    
+
     Parameters:
         user_id (int): ID of the user whose quota is being checked.
         minutes_requested (float): Minutes requested to consume from today's quota.
-    
+
     Returns:
-        Tuple[bool, Optional[float]]: 
+        Tuple[bool, Optional[float]]:
             allowed: `True` if the requested minutes can be consumed, `False` otherwise.
             remaining_after: Remaining minutes for the current UTC day after the request, or `None` if the user's daily limit is unlimited.
-    
+
     Notes:
         When the request is denied due to insufficient remaining minutes, a quota violation metric is recorded.
     """
@@ -533,13 +533,13 @@ def bytes_to_seconds(byte_count: int, sample_rate: int) -> float:
     # Float32 mono: 4 bytes per sample
     """
     Convert a byte count of Float32 mono audio into playback duration in seconds.
-    
+
     Treats audio as mono Float32 (4 bytes per sample). Negative byte counts are treated as zero. If `sample_rate` is zero or otherwise falsy, a default sample rate of 16000 Hz is used.
-    
+
     Parameters:
         byte_count (int): Number of bytes of audio data.
         sample_rate (int): Samples per second for the audio; if falsy, 16000 is used.
-    
+
     Returns:
         float: Duration in seconds represented by the given byte count.
     """
@@ -550,7 +550,7 @@ def bytes_to_seconds(byte_count: int, sample_rate: int) -> float:
 async def heartbeat_stream(user_id: int) -> None:
     """
     Refresh the TTL for a user's active audio stream counter to prevent stale/ leaked keys.
-    
+
     If Redis is unavailable this is a no-op; does nothing for in-process counters.
     """
     r = await _get_redis()
@@ -569,9 +569,9 @@ async def heartbeat_stream(user_id: int) -> None:
 async def active_streams_count(user_id: int) -> int:
     """
     Get the number of currently active audio streams for a user.
-    
+
     When Redis is available, reads the user's Redis counter key; otherwise returns the in-process counter. If the Redis value is missing or cannot be parsed as an integer, returns 0.
-    
+
     Returns:
         int: Active stream count for the user.
     """
@@ -594,18 +594,18 @@ async def active_streams_count(user_id: int) -> int:
 def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Dict[str, Optional[float]]]:
     """
     Merge a base per-tier limits mapping with overrides from the environment and configuration.
-    
+
     Checks the AUDIO_TIER_LIMITS_JSON environment variable (JSON object mapping tier names to partial
     limit objects) first, then the application's [Audio-Quota] config section. Keys recognized per tier
     are: `daily_minutes`, `concurrent_streams`, `concurrent_jobs`, and `max_file_size_mb`. Only tiers
     present in the base mapping are updated; other entries in the environment JSON are ignored.
-    
+
     Environment JSON takes precedence over config file values. For `daily_minutes`, the string values
     "none", "unlimited", or "-1" in the config are treated as `None` (unlimited).
-    
+
     Parameters:
         base (Dict[str, Dict[str, Optional[float]]]): Original tier limits mapping to copy and merge into.
-    
+
     Returns:
         Dict[str, Dict[str, Optional[float]]]: A new mapping with overrides applied.
     """

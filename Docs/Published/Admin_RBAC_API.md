@@ -308,4 +308,3 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
      http://127.0.0.1:8000/api/v1/admin/roles/2/permissions/effective | jq
 ```
-

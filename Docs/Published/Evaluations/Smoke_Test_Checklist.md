@@ -54,4 +54,3 @@ Error Shape
 - Malformed body → 400 with structured `error` object.
 - Not found → 404 with structured `error` object and `param`.
 - Server failures → 500 with sanitized messages.
-

@@ -48,7 +48,7 @@ def get_batch_processor() -> BatchProcessor:
 async def health_check() -> Dict[str, Any]:
     """
     Comprehensive health check for RAG service.
-    
+
     Returns health status of all components.
     """
     health_status = {
@@ -57,30 +57,30 @@ async def health_check() -> Dict[str, Any]:
         "components": {},
         "version": "1.0.0"
     }
-    
+
     try:
         # Check error recovery coordinator
         coordinator = get_coordinator()
-        
+
         # Check circuit breakers
         circuit_breakers_healthy = True
         for name, breaker in coordinator.circuit_breakers.items():
             breaker_stats = breaker.get_stats()
             is_healthy = breaker_stats["state"] != "open"
             circuit_breakers_healthy &= is_healthy
-            
+
             health_status["components"][f"circuit_breaker_{name}"] = {
                 "status": "healthy" if is_healthy else "unhealthy",
                 "state": breaker_stats["state"],
                 "failure_rate": breaker_stats["failure_rate"]
             }
-        
+
         # Check cache
         try:
             cache = get_rag_cache()
             cache_stats = cache.get_stats()
             cache_healthy = True  # Could check hit rate thresholds
-            
+
             health_status["components"]["cache"] = {
                 "status": "healthy" if cache_healthy else "degraded",
                 "hit_rate": cache_stats.get("hit_rate", 0),
@@ -92,13 +92,13 @@ async def health_check() -> Dict[str, Any]:
                 "status": "unhealthy",
                 "error": str(e)
             }
-        
+
         # Check metrics collector
         try:
             metrics = get_metrics_collector()
             current_metrics = metrics.get_current_metrics()
             metrics_healthy = current_metrics is not None
-            
+
             health_status["components"]["metrics"] = {
                 "status": "healthy" if metrics_healthy else "unhealthy",
                 "recent_queries": current_metrics.get("recent_queries", 0)
@@ -109,13 +109,13 @@ async def health_check() -> Dict[str, Any]:
                 "status": "unhealthy",
                 "error": str(e)
             }
-        
+
         # Check batch processor
         try:
             batch = get_batch_processor()
             batch_stats = batch.get_statistics()
             batch_healthy = True
-            
+
             health_status["components"]["batch_processor"] = {
                 "status": "healthy" if batch_healthy else "degraded",
                 "active_jobs": len(batch.active_jobs),
@@ -127,25 +127,25 @@ async def health_check() -> Dict[str, Any]:
                 "status": "unhealthy",
                 "error": str(e)
             }
-        
+
         # Overall health determination
         all_healthy = all(
             comp.get("status") == "healthy"
             for comp in health_status["components"].values()
         )
-        
+
         any_unhealthy = any(
             comp.get("status") == "unhealthy"
             for comp in health_status["components"].values()
         )
-        
+
         if any_unhealthy:
             health_status["status"] = "unhealthy"
         elif not all_healthy:
             health_status["status"] = "degraded"
-        
+
         return health_status
-        
+
     except Exception as e:
         logger.error(f"Health check error: {e}")
         return {
@@ -159,7 +159,7 @@ async def health_check() -> Dict[str, Any]:
 async def liveness_check() -> Dict[str, str]:
     """
     Simple liveness check for container orchestration.
-    
+
     Returns 200 if service is alive.
     """
     return {"status": "alive"}
@@ -169,14 +169,14 @@ async def liveness_check() -> Dict[str, str]:
 async def readiness_check() -> Dict[str, Any]:
     """
     Readiness check for container orchestration.
-    
+
     Returns 200 if service is ready to handle requests.
     """
     try:
         # Quick checks for critical components
         cache = get_rag_cache()
         metrics = get_metrics_collector()
-        
+
         return {
             "status": "ready",
             "timestamp": datetime.now().isoformat()
@@ -192,25 +192,25 @@ async def readiness_check() -> Dict[str, Any]:
 async def get_cache_statistics() -> Dict[str, Any]:
     """
     Get detailed cache statistics.
-    
+
     Returns cache performance metrics and status.
     """
     try:
         cache = get_rag_cache()
         stats = cache.get_stats()
-        
+
         # Add additional computed metrics
         if isinstance(stats, dict):
             # For multi-level cache
             overall_stats = stats.get("overall", {})
             hit_rate = overall_stats.get("hit_rate", 0)
-            
+
             # Determine cache effectiveness
             effectiveness = "excellent" if hit_rate > 0.8 else \
                           "good" if hit_rate > 0.6 else \
                           "fair" if hit_rate > 0.4 else \
                           "poor"
-            
+
             return {
                 "timestamp": datetime.now().isoformat(),
                 "effectiveness": effectiveness,
@@ -223,7 +223,7 @@ async def get_cache_statistics() -> Dict[str, Any]:
                 "timestamp": datetime.now().isoformat(),
                 "statistics": stats
             }
-            
+
     except Exception as e:
         logger.error(f"Failed to get cache statistics: {e}")
         raise HTTPException(
@@ -236,15 +236,15 @@ async def get_cache_statistics() -> Dict[str, Any]:
 async def clear_cache() -> Dict[str, str]:
     """
     Clear all cache entries.
-    
+
     WARNING: This will impact performance until cache is rebuilt.
     """
     try:
         cache = get_rag_cache()
         await cache.cache.clear()
-        
+
         logger.warning("Cache cleared via API endpoint")
-        
+
         return {
             "status": "success",
             "message": "Cache cleared successfully",
@@ -263,10 +263,10 @@ async def get_cache_warming_status() -> Dict[str, Any]:
     """Get status of cache warming operations."""
     try:
         cache = get_rag_cache()
-        
+
         if cache.warmer:
             top_queries = cache.warmer.get_top_queries(n=10)
-            
+
             return {
                 "warming_enabled": True,
                 "top_queries": top_queries,
@@ -277,7 +277,7 @@ async def get_cache_warming_status() -> Dict[str, Any]:
                 "warming_enabled": False,
                 "message": "Cache warming not configured"
             }
-            
+
     except Exception as e:
         logger.error(f"Failed to get warming status: {e}")
         raise HTTPException(
@@ -292,13 +292,13 @@ async def get_metrics_summary() -> Dict[str, Any]:
     try:
         metrics = get_metrics_collector()
         current = metrics.get_current_metrics()
-        
+
         # Get aggregated metrics for last hour
         end_time = datetime.now().timestamp()
         start_time = end_time - 3600  # Last hour
-        
+
         aggregated = metrics.aggregate_metrics(start_time, end_time)
-        
+
         summary = {
             "timestamp": datetime.now().isoformat(),
             "current": current,
@@ -310,9 +310,9 @@ async def get_metrics_summary() -> Dict[str, Any]:
                 "error_rate": aggregated.error_rate if aggregated else 0
             } if aggregated else None
         }
-        
+
         return summary
-        
+
     except Exception as e:
         logger.error(f"Failed to get metrics summary: {e}")
         raise HTTPException(
@@ -338,23 +338,23 @@ async def get_cost_summary() -> Dict[str, Any]:
 
         tracker = get_cost_tracker()
         summary = tracker.get_summary()
-        
+
         # Add budget warnings if configured
         budget_warnings = []
         daily_budget = 10.0  # Example: $10/day
-        
+
         if summary["total_cost"] > daily_budget:
             budget_warnings.append({
                 "level": "warning",
                 "message": f"Daily budget exceeded: ${summary['total_cost']:.2f} > ${daily_budget:.2f}"
             })
-        
+
         return {
             "timestamp": datetime.now().isoformat(),
             "summary": summary,
             "warnings": budget_warnings
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get cost summary: {e}")
         raise HTTPException(
@@ -368,7 +368,7 @@ async def get_batch_jobs() -> Dict[str, Any]:
     """Get status of all batch processing jobs."""
     try:
         processor = get_batch_processor()
-        
+
         jobs = []
         for job_id, job in processor.jobs.items():
             jobs.append({
@@ -380,16 +380,16 @@ async def get_batch_jobs() -> Dict[str, Any]:
                 "success_rate": job.success_rate,
                 "created_at": job.created_at
             })
-        
+
         # Sort by creation time (most recent first)
         jobs.sort(key=lambda x: x["created_at"], reverse=True)
-        
+
         return {
             "active_jobs": list(processor.active_jobs),
             "total_jobs": len(jobs),
             "jobs": jobs[:20]  # Last 20 jobs
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get batch jobs: {e}")
         raise HTTPException(
@@ -401,11 +401,11 @@ async def get_batch_jobs() -> Dict[str, Any]:
 def _get_cache_recommendations(stats: Dict[str, Any]) -> list:
     """Generate cache recommendations based on statistics."""
     recommendations = []
-    
+
     # Check overall hit rate
     overall = stats.get("overall", {})
     hit_rate = overall.get("hit_rate", 0)
-    
+
     if hit_rate < 0.3:
         recommendations.append({
             "priority": "high",
@@ -416,7 +416,7 @@ def _get_cache_recommendations(stats: Dict[str, Any]) -> list:
             "priority": "medium",
             "message": "Low cache hit rate. Review query patterns and adjust caching strategy."
         })
-    
+
     # Check L1 cache
     l1_stats = stats.get("l1", {})
     if l1_stats.get("evictions", 0) > l1_stats.get("size", 1) * 2:
@@ -424,7 +424,7 @@ def _get_cache_recommendations(stats: Dict[str, Any]) -> list:
             "priority": "medium",
             "message": "High L1 eviction rate. Consider increasing L1 cache size."
         })
-    
+
     # Check L2 cache
     l2_stats = stats.get("l2", {})
     l2_hit_rate = l2_stats.get("hit_rate", 0)
@@ -433,5 +433,5 @@ def _get_cache_recommendations(stats: Dict[str, Any]) -> list:
             "priority": "low",
             "message": "L2 performing better than L1. Consider adjusting promotion strategy."
         })
-    
+
     return recommendations

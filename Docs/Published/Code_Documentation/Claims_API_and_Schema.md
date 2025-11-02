@@ -149,4 +149,3 @@ curl -s -X POST -H "Authorization: Bearer <JWT>" \
 
 - Ingestion-time extraction can be enabled selectively; not all ingestion paths invoke it by default.
 - The answer-time Claims Engine (APS/LLM extractor + Hybrid verifier) is documented in design and is separate from these API endpoints.
-

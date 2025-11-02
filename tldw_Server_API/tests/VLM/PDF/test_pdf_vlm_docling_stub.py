@@ -70,4 +70,3 @@ async def test_pdf_process_uses_process_pdf_when_available(monkeypatch):
     # Confirm extra chunks were created
     extra = res.get("extra_chunks")
     assert isinstance(extra, list) and extra
-

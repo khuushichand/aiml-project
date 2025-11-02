@@ -79,4 +79,3 @@ def test_transaction_nested_rollback_only_once_on_exception_with_external_connec
     # Only outermost rollback should occur
     assert conn.commits == 0
     assert conn.rollbacks == 1
-

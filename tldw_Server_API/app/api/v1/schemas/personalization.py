@@ -69,4 +69,3 @@ class ExplanationListResponse(BaseModel):
 class DetailResponse(BaseModel):
     detail: str
     model_config = ConfigDict(from_attributes=True)
-

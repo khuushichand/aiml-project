@@ -62,4 +62,3 @@ def test_process_audios_upload_optional(page, server_url):
         # Basic sanity: backend responded and included results structure for our file
         assert "results" in resp_text
         assert "tiny.wav" in resp_text
-

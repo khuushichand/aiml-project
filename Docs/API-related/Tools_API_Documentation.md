@@ -10,7 +10,7 @@ Routes are controlled by the route policy in `config.txt` (section `[API-Routes]
 
 - Marked experimental: the `tools` route is disabled when `stable_only=true`.
 - Enable via config:
-  
+
   ```ini
   [API-Routes]
   enable = tools
@@ -18,7 +18,7 @@ Routes are controlled by the route policy in `config.txt` (section `[API-Routes]
   stable_only = false
   ```
 - Or enable via environment:
-  
+
   ```bash
   export ROUTES_ENABLE=tools   # comma/space separated list supported
   # optional: export ROUTES_STABLE_ONLY=false
@@ -115,4 +115,3 @@ Errors:
 - MCP Unified → Developer Guide: `Docs/MCP/Unified/Developer_Guide.md`
 - MCP Tool Catalogs: `Docs/MCP/mcp_tool_catalogs.md`
 - Adding tools: `Docs/MCP/Unified/Adding_Tools.md`
-

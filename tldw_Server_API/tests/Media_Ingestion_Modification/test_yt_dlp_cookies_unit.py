@@ -63,4 +63,3 @@ def test_get_playlist_videos_no_cookie_if_disabled(recorder_and_stub):
     assert R.last_opts is not None
     cookie_val = _cookie_header_from_opts(R.last_opts)
     assert cookie_val is None
-

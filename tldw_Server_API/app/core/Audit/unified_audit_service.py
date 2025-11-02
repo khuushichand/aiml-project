@@ -131,7 +131,7 @@ class AuditEventType(Enum):
     AUTH_TOKEN_REFRESHED = "auth.token.refreshed"
     AUTH_TOKEN_REVOKED = "auth.token.revoked"
     AUTH_SESSION_EXPIRED = "auth.session.expired"
-    
+
     # User Management
     USER_CREATED = "user.created"
     USER_UPDATED = "user.updated"
@@ -140,7 +140,7 @@ class AuditEventType(Enum):
     USER_DEACTIVATED = "user.deactivated"
     USER_PASSWORD_CHANGED = "user.password.changed"
     USER_PASSWORD_RESET = "user.password.reset"
-    
+
     # Data Operations
     DATA_READ = "data.read"
     DATA_WRITE = "data.write"
@@ -148,33 +148,33 @@ class AuditEventType(Enum):
     DATA_DELETE = "data.delete"
     DATA_EXPORT = "data.export"
     DATA_IMPORT = "data.import"
-    
+
     # RAG Operations
     RAG_SEARCH = "rag.search"
     RAG_RETRIEVAL = "rag.retrieval"
     RAG_GENERATION = "rag.generation"
     RAG_INDEXING = "rag.indexing"
     RAG_EMBEDDING = "rag.embedding"
-    
+
     # Evaluation Operations
     EVAL_STARTED = "eval.started"
     EVAL_COMPLETED = "eval.completed"
     EVAL_FAILED = "eval.failed"
     EVAL_COST_TRACKED = "eval.cost.tracked"
-    
+
     # API Operations
     API_REQUEST = "api.request"
     API_RESPONSE = "api.response"
     API_ERROR = "api.error"
     API_RATE_LIMITED = "api.rate_limited"
-    
+
     # Security Events
     SECURITY_VIOLATION = "security.violation"
     SECURITY_SCAN = "security.scan"
     PERMISSION_DENIED = "permission.denied"
     SUSPICIOUS_ACTIVITY = "suspicious.activity"
     PII_DETECTED = "pii.detected"
-    
+
     # System Events
     SYSTEM_START = "system.start"
     SYSTEM_STOP = "system.stop"
@@ -219,28 +219,28 @@ class AuditEvent:
     category: AuditEventCategory = AuditEventCategory.SYSTEM
     event_type: AuditEventType = AuditEventType.SYSTEM_START
     severity: AuditSeverity = AuditSeverity.INFO
-    
+
     # Context
     context: AuditContext = field(default_factory=AuditContext)
-    
+
     # Event details
     resource_type: Optional[str] = None
     resource_id: Optional[str] = None
     action: Optional[str] = None
     result: str = "success"  # success, failure, error
     error_message: Optional[str] = None
-    
+
     # Metrics
     duration_ms: Optional[float] = None
     tokens_used: Optional[int] = None
     estimated_cost: Optional[float] = None
     result_count: Optional[int] = None
-    
+
     # Risk and compliance
     risk_score: int = 0  # 0-100
     pii_detected: bool = False
     compliance_flags: List[str] = field(default_factory=list)
-    
+
     # Additional metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -423,14 +423,14 @@ class PIIDetector:
 
 class RiskScorer:
     """Calculate risk scores for audit events"""
-    
+
     # High-risk operations
     HIGH_RISK_OPERATIONS = {
         "delete", "drop", "truncate", "export", "download",
         "change_password", "reset_password", "grant", "revoke",
         "modify_permissions", "create_admin", "delete_user"
     }
-    
+
     # Default suspicious thresholds and toggles
     DEFAULT_SUSPICIOUS_THRESHOLDS = {
         "rapid_requests": 100,  # requests/minute threshold (unused in current scorer)
@@ -439,7 +439,7 @@ class RiskScorer:
         "after_hours": True,    # apply time-of-day risk
         "unusual_location": True,  # reserved for future use
     }
-    
+
     # Default action-specific bonuses to fine-tune risk semantics
     DEFAULT_ACTION_RISK_BONUS = {
         "sla_breached": 10,
@@ -524,11 +524,11 @@ class RiskScorer:
             pass
         thresholds = _merge_thresholds(thresholds, suspicious_thresholds_override)
         self.suspicious_thresholds: Dict[str, Union[int, bool]] = thresholds
-    
+
     def calculate_risk_score(self, event: AuditEvent) -> int:
         """Calculate risk score for an event (0-100)"""
         score = 0
-        
+
         # Event type risk
         if event.event_type in [
             AuditEventType.SECURITY_VIOLATION,
@@ -543,32 +543,32 @@ class RiskScorer:
             AuditEventType.CONFIG_CHANGED
         ]:
             score += 30
-        
+
         # Failed operations
         if event.result == "failure":
             score += 20
         elif event.result == "error":
             score += 10
-        
+
         # High-risk operations
         if event.action and any(op in event.action.lower() for op in self.high_risk_operations):
             score += 30
-        
+
         # PII detection
         if event.pii_detected:
             score += 25
-        
+
         # Time-based risk (after hours)
         # Toggleable after-hours risk
         if bool(self.suspicious_thresholds.get("after_hours", True)):
             hour = event.timestamp.hour
             if hour < 6 or hour > 22:
                 score += 10
-        
+
         # Weekend activity
         if event.timestamp.weekday() >= 5:
             score += 5
-        
+
         # Multiple consecutive failures (from metadata)
         metadata: Dict[str, Any] = {}
         raw_metadata = event.metadata
@@ -600,7 +600,7 @@ class RiskScorer:
             failed_thr = 3
         if metadata.get("consecutive_failures", 0) > failed_thr:
             score += 20
-        
+
         # Large data operations
         export_thr = 1000
         try:
@@ -610,13 +610,13 @@ class RiskScorer:
             export_thr = 1000
         if event.result_count and event.result_count > export_thr:
             score += 15
-        
+
         # Action-specific adjustments (case-insensitive exact match on action label)
         if event.action:
             bonus = self.action_risk_bonus.get(event.action.lower())
             if bonus:
                 score += int(bonus)
-        
+
         return min(score, 100)
 
 
@@ -628,7 +628,7 @@ class UnifiedAuditService:
     """
     Unified audit service with async operations, connection pooling,
     and comprehensive event tracking.
-    
+
     Notes:
     - Timestamps are stored as ISO8601 strings; SQLite filters rely on
       lexicographic ordering which is correct for ISO8601.
@@ -637,7 +637,7 @@ class UnifiedAuditService:
     - PII detection patterns may diverge from other modules; consider
       centralizing shared PII utilities across the codebase.
     """
-    
+
     def __init__(
         self,
         db_path: Optional[str] = None,
@@ -650,7 +650,7 @@ class UnifiedAuditService:
     ):
         """
         Initialize unified audit service.
-        
+
         Args:
             db_path: Path to audit database
             retention_days: Days to retain audit logs
@@ -664,7 +664,7 @@ class UnifiedAuditService:
             db_dir = Path("./Databases")
             db_dir.mkdir(parents=True, exist_ok=True)
             db_path = db_dir / "unified_audit.db"
-        
+
         self.db_path = Path(db_path)
         self.retention_days = retention_days
         self.enable_pii_detection = enable_pii_detection
@@ -685,7 +685,7 @@ class UnifiedAuditService:
             ) or (os.getenv("PYTEST_CURRENT_TEST") is not None)
         except Exception:
             self._test_mode = False
-        
+
         # Components
         # Configure PII detector and scan fields
         if enable_pii_detection:
@@ -713,15 +713,15 @@ class UnifiedAuditService:
             pass
         self._pii_scan_fields: List[str] = list(dict.fromkeys(default_scan + extra_scan))
         self.risk_scorer = RiskScorer() if enable_risk_scoring else None
-        
+
         # Event buffer
         self.event_buffer: List[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
-        
+
         # Background tasks
         self._flush_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
-        
+
         # Connection pool
         self._db_pool: Optional[aiosqlite.Connection] = None
         self._pool_lock = asyncio.Lock()
@@ -730,7 +730,7 @@ class UnifiedAuditService:
         # Ad-hoc flush tasks created for high-risk/buffer-full conditions
         # Tracked so they can be awaited during graceful shutdown
         self._flush_futures: Set[asyncio.Task] = set()
-        
+
         # Statistics
         self.stats = {
             "events_logged": 0,
@@ -738,7 +738,7 @@ class UnifiedAuditService:
             "flush_failures": 0,
             "high_risk_events": 0
         }
-    
+
     async def initialize(self):
         """Initialize database and start background tasks"""
         self._owner_loop = asyncio.get_running_loop()
@@ -753,7 +753,7 @@ class UnifiedAuditService:
         # tight loops and starve the event loop.
         if not self._test_mode:
             await self.start_background_tasks()
-    
+
     async def _init_database(self):
         """Initialize database schema"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -778,7 +778,7 @@ class UnifiedAuditService:
                     category TEXT NOT NULL,
                     event_type TEXT NOT NULL,
                     severity TEXT NOT NULL,
-                    
+
                     -- Context fields
                     context_request_id TEXT,
                     context_correlation_id TEXT,
@@ -789,30 +789,30 @@ class UnifiedAuditService:
                     context_user_agent TEXT,
                     context_endpoint TEXT,
                     context_method TEXT,
-                    
+
                     -- Event details
                     resource_type TEXT,
                     resource_id TEXT,
                     action TEXT,
                     result TEXT,
                     error_message TEXT,
-                    
+
                     -- Metrics
                     duration_ms REAL,
                     tokens_used INTEGER,
                     estimated_cost REAL,
                     result_count INTEGER,
-                    
+
                     -- Risk and compliance
                     risk_score INTEGER,
                     pii_detected BOOLEAN,
                     compliance_flags TEXT,
-                    
+
                     -- Metadata
                     metadata TEXT
                 )
             """)
-            
+
             # Create indexes for common queries
             await db.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON audit_events(timestamp)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON audit_events(context_user_id)")
@@ -830,7 +830,7 @@ class UnifiedAuditService:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_type ON audit_events(resource_type)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_id ON audit_events(resource_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_action ON audit_events(action)")
-            
+
             # Daily statistics table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS audit_daily_stats (
@@ -845,7 +845,7 @@ class UnifiedAuditService:
                     PRIMARY KEY (date, category)
                 )
             """)
-            
+
             await db.commit()
 
     async def _ensure_db_pool(self) -> aiosqlite.Connection:
@@ -868,14 +868,14 @@ class UnifiedAuditService:
                 except Exception as e:
                     logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
         return self._db_pool  # type: ignore[return-value]
-    
+
     async def start_background_tasks(self):
         """Start background flush and cleanup tasks"""
         if not self._flush_task:
             self._flush_task = asyncio.create_task(self._flush_loop())
         if not self._cleanup_task:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-    
+
     async def stop(self):
         """Stop background tasks and flush remaining events"""
         current_loop = asyncio.get_running_loop()
@@ -894,14 +894,14 @@ class UnifiedAuditService:
                 await self._flush_task
             except asyncio.CancelledError:
                 pass
-        
+
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
             except asyncio.CancelledError:
                 pass
-        
+
         # Await any outstanding ad-hoc flushes first to avoid contention
         if self._flush_futures:
             try:
@@ -927,7 +927,7 @@ class UnifiedAuditService:
             # During teardown it's acceptable to skip the final flush if the event loop
             # or DB is no longer available.
             logger.debug(f"Audit final flush skipped due to shutdown condition: {_e}")
-        
+
         # Close connection pool
         if self._db_pool:
             await self._db_pool.close()
@@ -937,7 +937,7 @@ class UnifiedAuditService:
     @property
     def owner_loop(self) -> Optional[asyncio.AbstractEventLoop]:
         return self._owner_loop
-    
+
     async def _flush_loop(self):
         """Background task to periodically flush events"""
         while True:
@@ -948,7 +948,7 @@ class UnifiedAuditService:
                 break
             except Exception as e:
                 logger.error(f"Error in audit flush loop: {e}")
-    
+
     async def _cleanup_loop(self):
         """Background task to clean up old logs"""
         while True:
@@ -959,7 +959,7 @@ class UnifiedAuditService:
                 break
             except Exception as e:
                 logger.error(f"Error in audit cleanup loop: {e}")
-    
+
     async def log_event(
         self,
         event_type: AuditEventType,
@@ -979,22 +979,22 @@ class UnifiedAuditService:
     ) -> str:
         """
         Log an audit event.
-        
+
         Returns:
             Event ID of the logged event
         """
         # Auto-determine category if not provided
         if category is None:
             category = self._determine_category(event_type)
-        
+
         # Auto-determine severity if not provided
         if severity is None:
             severity = self._determine_severity(event_type, result)
-        
+
         # Create context if not provided
         if context is None:
             context = AuditContext()
-        
+
         # Create event
         event = AuditEvent(
             category=category,
@@ -1012,7 +1012,7 @@ class UnifiedAuditService:
             result_count=result_count,
             metadata=metadata or {}
         )
-        
+
         # PII detection
         if self.enable_pii_detection:
             # Detect/redact in metadata
@@ -1061,7 +1061,7 @@ class UnifiedAuditService:
                 except Exception:
                     # Ignore unknown fields
                     pass
-        
+
         # Risk scoring
         if self.enable_risk_scoring:
             event.risk_score = self.risk_scorer.calculate_risk_score(event)
@@ -1071,19 +1071,19 @@ class UnifiedAuditService:
                     f"High-risk event: {event_type.value} "
                     f"(risk: {event.risk_score}, user: {context.user_id})"
                 )
-        
+
         # Add to buffer
         async with self.buffer_lock:
             self.event_buffer.append(event)
             self.stats["events_logged"] += 1
-            
+
             # Flush if buffer is full or high-risk event
             if len(self.event_buffer) >= self.buffer_size or event.risk_score >= HIGH_RISK_SCORE:
                 task = asyncio.create_task(self.flush())
                 # Track and auto-remove on completion
                 self._flush_futures.add(task)
                 task.add_done_callback(lambda t: self._flush_futures.discard(t))
-        
+
         return event.event_id
 
     async def log_login(
@@ -1109,16 +1109,16 @@ class UnifiedAuditService:
             context=ctx,
             metadata={"username": username},
         )
-    
+
     async def flush(self):
         """Flush buffered events to database"""
         async with self.buffer_lock:
             if not self.event_buffer:
                 return
-            
+
             events = self.event_buffer.copy()
             self.event_buffer.clear()
-        
+
         try:
             max_retries = 3
             backoff_base = 0.05  # 50ms base
@@ -1215,7 +1215,7 @@ class UnifiedAuditService:
         except Exception as e:
             logger.error(f"Failed to flush audit events: {e}")
             self.stats["flush_failures"] += 1
-            
+
             # Re-add events to buffer (with limit to prevent memory issues)
             async with self.buffer_lock:
                 max_buffer = self.buffer_size * 2
@@ -1237,21 +1237,21 @@ class UnifiedAuditService:
                 else:
                     logger.warning("Audit flush failure: events re-buffered (no drop)")
                 self.event_buffer = combined[:max_buffer]
-    
+
     async def _update_daily_stats(self, db: aiosqlite.Connection, events: List[AuditEvent]):
         """Update daily statistics"""
         from collections import defaultdict
-        
+
         # Aggregate by date and category
         stats = defaultdict(lambda: {
             "total": 0, "high_risk": 0, "failed": 0,
             "cost": 0.0, "tokens": 0, "durations": []
         })
-        
+
         for event in events:
             date = event.timestamp.date()
             key = (date, event.category.value)
-            
+
             stats[key]["total"] += 1
             if event.risk_score >= HIGH_RISK_SCORE:
                 stats[key]["high_risk"] += 1
@@ -1263,14 +1263,14 @@ class UnifiedAuditService:
                 stats[key]["tokens"] += event.tokens_used
             if event.duration_ms:
                 stats[key]["durations"].append(event.duration_ms)
-        
+
         # Update database
         for (date, category), data in stats.items():
             avg_duration = (
                 sum(data["durations"]) / len(data["durations"])
                 if data["durations"] else None
             )
-            
+
             await db.execute("""
                 INSERT INTO audit_daily_stats (
                     date, category, total_events, high_risk_events,
@@ -1283,7 +1283,7 @@ class UnifiedAuditService:
                     total_cost = total_cost + excluded.total_cost,
                     total_tokens = total_tokens + excluded.total_tokens,
                     avg_duration_ms = COALESCE(
-                        (avg_duration_ms * total_events + excluded.avg_duration_ms * excluded.total_events) 
+                        (avg_duration_ms * total_events + excluded.avg_duration_ms * excluded.total_events)
                         / (total_events + excluded.total_events),
                         excluded.avg_duration_ms
                     )
@@ -1291,11 +1291,11 @@ class UnifiedAuditService:
                 date, category, data["total"], data["high_risk"],
                 data["failed"], data["cost"], data["tokens"], avg_duration
             ))
-    
+
     async def cleanup_old_logs(self):
         """Remove logs older than retention period"""
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.retention_days)
-        
+
         try:
             db = await self._ensure_db_pool()
             async with self._db_lock:
@@ -1354,10 +1354,10 @@ class UnifiedAuditService:
                             logger.warning(f"Audit DB size {size_mb:.1f}MB exceeds configured limit {self.max_db_mb}MB")
                 except Exception:
                     pass
-                    
+
         except Exception as e:
             logger.error(f"Failed to cleanup old audit logs: {e}")
-    
+
     async def query_events(
         self,
         start_time: Optional[datetime] = None,
@@ -1378,37 +1378,37 @@ class UnifiedAuditService:
         """Query audit events with filters"""
         query = "SELECT * FROM audit_events WHERE 1=1"
         params = []
-        
+
         if start_time:
             query += " AND timestamp >= ?"
             params.append(start_time.isoformat())
-        
+
         if end_time:
             query += " AND timestamp <= ?"
             params.append(end_time.isoformat())
-        
+
         if event_types:
             placeholders = ",".join("?" * len(event_types))
             query += f" AND event_type IN ({placeholders})"
             params.extend([et.value for et in event_types])
-        
+
         if categories:
             placeholders = ",".join("?" * len(categories))
             query += f" AND category IN ({placeholders})"
             params.extend([c.value for c in categories])
-        
+
         if user_id:
             query += " AND context_user_id = ?"
             params.append(user_id)
-        
+
         if request_id:
             query += " AND context_request_id = ?"
             params.append(request_id)
-        
+
         if correlation_id:
             query += " AND context_correlation_id = ?"
             params.append(correlation_id)
-        
+
         if ip_address:
             query += " AND context_ip_address = ?"
             params.append(ip_address)
@@ -1421,14 +1421,14 @@ class UnifiedAuditService:
         if method:
             query += " AND context_method = ?"
             params.append(method)
-        
+
         if min_risk_score is not None:
             query += " AND risk_score >= ?"
             params.append(min_risk_score)
-        
+
         query += " ORDER BY timestamp DESC, event_id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        
+
         try:
             if self._test_mode:
                 async with aiosqlite.connect(self.db_path) as db:
@@ -1814,11 +1814,11 @@ class UnifiedAuditService:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(_rows_to_csv(all_rows), encoding="utf-8")
         return len(all_rows)
-    
+
     def _determine_category(self, event_type: AuditEventType) -> AuditEventCategory:
         """Auto-determine category from event type"""
         type_name = event_type.name.lower()
-        
+
         if type_name.startswith("auth_"):
             return AuditEventCategory.AUTHENTICATION
         elif type_name.startswith("user_"):
@@ -1846,21 +1846,21 @@ class UnifiedAuditService:
             if event_type is AuditEventType.PII_DETECTED:
                 return AuditEventCategory.COMPLIANCE
             return AuditEventCategory.SYSTEM
-    
+
     def _determine_severity(self, event_type: AuditEventType, result: str) -> AuditSeverity:
         """Auto-determine severity from event type and result"""
         if result == "error":
             return AuditSeverity.ERROR
         elif result == "failure":
             return AuditSeverity.WARNING
-        
+
         # Critical events
         if event_type in [
             AuditEventType.SECURITY_VIOLATION,
             AuditEventType.SUSPICIOUS_ACTIVITY
         ]:
             return AuditSeverity.CRITICAL
-        
+
         # Warning events
         elif event_type in [
             AuditEventType.AUTH_LOGIN_FAILURE,
@@ -1868,18 +1868,18 @@ class UnifiedAuditService:
             AuditEventType.API_RATE_LIMITED
         ]:
             return AuditSeverity.WARNING
-        
+
         # Debug events
         elif event_type in [
             AuditEventType.SYSTEM_START,
             AuditEventType.SYSTEM_STOP
         ]:
             return AuditSeverity.DEBUG
-        
+
         # Default to INFO
         else:
             return AuditSeverity.INFO
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get current statistics"""
         return {
@@ -1975,7 +1975,7 @@ async def audit_operation(
     """Context manager for auditing operations with automatic timing"""
     start_time = time.perf_counter()
     event_id = None
-    
+
     try:
         # Log start event when specified explicitly
         if start_event_type is not None:
@@ -1985,9 +1985,9 @@ async def audit_operation(
                 result="started",
                 **kwargs,
             )
-        
+
         yield event_id
-        
+
         # Log success
         duration_ms = (time.perf_counter() - start_time) * 1000
         await service.log_event(
@@ -1997,7 +1997,7 @@ async def audit_operation(
             duration_ms=duration_ms,
             **kwargs
         )
-        
+
     except Exception as e:
         # Log failure
         duration_ms = (time.perf_counter() - start_time) * 1000
@@ -2022,7 +2022,7 @@ async def get_unified_audit_service() -> UnifiedAuditService:
     """
     DEPRECATED: This global singleton pattern is no longer supported.
     Use dependency injection with get_audit_service_for_user instead.
-    
+
     Migration guide:
     Old: audit_service = await get_unified_audit_service()
     New: audit_service: UnifiedAuditService = Depends(get_audit_service_for_user)
@@ -2037,7 +2037,7 @@ async def get_unified_audit_service() -> UnifiedAuditService:
 async def shutdown_audit_service():
     """
     DEPRECATED: Use shutdown_all_audit_services from Audit_DB_Deps instead.
-    
+
     Migration guide:
     Old: await shutdown_audit_service()
     New: from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services

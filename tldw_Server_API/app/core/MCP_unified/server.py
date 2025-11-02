@@ -30,7 +30,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 class WebSocketConnection:
     """Manages a single WebSocket connection"""
-    
+
     def __init__(
         self,
         websocket: WebSocket,
@@ -49,7 +49,7 @@ class WebSocketConnection:
         self.message_count = 0
         self.error_count = 0
         self.request_times: Deque[float] = deque(maxlen=1000)
-    
+
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON data to client"""
         try:
@@ -59,7 +59,7 @@ class WebSocketConnection:
             logger.bind(connection_id=self.connection_id).error(f"Error sending to WebSocket {self.connection_id}: {e}")
             self.error_count += 1
             raise
-    
+
     async def receive_json(self) -> Dict[str, Any]:
         """Receive JSON data from client"""
         try:
@@ -71,7 +71,7 @@ class WebSocketConnection:
             logger.bind(connection_id=self.connection_id).error(f"Error receiving from WebSocket {self.connection_id}: {e}")
             self.error_count += 1
             raise
-    
+
     async def close(self, code: int = 1000, reason: str = ""):
         """Close the WebSocket connection"""
         try:
@@ -108,7 +108,7 @@ class SessionData:
 class MCPServer:
     """
     Production-ready MCP Server with WebSocket and HTTP support.
-    
+
     Features:
     - WebSocket connection management
     - HTTP request handling
@@ -117,7 +117,7 @@ class MCPServer:
     - Health monitoring
     - Metrics collection
     """
-    
+
     def __init__(self):
         self.config = get_config()
         self.protocol = MCPProtocol()
@@ -125,24 +125,24 @@ class MCPServer:
         self.jwt_manager = get_jwt_manager()
         self.rbac_policy = get_rbac_policy()
         self.rate_limiter = get_rate_limiter()
-        
+
         # Connection management
         self.connections: Dict[str, WebSocketConnection] = {}
         self.connection_lock = asyncio.Lock()
         self._ip_connection_counts: Dict[str, int] = {}
-        
+
         # Session management (HTTP/WS)
         self.sessions: Dict[str, SessionData] = {}
         self.session_lock = asyncio.Lock()
-        
+
         # Server state
         self.initialized = False
         self.startup_time = datetime.now(timezone.utc)
         self.shutdown_event = asyncio.Event()
-        
+
         # Background tasks
         self.background_tasks: Set[asyncio.Task] = set()
-        
+
         logger.info("MCP Server created")
 
     @staticmethod
@@ -164,7 +164,7 @@ class MCPServer:
             return text
         except Exception:
             return text
-    
+
     async def initialize(self):
         """Initialize the server and all modules"""
         if self.initialized:
@@ -194,25 +194,25 @@ class MCPServer:
                 pass
             # Start module health monitoring
             await self.module_registry.start_health_monitoring()
-            
+
             # Start metrics collection
             try:
                 await get_metrics_collector().start_collection()
             except Exception as e:
                 logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
-            
+
             # Register default modules (will be implemented when migrating modules)
             await self._register_default_modules()
 
             # Ensure default tool permissions exist (wildcard)
             await self._ensure_default_tool_permissions()
-            
+
             # Start background tasks
             self._start_background_tasks()
-            
+
             self.initialized = True
             logger.info("MCP Server initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"Server initialization failed: {self._mask_secrets(str(e))}")
             raise
@@ -237,31 +237,31 @@ class MCPServer:
                     )
         except Exception as e:
             logger.debug(f"Seed wildcard tool permission failed: {self._mask_secrets(str(e))}")
-    
+
     async def shutdown(self):
         """Gracefully shutdown the server"""
         logger.info("Shutting down MCP Server")
-        
+
         # Signal shutdown
         self.shutdown_event.set()
-        
+
         # Close all WebSocket connections
         await self._close_all_connections()
-        
+
         # Cancel background tasks
         for task in self.background_tasks:
             task.cancel()
-        
+
         # Wait for tasks to complete
         if self.background_tasks:
             await asyncio.gather(*self.background_tasks, return_exceptions=True)
-        
+
         # Shutdown modules
         await self.module_registry.shutdown_all()
-        
+
         self.initialized = False
         logger.info("MCP Server shutdown complete")
-    
+
     async def _register_default_modules(self):
         """Register default modules via config/env-driven loader"""
         # Autoload modules from YAML config and/or MCP_MODULES env var
@@ -406,14 +406,14 @@ class MCPServer:
 
         except Exception as e:
             logger.error(f"Default modules registration failed: {self._mask_secrets(str(e))}")
-    
+
     def _start_background_tasks(self):
         """Start background maintenance tasks"""
         # Connection cleanup task
         task = asyncio.create_task(self._connection_cleanup_loop())
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
-        
+
         # Metrics collection task
         task = asyncio.create_task(self._metrics_collection_loop())
         self.background_tasks.add(task)
@@ -423,7 +423,7 @@ class MCPServer:
         task = asyncio.create_task(self._session_cleanup_loop())
         self.background_tasks.add(task)
         task.add_done_callback(self.background_tasks.discard)
-    
+
     async def _connection_cleanup_loop(self):
         """Periodically clean up stale connections"""
         while not self.shutdown_event.is_set():
@@ -432,22 +432,22 @@ class MCPServer:
                 await self._cleanup_stale_connections()
             except Exception as e:
                 logger.error(f"Error in connection cleanup: {e}")
-    
+
     async def _cleanup_stale_connections(self):
         """Remove stale WebSocket connections"""
         async with self.connection_lock:
             stale_connections = []
             current_time = datetime.now(timezone.utc)
-            
+
             for conn_id, connection in self.connections.items():
                 # Check for stale connections (no activity for 5 minutes)
                 if (current_time - connection.last_activity).total_seconds() > 300:
                     stale_connections.append(conn_id)
-                
+
                 # Check for error threshold
                 elif connection.error_count > 10:
                     stale_connections.append(conn_id)
-            
+
             # Close stale connections
             for conn_id in stale_connections:
                 logger.info(f"Closing stale connection: {conn_id}")
@@ -459,7 +459,7 @@ class MCPServer:
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
             except Exception:
                 pass
-    
+
     async def _metrics_collection_loop(self):
         """Periodically collect and log metrics"""
         while not self.shutdown_event.is_set():
@@ -468,7 +468,7 @@ class MCPServer:
                 await self._log_metrics()
             except Exception as e:
                 logger.error(f"Error in metrics collection: {e}")
-    
+
     async def _log_metrics(self):
         """Log server metrics"""
         metrics = await self.get_metrics()
@@ -535,7 +535,7 @@ class MCPServer:
                 lo, hi = allow_int[k]
                 out[k] = int(max(lo, min(int(v), hi)))
         return out
-    
+
     async def handle_websocket(
         self,
         websocket: WebSocket,
@@ -545,7 +545,7 @@ class MCPServer:
     ):
         """
         Handle a WebSocket connection.
-        
+
         Args:
             websocket: FastAPI WebSocket instance
             client_id: Optional client identifier
@@ -585,7 +585,7 @@ class MCPServer:
         except HTTPException:
             await websocket.close(code=1008, reason="Client certificate required")
             return
-        
+
         # Origin validation (enforce when ws_allowed_origins configured)
         try:
             allowed = list(self.config.ws_allowed_origins or [])
@@ -716,7 +716,7 @@ class MCPServer:
                 logger.warning(f"WebSocket API key authentication failed: {self._mask_secrets(str(e))}")
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
-        
+
         # Optionally require authentication for WS (production hardening)
         if self.config.ws_auth_required and not user_id:
             await websocket.close(code=1008, reason="Authentication required")
@@ -757,7 +757,7 @@ class MCPServer:
                 except Exception:
                     pass
                 raise
-            
+
             # Create connection object
             connection = WebSocketConnection(
                 websocket=websocket,
@@ -766,7 +766,7 @@ class MCPServer:
                 user_id=user_id,
                 metadata=metadata
             )
-            
+
             self.connections[connection_id] = connection
             # per-IP count already reserved; nothing to do here
             # Update connection gauge
@@ -774,20 +774,20 @@ class MCPServer:
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
             except Exception:
                 pass
-        
+
         logger.bind(connection_id=connection_id, user_id=user_id, client_id=client_id, client_ip=client_ip).info(
             f"WebSocket connected: {connection_id} (client={client_id}, user={user_id}, ip={client_ip})"
         )
-        
+
         try:
             # Start ping task
             ping_task = asyncio.create_task(
                 self._websocket_ping_loop(connection)
             )
-            
+
             # Handle messages
             await self._handle_websocket_messages(connection)
-        
+
         except WebSocketDisconnect:
             logger.bind(connection_id=connection_id).info(f"WebSocket disconnected: {connection_id}")
         except Exception as e:
@@ -800,7 +800,7 @@ class MCPServer:
         finally:
             # Cancel ping task
             ping_task.cancel()
-            
+
             # Remove connection
             async with self.connection_lock:
                 if connection_id in self.connections:
@@ -813,14 +813,14 @@ class MCPServer:
                             del self._ip_connection_counts[client_ip]
                 except Exception:
                     pass
-            
+
             logger.bind(connection_id=connection_id).info(f"WebSocket cleanup complete: {connection_id}")
             # Update connection gauge
             try:
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
             except Exception:
                 pass
-    
+
     async def _websocket_ping_loop(self, connection: WebSocketConnection):
         """Send periodic pings to keep connection alive"""
         while True:
@@ -845,7 +845,7 @@ class MCPServer:
                 except Exception:
                     pass
                 break
-    
+
     async def _handle_websocket_messages(self, connection: WebSocketConnection):
         """Handle incoming WebSocket messages"""
         while True:
@@ -861,7 +861,7 @@ class MCPServer:
                     }
                 })
                 continue
-            
+
             # Check message size
             message_size = len(json.dumps(data))
             if message_size > self.config.ws_max_message_size:
@@ -905,7 +905,7 @@ class MCPServer:
                     break
             except Exception:
                 pass
-            
+
             # Ensure session exists and update with client/safe config if applicable
             try:
                 sess = await self._get_or_create_session(connection.connection_id)
@@ -944,7 +944,7 @@ class MCPServer:
                 session_id=connection.connection_id,
                 metadata=connection.metadata
             )
-            
+
             # Process MCP request (supports single, notification, and batch)
             try:
                 response = await self.protocol.process_request(data, context)
@@ -993,7 +993,7 @@ class MCPServer:
             return "public"
         except Exception:
             return "unknown"
-    
+
     async def handle_http_request(
         self,
         request: MCPRequest,
@@ -1003,12 +1003,12 @@ class MCPServer:
     ) -> MCPResponse:
         """
         Handle an HTTP MCP request.
-        
+
         Args:
             request: MCP request
             client_id: Optional client identifier
             user_id: Optional user identifier (from auth)
-        
+
         Returns:
             MCP response
         """
@@ -1050,7 +1050,7 @@ class MCPServer:
             session_id=session_id,
             metadata=metadata or {}
         )
-        
+
         # Process request
         try:
             response = await self.protocol.process_request(request, context)
@@ -1066,7 +1066,7 @@ class MCPServer:
         except Exception as e:
             logger.error(f"Error processing HTTP request: {self._mask_secrets(str(e))}")
             raise HTTPException(status_code=500, detail="Internal server error")
-    
+
     async def _close_all_connections(self):
         """Close all WebSocket connections"""
         async with self.connection_lock:
@@ -1075,26 +1075,26 @@ class MCPServer:
                 tasks.append(
                     connection.close(code=1001, reason="Server shutdown")
                 )
-            
+
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             self.connections.clear()
-    
+
     async def get_status(self) -> Dict[str, Any]:
         """Get server status"""
         uptime = (datetime.now(timezone.utc) - self.startup_time).total_seconds()
-        
+
         # Get module health
         health_results = await self.module_registry.check_all_health()
-        
+
         # Get connection stats
         connection_stats = {
             "total": len(self.connections),
             "authenticated": sum(1 for c in self.connections.values() if c.user_id),
             "anonymous": sum(1 for c in self.connections.values() if not c.user_id)
         }
-        
+
         return {
             "status": "healthy" if self.initialized else "initializing",
             "version": "3.0.0",
@@ -1107,13 +1107,13 @@ class MCPServer:
                 "unhealthy": sum(1 for h in health_results.values() if not h.is_operational)
             }
         }
-    
+
     async def get_metrics(self) -> Dict[str, Any]:
         """Get server metrics"""
         # Collect module metrics
         module_metrics = {}
         modules = await self.module_registry.get_all_modules()
-        
+
         for module_id, module in modules.items():
             metrics = module.get_metrics()
             module_metrics[module_id] = {
@@ -1122,11 +1122,11 @@ class MCPServer:
                 "error_rate": metrics.error_rate,
                 "avg_latency_ms": metrics.avg_latency_ms
             }
-        
+
         # Connection metrics
         total_messages = sum(c.message_count for c in self.connections.values())
         total_errors = sum(c.error_count for c in self.connections.values())
-        
+
         return {
             "connections": {
                 "active": len(self.connections),
@@ -1169,11 +1169,11 @@ async def reset_mcp_server() -> None:
 async def lifespan(app):
     """
     FastAPI lifespan manager for server initialization and shutdown.
-    
+
     Usage in main.py:
     ```python
     from tldw_Server_API.app.core.MCP_unified.server import lifespan
-    
+
     app = FastAPI(lifespan=lifespan)
     ```
     """
@@ -1181,9 +1181,9 @@ async def lifespan(app):
     server = get_mcp_server()
     await server.initialize()
     logger.info("MCP Server started")
-    
+
     yield
-    
+
     # Shutdown
     await server.shutdown()
     logger.info("MCP Server stopped")

@@ -35,4 +35,3 @@ def test_poison_quarantine_on_retries_postgres(monkeypatch):
     assert ok2 is True
     row = jm.get_job(int(j["id"]))
     assert row and row.get("status") == "quarantined"
-

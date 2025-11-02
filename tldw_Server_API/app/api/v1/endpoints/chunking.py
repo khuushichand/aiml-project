@@ -99,7 +99,7 @@ async def process_text_for_chunking_json(
         # Import necessary modules for template support
         import json
         from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
-        
+
         try:
             # Use the injected user-specific database instance
             # Get template from database
@@ -110,20 +110,20 @@ async def process_text_for_chunking_json(
             if template_data:
                 logger.info(f"Using chunking template: {request_data.options.template_name}")
                 template_used = True
-                
+
                 # Parse template JSON and prepare options
                 template_config = json.loads(template_data['template_json'])
-                
+
                 # Start with template's chunking config
                 effective_options = template_config.get('chunking', {}).get('config', {}).copy()
                 effective_options['method'] = template_config.get('chunking', {}).get('method', 'words')
-                
+
                 # Allow explicit request options to override template defaults
                 request_options_dict = request_data.options.model_dump(exclude_unset=True)
                 # Remove template_name from override options
                 request_options_dict.pop('template_name', None)
                 effective_options.update(request_options_dict)
-                
+
                 logger.debug(f"Template-based effective options: {effective_options}")
 
                 # Build Template object (DB schema -> stages)
@@ -225,7 +225,7 @@ async def process_text_for_chunking_json(
         except Exception as e:
             logger.error(f"Error loading template: {e}")
             # Fall back to regular processing
-    
+
     if not template_used:
         # Prepare effective chunking options (original logic)
         effective_options = default_chunk_options_from_lib.copy()
@@ -389,7 +389,7 @@ async def process_text_for_chunking_json(
         )
         for chunk in chunk_results
     ]
-    
+
     return ChunkingResponse(
         chunks=chunked_responses,
         original_file_name=request_data.file_name,
@@ -558,7 +558,7 @@ async def process_file_for_chunking(
         )
         for chunk in chunk_results
     ]
-    
+
     return ChunkingResponse(
         chunks=chunked_responses,
         original_file_name=file.filename,

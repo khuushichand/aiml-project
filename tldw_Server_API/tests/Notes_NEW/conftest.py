@@ -48,13 +48,13 @@ def pytest_configure(config):
 def test_env_vars():
     """Set up test environment variables."""
     original_env = os.environ.copy()
-    
+
     # Set test mode
     os.environ["TEST_MODE"] = "true"
     os.environ["RATE_LIMIT_PER_MINUTE"] = "30"
-    
+
     yield
-    
+
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
@@ -68,9 +68,9 @@ def test_db_path() -> Generator[Path, None, None]:
     """Create a temporary database file that gets cleaned up."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
         db_path = Path(tmp_file.name)
-    
+
     yield db_path
-    
+
     # Cleanup
     try:
         if db_path.exists():
@@ -85,12 +85,12 @@ def test_chacha_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
         db_path=str(test_db_path),
         client_id="test_client"
     )
-    
+
     # Initialize the database schema
     db.initialize_db()
-    
+
     yield db
-    
+
     # Cleanup
     try:
         db.close()
@@ -101,36 +101,36 @@ def test_chacha_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
 def populated_chacha_db(test_chacha_db) -> CharactersRAGDB:
     """Create a CharactersRAGDB with test data."""
     db = test_chacha_db
-    
+
     # Create test notes
     note1_id = db.create_note(
         title="Test Note 1",
         content="This is the content of test note 1.",
         user_id="test_user"
     )
-    
+
     note2_id = db.create_note(
         title="Test Note 2",
         content="This is the content of test note 2 with more details.",
         user_id="test_user"
     )
-    
+
     note3_id = db.create_note(
         title="Python Tutorial",
         content="This note contains information about Python programming.",
         user_id="test_user"
     )
-    
+
     # Create test keywords
     kw1_id = db.create_keyword("python", user_id="test_user")
     kw2_id = db.create_keyword("testing", user_id="test_user")
     kw3_id = db.create_keyword("tutorial", user_id="test_user")
-    
+
     # Link notes to keywords
     db.link_note_keyword(note3_id, kw1_id)
     db.link_note_keyword(note3_id, kw3_id)
     db.link_note_keyword(note1_id, kw2_id)
-    
+
     return db
 
 @pytest.fixture
@@ -142,19 +142,19 @@ def test_notes_service(test_db_path) -> Generator[NotesInteropService, None, Non
             base_db_directory=temp_dir,
             api_client_id="test_client"
         )
-        
+
         # Create a test user database
         test_user_db = CharactersRAGDB(
             db_path=str(test_db_path),
             client_id="test_client"
         )
         test_user_db.initialize_db()
-        
+
         # Inject the test database
         service._db_instances["test_user"] = test_user_db
-        
+
         yield service
-        
+
         # Cleanup
         service.close_all_user_connections()
 
@@ -162,7 +162,7 @@ def test_notes_service(test_db_path) -> Generator[NotesInteropService, None, Non
 def mock_chacha_db():
     """Create a mock CharactersRAGDB for unit tests."""
     db = MagicMock(spec=CharactersRAGDB)
-    
+
     # Mock note methods
     db.create_note = Mock(return_value=1)
     db.get_note = Mock(return_value={
@@ -178,7 +178,7 @@ def mock_chacha_db():
     db.update_note = Mock(return_value={'rows_affected': 1})
     db.delete_note = Mock(return_value={'success': True})
     db.search_notes = Mock(return_value=[])
-    
+
     # Mock keyword methods
     db.create_keyword = Mock(return_value=1)
     db.get_keyword = Mock(return_value={
@@ -189,13 +189,13 @@ def mock_chacha_db():
     db.list_keywords = Mock(return_value=[])
     db.delete_keyword = Mock(return_value={'success': True})
     db.search_keywords = Mock(return_value=[])
-    
+
     # Mock linking methods
     db.link_note_keyword = Mock(return_value={'success': True})
     db.unlink_note_keyword = Mock(return_value={'success': True})
     db.get_keywords_for_note = Mock(return_value=[])
     db.get_notes_for_keyword = Mock(return_value=[])
-    
+
     return db
 
 @pytest.fixture
@@ -260,16 +260,16 @@ def markdown_note():
     return {
         'title': 'Markdown Note',
         'content': """# Header 1
-        
-## Header 2        
-        
+
+## Header 2
+
 - Bullet 1
 - Bullet 2
-        
+
 **Bold text** and *italic text*
-        
+
 [Link](https://example.com)
-        
+
 ```python
 def hello():
     print("Hello")

@@ -112,13 +112,13 @@ async def create_evaluation(
 ) -> EvaluationResponse:
     """
     Create a new evaluation for a prompt.
-    
+
     Args:
         evaluation: Evaluation configuration
         background_tasks: FastAPI background tasks
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Created evaluation response
     """
@@ -284,7 +284,7 @@ async def create_evaluation(
                 created_at=datetime.now().isoformat(),
                 metrics=result.get("metrics"),
             )
-        
+
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
@@ -310,7 +310,7 @@ async def list_evaluations(
 ) -> List[EvaluationResponse]:
     """
     List evaluations for a project.
-    
+
     Args:
         project_id: Project ID
         prompt_id: Optional prompt ID filter
@@ -318,24 +318,24 @@ async def list_evaluations(
         offset: Pagination offset
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         List of evaluations
     """
     try:
         # Use EvaluationManager to list evaluations
         eval_manager = EvaluationManager(db)
-        
+
         # Calculate page from offset
         page = (offset // limit) + 1 if limit > 0 else 1
-        
+
         result = eval_manager.list_evaluations(
             project_id=project_id,
             prompt_id=prompt_id,
             page=page,
             per_page=limit
         )
-        
+
         # Convert to response format
         evaluations = []
         for eval_data in result.get("evaluations", []):
@@ -351,14 +351,14 @@ async def list_evaluations(
                 completed_at=eval_data.get("completed_at"),
                 metrics=eval_data.get("aggregate_metrics")
             ))
-        
+
         return {
             "evaluations": evaluations,
             "total": int(result.get("total", len(evaluations))),
             "limit": limit,
             "offset": offset,
         }
-        
+
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
@@ -404,26 +404,26 @@ async def get_evaluation(
 ) -> EvaluationResponse:
     """
     Get a specific evaluation.
-    
+
     Args:
         evaluation_id: Evaluation ID
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Evaluation details
     """
     try:
         conn = db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             SELECT id, uuid, project_id, prompt_id, name, description,
                    status, started_at, created_at, completed_at, aggregate_metrics
             FROM prompt_studio_evaluations
             WHERE id = ?
         """, (evaluation_id,))
-        
+
         row = cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Evaluation not found")
@@ -478,7 +478,7 @@ async def get_evaluation(
             "config": {},
             "tags": []
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -503,33 +503,33 @@ async def delete_evaluation(
 ) -> Dict[str, str]:
     """
     Delete an evaluation (soft delete).
-    
+
     Args:
         evaluation_id: Evaluation ID
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Success message
     """
     try:
         conn = db.get_connection()
         cursor = conn.cursor()
-        
+
         # Soft delete
         cursor.execute("""
             UPDATE prompt_studio_evaluations
             SET deleted = 1, deleted_at = ?
             WHERE id = ?
         """, (datetime.now().isoformat(), evaluation_id))
-        
+
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Evaluation not found")
-        
+
         conn.commit()
-        
+
         return {"message": f"Evaluation {evaluation_id} deleted successfully"}
-        
+
     except HTTPException:
         raise
     except Exception as e:

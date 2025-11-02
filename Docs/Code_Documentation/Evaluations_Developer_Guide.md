@@ -247,7 +247,7 @@ from loguru import logger
 
 class MyCustomEvaluator:
     """Custom evaluation implementation"""
-    
+
     async def evaluate(
         self,
         input_data: Dict[str, Any],
@@ -256,20 +256,20 @@ class MyCustomEvaluator:
     ) -> Dict[str, Any]:
         """
         Evaluate input against expected output.
-        
+
         Returns:
             Dict with scores and metadata
         """
         # Your evaluation logic here
         score = self._calculate_score(input_data, expected)
-        
+
         return {
             "scores": {"custom_metric": score},
             "passed": score >= config.get("threshold", 0.7),
             "avg_score": score,
             "metadata": {"evaluator": "custom"}
         }
-    
+
     def _calculate_score(self, input_data, expected):
         # Implement scoring logic
         return 0.85
@@ -301,13 +301,13 @@ async def _eval_custom(
     try:
         from .my_custom_evaluator import MyCustomEvaluator
         evaluator = MyCustomEvaluator()
-        
+
         result = await evaluator.evaluate(
             input_data=sample["input"],
             expected=sample.get("expected", {}),
             config=eval_spec
         )
-        
+
         return {
             "sample_id": sample_id,
             **result
@@ -346,16 +346,16 @@ class ExtendedEvaluationRunner(EvaluationRunner):
     def __init__(self, db_path: str, progress_callback=None):
         super().__init__(db_path)
         self.progress_callback = progress_callback
-    
+
     async def _process_batch(self, batch, eval_fn, eval_spec, eval_config, max_workers):
         results = await super()._process_batch(
             batch, eval_fn, eval_spec, eval_config, max_workers
         )
-        
+
         # Call progress callback
         if self.progress_callback:
             await self.progress_callback(len(results))
-        
+
         return results
 ```
 
@@ -367,7 +367,7 @@ def _calculate_custom_aggregate(self, results: List[Dict[str, Any]]) -> Dict[str
     # Calculate percentiles
     import numpy as np
     scores = [r["avg_score"] for r in results if "avg_score" in r]
-    
+
     return {
         "mean_score": np.mean(scores),
         "median_score": np.median(scores),
@@ -405,7 +405,7 @@ from tldw_Server_API.app.core.Embeddings import EmbeddingsServiceWrapper
 class EmbeddingEvaluator:
     def __init__(self):
         self.embeddings = EmbeddingsServiceWrapper()
-    
+
     async def calculate_similarity(self, text1: str, text2: str) -> float:
         emb1 = await self.embeddings.get_embedding(text1)
         emb2 = await self.embeddings.get_embedding(text2)
@@ -421,7 +421,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing import process_media
 async def evaluate_transcription(media_file: str):
     # Process media
     transcription = await process_media(media_file)
-    
+
     # Evaluate against ground truth
     eval_result = await evaluator.evaluate(
         transcription=transcription,
@@ -441,14 +441,14 @@ from unittest.mock import Mock, patch
 @pytest.mark.asyncio
 async def test_custom_evaluator():
     from tldw_Server_API.app.core.Evaluations.my_custom_evaluator import MyCustomEvaluator
-    
+
     evaluator = MyCustomEvaluator()
     result = await evaluator.evaluate(
         input_data={"text": "test"},
         expected={"output": "expected"},
         config={"threshold": 0.5}
     )
-    
+
     assert "scores" in result
     assert result["passed"] == True
     assert result["avg_score"] >= 0.5
@@ -494,9 +494,9 @@ async def test_evaluation_workflow():
 async def test_geval_with_mock(mock_chat):
     """Test G-Eval with mocked LLM"""
     mock_chat.return_value = "4.5"  # Mock score response
-    
+
     from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
-    
+
     result = run_geval(
         transcript="Test document",
         summary="Test summary",
@@ -504,7 +504,7 @@ async def test_geval_with_mock(mock_chat):
         api_name="openai",
         save=False
     )
-    
+
     assert "Coherence:" in result
     mock_chat.assert_called()
 ```
@@ -534,16 +534,16 @@ CREATE INDEX idx_runs_created ON evaluation_runs(created_at DESC);
 # Process evaluations concurrently
 async def process_evaluations_batch(evaluations: List[Dict]):
     tasks = [
-        evaluate_single(eval_data) 
+        evaluate_single(eval_data)
         for eval_data in evaluations
     ]
-    
+
     # Limit concurrency
     semaphore = asyncio.Semaphore(10)
     async def bounded_evaluate(eval_data):
         async with semaphore:
             return await evaluate_single(eval_data)
-    
+
     results = await asyncio.gather(
         *[bounded_evaluate(e) for e in evaluations]
     )
@@ -561,15 +561,15 @@ class CachedEvaluator:
     def _get_cached_score(self, input_hash: str) -> float:
         """Cache evaluation results for identical inputs"""
         return self._calculate_score(input_hash)
-    
+
     async def evaluate(self, input_data: Dict) -> Dict:
         # Create deterministic hash
         input_hash = self._hash_input(input_data)
-        
+
         # Check cache
         if cached_score := self._get_cached_score(input_hash):
             return {"score": cached_score, "cached": True}
-        
+
         # Calculate and cache
         score = await self._calculate_score_async(input_data)
         return {"score": score, "cached": False}
@@ -583,19 +583,19 @@ async def stream_dataset(dataset_id: str):
     """Stream dataset samples instead of loading all at once"""
     offset = 0
     batch_size = 100
-    
+
     while True:
         samples = db.get_dataset_samples(
-            dataset_id, 
-            offset=offset, 
+            dataset_id,
+            offset=offset,
             limit=batch_size
         )
         if not samples:
             break
-            
+
         for sample in samples:
             yield sample
-        
+
         offset += batch_size
 
 # Process with streaming
@@ -618,7 +618,7 @@ class EvaluationSettings(BaseSettings):
     batch_size: int = 10
     cache_ttl: int = 3600
     max_retries: int = 3
-    
+
     class Config:
         env_prefix = "EVAL_"
 

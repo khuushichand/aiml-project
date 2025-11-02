@@ -211,17 +211,17 @@ async def websocket_endpoint(
 ):
     """
     WebSocket endpoint for MCP protocol.
-    
+
     Supports:
     - Full MCP protocol over WebSocket
     - Optional authentication via token parameter
     - Real-time bidirectional communication
     - Automatic reconnection support
-    
+
     Example:
     ```javascript
     const ws = new WebSocket('ws://localhost:8000/api/v1/mcp/ws?client_id=my-client&token=jwt-token');
-    
+
     ws.onopen = () => {
         ws.send(JSON.stringify({
             jsonrpc: "2.0",
@@ -238,11 +238,11 @@ async def websocket_endpoint(
     ```
     """
     server = get_mcp_server()
-    
+
     # Ensure server is initialized
     if not server.initialized:
         await server.initialize()
-    
+
     # Handle WebSocket connection
     await server.handle_websocket(websocket, client_id=client_id, auth_token=token, api_key=api_key)
 
@@ -263,16 +263,16 @@ async def mcp_request(
 ):
     """
     Process an MCP request via HTTP.
-    
+
     This endpoint provides a simpler alternative to WebSocket for clients
     that don't need real-time bidirectional communication.
     """
     server = get_mcp_server()
-    
+
     # Ensure server is initialized
     if not server.initialized:
         await server.initialize()
-    
+
     # Process request
     # Attach org/team metadata when auth via API key
     metadata: Dict[str, Any] = {}
@@ -456,7 +456,7 @@ async def get_server_status(
 ):
     """
     Get MCP server status.
-    
+
     Returns:
     - Server health status
     - Uptime
@@ -464,11 +464,11 @@ async def get_server_status(
     - Module health summary
     """
     server = get_mcp_server()
-    
+
     # Ensure server is initialized
     if not server.initialized:
         await server.initialize()
-    
+
     status = await server.get_status()
     return ServerStatusResponse(**status)
 
@@ -480,7 +480,7 @@ async def get_server_metrics(
 ):
     """
     Get detailed server metrics (requires admin).
-    
+
     Returns:
     - Connection metrics
     - Module performance metrics
@@ -488,10 +488,10 @@ async def get_server_metrics(
     - Latency statistics
     """
     server = get_mcp_server()
-    
+
     if not server.initialized:
         await server.initialize()
-    
+
     metrics = await server.get_metrics()
     return ServerMetricsResponse(**metrics)
 
@@ -561,7 +561,7 @@ async def list_tools(
 ):
     """
     List available MCP tools.
-    
+
     Returns tools with their descriptions and required parameters.
     Tools are filtered based on user permissions if authenticated.
     """
@@ -573,11 +573,11 @@ async def list_tools(
     if catalog_id is not None:
         params["catalog_id"] = catalog_id
     request = MCPRequest(method="tools/list", params=params, id="http-tools-list")
-    
+
     server = get_mcp_server()
     if not server.initialized:
         await server.initialize()
-    
+
     # Derive user id with a robust single-user fallback
     derived_user_id: Optional[str] = user.sub if user else None
     if derived_user_id is None:
@@ -607,7 +607,7 @@ async def list_tools(
         user_id=derived_user_id,
         metadata=metadata or None
     )
-    
+
     if response.error:
         if response.error.code == -32001:
             raise HTTPException(status_code=403, detail={
@@ -615,7 +615,7 @@ async def list_tools(
                 "hint": "Permission denied for listing tools. Contact an admin."
             })
         raise HTTPException(status_code=500, detail=response.error.message)
-    
+
     return response.result
 
 
@@ -627,12 +627,12 @@ async def execute_tool(
 ):
     """
     Execute a specific tool (requires authentication).
-    
+
     Tools are executed with user context for permission checking.
     """
     import time
     start_time = time.time()
-    
+
     mcp_request = MCPRequest(
         method="tools/call",
         params={
@@ -641,11 +641,11 @@ async def execute_tool(
         },
         id=f"http-tools-execute:{request.tool_name}"
     )
-    
+
     server = get_mcp_server()
     if not server.initialized:
         await server.initialize()
-    
+
     metadata: Dict[str, Any] = {}
     if user.roles:
         metadata["roles"] = user.roles
@@ -657,11 +657,11 @@ async def execute_tool(
         user_id=user.sub,
         metadata=metadata or None
     )
-    
+
     if response is None:
         logger.error("MCP server returned no response for tools/call", tool=request.tool_name)
         raise HTTPException(status_code=502, detail="MCP tool execution returned no response")
-    
+
     if response.error:
         # Map authorization failures to 403 with a helpful hint
         if response.error.code == -32001:  # AUTHORIZATION_ERROR
@@ -678,9 +678,9 @@ async def execute_tool(
             raise HTTPException(status_code=400, detail=response.error.message)
         # Other errors
         raise HTTPException(status_code=500, detail=response.error.message)
-    
+
     execution_time = (time.time() - start_time) * 1000
-    
+
     result_payload = response.result
     # Back-compat: unwrap plain text content to raw string when possible
     display_result = result_payload
@@ -715,15 +715,15 @@ async def list_modules(
 ):
     """
     List registered MCP modules.
-    
+
     Returns module information including status and capabilities.
     """
     request = MCPRequest(method="modules/list", id="http-modules-list")
-    
+
     server = get_mcp_server()
     if not server.initialized:
         await server.initialize()
-    
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
@@ -742,7 +742,7 @@ async def list_modules(
         user_id=user.sub if user else None,
         metadata=metadata or None
     )
-    
+
     if response.error:
         if response.error.code == -32001:
             raise HTTPException(status_code=403, detail={
@@ -750,7 +750,7 @@ async def list_modules(
                 "hint": "Permission denied for listing tools. Contact an admin."
             })
         raise HTTPException(status_code=500, detail=response.error.message)
-    
+
     return response.result
 
 
@@ -761,15 +761,15 @@ async def get_modules_health(
 ):
     """
     Get detailed health status of all modules (requires admin).
-    
+
     Returns health checks and metrics for each module.
     """
     request = MCPRequest(method="modules/health", id="http-modules-health")
-    
+
     server = get_mcp_server()
     if not server.initialized:
         await server.initialize()
-    
+
     meta: Dict[str, Any] = {"admin_override": True}
     if user.roles:
         meta["roles"] = user.roles
@@ -777,7 +777,7 @@ async def get_modules_health(
         meta["permissions"] = user.permissions
 
     response = await server.handle_http_request(request, user_id=user.sub, metadata=meta)
-    
+
     if response.error:
         if response.error.code == -32001:
             raise HTTPException(status_code=403, detail={
@@ -785,7 +785,7 @@ async def get_modules_health(
                 "hint": "Permission denied for listing modules. Contact an admin."
             })
         raise HTTPException(status_code=500, detail=response.error.message)
-    
+
     return response.result
 
 
@@ -796,15 +796,15 @@ async def list_resources(
 ):
     """
     List available MCP resources.
-    
+
     Resources are filtered based on user permissions if authenticated.
     """
     request = MCPRequest(method="resources/list", id="http-resources-list")
-    
+
     server = get_mcp_server()
     if not server.initialized:
         await server.initialize()
-    
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
@@ -823,7 +823,7 @@ async def list_resources(
         user_id=user.sub if user else None,
         metadata=metadata or None
     )
-    
+
     if response.error:
         if response.error.code == -32001:
             raise HTTPException(status_code=403, detail={
@@ -831,7 +831,7 @@ async def list_resources(
                 "hint": "Permission denied for listing resources. Contact an admin."
             })
         raise HTTPException(status_code=500, detail=response.error.message)
-    
+
     return response.result
 
 
@@ -842,15 +842,15 @@ async def list_prompts(
 ):
     """
     List available MCP prompts.
-    
+
     Prompts are filtered based on user permissions if authenticated.
     """
     request = MCPRequest(method="prompts/list", id="http-prompts-list")
-    
+
     server = get_mcp_server()
     if not server.initialized:
         await server.initialize()
-    
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
@@ -869,7 +869,7 @@ async def list_prompts(
         user_id=user.sub if user else None,
         metadata=metadata or None
     )
-    
+
     if response.error:
         if response.error.code == -32001:
             raise HTTPException(status_code=403, detail={
@@ -877,7 +877,7 @@ async def list_prompts(
                 "hint": "Permission denied for listing prompts. Contact an admin."
             })
         raise HTTPException(status_code=500, detail=response.error.message)
-    
+
     return response.result
 
 
@@ -973,7 +973,7 @@ async def refresh_token(
 ):
     """
     Refresh authentication token.
-    
+
     Exchange a valid refresh token for a new access token using rotation.
     If `token_id` is not provided, the system attempts to locate it by scanning
     active refresh tokens (acceptable for in-memory DEV mode).
@@ -1017,25 +1017,25 @@ async def health_check(
 ):
     """
     Health check endpoint for load balancers.
-    
+
     Returns 200 if server is healthy, 503 if not.
     """
     server = get_mcp_server()
-    
+
     if not server.initialized:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Server not initialized"
         )
-    
+
     status = await server.get_status()
-    
+
     if status["status"] != "healthy":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Server status: {status['status']}"
         )
-    
+
     return {"status": "healthy"}
 
 
@@ -1044,35 +1044,35 @@ async def health_check(
 def customize_openapi():
     """Customize OpenAPI schema for better documentation"""
     from fastapi.openapi.utils import get_openapi
-    
+
     def custom_openapi():
         if router.openapi_schema:
             return router.openapi_schema
-        
+
         openapi_schema = get_openapi(
             title="MCP Unified API",
             version="3.0.0",
             description="""
             # Model Context Protocol (MCP) Unified API
-            
+
             Production-ready MCP implementation with enhanced security and monitoring.
-            
+
             ## Features
             - 🔒 **Secure by Default**: JWT authentication, RBAC, rate limiting
             - 🚀 **High Performance**: Connection pooling, caching, circuit breakers
             - 📊 **Observable**: Health checks, metrics, distributed tracing
             - 🔧 **Modular**: Extensible module system with hot-reload
-            
+
             ## Authentication
             Most endpoints support optional authentication via Bearer token.
             Some endpoints require authentication or admin role.
-            
+
             ## WebSocket
             The `/ws` endpoint provides full MCP protocol support over WebSocket.
             """,
             routes=router.routes,
         )
-        
+
         # Add security schemes
         openapi_schema["components"]["securitySchemes"] = {
             "bearerAuth": {
@@ -1081,10 +1081,10 @@ def customize_openapi():
                 "bearerFormat": "JWT"
             }
         }
-        
+
         router.openapi_schema = openapi_schema
         return router.openapi_schema
-    
+
     return custom_openapi
 
 

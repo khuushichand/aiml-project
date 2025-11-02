@@ -8,11 +8,11 @@ from typing import Optional, Any, Dict
 
 class ChunkingError(Exception):
     """Base exception for all chunking-related errors."""
-    
+
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         """
         Initialize chunking error.
-        
+
         Args:
             message: Error message
             details: Optional error details
@@ -39,11 +39,11 @@ class TokenizerError(ChunkingError):
 
 class TemplateError(ChunkingError):
     """Exception raised for template-related errors."""
-    
+
     def __init__(self, message: str, template_name: Optional[str] = None, **kwargs):
         """
         Initialize template error.
-        
+
         Args:
             message: Error message
             template_name: Name of the template that caused the error
@@ -55,11 +55,11 @@ class TemplateError(ChunkingError):
 
 class LanguageNotSupportedError(ChunkingError):
     """Exception raised when a language is not supported."""
-    
+
     def __init__(self, language: str, available_languages: Optional[list] = None):
         """
         Initialize language not supported error.
-        
+
         Args:
             language: The unsupported language code
             available_languages: List of supported languages
@@ -67,18 +67,18 @@ class LanguageNotSupportedError(ChunkingError):
         message = f"Language '{language}' is not supported"
         if available_languages:
             message += f". Supported languages: {', '.join(available_languages)}"
-        
+
         super().__init__(message, {'language': language, 'available': available_languages})
 
 
 class ChunkSizeError(ChunkingError):
     """Exception raised for invalid chunk size parameters."""
-    
-    def __init__(self, message: str, max_size: Optional[int] = None, 
+
+    def __init__(self, message: str, max_size: Optional[int] = None,
                  overlap: Optional[int] = None, **kwargs):
         """
         Initialize chunk size error.
-        
+
         Args:
             message: Error message
             max_size: Maximum chunk size that caused the error
@@ -91,12 +91,12 @@ class ChunkSizeError(ChunkingError):
 
 class ProcessingError(ChunkingError):
     """Exception raised during text processing."""
-    
-    def __init__(self, message: str, stage: Optional[str] = None, 
+
+    def __init__(self, message: str, stage: Optional[str] = None,
                  operation: Optional[str] = None, **kwargs):
         """
         Initialize processing error.
-        
+
         Args:
             message: Error message
             stage: Processing stage where error occurred

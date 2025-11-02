@@ -10,7 +10,7 @@ The audio streaming subsystem exports lightweight metrics via the built-in regis
   - `audio_jobs_active` labels: `user_id`
 - Counters (canonical)
   - `audio_quota_violations_total` labels: `type` (one of `daily_minutes`, `concurrent_streams`, `concurrent_jobs`)
-  
+
 Backward-compatibility
 - Dot-name aliases are also emitted for compatibility: `audio.streaming.active`, `audio.jobs.active`, `audio.quota_violations_total`.
 

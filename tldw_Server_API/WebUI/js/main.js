@@ -97,7 +97,7 @@ class WebUI {
         this.theme = theme;
         document.documentElement.setAttribute('data-theme', theme);
         Utils.saveToStorage('theme', theme);
-        
+
         // Update theme toggle button
         const themeToggle = document.getElementById('theme-toggle');
         if (themeToggle) {
@@ -237,7 +237,7 @@ class WebUI {
         if (contentId === 'tabMultiItemAnalysis' && typeof initializeMultiItemAnalysisTab === 'function') {
             initializeMultiItemAnalysisTab();
         }
-        
+
         if (contentId === 'tabEvalsOpenAI' || contentId === 'tabEvalsGEval') {
             if (typeof initializeEvaluationsTab === 'function') {
                 initializeEvaluationsTab();
@@ -247,16 +247,16 @@ class WebUI {
         if (contentId === 'tabDictionaries' && typeof initializeDictionariesTab === 'function') {
             initializeDictionariesTab();
         }
-        
+
         // Initialize model dropdowns for tabs that have LLM selection
         // This includes chat, media processing, and evaluation tabs
         const tabsWithModelSelection = [
             'tabChatCompletions', 'tabCharacterChat', 'tabConversations',
-            'tabMediaIngestion', 'tabMediaProcessingNoDB', 
+            'tabMediaIngestion', 'tabMediaProcessingNoDB',
             'tabEvalsOpenAI', 'tabEvalsGEval',
             'tabWebScrapingIngest', 'tabMultiItemAnalysis'
         ];
-        
+
         if (tabsWithModelSelection.includes(contentId)) {
             // Small delay to ensure DOM is ready
             setTimeout(() => {
@@ -320,13 +320,13 @@ class WebUI {
 
         // Re-initialize form handlers for newly loaded content
         this.initFormHandlers();
-        
+
         // After loading content, ensure all newly loaded tabs are hidden initially
         // This is important when loading multiple tabs from a single HTML file
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.remove('active');
         });
-        
+
         // Initialize model dropdowns for groups that contain LLM-using tabs
         const groupsWithModelSelection = ['chat', 'media', 'evaluations'];
         if (groupsWithModelSelection.includes(groupName)) {
@@ -434,7 +434,7 @@ class WebUI {
                 this.activateTopTab(firstTab);
             }
         }
-        
+
         // Ensure at least one content tab is visible
         setTimeout(() => {
             const activeTabs = document.querySelectorAll('.tab-content.active');
@@ -454,7 +454,7 @@ class WebUI {
         if (apiClient.init) {
             await apiClient.init();
         }
-        
+
         // Load saved API configuration
         const baseUrlInput = document.getElementById('baseUrl');
         const apiKeyInput = document.getElementById('apiKeyInput');
@@ -482,7 +482,7 @@ class WebUI {
 
         if (apiKeyInput) {
             apiKeyInput.value = apiClient.token;
-            
+
             // Show indicator if config was auto-loaded
             if (apiClient.configLoaded && apiClient.token) {
                 apiKeyInput.placeholder = 'Auto-configured from server';
@@ -492,7 +492,7 @@ class WebUI {
                     label.innerHTML = 'API Token: <span style="color: green;">✓ Auto-configured</span>';
                 }
             }
-            
+
             apiKeyInput.addEventListener('change', (e) => {
                 apiClient.setToken(e.target.value);
                 if (typeof Toast !== 'undefined' && Toast) {
@@ -584,7 +584,7 @@ class WebUI {
             const startTime = Date.now();
             const health = await apiClient.checkHealth();
             const responseTime = Date.now() - startTime;
-            
+
             if (health.online) {
                 if (statusDot) {
                     statusDot.classList.remove('offline');
@@ -756,7 +756,7 @@ class WebUI {
         endpoints.forEach(endpoint => {
             const title = endpoint.querySelector('h2')?.textContent.toLowerCase() || '';
             const path = endpoint.querySelector('.endpoint-path')?.textContent.toLowerCase() || '';
-            
+
             if (title.includes(query) || path.includes(query)) {
                 endpoint.style.display = 'block';
                 visibleCount++;
@@ -784,7 +784,7 @@ class WebUI {
 
     showRequestHistory() {
         const history = apiClient.getHistory();
-        
+
         if (history.length === 0) {
             if (typeof Toast !== 'undefined' && Toast) {
                 Toast.info('No request history available');
@@ -880,7 +880,7 @@ class WebUI {
             if (!input.parentElement.classList.contains('file-input-wrapper')) {
                 const wrapper = document.createElement('div');
                 wrapper.className = 'file-input-wrapper';
-                
+
                 const label = document.createElement('label');
                 label.className = 'file-input-label';
                 label.innerHTML = `

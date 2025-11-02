@@ -16,16 +16,16 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
     Chunks text by sentence count.
     Uses language-specific sentence boundary detection.
     """
-    
+
     def __init__(self, language: str = 'en'):
         """
         Initialize sentence chunking strategy.
-        
+
         Args:
             language: Language code for text processing
         """
         super().__init__(language)
-        
+
         # Try to import pysbd for better sentence splitting
         self.pysbd_available = False
         try:
@@ -35,7 +35,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             logger.debug("pysbd available for sentence segmentation")
         except ImportError:
             logger.debug("pysbd not available, using fallback sentence splitting")
-        
+
         # Language-specific sentence delimiters
         self.sentence_delimiters = {
             'zh': ['。', '！', '？', '；'],
@@ -51,9 +51,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             'th': ['!', '?', '…', 'ฯ'],
             'default': ['.', '!', '?']
         }
-        
+
         logger.debug(f"SentenceChunkingStrategy initialized for language: {language}")
-        
+
         # Optional Thai sentence tokenizer (PyThaiNLP)
         self.pythainlp_available = False
         self._th_sent_tokenize = None
@@ -65,7 +65,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 logger.debug("PyThaiNLP available for Thai sentence segmentation")
             except Exception:
                 logger.debug("PyThaiNLP not available; using regex fallback for Thai")
-    
+
     def chunk(self,
               text: str,
               max_size: int,
@@ -73,7 +73,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
               **options) -> List[str]:
         """
         Chunk text by sentence count.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum sentences per chunk
@@ -81,32 +81,32 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             **options: Additional options:
                 - combine_short: Combine short sentences
                 - min_sentence_length: Minimum characters per sentence
-                
+
         Returns:
             List of text chunks
         """
         if not self.validate_parameters(text, max_size, overlap):
             return []
-        
+
         # Adjust overlap if needed
         if overlap >= max_size:
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
             overlap = max_size - 1
-        
+
         records, combined_sentences = self._prepare_chunk_records(text, max_size, overlap, **options)
         if not combined_sentences or not records:
             return []
         chunks = [record['text'] for record in records]
         logger.debug(f"Created {len(chunks)} chunks from {len(combined_sentences)} sentences")
         return chunks
-    
+
     def _split_sentences(self, text: str) -> List[str]:
         """
         Split text into sentences based on language.
-        
+
         Args:
             text: Text to split
-            
+
         Returns:
             List of sentences
         """
@@ -118,13 +118,13 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     return sents
             except Exception:
                 logger.debug("PyThaiNLP sentence splitting failed; falling back")
-        
+
         # Try pysbd next if available
         if self.pysbd_available:
             sentences = self._split_with_pysbd(text)
             if sentences:
                 return sentences
-        
+
         # Fallback to language-specific splitting
         return self._split_with_regex(text)
 
@@ -150,7 +150,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     return spans
             except Exception:
                 logger.debug("PyThaiNLP sentence splitting (spans) failed; falling back")
-        
+
         # Try pysbd next if available; if used, recover spans via rolling pointer
         if self.pysbd_available:
             try:
@@ -209,14 +209,14 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             adjust = len(cur_txt) - len(cur_txt.lstrip(" \t\r\f\v"))
             spans.append((stripped, cur_start + adjust, cur_start + adjust + len(stripped)))
         return spans
-    
+
     def _split_with_pysbd(self, text: str) -> List[str]:
         """
         Split sentences using pysbd library.
-        
+
         Args:
             text: Text to split
-            
+
         Returns:
             List of sentences
         """
@@ -224,7 +224,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             # Map our language codes to pysbd language codes
             pysbd_lang_map = {
                 'en': 'en',
-                'de': 'de', 
+                'de': 'de',
                 'fr': 'fr',
                 'it': 'it',
                 'es': 'es',
@@ -242,25 +242,25 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 'sv': 'sv',
                 'no': 'no'
             }
-            
+
             lang_code = pysbd_lang_map.get(self.language, 'en')
             segmenter = self.pysbd.Segmenter(language=lang_code, clean=False)
             sentences = segmenter.segment(text)
-            
+
             logger.debug(f"pysbd split text into {len(sentences)} sentences")
             return sentences
-            
+
         except Exception as e:
             logger.warning(f"pysbd sentence splitting failed: {e}, falling back to regex")
             return []
-    
+
     def _split_with_regex(self, text: str) -> List[str]:
         """
         Split sentences using regex patterns.
-        
+
         Args:
             text: Text to split
-            
+
         Returns:
             List of sentences
         """
@@ -269,18 +269,18 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             self.language,
             self.sentence_delimiters['default']
         )
-        
+
         # Build regex pattern
         delimiter_pattern = '|'.join(re.escape(d) for d in delimiters)
         pattern = f'([{delimiter_pattern}])'
-        
+
         # Split on delimiters but keep them
         parts = re.split(pattern, text)
-        
+
         # Reconstruct sentences with their delimiters
         sentences = []
         current_sentence = ""
-        
+
         for i, part in enumerate(parts):
             if part in delimiters:
                 if current_sentence:
@@ -289,17 +289,17 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     current_sentence = ""
             else:
                 current_sentence += part
-        
+
         # Add any remaining text
         if current_sentence.strip():
             sentences.append(current_sentence.strip())
-        
+
         # Filter out empty sentences
         sentences = [s for s in sentences if s.strip()]
-        
+
         logger.debug(f"Regex split text into {len(sentences)} sentences")
         return sentences
-    
+
     def _combine_short_sentences_with_spans(
         self,
         sentences_with_spans: List[tuple[str, int, int]],
@@ -311,16 +311,16 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         current_start: Optional[int] = None
         current_end: Optional[int] = None
         min_length = max(0, int(min_length))
-        
+
         no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
-        
+
         for sentence, start, end in sentences_with_spans:
             if current_start is None:
                 current_text = sentence
                 current_start = start
                 current_end = end
                 continue
-            
+
             if len(current_text) + len(sentence) < min_length:
                 if self.language in no_space_languages:
                     current_text += sentence
@@ -332,26 +332,26 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 current_text = sentence
                 current_start = start
                 current_end = end
-        
+
         if current_start is not None:
             combined.append((current_text, current_start, current_end if current_end is not None else current_start))
-        
+
         return combined
-    
+
     def _combine_short_sentences(self, sentences: List[str], min_length: int) -> List[str]:
         """
         Combine short sentences to meet minimum length.
-        
+
         Args:
             sentences: List of sentences
             min_length: Minimum characters per sentence
-            
+
         Returns:
             List of combined sentences
         """
         combined = []
         current = ""
-        
+
         for sentence in sentences:
             if len(current) + len(sentence) < min_length:
                 if self.language in ['zh', 'zh-cn', 'zh-tw', 'ja', 'th']:
@@ -362,13 +362,13 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 if current:
                     combined.append(current)
                 current = sentence
-        
+
         if current:
             combined.append(current)
-        
+
         logger.debug(f"Combined {len(sentences)} sentences into {len(combined)} sentences")
         return combined
-    
+
     def chunk_generator(self,
                        text: str,
                        max_size: int,
@@ -376,20 +376,20 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                        **options) -> Generator[str, None, None]:
         """
         Memory-efficient generator version of chunk.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum sentences per chunk
             overlap: Number of sentences to overlap between chunks
             **options: Additional options
-            
+
         Yields:
             Individual text chunks
         """
         chunks = self.chunk(text, max_size, overlap, **options)
         for chunk in chunks:
             yield chunk
-    
+
     def _prepare_chunk_records(
         self,
         text: str,
@@ -401,9 +401,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         sentences_with_spans = self._split_sentences_with_spans(text)
         if not sentences_with_spans:
             return [], []
-        
+
         logger.debug(f"Split text into {len(sentences_with_spans)} sentences")
-        
+
         combined = sentences_with_spans
         if options.get('combine_short', False):
             try:
@@ -413,11 +413,11 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             combined = self._combine_short_sentences_with_spans(sentences_with_spans, min_length)
         # Ensure we operate on a copy to avoid mutating shared state
         combined = list(combined)
-        
+
         records: List[Dict[str, Any]] = []
         step = max(1, max_size - overlap)
         no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
-        
+
         for i in range(0, len(combined), step):
             window = combined[i:i + max_size]
             if not window:
@@ -439,9 +439,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 'end_char': end_char,
                 'sentence_count': len(window),
             })
-        
+
         return records, combined
-    
+
     def chunk_with_metadata(self,
                             text: str,
                             max_size: int,
@@ -450,20 +450,20 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         """Chunk text and include metadata with reliable offsets."""
         if not self.validate_parameters(text, max_size, overlap):
             return []
-        
+
         if overlap >= max_size:
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
             overlap = max_size - 1
-        
+
         records, combined = self._prepare_chunk_records(text, max_size, overlap, **options)
         if not records:
             return []
-        
+
         try:
             min_length_opt = int(options.get('min_sentence_length', 10))
         except Exception:
             min_length_opt = 10
-        
+
         results: List[ChunkResult] = []
         total = len(records)
         for idx, record in enumerate(records):
@@ -488,6 +488,6 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 }
             )
             results.append(ChunkResult(text=chunk_text, metadata=metadata))
-        
+
         logger.debug(f"Created {len(results)} chunks with metadata from {len(combined)} sentences")
         return results

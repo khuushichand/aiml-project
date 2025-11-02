@@ -34,11 +34,11 @@ def list_benchmarks(ctx, detailed, output_format):
     """List available benchmarks."""
     registry = get_registry()
     benchmarks = registry.list_benchmarks()
-    
+
     if not benchmarks:
         print_warning("No benchmarks registered")
         return
-    
+
     if output_format == 'json':
         data = {}
         for name in benchmarks:
@@ -75,27 +75,27 @@ def benchmark_info(ctx, benchmark_name):
     """Show detailed information about a benchmark."""
     registry = get_registry()
     config = registry.get(benchmark_name)
-    
+
     if not config:
         print_error(f"Benchmark '{benchmark_name}' not found")
         return
-    
+
     print_info(f"Benchmark: {config.name}")
     print(f"Description: {config.description}")
     print(f"Evaluation Type: {config.evaluation_type}")
     print(f"Dataset Source: {config.dataset_source}")
     print(f"Dataset Format: {config.dataset_format}")
-    
+
     if config.field_mappings:
         print("\nField Mappings:")
         for target, source in config.field_mappings.items():
             print(f"  {target} <- {source}")
-    
+
     if config.evaluation_params:
         print("\nEvaluation Parameters:")
         for key, value in config.evaluation_params.items():
             print(f"  {key}: {value}")
-    
+
     if config.metadata:
         print("\nMetadata:")
         for key, value in config.metadata.items():
@@ -116,11 +116,11 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
     """Run a benchmark evaluation."""
     registry = get_registry()
     config = registry.get(benchmark_name)
-    
+
     if not config:
         print_error(f"Benchmark '{benchmark_name}' not found")
         return
-    
+
     # Load dataset
     print_info(f"Loading dataset for {benchmark_name}...")
     try:
@@ -132,7 +132,7 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
     except Exception as e:
         print_error(f"Error loading dataset: {e}")
         return
-    
+
     # Resume from previous results if specified
     completed_ids = set()
     results = []
@@ -141,33 +141,33 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
             with open(resume_from, 'r') as f:
                 previous_results = json.load(f)
                 results = previous_results.get('results', [])
-                completed_ids = {r.get('id', r.get('question_id', i)) 
+                completed_ids = {r.get('id', r.get('question_id', i))
                                for i, r in enumerate(results)}
                 print_info(f"Resuming from {len(completed_ids)} completed evaluations")
         except Exception as e:
             print_warning(f"Could not load previous results: {e}")
-    
+
     # Filter out completed samples
     remaining_dataset = []
     for i, item in enumerate(dataset):
         item_id = item.get('id', item.get('question_id', i))
         if item_id not in completed_ids:
             remaining_dataset.append(item)
-    
+
     if not remaining_dataset:
         print_success("All samples already evaluated!")
         if output and results:
             _save_results(results, benchmark_name, output)
         return
-    
+
     print_info(f"Evaluating {len(remaining_dataset)} remaining samples...")
-    
+
     # Create evaluator
     evaluator = registry.create_evaluator(benchmark_name)
     if not evaluator:
         print_error(f"Could not create evaluator for {benchmark_name}")
         return
-    
+
     # Run evaluation with progress bar
     with Progress(
         SpinnerColumn(),
@@ -176,28 +176,28 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
     ) as progress:
         task = progress.add_task(f"Evaluating {benchmark_name}", total=len(remaining_dataset))
-        
+
         # Process in batches
         batch_size = 10
         for i in range(0, len(remaining_dataset), batch_size):
             batch = remaining_dataset[i:i+batch_size]
-            
+
             # Evaluate batch
             batch_results = run_async(_evaluate_batch(
                 batch, evaluator, model or "openai", api_key, parallel
             ))
-            
+
             results.extend(batch_results)
             progress.update(task, advance=len(batch))
-            
+
             # Save progress if requested
             if save_progress and output:
                 _save_results(results, benchmark_name, output)
-    
+
     # Generate summary
     summary = format_benchmark_summary(results, benchmark_name)
     print("\n" + summary)
-    
+
     # Save final results
     if output:
         _save_results(results, benchmark_name, output)
@@ -207,11 +207,11 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
 @benchmark_group.command('register')
 @click.option('--name', '-n', required=True, help='Benchmark name')
 @click.option('--description', '-d', help='Benchmark description')
-@click.option('--type', '-t', 'eval_type', required=True, 
-              type=click.Choice(['multiple_choice', 'code_generation', 'instruction_following', 
+@click.option('--type', '-t', 'eval_type', required=True,
+              type=click.Choice(['multiple_choice', 'code_generation', 'instruction_following',
                                'function_calling', 'honesty', 'multi_turn']))
 @click.option('--source', '-s', required=True, help='Dataset source (URL, file, or HF dataset)')
-@click.option('--format', '-f', 'data_format', 
+@click.option('--format', '-f', 'data_format',
               type=click.Choice(['json', 'jsonl', 'csv', 'huggingface', 'custom']),
               default='json')
 @click.option('--config-file', type=click.Path(), help='Load configuration from file')
@@ -220,7 +220,7 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
 def register_benchmark(ctx, name, description, eval_type, source, data_format, config_file, save_config):
     """Register a new benchmark."""
     registry = get_registry()
-    
+
     if config_file:
         # Load from config file
         config = registry.load_config(config_file)
@@ -239,11 +239,11 @@ def register_benchmark(ctx, name, description, eval_type, source, data_format, c
             evaluation_params={},
             metadata={}
         )
-    
+
     # Register the benchmark
     registry.register(config)
     print_success(f"Registered benchmark: {name}")
-    
+
     # Save config if requested
     if save_config:
         registry.save_config(config, save_config)
@@ -256,11 +256,11 @@ def register_benchmark(ctx, name, description, eval_type, source, data_format, c
 def unregister_benchmark(ctx, benchmark_name):
     """Unregister a benchmark."""
     registry = get_registry()
-    
+
     if benchmark_name not in registry.list_benchmarks():
         print_error(f"Benchmark '{benchmark_name}' not found")
         return
-    
+
     registry.unregister(benchmark_name)
     print_success(f"Unregistered benchmark: {benchmark_name}")
 
@@ -273,22 +273,22 @@ def validate_benchmark(ctx, benchmark_name, samples):
     """Validate a benchmark configuration by loading sample data."""
     registry = get_registry()
     config = registry.get(benchmark_name)
-    
+
     if not config:
         print_error(f"Benchmark '{benchmark_name}' not found")
         return
-    
+
     print_info(f"Validating benchmark: {benchmark_name}")
-    
+
     # Try to load dataset
     try:
         dataset = load_benchmark_dataset(benchmark_name, limit=samples)
         if not dataset:
             print_error("Failed to load dataset")
             return
-        
+
         print_success(f"Successfully loaded {len(dataset)} samples")
-        
+
         # Show sample structure
         if dataset:
             print_info("\nSample structure:")
@@ -301,12 +301,12 @@ def validate_benchmark(ctx, benchmark_name, samples):
                     elif isinstance(value, list) and len(str(value)) > 100:
                         value = f"[list with {len(value)} items]"
                     print(f"  {key}: {value}")
-        
+
         # Try to create evaluator
         evaluator = registry.create_evaluator(benchmark_name)
         if evaluator:
             print_success("Successfully created evaluator")
-            
+
             # Try formatting first sample
             if dataset and config.field_mappings:
                 try:
@@ -316,25 +316,25 @@ def validate_benchmark(ctx, benchmark_name, samples):
                     print_warning(f"Error formatting sample: {e}")
         else:
             print_warning("Could not create evaluator (evaluation type may not be implemented)")
-            
+
     except Exception as e:
         print_error(f"Validation failed: {e}")
         return
 
 
-async def _evaluate_batch(batch: List[Dict[str, Any]], evaluator, 
-                         model: str, api_key: Optional[str], 
+async def _evaluate_batch(batch: List[Dict[str, Any]], evaluator,
+                         model: str, api_key: Optional[str],
                          parallel: int) -> List[Dict[str, Any]]:
     """Evaluate a batch of samples."""
     manager = EvaluationManager()
     results = []
-    
+
     # Create tasks for parallel evaluation
     tasks = []
     for item in batch:
         # Format for evaluation
         eval_data = evaluator.format_for_custom_metric(item)
-        
+
         # Create evaluation task
         task = manager.evaluate_custom_metric(
             metric_name=eval_data['name'],
@@ -345,7 +345,7 @@ async def _evaluate_batch(batch: List[Dict[str, Any]], evaluator,
             api_name=model
         )
         tasks.append(task)
-    
+
     # Run evaluations in parallel
     if parallel > 1:
         # Batch into smaller groups to avoid overwhelming the API
@@ -358,7 +358,7 @@ async def _evaluate_batch(batch: List[Dict[str, Any]], evaluator,
         for task in tasks:
             result = await task
             results.append(result)
-    
+
     return results
 
 
@@ -373,7 +373,7 @@ def _save_results(results: List[Dict[str, Any]], benchmark_name: str, output_pat
             "average_score": sum(r.get('score', 0) for r in results) / len(results) if results else 0
         }
     }
-    
+
     with open(output_path, 'w') as f:
         json.dump(output_data, f, indent=2)
 

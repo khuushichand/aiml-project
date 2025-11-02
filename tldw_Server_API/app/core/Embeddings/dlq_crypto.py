@@ -95,4 +95,3 @@ def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, An
         return json.loads(raw.decode("utf-8"))
     except Exception:
         return None
-

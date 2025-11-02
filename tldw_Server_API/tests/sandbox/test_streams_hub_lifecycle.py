@@ -107,4 +107,3 @@ def test_hub_close_respects_dedup_after_end(monkeypatch: pytest.MonkeyPatch) -> 
     assert run_id not in hub._truncated
     assert run_id not in hub._ended
     assert run_id not in hub._seq
-

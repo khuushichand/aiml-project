@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 class RedisConfig(BaseModel):
     """Redis connection configuration"""
     url: str = Field(
-        default_factory=lambda: os.getenv("REDIS_URL", "redis://localhost:6379"), 
+        default_factory=lambda: os.getenv("REDIS_URL", "redis://localhost:6379"),
         description="Redis connection URL"
     )
     max_connections: int = Field(default=50, ge=1, description="Maximum connections in pool")
@@ -70,17 +70,17 @@ class OrchestrationConfig(BaseModel):
     enable_monitoring: bool = Field(default=True, description="Enable monitoring dashboard")
     monitoring_port: int = Field(default=9090, description="Monitoring dashboard port")
     log_level: str = Field(default="INFO", description="Logging level")
-    
+
     # Auto-scaling configuration
     enable_autoscaling: bool = Field(default=False, description="Enable auto-scaling")
     scale_up_threshold: float = Field(default=0.8, ge=0.1, le=1.0, description="Queue depth threshold for scaling up")
     scale_down_threshold: float = Field(default=0.2, ge=0.1, le=1.0, description="Queue depth threshold for scaling down")
     scale_check_interval: int = Field(default=60, ge=30, description="Auto-scaling check interval")
-    
+
     # Resource limits
     max_total_workers: int = Field(default=50, ge=1, description="Maximum total workers across all pools")
     max_memory_gb: float = Field(default=32.0, ge=1.0, description="Maximum total memory usage")
-    
+
     @classmethod
     def default_config(cls) -> "OrchestrationConfig":
         """Create default configuration with all worker pools"""
@@ -94,21 +94,21 @@ class OrchestrationConfig(BaseModel):
                 "storage": StorageWorkerPoolConfig(num_workers=1)
             }
         )
-    
+
     @classmethod
     def from_yaml(cls, path: str) -> "OrchestrationConfig":
         """Load configuration from YAML file"""
         import yaml
-        
+
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
-        
+
         return cls(**data)
-    
+
     def to_yaml(self, path: str):
         """Save configuration to YAML file"""
         import yaml
-        
+
         with open(path, 'w') as f:
             dump_obj = model_dump_compat(self)
             yaml.dump(dump_obj, f, default_flow_style=False)

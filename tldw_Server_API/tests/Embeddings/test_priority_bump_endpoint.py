@@ -42,4 +42,3 @@ def test_bump_priority_sets_override(monkeypatch):
     assert r.status_code == 200
     assert fake.kv.get("embeddings:priority:override:j1") == "high"
     app.dependency_overrides.pop(get_request_user, None)
-

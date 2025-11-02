@@ -71,4 +71,3 @@ describe('auth-advanced module', async () => {
     expect(body.max_runs).toBe(1);
   });
 });
-

@@ -240,11 +240,11 @@ CREATE INDEX idx_ps_job_queue_created ON prompt_studio_job_queue(created_at);
 
 ```sql
 -- Auto-update timestamps
-CREATE TRIGGER prompt_studio_projects_update 
+CREATE TRIGGER prompt_studio_projects_update
 AFTER UPDATE ON prompt_studio_projects
 BEGIN
-    UPDATE prompt_studio_projects 
-    SET updated_at = CURRENT_TIMESTAMP, 
+    UPDATE prompt_studio_projects
+    SET updated_at = CURRENT_TIMESTAMP,
         last_modified = CURRENT_TIMESTAMP,
         version = version + 1
     WHERE id = NEW.id;
@@ -257,7 +257,7 @@ CREATE TRIGGER prompt_studio_projects_sync_insert
 AFTER INSERT ON prompt_studio_projects
 BEGIN
     INSERT INTO sync_log (entity, entity_uuid, operation, client_id, version, payload)
-    VALUES ('prompt_studio_project', NEW.uuid, 'create', NEW.client_id, NEW.version, 
+    VALUES ('prompt_studio_project', NEW.uuid, 'create', NEW.client_id, NEW.version,
             json_object('name', NEW.name, 'description', NEW.description));
 END;
 ```
@@ -385,10 +385,10 @@ async def get_prompt_studio_user(
     """Extract user context from existing auth system"""
     if not auth_status.get("authenticated", False):
         raise HTTPException(status_code=401, detail="Authentication required")
-    
+
     user_id = auth_status.get("user_id", "anonymous")
     client_id = auth_status.get("client_id", "web")
-    
+
     return {
         "user_id": user_id,
         "client_id": client_id,
@@ -406,11 +406,11 @@ def require_project_access(
     project = db.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Check ownership or admin
     if project["user_id"] != user["user_id"] and not user["is_admin"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
     return True
 ```
 
@@ -418,11 +418,11 @@ def require_project_access(
 ```python
 class PromptStudioDatabase(PromptsDatabase):
     """Extends existing PromptsDatabase with studio functionality"""
-    
+
     def __init__(self, db_path: str, client_id: str):
         super().__init__(db_path, client_id)
         self._init_studio_schema()
-    
+
     # Inherits all existing patterns:
     # - Thread-local connections
     # - Transaction management
@@ -435,7 +435,7 @@ class PromptStudioDatabase(PromptsDatabase):
 ```python
 class PromptStudioJobProcessor:
     """Processes long-running optimization and evaluation jobs"""
-    
+
     async def process_job(self, job_id: str):
         # 1. Fetch job from queue
         # 2. Update status to 'processing'
@@ -462,12 +462,12 @@ async def optimization_updates(websocket: WebSocket, project_id: str):
 ```python
 class PromptStudioSecurity:
     """Basic security layer - to be expanded in future iterations"""
-    
+
     def __init__(self):
         self.max_prompt_length = 50000  # Character limit
         self.max_test_cases = 1000  # Per project
         self.max_concurrent_jobs = 10  # Per user
-    
+
     def validate_input(self, text: str) -> bool:
         """Basic input validation - expand later with injection detection"""
         if not text or len(text) > self.max_prompt_length:
@@ -476,17 +476,17 @@ class PromptStudioSecurity:
         # TODO: Add PII detection
         # TODO: Add malicious pattern detection
         return True
-    
+
     def check_rate_limit(self, user_id: str, endpoint: str) -> bool:
         """Placeholder for rate limiting - integrate with existing system"""
         # TODO: Integrate with existing rate limiting
         return True
-    
+
     def estimate_cost(self, config: Dict) -> float:
         """Basic cost estimation"""
         # TODO: Implement accurate cost calculation
         return 0.0
-    
+
     def sanitize_output(self, output: str) -> str:
         """Basic output sanitization"""
         # TODO: Add output filtering

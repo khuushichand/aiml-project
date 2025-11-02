@@ -6,8 +6,8 @@
 -- FTS for projects (search by name and description)
 DROP TABLE IF EXISTS prompt_studio_projects_fts;
 CREATE VIRTUAL TABLE IF NOT EXISTS prompt_studio_projects_fts USING fts5(
-    name, 
-    description, 
+    name,
+    description,
     content=prompt_studio_projects,
     content_rowid=id
 );
@@ -18,7 +18,7 @@ SELECT id, name, description FROM prompt_studio_projects WHERE deleted = 0;
 
 -- Triggers to keep FTS in sync with main table
 DROP TRIGGER IF EXISTS prompt_studio_projects_fts_insert;
-CREATE TRIGGER prompt_studio_projects_fts_insert 
+CREATE TRIGGER prompt_studio_projects_fts_insert
 AFTER INSERT ON prompt_studio_projects
 FOR EACH ROW
 WHEN NEW.deleted = 0
@@ -35,7 +35,7 @@ BEGIN
     INSERT INTO prompt_studio_projects_fts(prompt_studio_projects_fts, rowid)
     VALUES('delete', OLD.id);
     INSERT INTO prompt_studio_projects_fts(rowid, name, description)
-    SELECT id, name, description FROM prompt_studio_projects 
+    SELECT id, name, description FROM prompt_studio_projects
     WHERE id = NEW.id AND deleted = 0;
 END;
 

@@ -201,7 +201,7 @@ out = process_audio_files(
     perform_analysis=True,
     api_name="openai",
 )
-print(out["processed_count"], out["errors"]) 
+print(out["processed_count"], out["errors"])
 ```
 
 ### Per Media Type Examples

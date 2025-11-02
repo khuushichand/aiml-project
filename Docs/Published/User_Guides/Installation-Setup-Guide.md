@@ -103,5 +103,3 @@ Tip: You can also use the convenience script from the repo root:
 - Read the User Guide for common tasks: `User_Guide.md`
 - Configure providers and test chat/embeddings via the WebUI and `/docs`
 - See Production Hardening and Multi-User Deployment guides for production use
-
-

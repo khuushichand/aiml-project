@@ -83,4 +83,3 @@ def test_duplicate_pg_adapter_flow(client):
     data = resp.json()
     assert data['destination_id']
     assert data['upserted'] == 3
-

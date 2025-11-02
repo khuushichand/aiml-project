@@ -287,7 +287,7 @@ def test_settings_cache_invalidation(monkeypatch):
         return a if state["gen"] == 0 else b
 
     monkeypatch.setattr(mw, "get_settings", fake_get_settings)
-    monkeypatch.setattr(mw, "get_settings_generation", lambda: state["gen"]) 
+    monkeypatch.setattr(mw, "get_settings_generation", lambda: state["gen"])
 
     s1 = m._get_settings_cached()
     s2 = m._get_settings_cached()

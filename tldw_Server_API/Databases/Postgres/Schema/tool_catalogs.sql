@@ -29,4 +29,3 @@ CREATE TABLE IF NOT EXISTS tool_catalog_entries (
 
 CREATE INDEX IF NOT EXISTS idx_tool_catalog_entries_catalog ON tool_catalog_entries(catalog_id);
 CREATE INDEX IF NOT EXISTS idx_tool_catalog_entries_tool ON tool_catalog_entries(tool_name);
-

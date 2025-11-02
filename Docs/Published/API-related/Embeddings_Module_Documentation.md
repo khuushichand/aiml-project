@@ -327,7 +327,7 @@ All user inputs are validated to prevent security vulnerabilities:
 - Maximum 255 characters
 - No path traversal patterns
 
-# Model ID validation  
+# Model ID validation
 - Prevents injection attacks
 - Validates against known models
 - Sanitizes special characters
@@ -516,7 +516,7 @@ Use `GET /api/v1/embeddings/health` for service status (includes cache stats and
 #### 1. Model Loading Failures
 ```
 ERROR: Failed to load model "text-embedding-3-small"
-SOLUTION: 
+SOLUTION:
 - Check API keys in config.txt
 - Verify network connectivity
 - Check disk space for model downloads
@@ -627,15 +627,15 @@ def create_embedding(
 ) -> List[float]:
     """
     Create an embedding for the given text.
-    
+
     Args:
         text: Input text to embed
         model: Model identifier
         user_id: Optional user ID for tracking
-        
+
     Returns:
         List of embedding values
-        
+
     Raises:
         ValueError: If text is empty or invalid
         RateLimitError: If user exceeds rate limit

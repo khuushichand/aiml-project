@@ -21,7 +21,7 @@ try:
     from opentelemetry import trace, metrics, baggage
     from opentelemetry.trace import Status, StatusCode, Tracer
     from opentelemetry.metrics import Meter
-    
+
     # SDK components
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.metrics import MeterProvider
@@ -42,30 +42,30 @@ try:
         PeriodicExportingMetricReader,
         ConsoleMetricExporter
     )
-    
+
     # Exporters
     from opentelemetry.exporter.prometheus import PrometheusMetricReader
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-    
+
     # Instrumentation
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
     from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
     from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
     from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
-    
+
     # Context propagation
     from opentelemetry.propagate import set_global_textmap
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-    
+
     OTEL_AVAILABLE = True
 except ImportError as e:
     # Demote to debug/info to reduce noisy logs during tests; telemetry is optional
     logger.debug(f"OpenTelemetry not fully available: {e}")
     logger.debug("Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi")
     OTEL_AVAILABLE = False
-    
+
     # Provide dummy classes for fallback
     class DummyTracer:
         def start_span(self, name, **kwargs):
@@ -73,7 +73,7 @@ except ImportError as e:
         def start_as_current_span(self, name, **kwargs):
             # Provide a context manager compatible method used by trace_context
             return DummySpan()
-    
+
     class DummySpan:
         def __enter__(self):
             return self
@@ -87,7 +87,7 @@ except ImportError as e:
             pass
         def record_exception(self, exception):
             pass
-    
+
     class DummyMeter:
         def create_counter(self, name, **kwargs):
             return DummyInstrument()
@@ -97,7 +97,7 @@ except ImportError as e:
             return DummyInstrument()
         def create_up_down_counter(self, name, **kwargs):
             return DummyInstrument()
-    
+
     class DummyInstrument:
         def add(self, amount, attributes=None):
             pass
@@ -109,7 +109,7 @@ except ImportError as e:
 
 class TelemetryConfig:
     """Configuration for OpenTelemetry setup."""
-    
+
     def __init__(self):
         """Initialize telemetry configuration from environment variables."""
         # Service identification
@@ -117,38 +117,38 @@ class TelemetryConfig:
         self.service_version = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
         self.service_namespace = os.getenv("OTEL_SERVICE_NAMESPACE", "production")
         self.deployment_environment = os.getenv("DEPLOYMENT_ENV", "development")
-        
+
         # OTLP Configuration
         self.otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
         self.otlp_protocol = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
         self.otlp_headers = os.getenv("OTEL_EXPORTER_OTLP_HEADERS", "")
         self.otlp_insecure = os.getenv("OTEL_EXPORTER_OTLP_INSECURE", "true").lower() == "true"
-        
+
         # Exporter selection
         self.metrics_exporters = os.getenv("OTEL_METRICS_EXPORTER", "prometheus,console").split(",")
         self.traces_exporters = os.getenv("OTEL_TRACES_EXPORTER", "console").split(",")
-        
+
         # Prometheus Configuration
         self.prometheus_port = int(os.getenv("PROMETHEUS_PORT", "9090"))
         self.prometheus_host = os.getenv("PROMETHEUS_HOST", "0.0.0.0")
-        
+
         # Feature flags
         self.enable_metrics = os.getenv("ENABLE_METRICS", "true").lower() == "true"
         self.enable_tracing = os.getenv("ENABLE_TRACING", "true").lower() == "true"
         self.enable_logging = os.getenv("ENABLE_OTEL_LOGGING", "false").lower() == "true"
         self.enable_profiling = os.getenv("ENABLE_PROFILING", "false").lower() == "true"
-        
+
         # Performance settings
         self.metrics_export_interval = int(os.getenv("METRICS_EXPORT_INTERVAL_MS", "60000"))
         self.traces_export_batch_size = int(os.getenv("TRACES_EXPORT_BATCH_SIZE", "512"))
         self.traces_export_timeout = int(os.getenv("TRACES_EXPORT_TIMEOUT_MS", "30000"))
         self.sample_rate = float(os.getenv("METRICS_SAMPLE_RATE", "1.0"))
-        
+
         # Additional metadata
         self.hostname = socket.gethostname()
         self.pod_name = os.getenv("POD_NAME", self.hostname)
         self.pod_namespace = os.getenv("POD_NAMESPACE", "default")
-        
+
     def get_resource_attributes(self) -> Dict[str, Any]:
         """Get resource attributes for telemetry."""
         return {
@@ -164,11 +164,11 @@ class TelemetryConfig:
 
 class TelemetryManager:
     """Manages OpenTelemetry initialization and provides access to telemetry components."""
-    
+
     def __init__(self, config: Optional[TelemetryConfig] = None):
         """
         Initialize the telemetry manager.
-        
+
         Args:
             config: TelemetryConfig instance or None to use defaults
         """
@@ -180,51 +180,51 @@ class TelemetryManager:
         self.initialized = False
         # Hold pending views if provider not yet available
         self._pending_views = []  # list[tuple[str, list[float]]]
-        
+
         if not OTEL_AVAILABLE:
             logger.info("OpenTelemetry not available, using fallback implementations")
             self.tracer = DummyTracer()
             self.meter = DummyMeter()
             return
-        
+
         self._initialize()
-    
+
     def _initialize(self):
         """Initialize OpenTelemetry providers and exporters."""
         if self.initialized:
             return
-        
+
         try:
             # Create resource
             resource = Resource.create(self.config.get_resource_attributes())
-            
+
             # Initialize tracing
             if self.config.enable_tracing:
                 self._initialize_tracing(resource)
-            
+
             # Initialize metrics
             if self.config.enable_metrics:
                 self._initialize_metrics(resource)
-            
+
             # Set up context propagation
             set_global_textmap(TraceContextTextMapPropagator())
-            
+
             # Auto-instrumentation
             self._setup_auto_instrumentation()
-            
+
             self.initialized = True
             logger.info(f"Telemetry initialized for service: {self.config.service_name}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize telemetry: {e}")
             # Fall back to dummy implementations
             self.tracer = DummyTracer()
             self.meter = DummyMeter()
-    
+
     def _initialize_tracing(self, resource: Resource):
         """Initialize tracing with configured exporters."""
         self.tracer_provider = TracerProvider(resource=resource)
-        
+
         # Add exporters based on configuration
         for exporter_name in self.config.traces_exporters:
             exporter = self._create_trace_exporter(exporter_name)
@@ -236,31 +236,31 @@ class TelemetryManager:
                     max_export_timeout_millis=self.config.traces_export_timeout
                 )
                 self.tracer_provider.add_span_processor(processor)
-        
+
         # Set as global tracer provider
         trace.set_tracer_provider(self.tracer_provider)
         self.tracer = trace.get_tracer(
             self.config.service_name,
             self.config.service_version
         )
-    
+
     def _initialize_metrics(self, resource: Resource):
         """Initialize metrics with configured exporters."""
         readers = []
-        
+
         # Add metric readers based on configuration
         for exporter_name in self.config.metrics_exporters:
             reader = self._create_metric_reader(exporter_name)
             if reader:
                 readers.append(reader)
-        
+
         if readers:
             # If Views are supported, apply after provider construction via register_view
             self.meter_provider = MeterProvider(
                 resource=resource,
                 metric_readers=readers,
             )
-            
+
             # Set as global meter provider
             metrics.set_meter_provider(self.meter_provider)
             self.meter = metrics.get_meter(
@@ -284,27 +284,27 @@ class TelemetryManager:
                     self._pending_views.clear()
             except Exception:
                 pass
-    
+
     def _create_trace_exporter(self, exporter_name: str):
         """Create a trace exporter based on name."""
         exporter_name = exporter_name.strip().lower()
-        
+
         if exporter_name == "console":
             return ConsoleSpanExporter()
-        
+
         elif exporter_name == "otlp" and self.config.otlp_endpoint:
             headers = {}
             if self.config.otlp_headers:
                 for header in self.config.otlp_headers.split(","):
                     key, value = header.split("=")
                     headers[key] = value
-            
+
             return OTLPSpanExporter(
                 endpoint=self.config.otlp_endpoint,
                 insecure=self.config.otlp_insecure,
                 headers=headers
             )
-        
+
         elif exporter_name == "jaeger":
             # Jaeger support via OTLP
             jaeger_endpoint = os.getenv("JAEGER_ENDPOINT", "http://localhost:4317")
@@ -312,36 +312,36 @@ class TelemetryManager:
                 endpoint=jaeger_endpoint,
                 insecure=True
             )
-        
+
         else:
             logger.warning(f"Unknown trace exporter: {exporter_name}")
             return None
-    
+
     def _create_metric_reader(self, exporter_name: str):
         """Create a metric reader based on name."""
         exporter_name = exporter_name.strip().lower()
-        
+
         if exporter_name == "console":
             exporter = ConsoleMetricExporter()
             return PeriodicExportingMetricReader(
                 exporter,
                 export_interval_millis=self.config.metrics_export_interval
             )
-        
+
         elif exporter_name == "prometheus":
             # Prometheus pull-based metrics
             return PrometheusMetricReader(
                 host=self.config.prometheus_host,
                 port=self.config.prometheus_port
             )
-        
+
         elif exporter_name == "otlp" and self.config.otlp_endpoint:
             headers = {}
             if self.config.otlp_headers:
                 for header in self.config.otlp_headers.split(","):
                     key, value = header.split("=")
                     headers[key] = value
-            
+
             exporter = OTLPMetricExporter(
                 endpoint=self.config.otlp_endpoint,
                 insecure=self.config.otlp_insecure,
@@ -351,16 +351,16 @@ class TelemetryManager:
                 exporter,
                 export_interval_millis=self.config.metrics_export_interval
             )
-        
+
         else:
             logger.warning(f"Unknown metric exporter: {exporter_name}")
             return None
-    
+
     def _setup_auto_instrumentation(self):
         """Set up automatic instrumentation for common libraries."""
         if not OTEL_AVAILABLE:
             return
-        
+
         # FastAPI instrumentation
         try:
             FastAPIInstrumentor.instrument(
@@ -369,7 +369,7 @@ class TelemetryManager:
             )
         except Exception as e:
             logger.debug(f"Could not instrument FastAPI: {e}")
-        
+
         # HTTP client instrumentation
         try:
             HTTPXClientInstrumentor().instrument(
@@ -377,14 +377,14 @@ class TelemetryManager:
             )
         except Exception as e:
             logger.debug(f"Could not instrument HTTPX: {e}")
-        
+
         try:
             AioHttpClientInstrumentor().instrument(
                 tracer_provider=self.tracer_provider
             )
         except Exception as e:
             logger.debug(f"Could not instrument aiohttp: {e}")
-        
+
         # Database instrumentation
         try:
             SQLAlchemyInstrumentor().instrument(
@@ -392,44 +392,44 @@ class TelemetryManager:
             )
         except Exception as e:
             logger.debug(f"Could not instrument SQLAlchemy: {e}")
-        
+
         try:
             Psycopg2Instrumentor().instrument(
                 tracer_provider=self.tracer_provider
             )
         except Exception as e:
             logger.debug(f"Could not instrument psycopg2: {e}")
-    
+
     def get_tracer(self, name: Optional[str] = None) -> Tracer:
         """
         Get a tracer instance.
-        
+
         Args:
             name: Optional name for the tracer
-            
+
         Returns:
             Tracer instance
         """
         if not self.tracer:
             return DummyTracer()
-        
+
         if name:
             return trace.get_tracer(name, self.config.service_version)
         return self.tracer
-    
+
     def get_meter(self, name: Optional[str] = None) -> Meter:
         """
         Get a meter instance.
-        
+
         Args:
             name: Optional name for the meter
-            
+
         Returns:
             Meter instance
         """
         if not self.meter:
             return DummyMeter()
-        
+
         if name:
             return metrics.get_meter(name, self.config.service_version)
         return self.meter
@@ -456,16 +456,16 @@ class TelemetryManager:
                 self._pending_views.append((instrument_name, list(boundaries)))
         except Exception as e:
             logger.debug(f"Failed to register histogram view for {instrument_name}: {e}")
-    
+
     @contextmanager
     def trace_context(self, operation_name: str, attributes: Optional[Dict[str, Any]] = None):
         """
         Context manager for creating a traced operation.
-        
+
         Args:
             operation_name: Name of the operation
             attributes: Optional attributes to add to the span
-            
+
         Yields:
             The span object
         """
@@ -474,26 +474,26 @@ class TelemetryManager:
             if attributes:
                 for key, value in attributes.items():
                     span.set_attribute(key, value)
-            
+
             try:
                 yield span
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
-    
+
     def shutdown(self):
         """Shutdown telemetry providers and flush data."""
         if not OTEL_AVAILABLE or not self.initialized:
             return
-        
+
         try:
             if self.tracer_provider:
                 self.tracer_provider.shutdown()
-            
+
             if self.meter_provider:
                 self.meter_provider.shutdown()
-            
+
             logger.info("Telemetry providers shut down successfully")
         except Exception as e:
             logger.error(f"Error shutting down telemetry: {e}")
@@ -506,7 +506,7 @@ _telemetry_manager: Optional[TelemetryManager] = None
 def get_telemetry_manager() -> TelemetryManager:
     """
     Get or create the global telemetry manager.
-    
+
     Returns:
         TelemetryManager instance
     """
@@ -519,10 +519,10 @@ def get_telemetry_manager() -> TelemetryManager:
 def initialize_telemetry(config: Optional[TelemetryConfig] = None) -> TelemetryManager:
     """
     Initialize telemetry with optional configuration.
-    
+
     Args:
         config: Optional TelemetryConfig instance
-        
+
     Returns:
         TelemetryManager instance
     """

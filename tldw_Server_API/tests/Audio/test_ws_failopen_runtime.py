@@ -68,4 +68,3 @@ async def test_ws_failopen_cap_exhausted_sends_error_and_closes(monkeypatch):
             # Socket should close after error; subsequent receive should fail
             with pytest.raises(Exception):
                 ws.receive_json()
-

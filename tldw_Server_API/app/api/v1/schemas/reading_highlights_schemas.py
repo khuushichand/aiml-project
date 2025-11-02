@@ -50,4 +50,3 @@ class Highlight(BaseModel):
     context_before: Optional[str] = None
     context_after: Optional[str] = None
     state: HighlightState = "active"
-

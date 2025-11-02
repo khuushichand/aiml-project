@@ -146,4 +146,3 @@ async def test_get_messages_format_for_completions_roles_and_search_placeholders
             assert any(m.get("content") == "Hello User" for m in res.get("messages", []))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-

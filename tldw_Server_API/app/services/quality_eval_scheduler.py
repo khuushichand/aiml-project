@@ -155,4 +155,3 @@ async def start_quality_eval_scheduler() -> Optional[asyncio.Task]:
         f"Started RAG quality eval scheduler: every {interval}s using dataset={dataset_path}"
     )
     return task
-

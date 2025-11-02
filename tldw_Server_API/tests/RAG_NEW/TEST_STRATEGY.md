@@ -195,7 +195,7 @@ The RAG module is complex with multiple components:
 
 ### Data Generation
 
-- **Hypothesis Strategies**: 
+- **Hypothesis Strategies**:
   - Valid queries
   - Document generation
   - Configuration generation

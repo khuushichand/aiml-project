@@ -102,4 +102,3 @@ def test_evaluation_async_add_task_receives_request_id(monkeypatch, override_ps_
     assert captured["kwargs"].get("request_id") == "req-eval-xyz"
     # traceparent may be empty if not provided; verify kwarg exists
     assert "traceparent" in captured["kwargs"]
-

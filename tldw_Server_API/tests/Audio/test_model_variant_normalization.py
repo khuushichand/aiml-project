@@ -66,4 +66,3 @@ def test_unknown_parakeet_suffix_does_not_set_invalid_variant():
     assert m == "parakeet"
     assert v in ALLOWED_PARAKEET_VARIANTS
     assert v != "fast"
-

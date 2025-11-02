@@ -104,4 +104,3 @@ async def test_update_user_sqlite_detects_and_uses_qmark_placeholders(monkeypatc
     # Ensure booleans were coerced to ints for SQLite path and id appended last
     assert params[-1] == 7
     assert params[1] in (0, 1)
-

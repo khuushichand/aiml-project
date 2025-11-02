@@ -1,11 +1,11 @@
 situate_context: |
-  Give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. 
-  Answer only with the succinct context and nothing else. 
+  Give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk.
+  Answer only with the succinct context and nothing else.
 
 # Alternate key for loader compatibility
 situate_context_prompt: |
-  Give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. 
-  Answer only with the succinct context and nothing else. 
+  Give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk.
+  Answer only with the succinct context and nothing else.
 
 # LLM Gen-d prompt, untested
 situate_context_prompt_alt: |

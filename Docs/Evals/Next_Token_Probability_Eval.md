@@ -172,7 +172,7 @@ K_VALUE = 5 # Top 5 predictions
 def get_next_token_probs_hf(model, tokenizer, prompt_text, k):
     inputs = tokenizer(prompt_text, return_tensors="pt")
     input_ids = inputs.input_ids
-    
+
     with torch.no_grad():
         outputs = model.generate(
             input_ids,
@@ -185,16 +185,16 @@ def get_next_token_probs_hf(model, tokenizer, prompt_text, k):
     # scores contains the logits for the *generated* token(s)
     # For max_new_tokens=1, scores will be a tuple with one tensor
     next_token_logits = outputs.scores[0][0] # Logits for the first generated token
-    
+
     probabilities = torch.softmax(next_token_logits, dim=-1)
     top_k_probs, top_k_indices = torch.topk(probabilities, k=k)
-    
+
     top_k_tokens = tokenizer.convert_ids_to_tokens(top_k_indices.tolist())
-    
+
     results = []
     for token, prob in zip(top_k_tokens, top_k_probs.tolist()):
         results.append({"token": token, "probability": round(prob, 4)})
-        
+
     # Also get the single most likely token
     # generated_sequence = outputs.sequences[0]
     # most_likely_next_token_id = generated_sequence[input_ids.shape[-1]:][0] # Get the first new token ID

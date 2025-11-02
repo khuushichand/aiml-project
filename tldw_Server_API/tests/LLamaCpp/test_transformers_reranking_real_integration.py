@@ -59,4 +59,3 @@ def test_public_reranking_transformers_real_integration(client: TestClient):
     data = resp.json()
     assert isinstance(data.get("results"), list)
     assert len(data["results"]) == 2
-

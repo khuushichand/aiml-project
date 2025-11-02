@@ -24,4 +24,3 @@ def test_websocket_disconnects_decrement_connection_count(prompt_studio_dual_bac
     # At minimum, it should have decreased by one and ideally returned to baseline
     assert after <= during - 1
     assert after == before
-

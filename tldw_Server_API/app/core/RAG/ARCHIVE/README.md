@@ -39,7 +39,7 @@ If you need to reference old code:
 ## Files Still Referencing Archived Code
 
 The following files may need updating as they reference the archived implementations:
-- `/app/core/Evaluations/rag_evaluator.py` 
+- `/app/core/Evaluations/rag_evaluator.py`
 - `/tests/RAG/test_rag_embeddings_integration.py`
 
 These should be updated to use the new consolidated implementation at `/app/core/RAG/rag_service/`

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 class TestPromptCRUDEndpoints:
     """Test prompt CRUD operations through API."""
-    
+
     @pytest.mark.integration
     def test_create_prompt_endpoint(self, test_client, auth_headers, sample_prompt):
         """Test creating a prompt via API."""
@@ -36,7 +36,7 @@ class TestPromptCRUDEndpoints:
         data = response.json()
         assert 'id' in data and data['id'] > 0
         assert data['name'] == payload['name']
-    
+
     @pytest.mark.integration
     def test_get_prompt_endpoint(self, test_client, auth_headers):
         """Test getting a prompt via API."""
@@ -51,19 +51,19 @@ class TestPromptCRUDEndpoints:
             headers=auth_headers
         )
         prompt_id = create_response.json()['id']
-        
+
         # Then get it
         response = test_client.get(
             f"/api/v1/prompts/{prompt_id}",
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert data['name'] == 'API Test Prompt'
         assert data.get('details') == 'Test content {{variable}}'
         assert 'test' in data.get('keywords', [])
-    
+
     @pytest.mark.integration
     def test_list_prompts_endpoint(self, test_client, auth_headers):
         """Test listing prompts via API."""
@@ -84,7 +84,7 @@ class TestPromptCRUDEndpoints:
         data = response.json()
         assert 'items' in data
         assert len(data['items']) <= 2
-    
+
     @pytest.mark.integration
     def test_update_prompt_endpoint(self, test_client, auth_headers):
         """Test updating a prompt via API."""
@@ -115,7 +115,7 @@ class TestPromptCRUDEndpoints:
         data = update_response.json()
         assert data['id'] == prompt_id
         assert data.get('details') == 'Updated content {{new_var}}'
-    
+
     @pytest.mark.integration
     def test_delete_prompt_endpoint(self, test_client, auth_headers):
         """Test deleting a prompt via API."""
@@ -157,7 +157,7 @@ class TestVersionEndpoints:
 
 class TestSearchEndpoints:
     """Test search and filter endpoints."""
-    
+
     @pytest.mark.integration
     def test_search_prompts_endpoint(self, test_client, auth_headers):
         """Test searching prompts via API."""
@@ -172,11 +172,11 @@ class TestSearchEndpoints:
             params={'search_query': 'assistant', 'search_fields': ['details']},
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         data = response.json()
         assert 'items' in data and data['total_matches'] >= 1
-    
+
     @pytest.mark.integration
     def test_search_by_keywords(self, test_client, auth_headers):
         """Search using keywords field via FTS."""
@@ -195,7 +195,7 @@ class TestSearchEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data['total_matches'] >= 1
-    
+
     @pytest.mark.integration
     def test_search_by_author(self, test_client, auth_headers):
         """Search by author via search endpoint."""
@@ -273,7 +273,7 @@ class TestBulkOperationsEndpoints:
 
 class TestCollectionEndpoints:
     """Test collection management endpoints."""
-    
+
     @pytest.mark.integration
     def test_create_collection_endpoint(self, test_client, auth_headers):
         """Test creating a collection via API."""
@@ -290,7 +290,7 @@ class TestCollectionEndpoints:
                 headers=auth_headers
             )
             prompt_ids.append(response.json()['prompt_id'])
-        
+
         # Create collection
         collection_response = test_client.post(
             "/api/v1/prompts/collections/create",
@@ -301,12 +301,12 @@ class TestCollectionEndpoints:
             },
             headers=auth_headers
         )
-        
+
         assert collection_response.status_code == 200
         data = collection_response.json()
         assert 'collection_id' in data
         assert data['collection_id'] > 0
-    
+
     @pytest.mark.integration
     def test_get_collection_endpoint(self, test_client, auth_headers):
         """Test getting a collection via API."""
@@ -321,13 +321,13 @@ class TestCollectionEndpoints:
             headers=auth_headers
         )
         collection_id = create_response.json()['collection_id']
-        
+
         # Get collection
         get_response = test_client.get(
             f"/api/v1/prompts/collections/{collection_id}",
             headers=auth_headers
         )
-        
+
         assert get_response.status_code == 200
         data = get_response.json()
         assert data['name'] == 'Get Test'
@@ -339,7 +339,7 @@ class TestCollectionEndpoints:
 
 class TestErrorHandling:
     """Test API error handling."""
-    
+
     @pytest.mark.integration
     def test_not_found_error(self, test_client, auth_headers):
         """Test 404 for non-existent prompt."""
@@ -347,11 +347,11 @@ class TestErrorHandling:
             "/api/v1/prompts/99999",
             headers=auth_headers
         )
-        
+
         assert response.status_code == 404
         data = response.json()
         assert 'detail' in data
-    
+
     @pytest.mark.integration
     def test_validation_error(self, test_client, auth_headers):
         """Test 422 for invalid data."""
@@ -363,18 +363,18 @@ class TestErrorHandling:
             },
             headers=auth_headers
         )
-        
+
         assert response.status_code == 422
         data = response.json()
         assert 'detail' in data
-    
+
     @pytest.mark.integration
     def test_unauthorized_error(self, test_client):
         """Test 401 for missing auth."""
         response = test_client.get("/api/v1/prompts")
-        
+
         assert response.status_code in [401, 403]
-    
+
     @pytest.mark.integration
     def test_duplicate_prompt_error(self, test_client, auth_headers):
         """Test handling duplicate prompt names."""
@@ -390,7 +390,7 @@ class TestErrorHandling:
         )
         # Creation may return 201 (Created) or 200 depending on API semantics
         assert first_response.status_code in [200, 201]
-        
+
         # Try to create duplicate
         duplicate_response = test_client.post(
             "/api/v1/prompts",
@@ -401,7 +401,7 @@ class TestErrorHandling:
             },
             headers=auth_headers
         )
-        
+
         assert duplicate_response.status_code in [400, 409]
 
 # ========================================================================
@@ -410,7 +410,7 @@ class TestErrorHandling:
 
 class TestPaginationAndFiltering:
     """Test pagination and filtering in endpoints."""
-    
+
     @pytest.mark.integration
     def test_pagination_endpoint(self, test_client, auth_headers):
         """Test pagination in list endpoint."""
@@ -427,25 +427,25 @@ class TestPaginationAndFiltering:
             params={'page': 1, 'per_page': 2},
             headers=auth_headers
         )
-        
+
         assert page1_response.status_code == 200
         page1_data = page1_response.json()
         assert len(page1_data['items']) <= 2
-        
+
         # Get second page
         page2_response = test_client.get(
             "/api/v1/prompts",
             params={'page': 2, 'per_page': 2},
             headers=auth_headers
         )
-        
+
         assert page2_response.status_code == 200
         page2_data = page2_response.json()
-        
+
         # Ensure different results
         if page1_data['items'] and page2_data['items']:
             assert page1_data['items'][0]['id'] != page2_data['items'][0]['id']
-    
+
     @pytest.mark.integration
     def test_sorting_endpoint(self, test_client, auth_headers):
         """Test sorting in list endpoint."""

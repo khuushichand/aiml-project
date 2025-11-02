@@ -39,7 +39,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 
 class RegistrationService:
     """Service for user registration with full transaction safety"""
-    
+
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
@@ -50,78 +50,78 @@ class RegistrationService:
         self.settings = settings or get_settings()
         self.db_pool = db_pool
         self.password_service = password_service or get_password_service()
-        
+
         # Check if registration is enabled
         self.registration_enabled = self.settings.ENABLE_REGISTRATION
         self.require_code = self.settings.REQUIRE_REGISTRATION_CODE
-        
+
         logger.info(
             f"RegistrationService initialized (enabled={self.registration_enabled}, "
             f"require_code={self.require_code})"
         )
-    
+
     async def initialize(self):
         """Initialize the registration service"""
         if not self.db_pool:
             self.db_pool = await get_db_pool()
-    
+
     def generate_registration_code(self, length: int = 24) -> str:
         """
         Generate a secure registration code
-        
+
         Args:
             length: Length of the code
-            
+
         Returns:
             Secure random alphanumeric code
         """
         alphabet = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alphabet) for _ in range(length))
-    
+
     def _create_user_directories(self, user_id: int) -> bool:
         """
         Create user directories (runs in thread pool)
-        
+
         Args:
             user_id: User's database ID
-            
+
         Returns:
             True if successful, False otherwise
         """
         try:
             base_path = Path(self.settings.USER_DATA_BASE_PATH)
             user_dir = base_path / str(user_id)
-            
+
             # Create main user directory
             user_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Create subdirectories
             subdirs = ["media", "notes", "embeddings", "exports", "temp"]
             for subdir in subdirs:
                 (user_dir / subdir).mkdir(exist_ok=True)
-            
+
             # Create user-specific ChromaDB directory if configured
             if self.settings.CHROMADB_BASE_PATH:
                 chroma_path = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
                 chroma_path.mkdir(parents=True, exist_ok=True)
-            
+
             # Set permissions on Unix-like systems
             if os.name != 'nt':
                 os.chmod(user_dir, 0o750)
                 for subdir in subdirs:
                     os.chmod(user_dir / subdir, 0o750)
-            
+
             logger.debug(f"Created directories for user {user_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to create directories for user {user_id}: {e}")
             return False
-    
+
     def _cleanup_user_directories(self, user_id: int):
         """
         Clean up user directories (for rollback)
-        
+
         Args:
             user_id: User's database ID
         """
@@ -130,18 +130,18 @@ class RegistrationService:
             user_dir = Path(self.settings.USER_DATA_BASE_PATH) / str(user_id)
             if user_dir.exists():
                 shutil.rmtree(user_dir, ignore_errors=True)
-            
+
             # Remove ChromaDB directory
             if self.settings.CHROMADB_BASE_PATH:
                 chroma_dir = Path(self.settings.CHROMADB_BASE_PATH) / str(user_id)
                 if chroma_dir.exists():
                     shutil.rmtree(chroma_dir, ignore_errors=True)
-            
+
             logger.debug(f"Cleaned up directories for user {user_id}")
-            
+
         except Exception as e:
             logger.error(f"Error cleaning up directories for user {user_id}: {e}")
-    
+
     async def register_user(
         self,
         username: str,
@@ -152,34 +152,34 @@ class RegistrationService:
     ) -> Dict[str, Any]:
         """
         Register a new user with full transaction safety
-        
+
         Args:
             username: Username (must be unique)
             email: Email address (must be unique)
             password: Plain text password
             registration_code: Optional registration code
             created_by: ID of user creating this account (for admin creation)
-            
+
         Returns:
             Dictionary with user information
-            
+
         Raises:
             Various registration exceptions
         """
         # Check if registration is enabled
         if not self.registration_enabled and not created_by:
             raise RegistrationDisabledError()
-        
+
         # Initialize if needed
         if not self.db_pool:
             await self.initialize()
-        
+
         # Validate password strength
         self.password_service.validate_password_strength(password, username)
-        
+
         user_id = None
         directories_created = False
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 # Check for duplicate username/email
@@ -204,37 +204,37 @@ class RegistrationService:
                         (username.lower(), email.lower())
                     )
                     existing = await cursor.fetchone()
-                
+
                 if existing:
                     if existing[0] and existing[0].lower() == username.lower():
                         raise DuplicateUserError("username")
                     else:
                         raise DuplicateUserError("email")
-                
+
                 # Validate registration code if required
                 role = self.settings.DEFAULT_USER_ROLE
                 storage_quota = self.settings.DEFAULT_STORAGE_QUOTA_MB
-                
+
                 if self.require_code and not created_by:
                     if not registration_code:
                         raise InvalidRegistrationCodeError("Registration code required")
-                    
+
                     # Validate and use registration code
                     code_info = await self._validate_and_use_registration_code(
                         registration_code, conn
                     )
                     role = code_info.get('role_to_grant', role)
-                    
+
                     # Check if code specifies storage quota
                     if 'storage_quota_mb' in code_info:
                         storage_quota = code_info['storage_quota_mb']
-                
+
                 # Hash the password
                 password_hash = self.password_service.hash_password(password)
-                
+
                 # Generate UUID
                 user_uuid = str(uuid4())
-                
+
                 # Create user
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
@@ -264,16 +264,16 @@ class RegistrationService:
                          1, 0 if self.require_code else 1, created_by, storage_quota)
                     )
                     user_id = cursor.lastrowid
-                
+
                 # Add password to history
                 await self._add_password_to_history(user_id, password_hash, conn)
-                
+
                 # Create user directories (before committing transaction)
                 directories_created = await asyncio.to_thread(
                     self._create_user_directories,
                     user_id
                 )
-                
+
                 if not directories_created:
                     if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                         logger.warning(f"TEST_MODE: Skipping directory creation failure for user {user_id}")
@@ -282,13 +282,13 @@ class RegistrationService:
                             f"user_databases/{user_id}",
                             "Failed to create user directories"
                         )
-                
+
                 # Log registration in audit log
                 await self._log_registration(
-                    user_id, username, email, role, 
+                    user_id, username, email, role,
                     created_by, registration_code is not None, conn
                 )
-                
+
                 # If we get here, everything succeeded
                 try:
                     _s = get_settings()
@@ -302,7 +302,7 @@ class RegistrationService:
                     logger.info(
                         f"Successfully registered user: {username} (ID: {user_id}, Role: {role})"
                     )
-                
+
                 return {
                     "user_id": user_id,
                     "uuid": user_uuid,
@@ -312,12 +312,12 @@ class RegistrationService:
                     "is_verified": not self.require_code,
                     "storage_quota_mb": storage_quota
                 }
-                
+
         except Exception as e:
             # Rollback: Clean up directories if they were created
             if user_id and directories_created:
                 await asyncio.to_thread(self._cleanup_user_directories, user_id)
-            
+
             # Log the error
             try:
                 _s = get_settings()
@@ -327,10 +327,10 @@ class RegistrationService:
                     logger.error(f"Registration failed for {username}: {e}")
             except Exception:
                 logger.error(f"Registration failed for {username}: {e}")
-            
+
             # Re-raise the exception
             raise
-    
+
     async def _validate_and_use_registration_code(
         self,
         code: str,
@@ -338,14 +338,14 @@ class RegistrationService:
     ) -> Dict[str, Any]:
         """
         Validate and consume a registration code
-        
+
         Args:
             code: Registration code
             conn: Database connection (in transaction)
-            
+
         Returns:
             Code information
-            
+
         Raises:
             InvalidRegistrationCodeError: If code is invalid
         """
@@ -361,22 +361,22 @@ class RegistrationService:
                 """,
                 code
             )
-            
+
             if not code_row:
                 raise InvalidRegistrationCodeError("Invalid registration code")
-            
+
             # Check if active
             if not code_row['is_active']:
                 raise InvalidRegistrationCodeError("Registration code is inactive")
-            
+
             # Check expiration
             if code_row['expires_at'] < datetime.utcnow():
                 raise RegistrationCodeExpiredError()
-            
+
             # Check usage limit
             if code_row['times_used'] >= code_row['max_uses']:
                 raise RegistrationCodeExhaustedError()
-            
+
             # Update usage count
             await conn.execute(
                 """
@@ -386,9 +386,9 @@ class RegistrationService:
                 """,
                 code_row['id']
             )
-            
+
             return dict(code_row)
-            
+
         else:
             # SQLite - Manual locking with transaction
             cursor = await conn.execute(
@@ -401,10 +401,10 @@ class RegistrationService:
                 (code,)
             )
             code_row = await cursor.fetchone()
-            
+
             if not code_row:
                 raise InvalidRegistrationCodeError("Invalid registration code")
-            
+
             # Convert to dict for easier access
             code_info = {
                 "id": code_row[0],
@@ -415,17 +415,17 @@ class RegistrationService:
                 "is_active": code_row[5],
                 "description": code_row[6]
             }
-            
+
             # Validate
             if not code_info['is_active']:
                 raise InvalidRegistrationCodeError("Registration code is inactive")
-            
+
             if code_info['expires_at'] < datetime.utcnow():
                 raise RegistrationCodeExpiredError()
-            
+
             if code_info['times_used'] >= code_info['max_uses']:
                 raise RegistrationCodeExhaustedError()
-            
+
             # Update usage
             await conn.execute(
                 """
@@ -435,9 +435,9 @@ class RegistrationService:
                 """,
                 (code_info['id'],)
             )
-            
+
             return code_info
-    
+
     async def _add_password_to_history(
         self,
         user_id: int,
@@ -467,7 +467,7 @@ class RegistrationService:
         except Exception as e:
             logger.error(f"Failed to add password to history: {e}")
             # Don't fail registration for this
-    
+
     async def _log_registration(
         self,
         user_id: int,
@@ -487,7 +487,7 @@ class RegistrationService:
                 "used_registration_code": used_code,
                 "created_by": created_by
             }
-            
+
             if hasattr(conn, 'execute'):
                 # PostgreSQL
                 await conn.execute(
@@ -517,7 +517,7 @@ class RegistrationService:
         except Exception as e:
             logger.error(f"Failed to log registration: {e}")
             # Don't fail registration for this
-    
+
     async def create_registration_code(
         self,
         created_by: int,
@@ -529,7 +529,7 @@ class RegistrationService:
     ) -> Dict[str, Any]:
         """
         Create a new registration code
-        
+
         Args:
             created_by: ID of user creating the code
             max_uses: Maximum number of uses
@@ -537,18 +537,18 @@ class RegistrationService:
             role_to_grant: Role to grant to users
             description: Optional description
             allowed_email_domain: Restrict to email domain
-            
+
         Returns:
             Registration code information
         """
         if not self.db_pool:
             await self.initialize()
-        
+
         code = self.generate_registration_code()
         expires_at = datetime.utcnow() + timedelta(
             days=expires_in_days or self.settings.REGISTRATION_CODE_DEFAULT_EXPIRY_DAYS
         )
-        
+
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchval'):
@@ -580,12 +580,12 @@ class RegistrationService:
                     )
                     code_id = cursor.lastrowid
                     await conn.commit()
-                
+
                 logger.info(
                     f"Created registration code {code[:8]}... "
                     f"(max_uses={max_uses}, role={role_to_grant})"
                 )
-                
+
                 return {
                     "id": code_id,
                     "code": code,
@@ -594,11 +594,11 @@ class RegistrationService:
                     "role_to_grant": role_to_grant,
                     "description": description
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to create registration code: {e}")
             raise RegistrationError(f"Failed to create registration code: {e}")
-    
+
     async def list_registration_codes(
         self,
         active_only: bool = True,
@@ -606,47 +606,47 @@ class RegistrationService:
     ) -> List[Dict[str, Any]]:
         """
         List registration codes
-        
+
         Args:
             active_only: Only show active codes
             created_by: Filter by creator
-            
+
         Returns:
             List of registration codes
         """
         if not self.db_pool:
             await self.initialize()
-        
+
         query_parts = ["SELECT * FROM registration_codes WHERE 1=1"]
         params = []
-        
+
         if active_only:
             query_parts.append("AND is_active = ?")
             params.append(1 if self.db_pool.pool else True)
             query_parts.append("AND expires_at > ?")
             params.append(datetime.utcnow())
-        
+
         if created_by:
             query_parts.append("AND created_by = ?")
             params.append(created_by)
-        
+
         query_parts.append("ORDER BY created_at DESC")
         query = " ".join(query_parts)
-        
+
         codes = await self.db_pool.fetchall(query, *params)
         return codes
-    
+
     async def revoke_registration_code(self, code_id: int):
         """Revoke a registration code"""
         if not self.db_pool:
             await self.initialize()
-        
+
         await self.db_pool.execute(
             "UPDATE registration_codes SET is_active = ? WHERE id = ?",
             False, code_id
         )
         logger.info(f"Revoked registration code {code_id}")
-    
+
     async def shutdown(self):
         """Shutdown the registration service"""
         logger.info("RegistrationService shutdown complete (no dedicated executor)")

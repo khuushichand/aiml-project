@@ -68,4 +68,3 @@ def test_media_ingest_local_text_chunking(client_with_wf: TestClient, tmp_path):
     # basic shape
     first = out["chunks"][0]
     assert "chunker_name" in first and "metadata" in first
-

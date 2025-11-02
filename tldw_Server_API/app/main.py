@@ -613,10 +613,10 @@ READINESS_STATE = {"ready": True}
 async def lifespan(app: FastAPI):
     """
     Manage application startup and shutdown for the given FastAPI app, performing validations, initializing services, scheduling deferred non-critical startup tasks, and running background workers.
-    
+
     Parameters:
         app (FastAPI): The FastAPI application instance whose lifespan is managed.
-    
+
     Returns:
         None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
     """
@@ -1019,7 +1019,7 @@ async def lifespan(app: FastAPI):
             logger.debug(f"Failed to schedule deferred startup task: {_ds_e}")
     else:
         await _run_heavy_initializations(deferred=False)
-    
+
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
@@ -2574,13 +2574,13 @@ if WEBUI_DIR.exists():
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers
         from fastapi.responses import JSONResponse
         from tldw_Server_API.app.core.config import load_comprehensive_config
-        
+
         config = {
             "apiUrl": "",  # Empty means use same origin
             "apiKey": "",  # Default empty
             "_comment": "Auto-generated configuration"
         }
-        
+
         # In single user mode, include the API key unless running in production
         import os as _os
         _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2610,7 +2610,7 @@ if WEBUI_DIR.exists():
                     config["auth"]["preferApiKeyInMultiUser"] = True
             except Exception:
                 pass
-        
+
         # Add LLM providers information
         try:
             providers_info = get_configured_providers()
@@ -2648,7 +2648,7 @@ if WEBUI_DIR.exists():
             config["chat"] = {"default_save_to_db": default_save}
         except Exception as e:
             logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
-        
+
         return JSONResponse(content=config)
 
     # Gate WebUI static mount and config endpoint
@@ -2977,13 +2977,13 @@ else:
 try:
     if route_enabled("metrics"):
         app.add_api_route("/metrics", metrics, include_in_schema=False)
-        app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"]) 
+        app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"])
     else:
         logger.info("Route disabled by policy: metrics")
 except Exception as _metrics_rt_err:
     logger.warning(f"Route gating error for metrics; including by default. Error: {_metrics_rt_err}")
     app.add_api_route("/metrics", metrics, include_in_schema=False)
-    app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"]) 
+    app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"])
 
 # Router for trash endpoints - deletion of media items / trash file handling (FIXME: Secure delete vs lag on delete?)
 #app.include_router(trash_router, prefix=f"{API_V1_PREFIX}/trash", tags=["trash"])

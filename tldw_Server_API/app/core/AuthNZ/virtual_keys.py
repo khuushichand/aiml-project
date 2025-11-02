@@ -64,10 +64,10 @@ async def summarize_usage_for_key_day(key_id: int, day_iso: Optional[str] = None
     # Use a proper date for Postgres; SQLite path will use ISO string
     """
     Summarizes total tokens and USD cost for a given API key on a specific UTC day.
-    
+
     Parameters:
         day_iso (Optional[str|datetime.date]): ISO date string (YYYY-MM-DD) or a date object specifying the UTC day to summarize. If omitted, the current UTC date is used.
-    
+
     Returns:
         dict: A dictionary with keys:
             - "tokens" (int): Total tokens consumed on the specified day.
@@ -122,7 +122,7 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
     # Use a rolling 30-day window to avoid calendar-boundary flakiness
     """
     Summarizes token and USD usage for a key over a rolling 30-day UTC window.
-    
+
     Returns:
         dict: A mapping with keys `"tokens"` and `"usd"`. `"tokens"` is the total tokens consumed (int) and `"usd"` is the total cost in USD (float); both are 0 when no usage records are found.
     """
@@ -156,10 +156,10 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
         def _sqlite_fmt(iso: str) -> str:
             """
             Format an ISO datetime string or datetime object into a SQLite-compatible naive UTC timestamp.
-            
+
             Parameters:
                 iso (str | datetime): An ISO-formatted datetime string or a datetime instance. If a string is provided it is parsed with datetime.fromisoformat.
-            
+
             Returns:
                 str: Timestamp in "YYYY-MM-DD HH:MM:SS" format representing the equivalent instant in UTC with no timezone information.
             """
@@ -193,7 +193,7 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
 async def is_key_over_budget(key_id: int) -> Dict[str, Any]:
     """
     Determine whether the given API key has exceeded any configured consumption limits for its current day and rolling 30-day window.
-    
+
     Returns:
         A dictionary with:
         - `over` - `True` if any configured limit is exceeded, `False` otherwise.

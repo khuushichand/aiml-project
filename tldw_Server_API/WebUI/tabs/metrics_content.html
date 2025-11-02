@@ -3,7 +3,7 @@
     <div class="endpoint-section">
         <h2>System Metrics Dashboard</h2>
         <p>Real-time monitoring of system performance and health metrics.</p>
-        
+
         <div class="metrics-controls">
             <button class="btn btn-primary" onclick="refreshMetrics()">
                 Refresh Metrics
@@ -15,50 +15,50 @@
                 Stop Auto-Refresh
             </button>
         </div>
-        
+
         <div class="metrics-grid mt-3">
             <div class="metric-card">
                 <h3>API Health</h3>
                 <div class="metric-value" id="metric-api-health">--</div>
                 <div class="metric-label">Status</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>Request Rate</h3>
                 <div class="metric-value" id="metric-request-rate">--</div>
                 <div class="metric-label">req/min</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>Response Time</h3>
                 <div class="metric-value" id="metric-response-time">--</div>
                 <div class="metric-label">ms (p50)</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>Active Connections</h3>
                 <div class="metric-value" id="metric-active-connections">--</div>
                 <div class="metric-label">connections</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>Error Rate</h3>
                 <div class="metric-value" id="metric-error-rate">--</div>
                 <div class="metric-label">errors/min</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>CPU Usage</h3>
                 <div class="metric-value" id="metric-cpu-usage">--</div>
                 <div class="metric-label">percent</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>Memory Usage</h3>
                 <div class="metric-value" id="metric-memory-usage">--</div>
                 <div class="metric-label">MB</div>
             </div>
-            
+
             <div class="metric-card">
                 <h3>Database Size</h3>
                 <div class="metric-value" id="metric-database-size">--</div>
@@ -73,7 +73,7 @@
                 </ul>
             </div>
         </div>
-        
+
         <div class="endpoint-section" style="margin-top:16px;">
             <h3>
                 Embeddings Orchestrator
@@ -125,14 +125,14 @@
             <span class="endpoint-path">/metrics - Prometheus Metrics</span>
         </h2>
         <p>Get metrics in Prometheus format for scraping by monitoring systems.</p>
-        
+
         <button class="api-button" onclick="makeRequest('metricsPrometheus', 'GET', '/metrics', 'none')">
             Get Prometheus Metrics
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="metricsPrometheus_curl">---</pre>
-        
+
         <h3>Response (Prometheus Format):</h3>
         <pre id="metricsPrometheus_response">---</pre>
     </div>
@@ -143,7 +143,7 @@
             <span class="endpoint-path">/api/v1/metrics - JSON Metrics</span>
         </h2>
         <p>Get current metrics in JSON format for custom monitoring solutions.</p>
-        
+
         <div class="form-group">
             <label for="metricsJSON_category">Metric Category:</label>
             <select id="metricsJSON_category">
@@ -155,14 +155,14 @@
                 <option value="llm">LLM Metrics</option>
             </select>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('metricsJSON', 'GET', '/api/v1/metrics', 'query')">
             Get JSON Metrics
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="metricsJSON_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="metricsJSON_response">---</pre>
     </div>
@@ -173,14 +173,14 @@
             <span class="endpoint-path">/api/v1/metrics/health - Metrics Service Health</span>
         </h2>
         <p>Check the health status of the metrics collection service.</p>
-        
+
         <button class="api-button" onclick="makeRequest('metricsHealth', 'GET', '/api/v1/metrics/health', 'none')">
             Check Metrics Health
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="metricsHealth_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="metricsHealth_response">---</pre>
     </div>
@@ -191,7 +191,7 @@
             <span class="endpoint-path">/api/v1/metrics/reset - Reset Metrics</span>
         </h2>
         <p>Reset metrics counters. Use with caution in production.</p>
-        
+
         <div class="form-group">
             <label for="metricsReset_payload">Reset Configuration (JSON):</label>
             <textarea id="metricsReset_payload" class="code-input" rows="10">{
@@ -202,14 +202,14 @@
   "admin_token": "your_admin_token"
 }</textarea>
         </div>
-        
+
         <button class="api-button btn-warning" onclick="if(confirm('Are you sure you want to reset metrics?')) makeRequest('metricsReset', 'POST', '/api/v1/metrics/reset', 'json')">
             Reset Metrics
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="metricsReset_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="metricsReset_response">---</pre>
     </div>
@@ -628,7 +628,7 @@
     <div class="endpoint-section">
         <h2>Metrics Analysis Tools</h2>
         <p>Analyze historical metrics data and generate insights.</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -655,7 +655,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="form-group">
             <label for="metricsAnalysis_aggregation">Aggregation:</label>
             <select id="metricsAnalysis_aggregation">
@@ -667,24 +667,24 @@
                 <option value="p99">99th Percentile</option>
             </select>
         </div>
-        
+
         <button class="btn btn-primary" onclick="runMetricsAnalysis()">
             Run Analysis
         </button>
-        
+
         <div id="metricsAnalysis_chart" class="chart-container mt-3">
             <!-- Chart will be rendered here -->
         </div>
-        
+
         <div id="metricsAnalysis_insights" class="insights-panel mt-3">
             <!-- Insights will appear here -->
         </div>
     </div>
-    
+
     <div class="endpoint-section mt-4">
         <h2>Alerts Configuration</h2>
         <p>Set up alerts based on metric thresholds.</p>
-        
+
         <div class="form-group">
             <label for="metricsAlerts_config">Alert Configuration (JSON):</label>
             <textarea id="metricsAlerts_config" class="code-input" rows="20">{
@@ -720,7 +720,7 @@
   ]
 }</textarea>
         </div>
-        
+
         <button class="btn btn-primary" onclick="saveMetricsAlerts()">
             Save Alerts
         </button>
@@ -774,7 +774,7 @@ function runMetricsAnalysis() {
     const timeRange = document.getElementById('metricsAnalysis_timeRange').value;
     const metric = document.getElementById('metricsAnalysis_metric').value;
     const aggregation = document.getElementById('metricsAnalysis_aggregation').value;
-    
+
     // Simulate analysis results
     const chartContainer = document.getElementById('metricsAnalysis_chart');
     chartContainer.innerHTML = `
@@ -791,7 +791,7 @@ function runMetricsAnalysis() {
             </div>
         </div>
     `;
-    
+
     const insightsPanel = document.getElementById('metricsAnalysis_insights');
     insightsPanel.innerHTML = `
         <div class="insights">

@@ -123,7 +123,7 @@ cat > .env << 'EOF'
 AUTH_MODE=multi_user
 DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost/tldw_multiuser
 
-# JWT Configuration  
+# JWT Configuration
 JWT_SECRET_KEY=test-secret-key-for-testing-only
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60

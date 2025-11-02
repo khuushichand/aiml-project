@@ -121,13 +121,13 @@ sequenceDiagram
     API->>JobManager: Create Job
     JobManager->>Queue: Enqueue Download Task
     API-->>Client: Job ID (202 Accepted)
-    
+
     Worker->>Queue: Poll Download Task
     Worker->>Storage: Download Audio
     Worker->>Queue: Enqueue Conversion Task
-    
+
     Note over Queue,Worker: Fan-out pattern continues through pipeline
-    
+
     Worker->>Storage: Store Results
     Worker->>JobManager: Update Job Status
     Client->>API: GET /jobs/{id}/status
@@ -151,7 +151,7 @@ class JobManager:
         self.redis = redis_client
         self.db = db_session
         self.job_states = {}
-    
+
     async def create_job(self, audio_input: AudioInput) -> str:
         job_id = str(uuid.uuid4())
         job = Job(
@@ -163,7 +163,7 @@ class JobManager:
         await self.save_job(job)
         await self.enqueue_download(job)
         return job_id
-    
+
     async def update_job_status(self, job_id: str, status: JobStatus, metadata: dict = None):
         # Update job state with distributed lock
         async with self.redis.lock(f"job:{job_id}:lock"):
@@ -184,7 +184,7 @@ class BaseWorker(ABC):
         self.redis = redis_client
         self.config = config
         self.metrics = MetricsCollector()
-        
+
     async def start(self):
         while True:
             try:
@@ -193,11 +193,11 @@ class BaseWorker(ABC):
                     await self.process_task(task)
             except Exception as e:
                 await self.handle_error(e)
-    
+
     @abstractmethod
     async def process_task(self, task: Task):
         pass
-    
+
     async def poll_task(self) -> Optional[Task]:
         # Use Redis BLPOP for efficient polling
         result = await self.redis.blpop(self.queue_name, timeout=5)
@@ -217,16 +217,16 @@ class DownloadWorker(BaseWorker):
             connector=aiohttp.TCPConnector(limit=100, limit_per_host=10)
         )
         self.semaphore = asyncio.Semaphore(5)  # Max 5 concurrent downloads
-    
+
     async def process_task(self, task: DownloadTask):
         async with self.semaphore:
             try:
                 file_path = await self.download_with_retry(
-                    task.url, 
+                    task.url,
                     task.target_dir,
                     max_retries=3
                 )
-                
+
                 # Enqueue next stage
                 conversion_task = ConversionTask(
                     job_id=task.job_id,
@@ -234,7 +234,7 @@ class DownloadWorker(BaseWorker):
                     target_format="wav"
                 )
                 await self.redis.rpush("conversion_queue", conversion_task.to_json())
-                
+
             except DownloadError as e:
                 await self.handle_download_failure(task, e)
 ```
@@ -247,7 +247,7 @@ class TranscriptionWorkerPool:
     def __init__(self, num_workers: int, gpu_devices: List[int]):
         self.workers = []
         self.model_cache = ModelCache()
-        
+
         # Distribute workers across GPUs
         for i in range(num_workers):
             gpu_id = gpu_devices[i % len(gpu_devices)]
@@ -256,7 +256,7 @@ class TranscriptionWorkerPool:
                 model_cache=self.model_cache
             )
             self.workers.append(worker)
-    
+
     async def start_all(self):
         tasks = [worker.start() for worker in self.workers]
         await asyncio.gather(*tasks)
@@ -266,14 +266,14 @@ class TranscriptionWorker(BaseWorker):
         super().__init__("transcription_queue", *args, **kwargs)
         self.gpu_id = gpu_id
         self.model_cache = model_cache
-        
+
     async def process_task(self, task: TranscriptionTask):
         # Get or load model with caching
         model = await self.model_cache.get_model(
             task.model_name,
             device=f"cuda:{self.gpu_id}"
         )
-        
+
         # Process with resource monitoring
         with GPUMemoryMonitor(self.gpu_id) as monitor:
             result = await self.transcribe_audio(
@@ -281,7 +281,7 @@ class TranscriptionWorker(BaseWorker):
                 model,
                 language=task.language
             )
-            
+
         # Stream results for large files
         if result.is_large:
             await self.stream_results(task.job_id, result)
@@ -300,14 +300,14 @@ class CircuitBreaker:
         self.failure_count = 0
         self.last_failure_time = None
         self.state = CircuitState.CLOSED
-        
+
     async def call(self, func, *args, **kwargs):
         if self.state == CircuitState.OPEN:
             if self._should_attempt_reset():
                 self.state = CircuitState.HALF_OPEN
             else:
                 raise CircuitOpenError("Circuit breaker is OPEN")
-        
+
         try:
             result = await func(*args, **kwargs)
             self._on_success()
@@ -350,7 +350,7 @@ class QueueManager:
     def __init__(self, redis_client):
         self.redis = redis_client
         self._initialize_streams()
-    
+
     async def _initialize_streams(self):
         for queue_name, config in QUEUE_CONFIG.items():
             try:
@@ -387,20 +387,20 @@ class ModelCache:
         self.lru = OrderedDict()
         self.max_models = max_models
         self.lock = asyncio.Lock()
-    
+
     async def get_model(self, model_name: str, device: str):
         async with self.lock:
             key = f"{model_name}:{device}"
             if key in self.models:
                 self.lru.move_to_end(key)
                 return self.models[key]
-            
+
             # Evict LRU model if at capacity
             if len(self.models) >= self.max_models:
                 oldest = next(iter(self.lru))
                 del self.models[oldest]
                 del self.lru[oldest]
-            
+
             # Load new model
             model = await self._load_model(model_name, device)
             self.models[key] = model
@@ -443,12 +443,12 @@ class HybridProcessor:
         self.use_new_pipeline = use_new_pipeline
         self.old_processor = LegacyAudioProcessor()
         self.new_processor = FanOutAudioProcessor()
-    
+
     async def process(self, audio_input: AudioInput):
         if self.use_new_pipeline or self._should_use_new_pipeline(audio_input):
             return await self.new_processor.process(audio_input)
         return await self.old_processor.process(audio_input)
-    
+
     def _should_use_new_pipeline(self, audio_input: AudioInput) -> bool:
         # Gradual rollout logic
         return random.random() < ROLLOUT_PERCENTAGE
@@ -495,12 +495,12 @@ alerts:
     condition: queue_depth > 1000
     duration: 5m
     severity: warning
-    
+
   - name: WorkerErrorRateHigh
     condition: error_rate > 0.05
     duration: 10m
     severity: critical
-    
+
   - name: GPUMemoryExhausted
     condition: gpu_memory_used > 0.95
     duration: 2m
@@ -575,7 +575,7 @@ workers:
     timeout: 300
     retry_max: 3
     retry_delay: [1, 5, 10]
-    
+
   transcription:
     count: 5
     gpu_devices: [0, 1]

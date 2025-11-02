@@ -55,7 +55,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 ### 3. NVIDIA Parakeet TDT
 - **Model**: `parakeet`
 - **Size**: 0.6 billion parameters
-- **Variants**: 
+- **Variants**:
   - Standard (PyTorch)
   - ONNX (optimized for CPU/GPU)
   - MLX (optimized for Apple Silicon)
@@ -396,7 +396,7 @@ Example error payloads when files are missing and `embedding_local_only=true`:
 - WebSocket (unified streaming) warning frame on initialization/finalize:
 
 ```
-{ 
+{
   "type": "warning",
   "state": "diarization_unavailable",
   "message": "Diarization disabled: initialization failed",
@@ -580,7 +580,7 @@ with open("audio.wav", "rb") as f:
         "model": "parakeet",
         "response_format": "json"
     }
-    
+
     response = requests.post(url, headers=headers, files=files, data=data)
     result = response.json()
     print(result["text"])

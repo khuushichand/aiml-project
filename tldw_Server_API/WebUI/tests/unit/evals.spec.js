@@ -36,4 +36,3 @@ describe('Evals module bindings', () => {
     expect(global.makeRequest).toHaveBeenCalledWith('evalsCreate', 'POST', '/api/v1/evaluations', 'json');
   });
 });
-

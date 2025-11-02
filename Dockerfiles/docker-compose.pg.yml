@@ -47,4 +47,3 @@ volumes:
 networks:
   pgnet:
     driver: bridge
-

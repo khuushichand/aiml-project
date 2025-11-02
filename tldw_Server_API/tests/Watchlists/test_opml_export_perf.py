@@ -65,4 +65,3 @@ def test_opml_export_performance_sanity_large_set(client_with_user: TestClient):
     urls = _extract_opml_urls(r.text)
     # At least N RSS feeds appear (allow duplicates or pre-existing filters to reduce slightly)
     assert len([u for u in urls if u.startswith("https://example.com/perf")]) >= n
-

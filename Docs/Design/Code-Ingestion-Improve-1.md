@@ -67,4 +67,3 @@ This document outlines targeted, high-impact improvements for the code ingestion
 ---
 
 Suggested first milestone: AST-backed Python chunking (precise function/class/docstring boundaries) with heuristic fallback for other languages, plus token-aware sizing and stable chunk IDs. This provides immediate quality gains with limited blast radius.
-

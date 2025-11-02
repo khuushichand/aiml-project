@@ -23,7 +23,7 @@ from tldw_Server_API.tests.Evaluations.fixtures.database import create_test_data
 @pytest.mark.integration
 class TestGEvalEndpoint:
     """Integration tests for G-Eval endpoint."""
-    
+
     @pytest.mark.asyncio
     @pytest.mark.requires_llm
     async def test_geval_complete_flow(self, async_api_client, auth_headers):
@@ -38,33 +38,33 @@ class TestGEvalEndpoint:
             "api_key": "test_api_key_for_mocked_calls",
             "save_results": False
         }
-        
+
         # Send request to API
         response = await async_api_client.post(
             "/api/v1/evaluations/geval",
             json=request_data,
             headers=auth_headers
         )
-        
+
         if response.status_code != 200:
             print(f"Response status: {response.status_code}")
             print(f"Response text: {response.text}")
         assert response.status_code == 200
         result = response.json()
-        
+
         # Verify response structure matches GEvalResponse
         assert "metrics" in result
         assert "average_score" in result
         assert "summary_assessment" in result
         assert "evaluation_time" in result
         assert "metadata" in result
-        
+
         # Check evaluation_id is in metadata
         assert "evaluation_id" in result["metadata"]
-        
+
         # Check that metrics are present
         assert len(result["metrics"]) > 0
-    
+
     @pytest.mark.asyncio
     @pytest.mark.requires_llm
     async def test_geval_with_multiple_criteria(self, async_api_client, auth_headers):
@@ -76,23 +76,23 @@ class TestGEvalEndpoint:
             "api_name": "openai",
             "api_key": "test_api_key_for_mocked_calls"
         }
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/geval",
             json=request_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # All criteria should be evaluated
         assert "metrics" in result
         for criterion in request_data["metrics"]:
             assert criterion in result["metrics"]
             # Scores are normalized to 0-1
             assert 0 <= result["metrics"][criterion]["score"] <= 1
-    
+
     @pytest.mark.asyncio
     async def test_geval_persistence(self, async_api_client, auth_headers):
         """Test that G-Eval results are persisted to database."""
@@ -102,17 +102,17 @@ class TestGEvalEndpoint:
             "metrics": ["coherence"],
             "api_key": "test_api_key"
         }
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/geval",
             json=request_data,
             headers=auth_headers
         )
-        
+
         result = response.json()
         assert "metadata" in result
         eval_id = result["metadata"]["evaluation_id"]
-        
+
         # Verify data was persisted - check using the actual evaluations database
         from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
         from pathlib import Path
@@ -120,10 +120,10 @@ class TestGEvalEndpoint:
         db_env = os.environ.get("EVALUATIONS_TEST_DB_PATH")
         assert db_env, "EVALUATIONS_TEST_DB_PATH must be set for integration tests"
         db_path = Path(db_env)
-        
+
         # Use the EvaluationsDatabase to check persistence
         eval_db = EvaluationsDatabase(str(db_path))
-        
+
         # Check using the unified method
         if hasattr(eval_db, 'get_unified_evaluation'):
             stored_eval = eval_db.get_unified_evaluation(eval_id)
@@ -147,35 +147,35 @@ class TestGEvalEndpoint:
                         (eval_id,)
                     )
                 stored_eval = cursor.fetchone()
-        
+
         assert stored_eval is not None
 
 
 class TestRAGEvaluationEndpoint:
     """Integration tests for RAG evaluation endpoint."""
-    
+
     @pytest.mark.asyncio
     @pytest.mark.requires_llm
     async def test_rag_evaluation_complete_flow(self, async_api_client, auth_headers):
         """Test complete RAG evaluation with all metrics."""
         rag_data = SampleDataGenerator.generate_rag_evaluation_data()
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/rag",
             json=rag_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Verify all RAG metrics are present
         assert "metrics" in result
         assert "context_relevance" in result["metrics"]
         assert "answer_faithfulness" in result["metrics"]
         assert "answer_relevance" in result["metrics"]
         assert "overall_score" in result
-    
+
     @pytest.mark.asyncio
     @pytest.mark.requires_llm
     @pytest.mark.requires_embeddings
@@ -185,20 +185,20 @@ class TestRAGEvaluationEndpoint:
         rag_data["use_embeddings"] = True
         rag_data["embedding_provider"] = "openai"
         rag_data["embedding_model"] = "text-embedding-3-small"
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/rag",
             json=rag_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Should include similarity metric when ground truth provided
         if rag_data.get("ground_truth"):
             assert "answer_similarity" in result["metrics"]
-    
+
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_rag_concurrent_evaluations(self, async_api_client, auth_headers):
@@ -241,29 +241,29 @@ class TestRAGEvaluationEndpoint:
 @pytest.mark.integration
 class TestResponseQualityEndpoint:
     """Integration tests for response quality evaluation."""
-    
+
     @pytest.mark.asyncio
     @pytest.mark.requires_llm
     async def test_response_quality_evaluation(self, async_api_client, auth_headers):
         """Test response quality evaluation with all criteria."""
         quality_data = SampleDataGenerator.generate_response_quality_data()
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/response-quality",
             json=quality_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Verify all quality metrics
         assert "metrics" in result
         assert "overall_quality" in result
-        
+
         # Check that we have some metrics (may not match exact criteria names due to evaluation logic)
         assert len(result["metrics"]) > 0
-    
+
     @pytest.mark.asyncio
     @pytest.mark.requires_llm
     async def test_response_quality_custom_weights(self, async_api_client, auth_headers):
@@ -275,16 +275,16 @@ class TestResponseQualityEndpoint:
             "fluency": 0.15,
             "factuality": 0.15
         }
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/response-quality",
             json=quality_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Overall quality should be calculated
         assert "overall_quality" in result
         assert 0 <= result["overall_quality"] <= 1
@@ -293,25 +293,25 @@ class TestResponseQualityEndpoint:
 @pytest.mark.unit
 class TestBatchEvaluationEndpoint:
     """Integration tests for batch evaluation."""
-    
+
     @pytest.mark.asyncio
     async def test_batch_evaluation_mixed_types(self, async_api_client, auth_headers):
         """Test batch evaluation with different evaluation types."""
         batch_data = SampleDataGenerator.generate_batch_evaluation_request(size=3)
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/batch",
             json=batch_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # Should have results for all evaluations
         assert "results" in result
         assert len(result["results"]) == len(batch_data["items"])
-        
+
         # Each result should have status
         for eval_result in result["results"]:
             assert "status" in eval_result
@@ -345,30 +345,30 @@ class TestBatchEvaluationEndpoint:
             "RateLimit-Reset",
         ]:
             assert key in hdrs, f"Missing header: {key}"
-    
+
     @pytest.mark.asyncio
     async def test_batch_parallel_processing(self, async_api_client, auth_headers):
         """Test that batch evaluations are processed in parallel."""
         batch_data = SampleDataGenerator.generate_batch_evaluation_request(size=5)
         batch_data["parallel_workers"] = 3
-        
+
         import time
         start_time = time.time()
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/batch",
             json=batch_data,
             headers=auth_headers
         )
-        
+
         elapsed = time.time() - start_time
-        
+
         assert response.status_code == 200
-        
+
         # Parallel processing should be faster than sequential
         # (This is a soft assertion - depends on system)
         assert elapsed < len(batch_data["items"]) * 2
-    
+
     @pytest.mark.asyncio
     async def test_batch_fail_fast_behavior(self, async_api_client, auth_headers):
         """Test fail-fast behavior in batch processing."""
@@ -383,13 +383,13 @@ class TestBatchEvaluationEndpoint:
             "parallel_workers": 1,
             "continue_on_error": False  # fail_fast = True
         }
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/batch",
             json=batch_data,
             headers=auth_headers
         )
-        
+
         # Should either get validation error (422) or process with failures (200/207)
         if response.status_code == 422:
             # Pydantic validation caught the invalid type
@@ -398,7 +398,7 @@ class TestBatchEvaluationEndpoint:
             # Should return partial results with error
             assert response.status_code in [200, 207]  # 207 for partial success
             result = response.json()
-            
+
             # Should have at least one failure
             failed = [r for r in result.get("results", []) if r.get("status") == "failed"]
             assert len(failed) > 0 or result.get("failed", 0) > 0
@@ -407,52 +407,52 @@ class TestBatchEvaluationEndpoint:
 @pytest.mark.integration
 class TestEvaluationHistoryEndpoint:
     """Integration tests for evaluation history."""
-    
+
     @pytest.mark.asyncio
     async def test_get_evaluation_history(self, async_api_client, auth_headers, temp_db_path):
         """Test retrieving evaluation history."""
         # Seed database with history
         helper = create_test_database_with_data(str(temp_db_path))
-        
+
         request_data = {
             "user_id": "user_0",
             "limit": 10,
             "evaluation_type": "g_eval"
         }
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/history",
             json=request_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         assert "items" in result
         assert "total_count" in result
         assert len(result["items"]) <= 10
-    
+
     @pytest.mark.asyncio
     async def test_history_with_date_filter(self, async_api_client, auth_headers):
         """Test evaluation history with date range filter."""
         from datetime import datetime, timedelta
-        
+
         request_data = {
             "start_date": (datetime.utcnow() - timedelta(days=7)).isoformat(),
             "end_date": datetime.utcnow().isoformat(),
             "limit": 20
         }
-        
+
         response = await async_api_client.post(
             "/api/v1/evaluations/history",
             json=request_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         # All results should be within date range
         for eval in result["items"]:
             created_at = datetime.fromisoformat(eval["created_at"])
@@ -463,14 +463,14 @@ class TestEvaluationHistoryEndpoint:
 @pytest.mark.integration
 class TestWebhookEndpoints:
     """Integration tests for webhook functionality."""
-    
+
     @pytest.mark.asyncio
     async def test_webhook_registration(self, async_api_client, auth_headers):
         """Test webhook registration and retrieval."""
         import uuid
         import sqlite3
         from pathlib import Path
-        
+
         db_env = os.environ.get("EVALUATIONS_TEST_DB_PATH")
         assert db_env, "EVALUATIONS_TEST_DB_PATH must be set for integration tests"
         db_path = Path(db_env)
@@ -482,36 +482,36 @@ class TestWebhookEndpoints:
                 ).fetchone()[0]
             except sqlite3.OperationalError as exc:
                 pytest.fail(f"webhook_registrations table missing before test: {exc}")
-        
+
         # Use unique URL to avoid conflicts
         unique_id = str(uuid.uuid4())[:8]
         webhook_data = {
             "url": f"https://example.com/webhook/{unique_id}",
             "events": ["evaluation.completed", "evaluation.failed"]
         }
-        
+
         # Register webhook
         response = await async_api_client.post(
             "/api/v1/evaluations/webhooks",
             json=webhook_data,
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
         assert "webhook_id" in result
-        
+
         webhook_id = result["webhook_id"]
-        
+
         # Retrieve webhooks
         response = await async_api_client.get(
             "/api/v1/evaluations/webhooks",
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         webhooks = response.json()
-        
+
         # Should contain our webhook
         webhook_ids = [w["webhook_id"] for w in webhooks]
         assert webhook_id in webhook_ids
@@ -526,7 +526,7 @@ class TestWebhookEndpoints:
                 "SELECT COUNT(*) FROM webhook_registrations"
             ).fetchone()[0]
             assert final_count >= initial_count + 1
-    
+
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_webhook_delivery_on_evaluation(self, async_api_client, auth_headers, webhook_receiver_server):
@@ -569,7 +569,7 @@ class TestWebhookEndpoints:
 @pytest.mark.integration
 class TestRateLimitEndpoints:
     """Integration tests for rate limiting."""
-    
+
     @pytest.mark.asyncio
     async def test_rate_limit_enforcement(self, async_api_client, auth_headers):
         """Test that rate limits are enforced (deterministic in TEST_MODE)."""
@@ -590,7 +590,7 @@ class TestRateLimitEndpoints:
             statuses.append(resp.status_code)
         # Prefer 429 in TEST_MODE, but allow environments without RL enforcement
         assert 429 in statuses or all(s == 200 for s in statuses)
-    
+
     @pytest.mark.asyncio
     async def test_rate_limit_status_endpoint(self, async_api_client, auth_headers):
         """Test rate limit status retrieval."""
@@ -598,10 +598,10 @@ class TestRateLimitEndpoints:
             "/api/v1/evaluations/rate-limits",
             headers=auth_headers
         )
-        
+
         assert response.status_code == 200
         result = response.json()
-        
+
         assert "tier" in result
         assert "usage" in result
         assert "limits" in result
@@ -612,7 +612,7 @@ class TestRateLimitEndpoints:
 @pytest.mark.integration
 class TestErrorHandling:
     """Integration tests for error handling."""
-    
+
     @pytest.mark.asyncio
     async def test_invalid_evaluation_type(self, async_api_client, auth_headers):
         """Test handling of invalid evaluation type."""
@@ -625,11 +625,11 @@ class TestErrorHandling:
             },
             headers=auth_headers
         )
-        
+
         assert response.status_code == 422  # Validation error for invalid field
         error = response.json()
         assert "error" in error or "detail" in error
-    
+
     @pytest.mark.asyncio
     async def test_missing_required_fields(self, async_api_client, auth_headers):
         """Test handling of missing required fields."""
@@ -641,9 +641,9 @@ class TestErrorHandling:
             },
             headers=auth_headers
         )
-        
+
         assert response.status_code == 422  # Validation error
-    
+
     @pytest.mark.asyncio
     async def test_authentication_required(self, async_api_client):
         """Test that authentication is required for endpoints."""
@@ -656,5 +656,5 @@ class TestErrorHandling:
             }
             # No auth headers
         )
-        
+
         assert response.status_code in [401, 403]

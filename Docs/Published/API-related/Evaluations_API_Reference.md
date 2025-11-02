@@ -4,9 +4,9 @@
 
 The Evaluations API provides comprehensive capabilities for assessing the quality of AI-generated content. The system supports multiple evaluation types including summarization quality (G-Eval), RAG system evaluation, and various text matching strategies.
 
-**Base URL**: `http://localhost:8000`  
-**API Version**: `v1`  
-**API Prefix**: `/api/v1`  
+**Base URL**: `http://localhost:8000`
+**API Version**: `v1`
+**API Prefix**: `/api/v1`
 **Authentication**: Bearer token required (see Authentication section)
 
 ## Authentication

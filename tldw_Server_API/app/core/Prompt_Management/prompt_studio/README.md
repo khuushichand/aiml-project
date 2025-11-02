@@ -436,13 +436,13 @@ from prompt_studio import PromptStudio
 async def optimize_customer_support_prompt():
     # Initialize
     studio = PromptStudio(api_key="your_key")
-    
+
     # Create project
     project = await studio.create_project(
         name="Customer Support Optimization",
         description="Improve response quality"
     )
-    
+
     # Define signature
     signature = await studio.create_signature(
         project_id=project.id,
@@ -450,7 +450,7 @@ async def optimize_customer_support_prompt():
         inputs=["customer_query", "product_info"],
         outputs=["response", "satisfaction_prediction"]
     )
-    
+
     # Create initial prompt
     prompt = await studio.create_prompt(
         project_id=project.id,
@@ -458,27 +458,27 @@ async def optimize_customer_support_prompt():
         content="""
         Customer Query: {customer_query}
         Product Info: {product_info}
-        
+
         Please provide a helpful response.
         """,
         system_prompt="You are a friendly customer support agent."
     )
-    
+
     # Import test cases from CSV
     test_cases = await studio.import_test_cases(
         project_id=project.id,
         file_path="support_test_cases.csv"
     )
-    
+
     # Run baseline evaluation
     baseline = await studio.evaluate(
         prompt_id=prompt.id,
         test_case_ids=[tc.id for tc in test_cases],
         model="gpt-3.5-turbo"
     )
-    
+
     print(f"Baseline score: {baseline.overall_score:.2f}")
-    
+
     # Optimize using MIPRO
     optimization = await studio.optimize(
         prompt_id=prompt.id,
@@ -486,26 +486,26 @@ async def optimize_customer_support_prompt():
         test_cases=test_cases,
         max_iterations=20
     )
-    
+
     # Get optimized prompt
     optimized = await studio.get_prompt(optimization.optimized_prompt_id)
-    
+
     # Run final evaluation
     final = await studio.evaluate(
         prompt_id=optimized.id,
         test_case_ids=[tc.id for tc in test_cases],
         model="gpt-3.5-turbo"
     )
-    
+
     print(f"Final score: {final.overall_score:.2f}")
     print(f"Improvement: {(final.overall_score - baseline.overall_score)*100:.1f}%")
-    
+
     # Generate report
     report = await studio.generate_report(
         evaluation_id=final.id,
         format="pdf"
     )
-    
+
     print(f"Report saved to: {report.path}")
 
 # Run
@@ -520,7 +520,7 @@ const ws = new WebSocket('ws://localhost:8000/ws/prompt_studio?client_id=my_clie
 
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
-    
+
     switch(data.type) {
         case 'evaluation_progress':
             console.log(`Progress: ${data.data.progress}%`);

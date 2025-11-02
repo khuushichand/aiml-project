@@ -165,4 +165,3 @@ async def test_early_stop_no_improve(monkeypatch, temp_ps_db):
     )
     # Expect iterations equal to early_stop_no_improve before break
     assert res["iterations"] == 2
-

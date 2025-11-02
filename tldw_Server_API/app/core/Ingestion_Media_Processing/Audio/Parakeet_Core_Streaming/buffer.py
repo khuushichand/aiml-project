@@ -25,10 +25,10 @@ class AudioBuffer:
     def add(self, audio_chunk: np.ndarray) -> None:
         """
         Add a numpy audio chunk to the buffer, normalizing it to mono float32 and trimming the buffer to the configured maximum duration.
-        
+
         Parameters:
             audio_chunk (np.ndarray | None): Audio samples to add. Accepts a 1-D array of samples or a 2-D array (frames x channels); multi-channel input is converted to mono by averaging channels. If `None` or an empty array is provided, the call is ignored.
-        
+
         Detailed behavior:
             - Converts input to dtype `float32` if necessary.
             - Converts multi-dimensional audio to mono by averaging across channels.
@@ -54,7 +54,7 @@ class AudioBuffer:
     def get_duration(self) -> float:
         """
         Get the total duration of audio currently buffered.
-        
+
         Returns:
             float: Total duration of the buffered audio in seconds; returns 0.0 when the buffer is empty.
         """
@@ -66,12 +66,12 @@ class AudioBuffer:
     def get_audio(self, duration: Optional[float] = None) -> Optional[np.ndarray]:
         """
         Return buffered mono audio as a contiguous float32 array, optionally limited to a requested duration.
-        
+
         If duration is omitted, returns all buffered samples concatenated. If duration is provided, returns the first samples corresponding to that duration when the buffer contains at least that many samples; returns `None` if the buffer is empty or does not contain enough samples. Returned arrays are mono float32 and are copies of the buffered data.
-        
+
         Parameters:
             duration (Optional[float]): Desired length in seconds of the returned audio. If `None`, the entire buffer is returned.
-        
+
         Returns:
             Optional[np.ndarray]: A contiguous 1-D numpy array of mono float32 samples of the requested length, or `None` if the buffer is empty or does not contain enough samples.
         """
@@ -89,11 +89,11 @@ class AudioBuffer:
     def consume(self, duration: float, overlap: float = 0.0) -> None:
         """
         Advance the buffer by a given duration while optionally retaining an overlap window.
-        
+
         Parameters:
             duration (float): Number of seconds to remove from the start of the buffered audio. Values less than 0 are treated as 0.
             overlap (float): Number of seconds to keep from the start of the remaining audio after consuming `duration`; values less than 0 are treated as 0.
-        
+
         Behavior:
             - If the buffer is empty, does nothing.
             - If the buffer contains more samples than the requested consume amount minus overlap, the buffer is replaced with the remaining tail (keeping the overlap).
@@ -114,7 +114,7 @@ class AudioBuffer:
     def clear(self) -> None:
         """
         Clear all buffered audio chunks.
-        
+
         Removes all stored audio data so the buffer becomes empty.
         """
         self.data.clear()

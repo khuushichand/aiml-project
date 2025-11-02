@@ -1,8 +1,8 @@
 # Full SQLite Database Export/Import (Single-User Mode) - PRD
 
-- **Status:** Draft  
-- **Last Updated:** 2024-09-09  
-- **Authors:** Codex (coding agent)  
+- **Status:** Draft
+- **Last Updated:** 2024-09-09
+- **Authors:** Codex (coding agent)
 - **Stakeholders:** Core Backend, WebUI, DevOps, Docs
 
 ---
@@ -89,7 +89,7 @@ Enable single-user deployments that rely on SQLite to perform complete exports (
 ## 4. UX & API Design
 
 ### 4.1 API
-- `POST /api/v1/maintenance/db/export`  
+- `POST /api/v1/maintenance/db/export`
   Request body:
   ```json
   {
@@ -221,9 +221,9 @@ Feature flagged via config (`ENABLE_DB_EXPORTS=true`). Default enabled in single
 
 ## 11. Appendix
 
-- Existing helpers:  
-  - `Media_DB_v2.backup_database(path)`  
-  - `ChaChaNotes_DB.backup_database(path)`  
+- Existing helpers:
+  - `Media_DB_v2.backup_database(path)`
+  - `ChaChaNotes_DB.backup_database(path)`
   - `DB_Backups.create_backup(...)`
 - Related design docs: `Docs/Design/Content_Collections_PRD.md`, `Docs/Design/Workflows_PRD.md`
 - Reference operations guide: `Docs/Published/Deployment/Long_Term_Admin_Guide.md`

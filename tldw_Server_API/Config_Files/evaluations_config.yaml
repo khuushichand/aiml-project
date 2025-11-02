@@ -15,7 +15,7 @@ rate_limiting:
       max_cost_per_day: 1.0
       max_cost_per_month: 10.0
       description: "Free tier with basic usage limits"
-      
+
     basic:
       evaluations_per_minute: 30
       batch_evaluations_per_minute: 5
@@ -25,7 +25,7 @@ rate_limiting:
       max_cost_per_day: 10.0
       max_cost_per_month: 100.0
       description: "Basic paid tier with increased limits"
-      
+
     premium:
       evaluations_per_minute: 100
       batch_evaluations_per_minute: 20
@@ -35,7 +35,7 @@ rate_limiting:
       max_cost_per_day: 100.0
       max_cost_per_month: 1000.0
       description: "Premium tier for power users"
-      
+
     enterprise:
       evaluations_per_minute: 500
       batch_evaluations_per_minute: 100
@@ -45,7 +45,7 @@ rate_limiting:
       max_cost_per_day: 1000.0
       max_cost_per_month: 10000.0
       description: "Enterprise tier with high limits"
-      
+
     custom:
       evaluations_per_minute: 10
       batch_evaluations_per_minute: 2
@@ -55,29 +55,29 @@ rate_limiting:
       max_cost_per_day: 1.0
       max_cost_per_month: 10.0
       description: "Custom tier (configured per user)"
-  
+
   # Global rate limiting settings
   global:
     # Default tier for new users
     default_tier: "free"
-    
+
     # Grace period for new users (in days)
     new_user_grace_period: 7
     grace_tier: "basic"
-    
+
     # Rate limit enforcement settings
     enable_burst_protection: true
     burst_window_seconds: 10
-    
+
     # Violation handling
     violation_penalty_minutes: 5  # Time to wait after violation
     max_violations_per_hour: 3
     auto_tier_downgrade_violations: 10  # Violations before auto-downgrade
-    
+
     # IP-based rate limiting (for unauthenticated requests)
     ip_requests_per_minute: 20
     ip_requests_per_hour: 200
-    
+
     # Suspicious activity thresholds
     suspicious_requests_per_minute: 100
     suspicious_error_rate_threshold: 0.5  # 50% error rate
@@ -96,7 +96,7 @@ circuit_breakers:
         - "RateLimitError"
         - "APIError"
         - "TimeoutError"
-    
+
     anthropic:
       failure_threshold: 3
       success_threshold: 2
@@ -106,7 +106,7 @@ circuit_breakers:
         - "RateLimitError"
         - "APIError"
         - "TimeoutError"
-    
+
     google:
       failure_threshold: 5
       success_threshold: 3
@@ -115,7 +115,7 @@ circuit_breakers:
       expected_exceptions:
         - "ResourceExhausted"
         - "DeadlineExceeded"
-    
+
     cohere:
       failure_threshold: 4
       success_threshold: 2
@@ -124,7 +124,7 @@ circuit_breakers:
       expected_exceptions:
         - "RateLimitError"
         - "APIError"
-    
+
     local:
       failure_threshold: 5
       success_threshold: 2
@@ -133,7 +133,7 @@ circuit_breakers:
       expected_exceptions:
         - "ConnectionError"
         - "TimeoutError"
-    
+
     default:
       failure_threshold: 5
       success_threshold: 2
@@ -150,7 +150,7 @@ webhooks:
     retry_delays: [1, 5, 15]  # seconds between retries
     timeout_seconds: 30
     batch_size: 10  # Max webhooks to deliver concurrently
-    
+
   # Security settings
   security:
     require_https: false  # Set to true in production
@@ -163,7 +163,7 @@ webhooks:
       - "192.168.0.0/16"
     max_url_length: 2048
     validate_ssl_certificates: true
-    
+
   # Rate limiting for webhook registrations
   registration_limits:
     per_user_max: 10  # Max webhooks per user
@@ -179,19 +179,19 @@ database:
     max_overflow: 20
     pool_timeout: 30
     pool_recycle: 3600  # 1 hour
-    
+
   # Query performance settings
   query:
     timeout_seconds: 30
     slow_query_threshold: 1.0  # Log queries taking longer than 1 second
-    
+
   # Cleanup and maintenance
   maintenance:
     audit_log_retention_days: 90
     evaluation_history_retention_days: 365
     cleanup_frequency_hours: 24
     vacuum_frequency_days: 7
-    
+
   # Backup settings
   backup:
     enabled: true
@@ -208,13 +208,13 @@ security:
     max_context_length: 20000  # 20KB per context
     max_batch_size: 100
     max_request_size_mb: 10
-    
+
   # API key management
   api_keys:
     require_rotation: false
     rotation_warning_days: 30
     min_key_length: 16
-    
+
   # Audit logging
   audit:
     log_all_requests: true
@@ -222,7 +222,7 @@ security:
     log_response_bodies: false
     mask_sensitive_fields: true
     retention_days: 90
-    
+
   # Suspicious activity detection
   anomaly_detection:
     enabled: true
@@ -237,13 +237,13 @@ performance:
     evaluation_results_ttl: 3600  # 1 hour
     user_tier_cache_ttl: 300  # 5 minutes
     config_cache_ttl: 60  # 1 minute
-    
+
   # Async processing
   async:
     max_workers: 4
     queue_size: 100
     timeout_seconds: 300  # 5 minutes
-    
+
   # Resource limits
   resources:
     max_memory_mb: 1024  # 1GB
@@ -257,13 +257,13 @@ monitoring:
     enabled: true
     prometheus_port: 9090
     collection_interval: 15  # seconds
-    
+
   # Health check settings
   health_checks:
     interval_seconds: 30
     timeout_seconds: 5
     failure_threshold: 3
-    
+
   # Alerting thresholds
   alerts:
     high_error_rate: 0.1  # 10%
@@ -271,7 +271,7 @@ monitoring:
     low_success_rate: 0.9  # 90%
     memory_usage_percent: 80
     cpu_usage_percent: 80
-    
+
   # Log levels
   logging:
     level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -295,7 +295,7 @@ environments:
     monitoring:
       logging:
         level: "DEBUG"
-        
+
   testing:
     rate_limiting:
       global:
@@ -307,7 +307,7 @@ environments:
     database:
       maintenance:
         audit_log_retention_days: 1
-    
+
   production:
     webhooks:
       security:
