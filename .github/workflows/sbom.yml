@@ -21,7 +21,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
+
       # No registry login required for public Docker Hub images used below
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Generate Python SBOM from pyproject (cdxgen)
+        run: |
+          if [ -f pyproject.toml ]; then \
+            npx @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
+          fi
 
       - name: Generate SBOM (CycloneDX JSON)
         uses: anchore/sbom-action@8e94d75ddd33f69f691467e42275782e4bfefe84 # v0.20.9
