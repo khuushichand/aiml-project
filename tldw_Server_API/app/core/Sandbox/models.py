@@ -70,6 +70,7 @@ class RunStatus:
     phase: RunPhase
     spec_version: Optional[str] = None
     runtime: Optional[RuntimeType] = None
+    runtime_version: Optional[str] = None
     base_image: Optional[str] = None
     image_digest: Optional[str] = None
     policy_hash: Optional[str] = None

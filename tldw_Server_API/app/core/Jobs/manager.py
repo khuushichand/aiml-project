@@ -257,6 +257,52 @@ class JobManager:
                 pass
         return cur
 
+    # --- Acquire ordering policy (env-driven overrides) ---
+    def _priority_dir_for(self, domain: Optional[str], backend: str) -> str:
+        """Return 'ASC' or 'DESC' for priority ordering based on env.
+
+        Env (checked in order):
+          - JOBS_{BACKEND}_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)
+          - JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)
+        If domain is listed => DESC; otherwise ASC.
+        """
+        try:
+            dom = (domain or "").strip()
+            key_backend = f"JOBS_{backend.upper()}_ACQUIRE_PRIORITY_DESC_DOMAINS"
+            key_global = "JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS"
+            raw = os.getenv(key_backend) or os.getenv(key_global) or ""
+            listed = {d.strip().lower() for d in raw.split(",") if d.strip()}
+            return "DESC" if dom.lower() in listed else "ASC"
+        except Exception:
+            return "ASC"
+
+    def _tie_break_for(self, domain: Optional[str], backend: str) -> Optional[str]:
+        """Return 'fifo' or 'lifo' if explicitly configured, else None for default behavior.
+
+        Env (checked in order):
+          - JOBS_{BACKEND}_ACQUIRE_TIE_BREAK_{DOMAIN}
+          - JOBS_{BACKEND}_ACQUIRE_TIE_BREAK
+          - JOBS_ACQUIRE_TIE_BREAK_{DOMAIN}
+          - JOBS_ACQUIRE_TIE_BREAK
+        """
+        try:
+            dom = (domain or "").strip()
+            cands = [
+                f"JOBS_{backend.upper()}_ACQUIRE_TIE_BREAK_{dom.upper()}",
+                f"JOBS_{backend.upper()}_ACQUIRE_TIE_BREAK",
+                f"JOBS_ACQUIRE_TIE_BREAK_{dom.upper()}",
+                "JOBS_ACQUIRE_TIE_BREAK",
+            ]
+            for k in cands:
+                v = os.getenv(k)
+                if v:
+                    v2 = v.strip().lower()
+                    if v2 in {"fifo", "lifo"}:
+                        return v2
+            return None
+        except Exception:
+            return None
+
     @classmethod
     def set_rls_context(cls, *, is_admin: bool, domain_allowlist: Optional[str], owner_user_id: Optional[str]) -> None:
         try:
@@ -1471,19 +1517,29 @@ class JobManager:
                 with conn:
                     with self._pg_cursor(conn) as cur:
                         if str(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")).lower() in {"1","true","yes","y","on"}:
+                            # Build ordering clause with optional env overrides
+                            prio_dir = self._priority_dir_for(domain, backend="pg")
+                            tie = self._tie_break_for(domain, backend="pg")
+                            if tie == "fifo":
+                                _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            elif tie == "lifo":
+                                _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            else:
+                                _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            _cond_owner = (" AND owner_user_id = %s" if owner_user_id else "")
+                            _sql = (
+                                "WITH picked AS ("
+                                "  SELECT id FROM jobs WHERE domain=%s AND queue=%s AND ("
+                                "    (status='queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
+                                "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
+                                "  )"
+                                + _cond_owner + _order +
+                                ") "
+                                "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
+                                "WHERE id IN (SELECT id FROM picked) RETURNING *"
+                            )
                             cur.execute(
-                                (
-                                    "WITH picked AS ("
-                                    "  SELECT id FROM jobs WHERE domain=%s AND queue=%s AND ("
-                                    "    (status='queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
-                                    "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
-                                    "  )"
-                                    + (" AND owner_user_id = %s" if owner_user_id else "") +
-                                    "  ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
-                                    ")"
-                                    "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
-                                    "WHERE id IN (SELECT id FROM picked) RETURNING *"
-                                ),
+                                _sql,
                                 ([domain, queue] + ([owner_user_id] if owner_user_id else []) + [int(lease_seconds), worker_id, str(_uuid.uuid4())]),
                             )
                             row2 = cur.fetchone()
@@ -1513,8 +1569,15 @@ class JobManager:
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
-                            # Stable ordering: priority ASC (lower numeric first), then available/created, then id
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            # Stable ordering: allow env-based override
+                            prio_dir = self._priority_dir_for(domain, backend="pg")
+                            tie = self._tie_break_for(domain, backend="pg")
+                            if tie == "fifo":
+                                base += f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            elif tie == "lifo":
+                                base += f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            else:
+                                base += f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1610,29 +1673,15 @@ class JobManager:
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
-                        # Ordering: default priority ASC (lower first); for 'chatbooks' domain prefer DESC to match test expectations
-                        if str(domain) == 'chatbooks':
-                            # For chatbooks: higher numeric priority first; tie-break depends on presence of scheduled rows
-                            try:
-                                _has_sched = False
-                                try:
-                                    _r = conn.execute(
-                                        "SELECT 1 FROM jobs WHERE domain=? AND queue=? AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) LIMIT 1",
-                                        (domain, queue),
-                                    ).fetchone()
-                                    _has_sched = bool(_r)
-                                except Exception:
-                                    _has_sched = False
-                                if _has_sched:
-                                    # When scheduled jobs exist, prefer FIFO among ready
-                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
-                                else:
-                                    # Otherwise, prefer newest-first among ready
-                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                            except Exception:
-                                order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        # Ordering: env-based override; else default FIFO
+                        prio_dir = self._priority_dir_for(domain, backend="sqlite")
+                        tie = self._tie_break_for(domain, backend="sqlite")
+                        if tie == "fifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        elif tie == "lifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sub += order_sql
                         sql = (
                             "UPDATE jobs SET status='processing', "
@@ -1698,11 +1747,16 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Ordering: default priority ASC (lower first), newest by available/created; for 'chatbooks' prefer DESC
-                        if str(domain) == 'chatbooks':
-                            # For chatbooks: higher numeric priority first; tie-break depends on presence of scheduled rows
-                            try:
-                                _has_sched = False
+                        # Ordering: env-based override; otherwise default FIFO for most domains.
+                        prio_dir = self._priority_dir_for(domain, backend="sqlite")
+                        tie = self._tie_break_for(domain, backend="sqlite")
+                        if tie == "fifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        elif tie == "lifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        else:
+                            # Only 'chatbooks' uses the dynamic tie-break by default; others stick to FIFO
+                            if str(domain) == 'chatbooks':
                                 try:
                                     _r = conn.execute(
                                         "SELECT 1 FROM jobs WHERE domain=? AND queue=? AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) LIMIT 1",
@@ -1712,14 +1766,11 @@ class JobManager:
                                 except Exception:
                                     _has_sched = False
                                 if _has_sched:
-                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                                    order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                                 else:
-                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                            except Exception:
-                                order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
-                        else:
-                            # Default FIFO by created/available and lowest id tie-breaker
-                            order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                                    order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            else:
+                                order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         base += order_sql
                         if _test_mode:
                             try:

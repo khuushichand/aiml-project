@@ -104,6 +104,7 @@ class SandboxRunStatus(BaseModel):
     id: str
     spec_version: Optional[str] = None
     runtime: Optional[RuntimeType] = None
+    runtime_version: Optional[str] = None
     base_image: Optional[str] = None
     image_digest: Optional[str] = None
     policy_hash: Optional[str] = None
@@ -147,6 +148,7 @@ class SandboxAdminRunSummary(BaseModel):
     user_id: Optional[str] = None
     spec_version: Optional[str] = None
     runtime: Optional[RuntimeType] = None
+    runtime_version: Optional[str] = None
     base_image: Optional[str] = None
     image_digest: Optional[str] = None
     policy_hash: Optional[str] = None

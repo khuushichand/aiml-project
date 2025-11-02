@@ -37,6 +37,25 @@ class DockerRunner:
     def _truthy(self, v: Optional[str]) -> bool:
         return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
+    @staticmethod
+    def _docker_version() -> Optional[str]:
+        try:
+            out = subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True, timeout=2).strip()
+            if out:
+                return out
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(["docker", "--version"], text=True, timeout=2).strip()
+            # e.g., Docker version 24.0.6, build ed223bc
+            parts = out.split()
+            for i, tok in enumerate(parts):
+                if tok.lower() == "version" and i + 1 < len(parts):
+                    return parts[i + 1].rstrip(",")
+            return out
+        except Exception:
+            return None
+
     # Track active containers per run for cancellation
     _active_lock = threading.RLock()
     _active_cid: dict[str, str] = {}
@@ -122,6 +141,7 @@ class DockerRunner:
                 finished_at=now,
                 exit_code=0,
                 message="Docker fake execution",
+                runtime_version=self._docker_version(),
                 resource_usage=usage,
             )
 
@@ -282,6 +302,7 @@ class DockerRunner:
                 finished_at=finished,
                 exit_code=None,
                 message="startup_timeout",
+                runtime_version=self._docker_version(),
                 resource_usage=usage,
             )
         except subprocess.CalledProcessError as e:
@@ -579,10 +600,14 @@ class DockerRunner:
             cpu_time = max(0, int(final_cpu2 - baseline_cpu_sec))
         else:
             cpu_time = self._get_cpu_time_sec(cid, started, finished)
+        # Memory: prefer cgroup peak/current when available; fallback to docker stats
+        mem_mb = self._read_cgroup_mem_peak_mb_by_cid(cid)
+        if mem_mb is None:
+            mem_mb = self._get_mem_usage_mb(cid)
         usage = {
             "cpu_time_sec": int(max(0, cpu_time)),
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
-            "peak_rss_mb": self._get_mem_usage_mb(cid),
+            "peak_rss_mb": int(mem_mb or 0),
             "log_bytes": int(total_log),
             "artifact_bytes": int(art_bytes),
         }
@@ -600,6 +625,7 @@ class DockerRunner:
             message=msg,
             image_digest=image_digest,
             artifacts=artifacts_map or None,
+            runtime_version=self._docker_version(),
             resource_usage=usage,
         )
 
@@ -665,6 +691,63 @@ class DockerRunner:
                             return int(usec / 1_000_000)
             except Exception:
                 pass
+        return None
+
+    @staticmethod
+    def _read_cgroup_mem_peak_mb_by_cid(cid: str) -> Optional[int]:
+        try:
+            pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
+            pid = int(pid_out)
+            return DockerRunner._read_cgroup_mem_peak_mb_by_pid(pid)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_cgroup_mem_peak_mb_by_pid(pid: int) -> Optional[int]:
+        """Read memory peak/current from cgroup and convert to MB.
+
+        Prefer cgroup v2 memory.peak; fallback to memory.current. For v1, prefer
+        memory.max_usage_in_bytes; fallback to memory.usage_in_bytes.
+        Returns None if unavailable.
+        """
+        try:
+            with open(f"/proc/{pid}/cgroup", "r") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            return None
+        subs: Dict[str, str] = {}
+        for ln in lines:
+            parts = ln.split(":")
+            if len(parts) == 3:
+                subs[parts[1]] = parts[2]
+        # Try v2 unified
+        v2_path = subs.get("") or subs.get("0")
+        if v2_path:
+            base = os.path.join("/sys/fs/cgroup", v2_path.lstrip("/"))
+            for name in ("memory.peak", "memory.current"):
+                fp = os.path.join(base, name)
+                try:
+                    with open(fp, "r") as f:
+                        val = int(f.read().strip())
+                        return int(val / (1024 * 1024))
+                except Exception:
+                    continue
+        # Try v1 memory cgroup
+        mem_key = None
+        for key in subs.keys():
+            if "memory" in key:
+                mem_key = key
+                break
+        if mem_key:
+            base = os.path.join("/sys/fs/cgroup", "memory", subs[mem_key].lstrip("/"))
+            for name in ("memory.max_usage_in_bytes", "memory.usage_in_bytes"):
+                fp = os.path.join(base, name)
+                try:
+                    with open(fp, "r") as f:
+                        val = int(f.read().strip())
+                        return int(val / (1024 * 1024))
+                except Exception:
+                    continue
         return None
 
     @staticmethod

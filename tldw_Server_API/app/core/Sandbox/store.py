@@ -252,6 +252,7 @@ class InMemoryStore(SandboxStore):
                     "user_id": self._owners.get(st.id),
                     "spec_version": st.spec_version,
                     "runtime": (st.runtime.value if st.runtime else None),
+                    "runtime_version": getattr(st, "runtime_version", None),
                     "base_image": st.base_image,
                     "phase": st.phase.value,
                     "exit_code": st.exit_code,
@@ -432,6 +433,7 @@ class SQLiteStore(SandboxStore):
                     user_id TEXT,
                     spec_version TEXT,
                     runtime TEXT,
+                    runtime_version TEXT,
                     base_image TEXT,
                     phase TEXT,
                     exit_code INTEGER,
@@ -476,6 +478,24 @@ class SQLiteStore(SandboxStore):
                     # Log full exception (with stack trace) and re-raise to avoid masking real issues
                     logger.exception(
                         "SQLite migration failed adding resource_usage column to sandbox_runs"
+                    )
+                    raise
+            # Migration: add runtime_version if missing
+            try:
+                con.execute("ALTER TABLE sandbox_runs ADD COLUMN runtime_version TEXT")
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if (
+                    "duplicate" in msg
+                    or "already exists" in msg
+                    or "duplicate column" in msg
+                ):
+                    logger.debug(
+                        "SQLite migration: runtime_version column already exists; skipping ALTER TABLE"
+                    )
+                else:
+                    logger.exception(
+                        "SQLite migration failed adding runtime_version column to sandbox_runs"
                     )
                     raise
 
@@ -572,12 +592,13 @@ class SQLiteStore(SandboxStore):
         """
         with self._lock, self._conn() as con:
             con.execute(
-                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     st.id,
                     self._user_key(user_id),
                     st.spec_version,
                     (st.runtime.value if st.runtime else None),
+                    (st.runtime_version if getattr(st, "runtime_version", None) else None),
                     st.base_image,
                     st.phase.value,
                     st.exit_code,
@@ -610,20 +631,21 @@ class SQLiteStore(SandboxStore):
                     ru = json.loads(row["resource_usage"]) if row["resource_usage"] else None
                 except Exception:
                     ru = None
-                st = RunStatus(
-                    id=row["id"],
-                    phase=RunPhase(row["phase"]),
-                    spec_version=row["spec_version"],
-                    runtime=(RuntimeType(row["runtime"]) if row["runtime"] else None),
-                    base_image=row["base_image"],
-                    image_digest=row["image_digest"],
-                    policy_hash=row["policy_hash"],
-                    exit_code=row["exit_code"],
-                    started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
-                    finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
-                    message=row["message"],
-                    resource_usage=ru,
-                )
+            st = RunStatus(
+                id=row["id"],
+                phase=RunPhase(row["phase"]),
+                spec_version=row["spec_version"],
+                runtime=(RuntimeType(row["runtime"]) if row["runtime"] else None),
+                runtime_version=(row["runtime_version"] if "runtime_version" in row.keys() else None),
+                base_image=row["base_image"],
+                image_digest=row["image_digest"],
+                policy_hash=row["policy_hash"],
+                exit_code=row["exit_code"],
+                started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
+                finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
+                message=row["message"],
+                resource_usage=ru,
+            )
                 return st
             except Exception:
                 return None
@@ -686,7 +708,7 @@ class SQLiteStore(SandboxStore):
             where.append("started_at <= ?")
             params.append(started_at_to)
         sql = (
-            "SELECT id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "
+            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "
             f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT ? OFFSET ?"
         )
         params.extend([int(limit), int(offset)])
@@ -699,6 +721,7 @@ class SQLiteStore(SandboxStore):
                     "user_id": row["user_id"],
                     "spec_version": row["spec_version"],
                     "runtime": row["runtime"],
+                    "runtime_version": row["runtime_version"],
                     "base_image": row["base_image"],
                     "phase": row["phase"],
                     "exit_code": row["exit_code"],

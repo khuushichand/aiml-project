@@ -28,11 +28,31 @@ jobs:
 
       - name: Generate Python SBOM (CycloneDX)
         run: |
-          python -m pip install -q cyclonedx-bom
+          set -euo pipefail
+          python -m pip install -q cyclonedx-python
+          GEN_CMD="python -m cyclonedx_py"
+          if [ -n "${pythonLocation:-}" ] && [ -x "${pythonLocation}/bin/cyclonedx-py" ]; then \
+            GEN_CMD="${pythonLocation}/bin/cyclonedx-py"; \
+          elif command -v cyclonedx-py >/dev/null 2>&1; then \
+            GEN_CMD="cyclonedx-py"; \
+          fi
+          gen_from_requirements() { \
+            local req="$1"; \
+            echo "Generating Python SBOM from ${req} using ${GEN_CMD}"; \
+            ${GEN_CMD} -r "${req}" --output-file sbom-python.cdx.json || { \
+              echo "Primary generator failed; attempting cyclonedx-bom fallback"; \
+              python -m pip install -q cyclonedx-bom || true; \
+              if command -v cyclonedx-bom >/dev/null 2>&1; then \
+                cyclonedx-bom -r "${req}" -o sbom-python.cdx.json; \
+              else \
+                python -m cyclonedx_bom -r "${req}" -o sbom-python.cdx.json; \
+              fi; \
+            }; \
+          }
           if [ -f tldw_Server_API/requirements.txt ]; then \
-            python -m cyclonedx_bom -r tldw_Server_API/requirements.txt -o sbom-python.cdx.json; \
+            gen_from_requirements tldw_Server_API/requirements.txt; \
           elif [ -f requirements.txt ]; then \
-            python -m cyclonedx_bom -r requirements.txt -o sbom-python.cdx.json; \
+            gen_from_requirements requirements.txt; \
           else \
             echo "No requirements file found; cannot generate SBOM"; \
             exit 1; \
