@@ -12,8 +12,8 @@ class RunStreamHub:
     """In-memory pub/sub for run log/event streaming with caps and backpressure."""
 
     def __init__(self) -> None:
-        # Map run_id -> list of subscriber queues (fan-out to all subscribers)
-        self._queues: dict[str, list[asyncio.Queue]] = {}
+        # Map run_id -> list of (loop, subscriber queue) pairs (fan-out to all subscribers)
+        self._queues: dict[str, list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]]] = {}
         self._buffers: dict[str, list[dict]] = {}
         self._log_bytes: dict[str, int] = {}
         self._truncated: set[str] = set()
@@ -39,7 +39,12 @@ class RunStreamHub:
         """
         with self._lock:
             q = asyncio.Queue(self._max_queue)
-            self._queues.setdefault(run_id, []).append(q)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # Fallback to stored loop if called from a non-async context
+                loop = self._loop or asyncio.get_event_loop()
+            self._queues.setdefault(run_id, []).append((loop, q))
             return q
 
     def subscribe(self, run_id: str) -> asyncio.Queue:
@@ -68,10 +73,10 @@ class RunStreamHub:
             if buf is not None and len(buf) > 100:
                 del buf[:-100]
             subs = self._queues.get(run_id)
-            if subs and self._loop is not None:
-                for q in list(subs):
+            if subs:
+                for (lp, q) in list(subs):
                     try:
-                        self._loop.call_soon_threadsafe(self._queue_put_nowait, q, frame)
+                        lp.call_soon_threadsafe(self._queue_put_nowait, q, frame)
                     except Exception as e:
                         logger.debug(f"queue publish failed: {e}")
 

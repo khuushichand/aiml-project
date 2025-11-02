@@ -10,6 +10,7 @@ from heapq import heappush, heappop
 from typing import Any, Dict, Optional, Callable, Tuple
 from loguru import logger
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 #######################################################################################################################
 #
@@ -80,6 +81,9 @@ class RequestQueue:
         self._recent_activity = deque(maxlen=200)
         # Event to wake workers when new items arrive (avoids polling delay)
         self._has_items = asyncio.Event()
+        # Dedicated thread pool for processor execution to reduce scheduling variance
+        # and guarantee at-most max_concurrent worker threads.
+        self._executor = ThreadPoolExecutor(max_workers=max(1, int(max_concurrent)))
     
     async def start(self, num_workers: int = 4):
         """
@@ -98,10 +102,14 @@ class RequestQueue:
             worker = asyncio.create_task(self._worker(f"worker-{i}"))
             self._workers.append(worker)
 
-        # Pre-warm the default thread pool to reduce first-run latency for processors
+        # Pre-warm the dedicated executor to reduce first-run latency for processors
         try:
             warm_n = max(1, min(self.max_concurrent, num_workers))
-            await asyncio.gather(*[asyncio.to_thread(lambda: None) for _ in range(warm_n)])
+            loop = asyncio.get_running_loop()
+            await asyncio.gather(*[
+                loop.run_in_executor(self._executor, lambda: None)
+                for _ in range(warm_n)
+            ])
         except Exception:
             pass
 
@@ -118,6 +126,10 @@ class RequestQueue:
         # Wait for workers to finish
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
+        try:
+            self._executor.shutdown(wait=True)
+        except Exception:
+            pass
         
         logger.info("Stopped queue workers")
 
@@ -229,11 +241,11 @@ class RequestQueue:
         logger.debug(f"Processing request {request.request_id} with processor; streaming={request.streaming}")
         loop = asyncio.get_running_loop()
 
-        # Non-streaming: run processor in thread executor to avoid blocking loop
+        # Non-streaming: run processor in dedicated thread executor to avoid blocking loop
         if not request.streaming:
             try:
                 result = await loop.run_in_executor(
-                    None,
+                    self._executor,
                     lambda: request.processor(*request.processor_args, **request.processor_kwargs)
                 )
                 duration = time.time() - start_ts
@@ -298,7 +310,7 @@ class RequestQueue:
         # Run the processor to obtain the stream (potentially blocking)
         try:
             stream = await loop.run_in_executor(
-                None, lambda: request.processor(*request.processor_args, **request.processor_kwargs)
+                self._executor, lambda: request.processor(*request.processor_args, **request.processor_kwargs)
             )
         except Exception as e:
             # Emit SSE-style error payload to channel to gracefully end downstream streaming
@@ -329,7 +341,7 @@ class RequestQueue:
                 await _pump_async_iterator(stream)
             else:
                 # Sync iterator; run pumping in thread
-                await loop.run_in_executor(None, _pump_sync_iterator, stream)
+                await loop.run_in_executor(self._executor, _pump_sync_iterator, stream)
             # For streaming jobs, return a simple status when pumping completes
             duration = time.time() - start_ts
             self._recent_activity.append({

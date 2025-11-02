@@ -854,11 +854,27 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             poll_timeout = float(_pt_env) if _pt_env is not None else float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
         except Exception:
             poll_timeout = 30.0
+        last_seq_sent = 0
         while True:
             try:
                 frame = await asyncio.wait_for(q.get(), timeout=poll_timeout)
             except asyncio.TimeoutError:
                 continue
+            # Enforce per-connection monotonic sequence in case of any out-of-band frames
+            try:
+                s = frame.get("seq") if isinstance(frame, dict) else None
+                if isinstance(s, int) and s <= last_seq_sent:
+                    # Create a shallow copy to avoid mutating shared frame objects
+                    frame = dict(frame)
+                    frame["seq"] = last_seq_sent + 1
+                if isinstance(frame.get("seq"), int):
+                    last_seq_sent = int(frame["seq"])  # type: ignore[index]
+            except Exception:
+                pass
+            try:
+                logger.debug(f"WS[{run_id}] send frame type={frame.get('type')} seq={frame.get('seq')}")
+            except Exception:
+                pass
             await websocket.send_json(frame)
             # Do not forcibly close on 'end'; allow clients/tests to disconnect.
             # This avoids race conditions with the Starlette TestClient where the
