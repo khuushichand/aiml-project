@@ -33,18 +33,11 @@ async def test_enforce_llm_budget_logs_and_raises_on_state_failure(monkeypatch):
 
     monkeypatch.setattr(guard, "get_settings", lambda: StubSettings())
 
-    # Make HMAC key candidates deterministic
-    monkeypatch.setattr(guard, "derive_hmac_key_candidates", lambda _s: [b"k"])
+    # Stub shared resolver to return a fixed identity
+    async def fake_resolver(_api_key: str, *, settings=None):
+        return {"id": 123, "user_id": 456}
 
-    # Fake DB pool that always finds a matching key row
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 123, "user_id": 456}
-
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(guard, "get_db_pool", fake_get_db_pool)
+    monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
     # Capture loguru error/exception output
     logs = []
@@ -76,16 +69,11 @@ async def test_enforce_llm_budget_error_payload_shape(monkeypatch):
         LLM_BUDGET_ENFORCE = True
 
     monkeypatch.setattr(guard, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(guard, "derive_hmac_key_candidates", lambda _s: [b"k"])
 
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 42, "user_id": 7}
+    async def fake_resolver(_api_key: str, *, settings=None):
+        return {"id": 42, "user_id": 7}
 
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(guard, "get_db_pool", fake_get_db_pool)
+    monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
     # Use the RaisingState again to trigger the error path
     req = DummyRequest()
@@ -111,16 +99,11 @@ async def test_enforce_llm_budget_happy_path(monkeypatch):
         LLM_BUDGET_ENFORCE = True
 
     monkeypatch.setattr(guard, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(guard, "derive_hmac_key_candidates", lambda _s: [b"k"])
 
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 555, "user_id": 999}
+    async def fake_resolver(_api_key: str, *, settings=None):
+        return {"id": 555, "user_id": 999}
 
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(guard, "get_db_pool", fake_get_db_pool)
+    monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
     # Make the key non-virtual to early-return without budget checks
     async def fake_get_key_limits(_key_id: int):
@@ -154,16 +137,11 @@ async def test_enforce_llm_budget_virtual_under_budget_ok(monkeypatch):
         LLM_BUDGET_ENFORCE = True
 
     monkeypatch.setattr(guard, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(guard, "derive_hmac_key_candidates", lambda _s: [b"k"])
 
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 111, "user_id": 222}
+    async def fake_resolver(_api_key: str, *, settings=None):
+        return {"id": 111, "user_id": 222}
 
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(guard, "get_db_pool", fake_get_db_pool)
+    monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
     # Virtual key with limits, but not over budget
     async def fake_get_key_limits(_key_id: int):
@@ -216,16 +194,11 @@ async def test_enforce_llm_budget_virtual_over_budget_raises(monkeypatch):
         LLM_BUDGET_ENFORCE = True
 
     monkeypatch.setattr(guard, "get_settings", lambda: StubSettings())
-    monkeypatch.setattr(guard, "derive_hmac_key_candidates", lambda _s: [b"k"])
 
-    class FakePool:
-        async def fetchone(self, *_args, **_kwargs):
-            return {"id": 222, "user_id": 333}
+    async def fake_resolver(_api_key: str, *, settings=None):
+        return {"id": 222, "user_id": 333}
 
-    async def fake_get_db_pool():
-        return FakePool()
-
-    monkeypatch.setattr(guard, "get_db_pool", fake_get_db_pool)
+    monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
     # Virtual key with limits and over budget
     async def fake_get_key_limits(_key_id: int):

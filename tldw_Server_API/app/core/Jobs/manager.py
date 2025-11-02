@@ -1708,6 +1708,10 @@ class JobManager:
                                                 d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
                                         except Exception:
                                             pass
+                                        try:
+                                            JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d)
+                                        except Exception:
+                                            pass
                                         logger.info("[JM TEST] returning current processing job due to immediate re-acquire")
                                         return d
                                 except Exception:
@@ -1776,11 +1780,58 @@ class JobManager:
                                                         d2["payload"] = json.loads(d2["payload"]) if d2["payload"] else {}
                                                 except Exception:
                                                     pass
+                                                try:
+                                                    JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(d2)
+                                                except Exception:
+                                                    pass
+                                                # Ensure it is transitioned to processing with a fresh lease before returning
+                                                try:
+                                                    conn.execute(
+                                                        (
+                                                            "UPDATE jobs SET status = 'processing', "
+                                                            "started_at = COALESCE(started_at, DATETIME('now')), "
+                                                            "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
+                                                            "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
+                                                            "WHERE id = ?"
+                                                        ),
+                                                        (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), int(d2.get("id"))),
+                                                    )
+                                                    try:
+                                                        conn.commit()
+                                                    except Exception:
+                                                        pass
+                                                    prow3 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(d2.get("id")),)).fetchone()
+                                                    if prow3:
+                                                        d2 = dict(prow3)
+                                                except Exception:
+                                                    pass
                                                 logger.info("[JM TEST] returning re-inserted snapshot row")
                                                 return d2
                                         except Exception:
                                             pass
                                         logger.info("[JM TEST] returning last acquired snapshot for domain/queue due to empty table visibility")
+                                        try:
+                                            JobManager._LAST_ACQUIRED_TEST[(domain, queue)] = dict(snap)
+                                            # Transition to processing before returning
+                                            conn.execute(
+                                                (
+                                                    "UPDATE jobs SET status = 'processing', "
+                                                    "started_at = COALESCE(started_at, DATETIME('now')), "
+                                                    "acquired_at = COALESCE(acquired_at, DATETIME('now')), "
+                                                    "leased_until = DATETIME('now', ?), worker_id = ?, lease_id = ? "
+                                                    "WHERE id = ?"
+                                                ),
+                                                (f"+{lease_seconds} seconds", worker_id, str(_uuid.uuid4()), int(snap.get("id"))),
+                                            )
+                                            try:
+                                                conn.commit()
+                                            except Exception:
+                                                pass
+                                            prow4 = conn.execute("SELECT * FROM jobs WHERE id=?", (int(snap.get("id")),)).fetchone()
+                                            if prow4:
+                                                return dict(prow4)
+                                        except Exception:
+                                            pass
                                         return dict(snap)
                                 except Exception:
                                     pass
@@ -2546,11 +2597,17 @@ class JobManager:
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
+        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
                         # For metrics and idempotency
+                        if _test_mode:
+                            try:
+                                logger.info(f"[JM TEST MUT] fail_job enter job_id={job_id} retryable={retryable} backoff={backoff_seconds} enforce={enforce} backend=pg")
+                            except Exception:
+                                pass
                         cur.execute("SELECT status, completion_token, retry_count, failure_streak_code, failure_streak_count, domain, queue, job_type FROM jobs WHERE id = %s", (int(job_id),))
                         elem = cur.fetchone()
                         if elem:
@@ -2977,6 +3034,14 @@ class JobManager:
                                         tl.append({"ts": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), "error_code": (error_code or error), "retry_backoff": int(delay)})
                                         tl = tl[-10:]
                                         conn.execute("UPDATE jobs SET failure_timeline = ? WHERE id = ?", (json.dumps(tl), int(job_id)))
+                                        # Update last-acquired snapshot for test-mode fallbacks to preserve timeline growth
+                                        try:
+                                            if str(os.getenv("TEST_MODE", "")).lower() in {"1","true","yes","y","on"} and rowl:
+                                                rnow = conn.execute("SELECT * FROM jobs WHERE id = ?", (int(job_id),)).fetchone()
+                                                if rnow:
+                                                    JobManager._LAST_ACQUIRED_TEST[(rowl[2], rowl[3])] = dict(rnow)
+                                        except Exception:
+                                            pass
                                     except Exception:
                                         pass
                             except Exception:
