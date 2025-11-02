@@ -1,5 +1,9 @@
 # Simple SBOM generation helpers
 
+# CycloneDX CLI reference. Override with a digest for pinning:
+#   make CDX_CLI_REF=ghcr.io/cyclonedx/cyclonedx-cli@sha256:<digest>
+CDX_CLI_REF ?= ghcr.io/cyclonedx/cyclonedx-cli:0.30.0
+
 PY ?= python3
 NPM ?= npm
 
@@ -32,7 +36,7 @@ sbom:
 	done; \
 	if [ -n "$$files" ]; then \
 			if command -v docker >/dev/null 2>&1; then \
-				docker run --rm -v "$$PWD":/work -w /work cyclonedx/cyclonedx-cli:0.30.0 merge --input-files $$files --output-file sbom/sbom.cdx.json \
+				docker run --rm -v "$$PWD":/work -w /work $(CDX_CLI_REF) merge --input-files $$files --output-file sbom/sbom.cdx.json \
 					|| cp sbom/sbom-python.cdx.json sbom/sbom.cdx.json || true; \
 		elif command -v cyclonedx-cli >/dev/null 2>&1; then \
 			cyclonedx-cli merge --input-files $$files --output-file sbom/sbom.cdx.json || cp sbom/sbom-python.cdx.json sbom/sbom.cdx.json || true; \
@@ -50,7 +54,7 @@ sbom-validate:
 	@echo "==> Validating SBOM (if present)"
 	@if [ -f sbom/sbom.cdx.json ]; then \
 			if command -v docker >/dev/null 2>&1; then \
-				docker run --rm -v "$$PWD":/work -w /work cyclonedx/cyclonedx-cli:0.30.0 validate --input-file sbom/sbom.cdx.json || true; \
+				docker run --rm -v "$$PWD":/work -w /work $(CDX_CLI_REF) validate --input-file sbom/sbom.cdx.json || true; \
 		elif command -v cyclonedx-cli >/dev/null 2>&1; then \
 			cyclonedx-cli validate --input-file sbom/sbom.cdx.json || true; \
 		else \

@@ -777,6 +777,10 @@ async def ttl_sweep_endpoint(
     user=Depends(require_admin),
 ) -> TTLSweepResponse:
     try:
+        # Correlation IDs and diagnostics
+        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
         # Pre-parse raw to enforce RBAC and confirm header before validation
         try:
             raw = await request.json()
@@ -805,6 +809,20 @@ async def ttl_sweep_endpoint(
         jm = JobManager(backend=backend, db_url=db_url)
         # Now validate the request model
         req = TTLSweepRequest(**(raw or {}))
+        # Capture a single reference time to avoid boundary drift between age/runtime calculations
+        try:
+            from datetime import datetime, timezone as _tz
+            ref_now = datetime.now(tz=_tz.utc)
+        except Exception:
+            ref_now = None
+        # Diagnostics before executing
+        try:
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
+                "TTL sweep request: action=%s domain=%s queue=%s job_type=%s age=%s runtime=%s backend=%s ref_now=%s",
+                req.action, req.domain, req.queue, req.job_type, req.age_seconds, req.runtime_seconds, (backend or "sqlite"), str(ref_now) if ref_now else ""
+            )
+        except Exception:
+            pass
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
             runtime_seconds=req.runtime_seconds,
@@ -812,11 +830,20 @@ async def ttl_sweep_endpoint(
             domain=req.domain,
             queue=req.queue,
             job_type=req.job_type,
+            reference_time=ref_now,
         )
         # Refresh gauges when fully scoped to avoid stale metrics
         try:
             if req.domain and req.queue and req.job_type:
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+        except Exception:
+            pass
+        # Diagnostics after executing
+        try:
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
+                "TTL sweep result: affected=%s action=%s domain=%s queue=%s job_type=%s",
+                int(affected), req.action, req.domain, req.queue, req.job_type
+            )
         except Exception:
             pass
         return TTLSweepResponse(affected=int(affected))

@@ -242,6 +242,20 @@ class SandboxService:
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+        # Configure stdin caps in hub if interactive is requested (spec 1.1)
+        try:
+            interactive = bool(spec.interactive) if getattr(spec, "interactive", None) is not None else False
+            if interactive:
+                get_hub().configure_stdin(
+                    status.id,
+                    interactive=True,
+                    stdin_max_bytes=(int(spec.stdin_max_bytes) if getattr(spec, "stdin_max_bytes", None) is not None else None),
+                    stdin_max_frame_bytes=(int(spec.stdin_max_frame_bytes) if getattr(spec, "stdin_max_frame_bytes", None) is not None else None),
+                    stdin_bps=(int(spec.stdin_bps) if getattr(spec, "stdin_bps", None) is not None else None),
+                    stdin_idle_timeout_sec=(int(spec.stdin_idle_timeout_sec) if getattr(spec, "stdin_idle_timeout_sec", None) is not None else None),
+                )
+        except Exception:
+            pass
         # Emit queue-wait metric as soon as we move out of queued (or immediately after enqueue)
         # so tests that disable execution still observe this metric.
         try:

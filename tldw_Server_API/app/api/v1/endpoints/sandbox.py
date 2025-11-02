@@ -446,6 +446,11 @@ async def start_run(
         network_policy=payload.network_policy,
         files_inline=files_inline,
         capture_patterns=payload.capture_patterns or [],
+        interactive=(bool(payload.interactive) if hasattr(payload, "interactive") and payload.interactive is not None else None),
+        stdin_max_bytes=(int(payload.stdin_max_bytes) if hasattr(payload, "stdin_max_bytes") and payload.stdin_max_bytes is not None else None),
+        stdin_max_frame_bytes=(int(payload.stdin_max_frame_bytes) if hasattr(payload, "stdin_max_frame_bytes") and payload.stdin_max_frame_bytes is not None else None),
+        stdin_bps=(int(payload.stdin_bps) if hasattr(payload, "stdin_bps") and payload.stdin_bps is not None else None),
+        stdin_idle_timeout_sec=(int(payload.stdin_idle_timeout_sec) if hasattr(payload, "stdin_idle_timeout_sec") and payload.stdin_idle_timeout_sec is not None else None),
     )
     # Scaffold: return immediate completed status without real execution
     try:
@@ -645,6 +650,13 @@ async def start_run(
             log_stream_url = f"{base_path}?token={token}&exp={exp}"
         else:
             log_stream_url = base_path
+        # Append from_seq when requested via POST body (spec 1.1 convenience)
+        try:
+            if hasattr(payload, "resume_from_seq") and payload.resume_from_seq and int(payload.resume_from_seq) > 0:
+                sep = "&" if ("?" in str(log_stream_url)) else "?"
+                log_stream_url = f"{log_stream_url}{sep}from_seq={int(payload.resume_from_seq)}"
+        except Exception:
+            pass
     except Exception:
         # Fail open: omit URL on error
         log_stream_url = None
@@ -946,8 +958,18 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     await websocket.accept()
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
+    # Optional resume from specific sequence
+    try:
+        qp = websocket.query_params  # type: ignore[attr-defined]
+        from_seq_raw = qp.get("from_seq") if qp else None  # type: ignore[assignment]
+        from_seq = int(str(from_seq_raw)) if from_seq_raw is not None else 0
+    except Exception:
+        from_seq = 0
     # Subscribe with buffered frames prefilled to avoid races
-    q = hub.subscribe_with_buffer(run_id)
+    if from_seq and from_seq > 0:
+        q = hub.subscribe_with_buffer_from_seq(run_id, int(from_seq))
+    else:
+        q = hub.subscribe_with_buffer(run_id)
     # Keep strong references to any background tasks spawned in this handler
     synth_task: asyncio.Task | None = None
     # No-op: retain default queue state; buffered frames are enqueued below.
@@ -1018,6 +1040,86 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     except Exception:
         spawn_hb = True
     hb_task = asyncio.create_task(_heartbeats()) if spawn_hb else None
+
+    # Background task to read inbound frames (stdin) when interactive is enabled
+    async def _reader() -> None:
+        try:
+            while True:
+                try:
+                    msg = await websocket.receive_json()
+                except WebSocketDisconnect:
+                    return
+                except Exception:
+                    # Non-JSON or decode error: ignore and continue
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("type") != "stdin":
+                    continue
+                # Determine encoding and data
+                enc = str(msg.get("encoding") or "utf8").lower()
+                data_field = msg.get("data")
+                if not isinstance(data_field, str):
+                    continue
+                try:
+                    if enc == "base64":
+                        import base64 as _b64
+                        raw = _b64.b64decode(data_field)
+                    else:
+                        raw = data_field.encode("utf-8")
+                except Exception:
+                    raw = b""
+                if not raw:
+                    continue
+                # Enforce caps via hub
+                allowed, reason = hub.consume_stdin(run_id, len(raw))
+                if allowed <= 0:
+                    # Rate limited or cap reached: notify client via truncated frame
+                    if reason:
+                        try:
+                            hub.publish_truncated(run_id, str(reason))
+                        except Exception:
+                            pass
+                    continue
+                if allowed < len(raw):
+                    # Truncated by cap; notify once
+                    try:
+                        hub.publish_truncated(run_id, str(reason or "stdin_cap"))
+                    except Exception:
+                        pass
+                # Runner-side stdin consumption is stubbed for now.
+                # Intentionally drop bytes after accounting for caps.
+        except Exception:
+            return
+
+    reader_task = asyncio.create_task(_reader())
+
+    # Idle-timeout watchdog for stdin
+    async def _idle_watchdog() -> None:
+        try:
+            tout = hub.get_stdin_idle_timeout(run_id)
+            if not tout or tout <= 0:
+                return
+            import time as _time
+            while True:
+                await asyncio.sleep(0.5)
+                last = hub.get_last_stdin_input_time(run_id)
+                if last is None:
+                    continue
+                if (_time.time() - float(last)) > float(tout):
+                    try:
+                        hub.publish_truncated(run_id, "stdin_idle")
+                    except Exception:
+                        pass
+                    try:
+                        await websocket.close()
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            return
+
+    idle_task = asyncio.create_task(_idle_watchdog())
     try:
         # Allow tests to reduce the poll timeout via settings/env (prefer env at runtime)
         try:
@@ -1047,6 +1149,16 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             if hb_task:
                 hb_task.cancel()
+        except Exception:
+            pass
+        try:
+            if reader_task:
+                reader_task.cancel()
+        except Exception:
+            pass
+        try:
+            if idle_task:
+                idle_task.cancel()
         except Exception:
             pass
         # Ensure any synthetic end task is also cancelled if still pending

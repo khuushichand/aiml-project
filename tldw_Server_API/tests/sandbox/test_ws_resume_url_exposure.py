@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import os
+from urllib.parse import urlparse, parse_qs
+
+from fastapi.testclient import TestClient
+import pytest
+
+
+pytestmark = pytest.mark.timeout(10)
+
+
+def _client() -> TestClient:
+    os.environ.setdefault("TEST_MODE", "1")
+    os.environ.setdefault("SANDBOX_ENABLE_EXECUTION", "false")
+    os.environ.setdefault("SANDBOX_BACKGROUND_EXECUTION", "true")
+    os.environ.setdefault("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
+    # Ensure router enabled
+    existing = os.environ.get("ROUTES_ENABLE", "")
+    parts = [p.strip().lower() for p in existing.split(",") if p.strip()]
+    if "sandbox" not in parts:
+        parts.append("sandbox")
+    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    from tldw_Server_API.app.main import app as _app
+    return TestClient(_app)
+
+
+def test_post_runs_exposes_resume_from_seq_in_url() -> None:
+    with _client() as client:
+        body = {
+            "spec_version": "1.0",
+            "runtime": "docker",
+            "base_image": "python:3.11-slim",
+            "command": ["bash", "-lc", "echo run"],
+            "timeout_sec": 5,
+            "resume_from_seq": 7,
+        }
+        r = client.post("/api/v1/sandbox/runs", json=body)
+        assert r.status_code == 200
+        url = r.json().get("log_stream_url")
+        assert isinstance(url, str)
+        p = urlparse(url)
+        qs = parse_qs(p.query)
+        assert int(qs.get("from_seq", ["0"])[0]) == 7
+

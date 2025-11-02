@@ -81,6 +81,14 @@ class SandboxRunCreateRequest(BaseModel):
     network_policy: Optional[Literal["deny_all", "allowlist"]] = Field(default=None)
     files: Optional[List[RunFile]] = Field(default=None, description="Inline small files to write before run")
     capture_patterns: Optional[List[str]] = Field(default=None, description="Glob patterns for artifact capture")
+    # Spec 1.1: interactive stdin over WS
+    interactive: Optional[bool] = Field(default=None, description="Enable interactive mode with stdin over WS")
+    stdin_max_bytes: Optional[int] = Field(default=None, ge=0, description="Max total stdin bytes across connection(s)")
+    stdin_max_frame_bytes: Optional[int] = Field(default=None, ge=0, description="Max bytes per stdin frame")
+    stdin_bps: Optional[int] = Field(default=None, ge=0, description="Approximate stdin bytes-per-second rate limit")
+    stdin_idle_timeout_sec: Optional[int] = Field(default=None, ge=0, description="Close WS after this many seconds of stdin inactivity")
+    # Optional resume hint for clients; WS also supports from_seq query parameter
+    resume_from_seq: Optional[int] = Field(default=None, ge=0, description="If provided, client suggests resuming WS from this sequence number")
 
 
 class SandboxRun(BaseModel):

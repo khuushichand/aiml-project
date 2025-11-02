@@ -26,6 +26,9 @@ class RunStreamHub:
         # Per-run serialized dispatcher
         self._dispatch: dict[str, list[dict]] = {}
         self._dispatching: set[str] = set()
+        # Interactive stdin caps and state per run
+        self._stdin_cfg: dict[str, dict] = {}
+        self._stdin_state: dict[str, dict] = {}
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -80,6 +83,34 @@ class RunStreamHub:
                 except Exception:
                     break
             # Finally register this subscriber for future live frames
+            self._queues.setdefault(run_id, []).append((loop, q))
+            return q
+
+    def subscribe_with_buffer_from_seq(self, run_id: str, from_seq: int) -> asyncio.Queue:
+        """Subscribe and pre-fill only buffered frames with seq >= from_seq.
+
+        Stamps sequence numbers on buffered frames first (if missing) to ensure
+        consistent numbering across subscribers, then enqueues only those with
+        seq >= from_seq for this subscriber. Live frames are delivered as usual.
+        """
+        if from_seq is None or int(from_seq) <= 0:
+            return self.subscribe_with_buffer(run_id)
+        with self._lock:
+            q = asyncio.Queue(self._max_queue)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = self._loop or asyncio.get_event_loop()
+            buf = self._buffers.get(run_id) or []
+            import copy as _copy
+            for frame in buf[-100:]:
+                if isinstance(frame, dict) and "seq" not in frame:
+                    frame["seq"] = self._next_seq(run_id)
+                try:
+                    if isinstance(frame, dict) and int(frame.get("seq", 0)) >= int(from_seq):
+                        q.put_nowait(_copy.deepcopy(frame))
+                except Exception:
+                    break
             self._queues.setdefault(run_id, []).append((loop, q))
             return q
 
@@ -183,6 +214,10 @@ class RunStreamHub:
         """Publish a heartbeat frame with seq attached by the hub."""
         self._publish(run_id, {"type": "heartbeat"})
 
+    def publish_truncated(self, run_id: str, reason: str) -> None:
+        """Publish a truncated frame with a reason code."""
+        self._publish(run_id, {"type": "truncated", "reason": str(reason)})
+
     def publish_stdout(self, run_id: str, chunk: bytes, max_log_bytes: Optional[int] = None) -> None:
         self._publish_stream(run_id, "stdout", chunk, max_log_bytes=max_log_bytes)
 
@@ -245,6 +280,125 @@ class RunStreamHub:
             import copy as _copy
             buf = self._buffers.get(run_id) or []
             return [_copy.deepcopy(f) for f in buf[-100:]]
+
+    # -----------------
+    # Interactive stdin
+    # -----------------
+    def configure_stdin(self, run_id: str, *, interactive: bool,
+                         stdin_max_bytes: Optional[int] = None,
+                         stdin_max_frame_bytes: Optional[int] = None,
+                         stdin_bps: Optional[int] = None,
+                         stdin_idle_timeout_sec: Optional[int] = None) -> None:
+        """Configure stdin caps for a run. If interactive is False, clears any config."""
+        with self._lock:
+            if not interactive:
+                self._stdin_cfg.pop(run_id, None)
+                self._stdin_state.pop(run_id, None)
+                return
+            cfg = {
+                "interactive": True,
+                "stdin_max_bytes": int(stdin_max_bytes) if stdin_max_bytes is not None else None,
+                "stdin_max_frame_bytes": int(stdin_max_frame_bytes) if stdin_max_frame_bytes is not None else None,
+                "stdin_bps": int(stdin_bps) if stdin_bps is not None else None,
+                "stdin_idle_timeout_sec": int(stdin_idle_timeout_sec) if stdin_idle_timeout_sec is not None else None,
+            }
+            self._stdin_cfg[run_id] = cfg
+            st = self._stdin_state.get(run_id) or {}
+            # Initialize token bucket and counters
+            import time as _time
+            st.setdefault("bytes_total", 0)
+            st.setdefault("last_refill", float(_time.time()))
+            # bucket capacity equals 1 second worth of tokens
+            rate = cfg.get("stdin_bps") or 0
+            st.setdefault("tokens", int(rate))
+            st["rate"] = int(rate)
+            st.setdefault("last_input", float(_time.time()))
+            self._stdin_state[run_id] = st
+
+    def get_stdin_config(self, run_id: str) -> Optional[dict]:
+        with self._lock:
+            cfg = self._stdin_cfg.get(run_id)
+            return dict(cfg) if cfg else None
+
+    def _refill_tokens(self, st: dict) -> None:
+        try:
+            import time as _time
+            now = float(_time.time())
+            last = float(st.get("last_refill", now))
+            rate = int(st.get("rate", 0))
+            if rate <= 0:
+                st["last_refill"] = now
+                return
+            delta = max(0.0, now - last)
+            add = int(delta * rate)
+            cap = rate  # 1s burst
+            tokens = int(st.get("tokens", 0))
+            tokens = min(cap, tokens + add)
+            st["tokens"] = tokens
+            st["last_refill"] = now
+        except Exception:
+            return
+
+    def consume_stdin(self, run_id: str, data_len: int) -> tuple[int, Optional[str]]:
+        """Consume stdin bytes for a run according to configured caps.
+
+        Returns a tuple of (allowed_bytes, reason_if_truncated). If allowed_bytes is 0
+        and a reason is provided, the caller may drop the frame or retry later.
+        """
+        with self._lock:
+            cfg = self._stdin_cfg.get(run_id)
+            if not cfg or not cfg.get("interactive"):
+                return (0, None)
+            st = self._stdin_state.setdefault(run_id, {})
+            # refill tokens for rate limiting
+            self._refill_tokens(st)
+            allowed = int(data_len)
+            reason: Optional[str] = None
+            # Per-frame cap
+            if cfg.get("stdin_max_frame_bytes") is not None:
+                mfb = int(cfg["stdin_max_frame_bytes"])
+                if allowed > mfb:
+                    allowed = mfb
+                    reason = reason or "stdin_frame_cap"
+            # Rate limit
+            tokens = int(st.get("tokens", 0))
+            if cfg.get("stdin_bps") is not None:
+                if tokens <= 0:
+                    allowed = 0
+                    reason = reason or "stdin_rate"
+                else:
+                    if allowed > tokens:
+                        allowed = tokens
+                        reason = reason or "stdin_rate"
+                    st["tokens"] = max(0, tokens - allowed)
+            # Total cap
+            if cfg.get("stdin_max_bytes") is not None and allowed > 0:
+                used = int(st.get("bytes_total", 0))
+                remain = max(0, int(cfg["stdin_max_bytes"]) - used)
+                if remain <= 0:
+                    allowed = 0
+                    reason = reason or "stdin_cap"
+                else:
+                    if allowed > remain:
+                        allowed = remain
+                        reason = reason or "stdin_cap"
+            # Update counters
+            if allowed > 0:
+                st["bytes_total"] = int(st.get("bytes_total", 0)) + int(allowed)
+                import time as _time
+                st["last_input"] = float(_time.time())
+            return (int(allowed), reason)
+
+    def get_stdin_idle_timeout(self, run_id: str) -> Optional[int]:
+        with self._lock:
+            cfg = self._stdin_cfg.get(run_id) or {}
+            val = cfg.get("stdin_idle_timeout_sec")
+            return int(val) if val is not None else None
+
+    def get_last_stdin_input_time(self, run_id: str) -> Optional[float]:
+        with self._lock:
+            st = self._stdin_state.get(run_id) or {}
+            return float(st.get("last_input")) if st.get("last_input") is not None else None
 
     def close(self, run_id: str) -> None:
         # Use publish_event so end-event deduplication applies

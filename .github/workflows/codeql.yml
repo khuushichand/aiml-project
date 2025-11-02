@@ -1,12 +1,20 @@
 name: CodeQL
 
 on:
+  # Run on direct pushes to protected/default branches only
   push:
-    branches: [ main, master, dev ]
+    branches: [ main, master ]
+  # Run on PRs targeting main/master/dev, not every branch
   pull_request:
-    branches: [ '**' ]
+    branches: [ main, master, dev ]
   schedule:
     - cron: '0 6 * * 1'
+  # Allow manual runs
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
