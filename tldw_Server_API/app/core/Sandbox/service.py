@@ -425,7 +425,6 @@ class SandboxService:
                         except Exception as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
                     threading.Thread(target=_worker_fc, daemon=True).start()
-                    return status
                 # Foreground
                 fr = FirecrackerRunner()
                 ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
