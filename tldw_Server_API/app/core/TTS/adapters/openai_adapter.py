@@ -27,7 +27,21 @@ from ..tts_exceptions import (
     TTSNetworkError,
     TTSTimeoutError,
     TTSProviderError,
+from ..tts_exceptions import (
+    TTSProviderNotConfiguredError,
+    TTSProviderInitializationError,
+    TTSAuthenticationError,
+    TTSRateLimitError,
+    TTSNetworkError,
+    TTSTimeoutError,
+    TTSProviderError,
     TTSValidationError,
+    TTSGenerationError,
+    auth_error,
+    rate_limit_error,
+    network_error,
+    timeout_error
+)
     auth_error,
     rate_limit_error,
     network_error,
