@@ -1913,7 +1913,7 @@ async def test_streaming():
             content={
                 "status": "error",
                 "test_passed": False,
-                "message": str(e)
+                "message": "An internal error occurred during the streaming test. Please contact support if the problem persists."
             }
         )
 
