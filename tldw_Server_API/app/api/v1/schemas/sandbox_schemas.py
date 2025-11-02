@@ -175,3 +175,37 @@ class SandboxAdminRunListResponse(BaseModel):
 
 class SandboxAdminRunDetails(SandboxAdminRunSummary):
     resource_usage: Optional[Dict[str, int]] = None
+
+
+# Admin: Idempotency listing
+class SandboxAdminIdempotencyItem(BaseModel):
+    endpoint: str
+    user_id: Optional[str] = None
+    key: str
+    fingerprint: Optional[str] = None
+    object_id: str
+    created_at: Optional[str] = None
+
+
+class SandboxAdminIdempotencyListResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+    items: List[SandboxAdminIdempotencyItem]
+
+
+# Admin: Usage aggregates
+class SandboxAdminUsageItem(BaseModel):
+    user_id: str
+    runs_count: int
+    log_bytes: int
+    artifact_bytes: int
+
+
+class SandboxAdminUsageResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+    items: List[SandboxAdminUsageItem]

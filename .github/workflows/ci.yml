@@ -83,6 +83,8 @@ jobs:
       TEST_DB_HOST: 127.0.0.1
       TEST_DB_USER: tldw
       TEST_DB_PASSWORD: tldw
+      # Align AuthNZ_Postgres conftest default DB name with service DB
+      TEST_DB_NAME: tldw_content
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
@@ -115,6 +117,9 @@ jobs:
         run: |
           echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
           echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+          # Provide a unified DSN so any test preferring TEST_DATABASE_URL uses the right DB
+          echo "TEST_DATABASE_URL=postgresql://tldw:tldw@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql://tldw:tldw@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
 
       - name: Install additional deps for PG tests
         run: |

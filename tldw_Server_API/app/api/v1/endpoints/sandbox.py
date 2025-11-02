@@ -23,6 +23,10 @@ from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
     SandboxAdminRunListResponse,
     SandboxAdminRunSummary,
     SandboxAdminRunDetails,
+    SandboxAdminIdempotencyListResponse,
+    SandboxAdminIdempotencyItem,
+    SandboxAdminUsageResponse,
+    SandboxAdminUsageItem,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType
@@ -1286,3 +1290,89 @@ async def sandbox_runs_fallback_guard(
         pass
     # Fallback: not found under /runs/{run_id}
     raise HTTPException(status_code=404, detail="Not Found")
+
+
+# -----------------------------
+# Admin API: Idempotency, Usage
+# -----------------------------
+
+@router.get(
+    "/admin/idempotency",
+    response_model=SandboxAdminIdempotencyListResponse,
+    summary="Admin: list idempotency records",
+)
+async def admin_list_idempotency(
+    endpoint: Optional[str] = Query(None, description="Filter by endpoint, e.g., 'runs' or 'sessions'"),
+    user_id: Optional[str] = Query(None, description="Filter by user id"),
+    key: Optional[str] = Query(None, description="Filter by idempotency key"),
+    created_at_from: Optional[str] = Query(None, description="ISO timestamp inclusive lower bound"),
+    created_at_to: Optional[str] = Query(None, description="ISO timestamp inclusive upper bound"),
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    current_user: User = Depends(RoleChecker("admin")),
+) -> SandboxAdminIdempotencyListResponse:
+    items_raw = _service._orch._store.list_idempotency(  # type: ignore[attr-defined]
+        endpoint=endpoint,
+        user_id=user_id,
+        key=key,
+        created_at_from=created_at_from,
+        created_at_to=created_at_to,
+        limit=limit,
+        offset=offset,
+        sort_desc=(str(sort).lower() != "asc"),
+    )
+    total = _service._orch._store.count_idempotency(  # type: ignore[attr-defined]
+        endpoint=endpoint,
+        user_id=user_id,
+        key=key,
+        created_at_from=created_at_from,
+        created_at_to=created_at_to,
+    )
+    items: list[SandboxAdminIdempotencyItem] = []
+    for r in items_raw:
+        items.append(
+            SandboxAdminIdempotencyItem(
+                endpoint=str(r.get("endpoint")),
+                user_id=(r.get("user_id") if r.get("user_id") is not None else None),
+                key=str(r.get("key")),
+                fingerprint=(r.get("fingerprint") if r.get("fingerprint") is not None else None),
+                object_id=str(r.get("object_id")),
+                created_at=(r.get("created_at") if isinstance(r.get("created_at"), str) else None),
+            )
+        )
+    has_more = (offset + len(items)) < int(total)
+    return SandboxAdminIdempotencyListResponse(total=int(total), limit=int(limit), offset=int(offset), has_more=bool(has_more), items=items)
+
+
+@router.get(
+    "/admin/usage",
+    response_model=SandboxAdminUsageResponse,
+    summary="Admin: usage aggregates per user",
+)
+async def admin_usage(
+    user_id: Optional[str] = Query(None, description="Filter by user id"),
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    current_user: User = Depends(RoleChecker("admin")),
+) -> SandboxAdminUsageResponse:
+    items_raw = _service._orch._store.list_usage(  # type: ignore[attr-defined]
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        sort_desc=(str(sort).lower() != "asc"),
+    )
+    total = _service._orch._store.count_usage(user_id=user_id)  # type: ignore[attr-defined]
+    items: list[SandboxAdminUsageItem] = []
+    for r in items_raw:
+        items.append(
+            SandboxAdminUsageItem(
+                user_id=str(r.get("user_id")),
+                runs_count=int(r.get("runs_count") or 0),
+                log_bytes=int(r.get("log_bytes") or 0),
+                artifact_bytes=int(r.get("artifact_bytes") or 0),
+            )
+        )
+    has_more = (offset + len(items)) < int(total)
+    return SandboxAdminUsageResponse(total=int(total), limit=int(limit), offset=int(offset), has_more=bool(has_more), items=items)

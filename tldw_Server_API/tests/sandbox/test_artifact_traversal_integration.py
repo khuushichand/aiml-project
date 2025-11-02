@@ -45,6 +45,8 @@ def test_artifact_traversal_rejected_under_uvicorn(tmp_path) -> None:
 
     # Drive API against real HTTP server so raw_path is preserved
     import requests
+    # Use the same timeout for all HTTP calls to avoid hangs
+    TIMEOUT = 5
 
     # Create a run
     body = {
@@ -55,12 +57,12 @@ def test_artifact_traversal_rejected_under_uvicorn(tmp_path) -> None:
         "timeout_sec": 5,
         "capture_patterns": ["out.txt"],
     }
-    r = requests.post(f"http://{host}:{port}/api/v1/sandbox/runs", json=body)
+    r = requests.post(f"http://{host}:{port}/api/v1/sandbox/runs", json=body, timeout=TIMEOUT)
     assert r.status_code == 200
     run_id: str = r.json()["id"]
 
     # Traversal should be rejected with 400 using raw `..` segment
-    r3 = requests.get(f"http://{host}:{port}/api/v1/sandbox/runs/{run_id}/artifacts/../secret.txt")
+    r3 = requests.get(f"http://{host}:{port}/api/v1/sandbox/runs/{run_id}/artifacts/../secret.txt", timeout=TIMEOUT)
     assert r3.status_code == 400
 
     # Shutdown server (best-effort)
@@ -69,4 +71,3 @@ def test_artifact_traversal_rejected_under_uvicorn(tmp_path) -> None:
         th.join(timeout=2)
     except Exception:
         pass
-

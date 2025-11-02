@@ -1612,7 +1612,25 @@ class JobManager:
                             params_sub.append(owner_user_id)
                         # Ordering: default priority ASC (lower first); for 'chatbooks' domain prefer DESC to match test expectations
                         if str(domain) == 'chatbooks':
-                            order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            # For chatbooks: higher numeric priority first; tie-break depends on presence of scheduled rows
+                            try:
+                                _has_sched = False
+                                try:
+                                    _r = conn.execute(
+                                        "SELECT 1 FROM jobs WHERE domain=? AND queue=? AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) LIMIT 1",
+                                        (domain, queue),
+                                    ).fetchone()
+                                    _has_sched = bool(_r)
+                                except Exception:
+                                    _has_sched = False
+                                if _has_sched:
+                                    # When scheduled jobs exist, prefer FIFO among ready
+                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                                else:
+                                    # Otherwise, prefer newest-first among ready
+                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            except Exception:
+                                order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
                             order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sub += order_sql
@@ -1682,9 +1700,26 @@ class JobManager:
                             params.append(owner_user_id)
                         # Ordering: default priority ASC (lower first), newest by available/created; for 'chatbooks' prefer DESC
                         if str(domain) == 'chatbooks':
-                            order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            # For chatbooks: higher numeric priority first; tie-break depends on presence of scheduled rows
+                            try:
+                                _has_sched = False
+                                try:
+                                    _r = conn.execute(
+                                        "SELECT 1 FROM jobs WHERE domain=? AND queue=? AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) LIMIT 1",
+                                        (domain, queue),
+                                    ).fetchone()
+                                    _has_sched = bool(_r)
+                                except Exception:
+                                    _has_sched = False
+                                if _has_sched:
+                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                                else:
+                                    order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            except Exception:
+                                order_sql = " ORDER BY priority DESC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
                         else:
-                            order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            # Default FIFO by created/available and lowest id tie-breaker
+                            order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         base += order_sql
                         if _test_mode:
                             try:

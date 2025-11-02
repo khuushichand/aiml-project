@@ -84,6 +84,50 @@ class SandboxStore:
     ) -> int:
         raise NotImplementedError
 
+    # Admin: Idempotency listing
+    def list_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        raise NotImplementedError
+
+    def count_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+    ) -> int:
+        raise NotImplementedError
+
+    # Admin: Usage aggregates per user
+    def list_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        raise NotImplementedError
+
+    def count_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+    ) -> int:
+        raise NotImplementedError
+
 
 class InMemoryStore(SandboxStore):
     def __init__(self, idem_ttl_sec: int = 600) -> None:
@@ -237,6 +281,116 @@ class InMemoryStore(SandboxStore):
             offset=0,
             sort_desc=True,
         ))
+
+    def list_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        with self._lock:
+            rows = []
+            for (ep, uid, k), (ts, fp, resp, oid) in self._idem.items():
+                if endpoint and ep != endpoint:
+                    continue
+                if user_id and uid != user_id:
+                    continue
+                if key and k != key:
+                    continue
+                if created_at_from:
+                    try:
+                        from datetime import datetime
+                        dt_from = datetime.fromisoformat(created_at_from)
+                        if ts < dt_from.timestamp():
+                            continue
+                    except Exception:
+                        pass
+                if created_at_to:
+                    try:
+                        from datetime import datetime
+                        dt_to = datetime.fromisoformat(created_at_to)
+                        if ts > dt_to.timestamp():
+                            continue
+                    except Exception:
+                        pass
+                from datetime import datetime, timezone
+                rows.append({
+                    "endpoint": ep,
+                    "user_id": uid,
+                    "key": k,
+                    "fingerprint": fp,
+                    "object_id": oid,
+                    "created_at": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                })
+        rows.sort(key=lambda r: r.get("created_at") or "", reverse=bool(sort_desc))
+        return rows[offset: offset + limit]
+
+    def count_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+    ) -> int:
+        return len(self.list_idempotency(
+            endpoint=endpoint,
+            user_id=user_id,
+            key=key,
+            created_at_from=created_at_from,
+            created_at_to=created_at_to,
+            limit=10**9,
+            offset=0,
+            sort_desc=True,
+        ))
+
+    def list_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        # Aggregate runs_count and log_bytes from runs; artifact_bytes from _user_bytes
+        with self._lock:
+            users = set(self._owners.values())
+            if user_id:
+                users = {u for u in users if u == user_id}
+            items: list[dict] = []
+            for uid in sorted(users):
+                runs = [r for r_id, r in self._runs.items() if self._owners.get(r_id) == uid]
+                runs_count = len(runs)
+                log_bytes = 0
+                for st in runs:
+                    try:
+                        if st.resource_usage and isinstance(st.resource_usage.get("log_bytes"), int):
+                            log_bytes += int(st.resource_usage.get("log_bytes") or 0)
+                    except Exception:
+                        continue
+                art_bytes = int(self._user_bytes.get(uid, 0))
+                items.append({
+                    "user_id": uid,
+                    "runs_count": int(runs_count),
+                    "log_bytes": int(log_bytes),
+                    "artifact_bytes": int(art_bytes),
+                })
+        items.sort(key=lambda r: r.get("user_id") or "", reverse=bool(sort_desc))
+        return items[offset: offset + limit]
+
+    def count_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+    ) -> int:
+        return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
 
 
 class SQLiteStore(SandboxStore):
@@ -578,6 +732,165 @@ class SQLiteStore(SandboxStore):
             cur = con.execute(sql, tuple(params))
             row = cur.fetchone()
             return int(row[0]) if row else 0
+
+    def list_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        order = "DESC" if sort_desc else "ASC"
+        where = ["1=1"]
+        params: list[Any] = []
+        if endpoint:
+            where.append("endpoint = ?")
+            params.append(endpoint)
+        if user_id:
+            where.append("user_key = ?")
+            params.append(user_id)
+        if key:
+            where.append("key = ?")
+            params.append(key)
+        if created_at_from:
+            where.append("created_at >= ?")
+            # if provided ISO, parse to epoch seconds; else assume float
+            try:
+                from datetime import datetime
+                params.append(datetime.fromisoformat(created_at_from).timestamp())
+            except Exception:
+                params.append(float(created_at_from))
+        if created_at_to:
+            where.append("created_at <= ?")
+            try:
+                from datetime import datetime
+                params.append(datetime.fromisoformat(created_at_to).timestamp())
+            except Exception:
+                params.append(float(created_at_to))
+        sql = (
+            "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "
+            f"WHERE {' AND '.join(where)} ORDER BY created_at {order} LIMIT ? OFFSET ?"
+        )
+        params.extend([int(limit), int(offset)])
+        items: list[dict] = []
+        with self._lock, self._conn() as con:
+            cur = con.execute(sql, tuple(params))
+            for row in cur.fetchall():
+                try:
+                    from datetime import datetime, timezone
+                    iso_ct = datetime.fromtimestamp(float(row["created_at"]), tz=timezone.utc).isoformat()
+                except Exception:
+                    iso_ct = None
+                items.append({
+                    "endpoint": row["endpoint"],
+                    "user_id": row["user_key"],
+                    "key": row["key"],
+                    "fingerprint": row["fingerprint"],
+                    "object_id": row["object_id"],
+                    "created_at": iso_ct,
+                })
+        return items
+
+    def count_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+    ) -> int:
+        where = ["1=1"]
+        params: list[Any] = []
+        if endpoint:
+            where.append("endpoint = ?")
+            params.append(endpoint)
+        if user_id:
+            where.append("user_key = ?")
+            params.append(user_id)
+        if key:
+            where.append("key = ?")
+            params.append(key)
+        if created_at_from:
+            where.append("created_at >= ?")
+            try:
+                from datetime import datetime
+                params.append(datetime.fromisoformat(created_at_from).timestamp())
+            except Exception:
+                params.append(float(created_at_from))
+        if created_at_to:
+            where.append("created_at <= ?")
+            try:
+                from datetime import datetime
+                params.append(datetime.fromisoformat(created_at_to).timestamp())
+            except Exception:
+                params.append(float(created_at_to))
+        sql = f"SELECT COUNT(*) FROM sandbox_idempotency WHERE {' AND '.join(where)}"
+        with self._lock, self._conn() as con:
+            cur = con.execute(sql, tuple(params))
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+    def list_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        # Aggregate in Python to avoid JSON1 dependence
+        with self._lock, self._conn() as con:
+            # Gather artifact bytes per user
+            art: dict[str, int] = {}
+            cur = con.execute("SELECT user_id, artifact_bytes FROM sandbox_usage")
+            for row in cur.fetchall():
+                u = row["user_id"]
+                if user_id and u != user_id:
+                    continue
+                art[u] = int(row["artifact_bytes"]) if row["artifact_bytes"] is not None else 0
+            # Gather runs and log_bytes from runs table
+            cur2 = con.execute("SELECT user_id, resource_usage FROM sandbox_runs")
+            agg: dict[str, dict] = {}
+            for row in cur2.fetchall():
+                u = row["user_id"]
+                if not u:
+                    continue
+                if user_id and u != user_id:
+                    continue
+                rs = agg.setdefault(u, {"runs_count": 0, "log_bytes": 0})
+                rs["runs_count"] += 1
+                try:
+                    import json as _json
+                    ru = _json.loads(row["resource_usage"]) if row["resource_usage"] else None
+                    if ru and isinstance(ru.get("log_bytes"), int):
+                        rs["log_bytes"] += int(ru.get("log_bytes") or 0)
+                except Exception:
+                    pass
+            # Build items
+            users = set(art.keys()) | set(agg.keys())
+            items: list[dict] = []
+            for u in users:
+                items.append({
+                    "user_id": u,
+                    "runs_count": int((agg.get(u) or {}).get("runs_count", 0)),
+                    "log_bytes": int((agg.get(u) or {}).get("log_bytes", 0)),
+                    "artifact_bytes": int(art.get(u, 0)),
+                })
+        items.sort(key=lambda r: r.get("user_id") or "", reverse=bool(sort_desc))
+        return items[offset: offset + limit]
+
+    def count_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+    ) -> int:
+        return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
 
 
 def get_store() -> SandboxStore:
