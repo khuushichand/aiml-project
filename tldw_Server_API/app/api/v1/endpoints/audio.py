@@ -736,8 +736,22 @@ async def create_transcription(
                     f"Failed to release job slot in finally: user_id={current_user.id}, error={e}; request_id={rid}"
                 )
 
+        # Helper: detect various error messages
+        def is_transcription_error(msg: str) -> bool:
+            lower_msg = msg.lower()
+            return (
+                lower_msg.startswith("[error")
+                or lower_msg.startswith("[transcription error")
+                or lower_msg.startswith("canary transcription error")
+                or lower_msg.startswith("parakeet transcription error")
+                or lower_msg.startswith("external provider transcription error")
+                or lower_msg.startswith("nemo transcription module not available")
+                or lower_msg.startswith("failed to import nemo")
+                or lower_msg.startswith("failed to import external provider")
+            )
+
         # Check for errors in transcription
-        if transcribed_text.startswith("[Error") or transcribed_text.startswith("[Transcription error"):
+        if is_transcription_error(transcribed_text):
             logger.error(f"Transcription failed: {transcribed_text}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -762,15 +776,33 @@ async def create_transcription(
             )
 
         # Format response based on requested format
+            if is_transcription_error(transcribed_text):
+                logger.error(f"Transcription failed: {transcribed_text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model."
+                )
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
 
         elif response_format == "srt":
+            if is_transcription_error(transcribed_text):
+                logger.error(f"Transcription failed: {transcribed_text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model."
+                )
             # Simple SRT format (would need proper timing for real implementation)
             srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
             return Response(content=srt_content, media_type="text/plain")
 
         elif response_format == "vtt":
+            if is_transcription_error(transcribed_text):
+                logger.error(f"Transcription failed: {transcribed_text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model."
+                )
             # Simple VTT format
             vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
             return Response(content=vtt_content, media_type="text/vtt")
