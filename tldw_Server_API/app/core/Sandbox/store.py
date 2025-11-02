@@ -499,6 +499,24 @@ class SQLiteStore(SandboxStore):
                     )
                     raise
 
+    def _coerce_created_at(self, value: str | int | float) -> float:
+        """Coerce created_at filter to epoch seconds.
+
+        Accepts ISO-8601 strings (including trailing 'Z'), ints, or floats.
+        Raises ValueError if not parseable.
+        """
+        txt = str(value).strip()
+        if txt.endswith("Z"):
+            txt = txt[:-1] + "+00:00"
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(txt).timestamp()
+        except ValueError:
+            try:
+                return float(txt)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid created_at filter: {value!r}")
+
     def _fp(self, body: Dict[str, Any]) -> str:
         """
         Compute a stable SHA-256 fingerprint for a JSON-like body.
@@ -791,19 +809,10 @@ class SQLiteStore(SandboxStore):
             params.append(key)
         if created_at_from:
             where.append("created_at >= ?")
-            # if provided ISO, parse to epoch seconds; else assume float
-            try:
-                from datetime import datetime
-                params.append(datetime.fromisoformat(created_at_from).timestamp())
-            except Exception:
-                params.append(float(created_at_from))
+            params.append(self._coerce_created_at(created_at_from))
         if created_at_to:
             where.append("created_at <= ?")
-            try:
-                from datetime import datetime
-                params.append(datetime.fromisoformat(created_at_to).timestamp())
-            except Exception:
-                params.append(float(created_at_to))
+            params.append(self._coerce_created_at(created_at_to))
         sql = (
             "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "
             f"WHERE {' AND '.join(where)} ORDER BY created_at {order} LIMIT ? OFFSET ?"
@@ -850,18 +859,10 @@ class SQLiteStore(SandboxStore):
             params.append(key)
         if created_at_from:
             where.append("created_at >= ?")
-            try:
-                from datetime import datetime
-                params.append(datetime.fromisoformat(created_at_from).timestamp())
-            except Exception:
-                params.append(float(created_at_from))
+            params.append(self._coerce_created_at(created_at_from))
         if created_at_to:
             where.append("created_at <= ?")
-            try:
-                from datetime import datetime
-                params.append(datetime.fromisoformat(created_at_to).timestamp())
-            except Exception:
-                params.append(float(created_at_to))
+            params.append(self._coerce_created_at(created_at_to))
         sql = f"SELECT COUNT(*) FROM sandbox_idempotency WHERE {' AND '.join(where)}"
         with self._lock, self._conn() as con:
             cur = con.execute(sql, tuple(params))

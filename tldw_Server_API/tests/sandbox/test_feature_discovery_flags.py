@@ -25,3 +25,21 @@ def test_runtimes_include_capability_flags_and_store_mode() -> None:
             assert "egress_allowlist_supported" in rt
             assert "store_mode" in rt
             assert rt["store_mode"] in {"memory", "sqlite", "cluster", "unknown"}
+
+
+def test_egress_allowlist_supported_when_enforced(monkeypatch) -> None:
+    # Ensure app is in test mode and config cache is fresh
+    os.environ.setdefault("TEST_MODE", "1")
+    os.environ["SANDBOX_STORE_BACKEND"] = "memory"
+    clear_config_cache()
+    # Flip enforcement on the live service instance to avoid re-importing app
+    import tldw_Server_API.app.api.v1.endpoints.sandbox as sandbox_ep
+    sandbox_ep._service.policy.cfg.egress_enforcement = True  # type: ignore[attr-defined]
+    with TestClient(app) as client:
+        r = client.get("/api/v1/sandbox/runtimes")
+        assert r.status_code == 200
+        data = r.json()
+        # Find docker entry and assert flag is true
+        docker = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "docker"), None)
+        assert docker is not None
+        assert docker.get("egress_allowlist_supported") is True

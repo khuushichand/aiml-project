@@ -46,8 +46,9 @@ def test_ws_resume_from_seq_replays_only_newer(ws_flush) -> None:
                 # We expect at least one delivered
                 if len(seqs) >= 1 and msg.get("type") == "event" and msg.get("event") == "end":
                     break
+            # Ensure at least one non-heartbeat frame was received
+            assert len(seqs) >= 1
             # All delivered frames should be >= requested from_seq
             assert all(s >= 3 for s in seqs)
             ws_flush(run_id)
             ws.close()
-

@@ -15,6 +15,9 @@ import hashlib
 class SandboxPolicyConfig:
     default_runtime: RuntimeType = RuntimeType.docker
     network_default: str = "deny_all"  # deny_all | allowlist (allowlist controlled elsewhere)
+    # Opt-in egress allowlist enforcement (runtime dependent; Docker only for now)
+    egress_enforcement: bool = False
+    egress_allowlist: List[str] = field(default_factory=list)
     artifact_ttl_hours: int = 24
     max_upload_mb: int = 64
     max_log_bytes: int = 10 * 1024 * 1024
@@ -54,9 +57,20 @@ class SandboxPolicyConfig:
                 return [t.strip() for t in s.split(',') if t.strip()]
             except Exception:
                 return dv
+        def _get_bool(key: str, dv: bool) -> bool:
+            try:
+                v = getattr(app_settings, key)
+                if isinstance(v, bool):
+                    return v
+                s = str(v).strip().lower()
+                return s in {"1", "true", "yes", "on", "y"}
+            except Exception:
+                return dv
         return cls(
             default_runtime=runtime,
             network_default=network_default,
+            egress_enforcement=_get_bool("SANDBOX_EGRESS_ENFORCEMENT", False),
+            egress_allowlist=_get_list("SANDBOX_EGRESS_ALLOWLIST", []),
             artifact_ttl_hours=_get_int("SANDBOX_ARTIFACT_TTL_HOURS", 24),
             max_upload_mb=_get_int("SANDBOX_MAX_UPLOAD_MB", 64),
             max_log_bytes=_get_int("SANDBOX_MAX_LOG_BYTES", 10 * 1024 * 1024),
@@ -140,6 +154,10 @@ def _canonical_policy_dict(cfg: SandboxPolicyConfig) -> dict:
     material = {
         "default_runtime": cfg.default_runtime.value,
         "network_default": str(cfg.network_default),
+        "egress": {
+            "enforced": bool(cfg.egress_enforcement),
+            "allowlist_count": int(len(cfg.egress_allowlist or [])),
+        },
         "artifact_ttl_hours": int(cfg.artifact_ttl_hours),
         "max_upload_mb": int(cfg.max_upload_mb),
         "max_log_bytes": int(cfg.max_log_bytes),

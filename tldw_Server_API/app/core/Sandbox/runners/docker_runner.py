@@ -186,8 +186,25 @@ class DockerRunner:
         # Step 1: docker create
         cmd: List[str] = ["docker", "create"]
         # Network policy
-        if (spec.network_policy or "deny_all").lower() == "deny_all":
+        net_policy = (spec.network_policy or "deny_all").lower()
+        if net_policy == "deny_all":
             cmd += ["--network", "none"]
+        elif net_policy == "allowlist":
+            # Opt-in allowlist enforcement: coarse-grained for now.
+            # When SANDBOX_EGRESS_ENFORCEMENT is enabled, we currently enforce
+            # a strict no-egress policy (network=none). Granular host/IP allowlisting
+            # requires host-level networking controls not yet implemented here.
+            try:
+                enforced = os.getenv("SANDBOX_EGRESS_ENFORCEMENT")
+                if enforced is None:
+                    enforced = str(getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "false"))
+                if str(enforced).strip().lower() in {"1", "true", "yes", "on", "y"}:
+                    logger.info("Sandbox Docker egress allowlist enforcement active: applying network=none (coarse deny-all)")
+                    cmd += ["--network", "none"]
+                else:
+                    logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; using default bridge network")
+            except Exception:
+                logger.debug("Sandbox Docker egress allowlist check failed; proceeding without enforcement")
         # Resources
         try:
             pids_limit = int(getattr(app_settings, "SANDBOX_PIDS_LIMIT", 256))

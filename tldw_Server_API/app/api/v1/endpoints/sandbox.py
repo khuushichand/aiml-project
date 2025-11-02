@@ -180,12 +180,20 @@ async def create_session(
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
         if isinstance(e, _Pol.RuntimeUnavailable):
-            # Map to 503 with details per PRD; return body at top-level (not under "detail")
+            # Map to 503 with details per PRD; read runtime from exception with safe fallback
+            rt_attr = getattr(e, "runtime", None)
+            if rt_attr is None:
+                rt = "unknown"
+            else:
+                try:
+                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
+                except Exception:
+                    rt = str(rt_attr) if rt_attr is not None else "unknown"
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": str(e),
-                    "details": {"runtime": "firecracker", "available": False, "suggested": ["docker"]}
+                    "details": {"runtime": rt, "available": False, "suggested": ["docker"]}
                 }
             })
         if isinstance(e, IdempotencyConflict):
@@ -491,11 +499,20 @@ async def start_run(
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
         if isinstance(e, _Pol.RuntimeUnavailable):
+            # Use runtime from exception; fallback only if missing/None
+            rt_attr = getattr(e, "runtime", None)
+            if rt_attr is None:
+                rt = "unknown"
+            else:
+                try:
+                    rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
+                except Exception:
+                    rt = str(rt_attr) if rt_attr is not None else "unknown"
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
                     "message": str(e),
-                    "details": {"runtime": "firecracker", "available": False, "suggested": ["docker"]}
+                    "details": {"runtime": rt, "available": False, "suggested": ["docker"]}
                 }
             })
         if isinstance(e, IdempotencyConflict):

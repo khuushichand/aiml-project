@@ -93,6 +93,8 @@ class SandboxService:
             store_mode = str(get_store_mode())
         except Exception:
             store_mode = "unknown"
+        # Whether we have active enforcement for egress allowlisting (Docker only for now)
+        egress_supported = bool(self.policy.cfg.egress_enforcement)
         return [
             {
                 "name": "docker",
@@ -108,7 +110,7 @@ class SandboxService:
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
                 "interactive_supported": False,
-                "egress_allowlist_supported": False,
+                "egress_allowlist_supported": bool(egress_supported),
                 "store_mode": store_mode,
                 "notes": None,
             },

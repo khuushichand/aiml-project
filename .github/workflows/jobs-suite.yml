@@ -104,7 +104,7 @@ jobs:
       POSTGRES_TEST_DB: tldw_content
       POSTGRES_TEST_USER: tldw
       POSTGRES_TEST_PASSWORD: tldw
-      TEST_DB_NAME: tldw_authnz
+      TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout

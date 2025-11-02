@@ -225,7 +225,7 @@ performance:
   stream_errors_as_audio: false
 ```
 
-If you want, I can wire a setup checker that validates models, voices, FFmpeg, and environment keys, and reports fixes before you run your first request.
+If you would like, we can configure a setup checker that validates models, voices, FFmpeg, and environment keys, and reports fixes before you run your first request.
 
 ---
 

@@ -73,6 +73,9 @@ jobs:
             echo "No package-lock.json found; skipping Node SBOM"; \
           fi
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Resolve CycloneDX CLI digest
         run: |
           set -euo pipefail

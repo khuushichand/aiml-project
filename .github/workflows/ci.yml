@@ -88,8 +88,8 @@ jobs:
       TEST_DB_HOST: 127.0.0.1
       TEST_DB_USER: tldw
       TEST_DB_PASSWORD: tldw
-      # Align AuthNZ_Postgres conftest default DB name with service DB
-      TEST_DB_NAME: tldw_authnz
+      # Align AuthNZ_Postgres conftest default DB name with tests
+      TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
