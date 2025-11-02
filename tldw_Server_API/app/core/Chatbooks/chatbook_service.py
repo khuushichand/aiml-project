@@ -762,7 +762,7 @@ class ChatbookService:
             # Store job in database
             self._save_export_job(job)
             
-            # Start async task
+            # Start async processing depending on backend
             if self._jobs_backend == "core":
                 # Enqueue into core Jobs and start worker if needed
                 try:
@@ -795,15 +795,10 @@ class ChatbookService:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to enqueue export job into core Jobs: {e}")
-            else:
-                # Start async task (legacy in-process)
-                task = asyncio.create_task(self._create_chatbook_job_async(
-                    job_id, name, description, content_selections,
-                    author, include_media, media_quality, include_embeddings,
-                    include_generated_content, tags, categories
-                ))
-                self._tasks[job_id] = task
-                task.add_done_callback(lambda _t: self._tasks.pop(job_id, None))
+            elif self._jobs_backend == "prompt_studio":
+                # Do not start local processing when using Prompt Studio backend.
+                # PS worker (external) is responsible for running the job.
+                pass
             
             return True, f"Export job started: {job_id}", job_id
         else:
