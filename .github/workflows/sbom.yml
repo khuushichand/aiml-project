@@ -22,106 +22,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      # No registry login required for public Docker Hub images used below
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Generate Python SBOM from pyproject (cdxgen)
-        run: |
-          if [ -f pyproject.toml ]; then \
-            npx -y @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
-          fi
-
-      - name: Generate Node SBOM (cyclonedx-npm)
-        run: |
-          if [ -f tldw-frontend/package.json ]; then \
-            (cd tldw-frontend && npx -y @cyclonedx/cyclonedx-npm --output-file ../sbom-frontend.cdx.json) || true; \
-          elif [ -f package.json ]; then \
-            npx -y @cyclonedx/cyclonedx-npm --output-file sbom-frontend.cdx.json || true; \
-          else \
-            echo "No package.json found for Node SBOM generation"; \
-          fi
-
-      - name: Generate Source SBOM with Syft (CycloneDX JSON)
+      - name: Generate SBOM (CycloneDX JSON)
         uses: anchore/sbom-action@v0
         with:
           path: .
           format: cyclonedx-json
-          output-file: sbom-syft.cdx.json
-          upload-artifact: false
+          output-file: sbom.cdx.json
+          upload-artifact: true
+          artifact-name: sbom-cyclonedx
 
-      # Merge/validate will use CycloneDX CLI container, no Python install needed
-
-      - name: Gather SBOM files
-        id: gather
-        shell: bash
-        run: |
-          FILES=""
-          COUNT=0
-          for f in sbom-python.cdx.json sbom-frontend.cdx.json sbom-syft.cdx.json; do
-            if [ -f "$f" ]; then
-              FILES="$FILES $f"
-              COUNT=$((COUNT+1))
-            fi
-          done
-          echo "SBOM_FILES=$FILES" >> "$GITHUB_ENV"
-          echo "SBOM_COUNT=$COUNT" >> "$GITHUB_ENV"
-          echo "Found $COUNT SBOM file(s): $FILES"
-
-      - name: Merge SBOMs (CycloneDX CLI via GHCR)
-        id: merge_ghcr
-        if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' }}
-        continue-on-error: true
-        uses: docker://ghcr.io/cyclonedx/cyclonedx-cli:v0.30.0
-        with:
-          args: >-
-            merge --input-files ${{ env.SBOM_FILES }} --output-file sbom.cdx.json
-
-      - name: Merge SBOMs (CycloneDX CLI via Docker Hub fallback)
-        if: ${{ env.SBOM_COUNT != '0' && env.SBOM_COUNT != '1' && steps.merge_ghcr.outcome == 'failure' }}
-        uses: docker://cyclonedx/cyclonedx-cli:latest
-        with:
-          args: >-
-            merge --input-files ${{ env.SBOM_FILES }} --output-file sbom.cdx.json
-
-      - name: Copy single SBOM to sbom.cdx.json
-        if: ${{ env.SBOM_COUNT == '1' }}
-        shell: bash
-        run: |
-          # env.SBOM_FILES contains exactly one entry
-          cp $SBOM_FILES sbom.cdx.json
-
-      - name: Validate merged SBOM (CycloneDX CLI via GHCR)
-        id: validate_ghcr
+      - name: Validate SBOM (CycloneDX CLI - pinned)
+        id: validate_cli_pinned
         if: ${{ hashFiles('sbom.cdx.json') != '' }}
         continue-on-error: true
-        uses: docker://ghcr.io/cyclonedx/cyclonedx-cli:v0.30.0
+        uses: docker://cyclonedx/cyclonedx-cli:0.30.0
         with:
           args: >-
             validate --input-file sbom.cdx.json
 
-      - name: Validate merged SBOM (CycloneDX CLI via Docker Hub fallback)
-        if: ${{ hashFiles('sbom.cdx.json') != '' && steps.validate_ghcr.outcome == 'failure' }}
+      - name: Validate SBOM (CycloneDX CLI - latest fallback)
+        if: ${{ hashFiles('sbom.cdx.json') != '' && steps.validate_cli_pinned.outcome == 'failure' }}
         uses: docker://cyclonedx/cyclonedx-cli:latest
         with:
           args: >-
             validate --input-file sbom.cdx.json
-
-      - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: |
-            sbom-python.cdx.json
-            sbom-frontend.cdx.json
-            sbom-syft.cdx.json
-            sbom.cdx.json
-          if-no-files-found: ignore
