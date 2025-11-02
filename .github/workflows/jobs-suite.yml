@@ -30,7 +30,7 @@ jobs:
       DISABLE_HEAVY_STARTUP: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
@@ -107,7 +107,7 @@ jobs:
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
