@@ -79,11 +79,16 @@ class SandboxPolicy:
     def __init__(self, cfg: Optional[SandboxPolicyConfig] = None) -> None:
         self.cfg = cfg or SandboxPolicyConfig.from_settings()
 
+    class RuntimeUnavailable(Exception):
+        def __init__(self, runtime: RuntimeType) -> None:
+            super().__init__(f"Requested runtime '{runtime.value}' is unavailable")
+            self.runtime = runtime
+
     def select_runtime(self, requested: Optional[RuntimeType], firecracker_available: bool) -> RuntimeType:
-        if requested:
+        if requested is not None:
             if requested == RuntimeType.firecracker and not firecracker_available:
-                logger.info("Firecracker requested but unavailable; falling back to default runtime")
-                return self.cfg.default_runtime
+                # Do not silently fallback; surface unavailability to caller
+                raise SandboxPolicy.RuntimeUnavailable(requested)
             return requested
         return self.cfg.default_runtime
 
@@ -94,10 +99,11 @@ class SandboxPolicy:
         return spec
 
     def apply_to_run(self, spec: RunSpec, firecracker_available: bool) -> RunSpec:
-        spec.runtime = spec.runtime or self.cfg.default_runtime
-        if spec.runtime == RuntimeType.firecracker and not firecracker_available:
-            logger.info("Firecracker selected but unavailable; falling back to default runtime for run")
+        if spec.runtime is None:
             spec.runtime = self.cfg.default_runtime
+        else:
+            # Honor explicit request; surface unavailability
+            spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
         if not spec.network_policy:
             spec.network_policy = self.cfg.network_default
         return spec

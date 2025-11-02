@@ -178,12 +178,26 @@ async def create_session(
     except Exception as e:
         from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
+        from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
+        if isinstance(e, _Pol.RuntimeUnavailable):
+            # Map to 503 with details per PRD; return body at top-level (not under "detail")
+            return JSONResponse(status_code=503, content={
+                "error": {
+                    "code": "runtime_unavailable",
+                    "message": str(e),
+                    "details": {"runtime": "firecracker", "available": False, "suggested": ["docker"]}
+                }
+            })
         if isinstance(e, IdempotencyConflict):
             raise HTTPException(status_code=409, detail={
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
-                    "details": {"prior_id": e.original_id}
+                    "details": {
+                        "prior_id": e.original_id,
+                        "key": getattr(e, "key", None),
+                        "prior_created_at": getattr(e, "prior_created_at", None),
+                    }
                 }
             })
         if isinstance(e, QueueFull):
@@ -475,12 +489,25 @@ async def start_run(
     except Exception as e:
         from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
+        from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
+        if isinstance(e, _Pol.RuntimeUnavailable):
+            return JSONResponse(status_code=503, content={
+                "error": {
+                    "code": "runtime_unavailable",
+                    "message": str(e),
+                    "details": {"runtime": "firecracker", "available": False, "suggested": ["docker"]}
+                }
+            })
         if isinstance(e, IdempotencyConflict):
             return JSONResponse(status_code=409, content={
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
-                    "details": {"prior_id": e.original_id}
+                    "details": {
+                        "prior_id": e.original_id,
+                        "key": getattr(e, "key", None),
+                        "prior_created_at": getattr(e, "prior_created_at", None),
+                    }
                 }
             })
         if isinstance(e, QueueFull):

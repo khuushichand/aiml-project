@@ -83,10 +83,12 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
             # Last resort: relative to this module's package root
             from pathlib import Path as _Path
             cursor_path = str(_Path(__file__).resolve().parents[3] / "Databases" / "jobs_webhooks_cursor.txt")
-    # Resume from persisted cursor if present, unless explicitly overridden by env
+    # Resume from persisted cursor if present, unless explicitly overridden by env.
+    # In TEST_MODE, when no explicit cursor path is provided, skip loading a global cursor file
+    # to avoid cross-test interference.
     persisted_after = None
     try:
-        if cursor_path and os.path.exists(cursor_path):
+        if cursor_path and os.path.exists(cursor_path) and not _truthy(os.getenv("TEST_MODE")):
             with open(cursor_path, "r", encoding="utf-8") as f:
                 persisted_after = int((f.read() or "0").strip() or 0)
     except Exception as e:

@@ -24,15 +24,15 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.12'
 
       - name: Generate Python SBOM (CycloneDX)
         run: |
           python -m pip install -q cyclonedx-bom
           if [ -f tldw_Server_API/requirements.txt ]; then \
-            cyclonedx-bom -r tldw_Server_API/requirements.txt -o sbom-python.cdx.json; \
+            python -m cyclonedx_bom -r tldw_Server_API/requirements.txt -o sbom-python.cdx.json; \
           elif [ -f requirements.txt ]; then \
-            cyclonedx-bom -r requirements.txt -o sbom-python.cdx.json; \
+            python -m cyclonedx_bom -r requirements.txt -o sbom-python.cdx.json; \
           else \
             echo "No requirements file found; cannot generate SBOM"; \
             exit 1; \

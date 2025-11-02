@@ -21,9 +21,12 @@ def _now_iso() -> str:
 
 
 class IdempotencyConflict(Exception):
-    def __init__(self, original_id: str, message: str = "Idempotency conflict") -> None:
+    def __init__(self, original_id: str, key: Optional[str] = None, created_at: Optional[float] = None, message: str = "Idempotency conflict") -> None:
         super().__init__(message)
         self.original_id = original_id
+        self.key = key
+        # created_at is expressed as epoch seconds (float) at the store layer
+        self.created_at = created_at
 
 
 class SandboxStore:
@@ -171,7 +174,8 @@ class InMemoryStore(SandboxStore):
             fp_new = self._fp(body)
             if fp_new == fp_saved:
                 return resp
-            raise IdempotencyConflict(obj_id)
+            # include key and created_at (epoch seconds) for richer error details upstream
+            raise IdempotencyConflict(obj_id, key=key, created_at=ts)
 
     def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
         if not key:
@@ -514,7 +518,7 @@ class SQLiteStore(SandboxStore):
         with self._lock, self._conn() as con:
             self._gc_idem(con)
             cur = con.execute(
-                "SELECT fingerprint, response_body, object_id FROM sandbox_idempotency WHERE endpoint=? AND user_key=? AND key=?",
+                "SELECT fingerprint, response_body, object_id, created_at FROM sandbox_idempotency WHERE endpoint=? AND user_key=? AND key=?",
                 (endpoint, self._user_key(user_id), key),
             )
             row = cur.fetchone()
@@ -526,7 +530,12 @@ class SQLiteStore(SandboxStore):
                     return json.loads(row["response_body"]) if row["response_body"] else None
                 except Exception:
                     return None
-            raise IdempotencyConflict(row["object_id"])
+            # include key and created_at (epoch seconds) from the row for richer error details upstream
+            try:
+                ct = float(row["created_at"]) if row["created_at"] is not None else None
+            except Exception:
+                ct = None
+            raise IdempotencyConflict(row["object_id"], key=key, created_at=ct)
 
     def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
         if not key:

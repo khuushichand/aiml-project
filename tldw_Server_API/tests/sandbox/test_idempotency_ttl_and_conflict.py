@@ -31,10 +31,17 @@ def test_idempotency_conflict_on_mismatch() -> None:
         key = "k-conflict-1"
         r1 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 1"))
         assert r1.status_code == 200
+        rid1 = r1.json().get("id")
+        assert isinstance(rid1, str) and rid1
         r2 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 2"))
         assert r2.status_code == 409
         j = r2.json()
         assert j.get("error", {}).get("code") == "idempotency_conflict"
+        details = j.get("error", {}).get("details", {})
+        assert details.get("prior_id") == rid1
+        assert details.get("key") == key
+        # ISO 8601 string expected (not validating format strictly)
+        assert isinstance(details.get("prior_created_at"), str) and details.get("prior_created_at")
 
 
 def test_idempotency_ttl_expiry_allows_new_execution() -> None:
