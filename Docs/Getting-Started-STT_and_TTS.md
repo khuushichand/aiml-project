@@ -165,7 +165,7 @@ Troubleshooting
 ---
 
 ## Verifying Setup via WebUI
-- Open http://127.0.0.1:8000/webui/
+- Open <http://127.0.0.1:8000/webui/>
 - Tabs:
   - Audio → Transcription (STT): upload a short clip and transcribe
   - Audio → TTS: enter text, pick a voice/model, and synthesize
