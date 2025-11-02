@@ -656,14 +656,30 @@ class PostgreSQLBackend(DatabaseBackend):
             owns_connection = True
         
         try:
+            # Track managed transaction depth per-connection so we can
+            # reliably commit/rollback only at the outermost boundary,
+            # regardless of whether we own the connection or it was
+            # supplied by the caller.
             self._tx_depth_inc(conn)
+            is_outermost = self._tx_depth(conn) == 1
             # PostgreSQL uses implicit transactions
             yield conn
-            if owns_connection:
-                conn.commit()
+            # Commit only when we're at the outermost depth for this connection.
+            if is_outermost:
+                try:
+                    conn.commit()
+                except Exception as e:
+                    # Surface commit failures consistently
+                    logger.error(f"Transaction commit failed: {e}")
+                    raise
         except Exception as e:
-            if owns_connection:
-                conn.rollback()
+            # Roll back only when we're at the outermost depth for this connection.
+            try:
+                if self._tx_depth(conn) == 1:
+                    conn.rollback()
+            except Exception:
+                # Swallow rollback errors to avoid masking the original
+                pass
             logger.error(f"Transaction failed: {e}")
             raise
         finally:

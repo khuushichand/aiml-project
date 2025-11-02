@@ -2163,6 +2163,33 @@ async def _guard_workflow_templates_traversal(request, call_next):
         pass
     return await call_next(request)
 
+# Early middleware to guard sandbox artifact path traversal/double-slash before Starlette routing
+@app.middleware("http")
+async def _guard_sandbox_artifact_path(request: Request, call_next):
+    try:
+        # Inspect raw ASGI path first to avoid client/Starlette normalization
+        raw_path = request.scope.get("raw_path")
+        path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path or "")
+        # Quick filter: only check sandbox artifact endpoints
+        # Example: /api/v1/sandbox/runs/{run_id}/artifacts/{path}
+        if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
+            from urllib.parse import unquote
+            # Segment after /artifacts/
+            idx = path_raw.find("/artifacts/")
+            tail = path_raw[idx + len("/artifacts/"):]
+            tail_unquoted = unquote(tail)
+            # Reject traversal attempts and absolute/double-slash paths
+            if (
+                ".." in tail_unquoted.split("/")
+                or tail_unquoted.startswith("/")
+                or "//" in tail
+            ):
+                return JSONResponse({"detail": "invalid_path"}, status_code=400)
+    except Exception:
+        # Fail open: if guard fails, let the request proceed
+        pass
+    return await call_next(request)
+
 # Add global security schemes, servers, and branding to the generated OpenAPI schema
 def custom_openapi():
     if app.openapi_schema:

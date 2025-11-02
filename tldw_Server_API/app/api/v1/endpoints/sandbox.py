@@ -861,7 +861,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             while True:
                 await asyncio.sleep(10)
-                # Publish via hub to attach seq and flow through the same queue
+                # Publish via hub to attach seq and flow through the same queue.
+                # If this fails, skip the heartbeat to avoid injecting out-of-band frames
+                # with potentially inconsistent sequencing.
                 try:
                     hub.publish_heartbeat(run_id)
                     try:
@@ -869,12 +871,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                     except Exception:
                         pass
                 except Exception:
-                    # If publish fails, fallback to direct send with a hub seq
-                    try:
-                        seq_hb = hub._next_seq(run_id)  # type: ignore[attr-defined]
-                    except Exception:
-                        seq_hb = 1
-                    await websocket.send_json({"type": "heartbeat", "seq": int(seq_hb)})
+                    continue
         except Exception:
             return
 

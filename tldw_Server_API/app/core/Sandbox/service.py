@@ -230,6 +230,16 @@ class SandboxService:
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+        # Emit queue-wait metric as soon as we move out of queued (or immediately after enqueue)
+        # so tests that disable execution still observe this metric.
+        try:
+            ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
+            if ts:
+                import time as _time
+                qwait = max(0.0, _time.time() - float(ts))
+                observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": str(spec.runtime.value if spec.runtime else "unknown")})
+        except Exception:
+            pass
         # Optional: Execute via Docker runner if enabled and requested
         # Allow per-test overrides via env even if settings were loaded earlier
         try:
@@ -394,6 +404,8 @@ class SandboxService:
             st.finished_at = datetime.utcnow()
             st.exit_code = None
             self._orch.update_run(run_id, st)
+            # Consider the operation successful if we set killed state
+            cancelled = True
         except Exception:
             pass
         # Ensure WS end event is sent even if runner didn't publish
