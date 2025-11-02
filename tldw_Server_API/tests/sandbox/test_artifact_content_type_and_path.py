@@ -39,8 +39,8 @@ def test_artifact_content_type_and_invalid_path() -> None:
         assert r2.headers.get("content-type", "").startswith("text/plain")
         assert r2.content == payload
 
-        # Invalid path: traversal
-        r3 = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/../secret.txt")
+        # Invalid path: traversal (encoded to avoid client-side normalization)
+        r3 = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/%2E%2E/secret.txt")
         assert r3.status_code == 400
         # Invalid path: absolute
         r4 = client.get(f"/api/v1/sandbox/runs/{run_id}/artifacts//etc/passwd")
