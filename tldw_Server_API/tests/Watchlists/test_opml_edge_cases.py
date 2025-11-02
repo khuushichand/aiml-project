@@ -58,4 +58,3 @@ def test_opml_edge_cases(client_with_user):
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["created"] == 0 and data["errors"] == 0  # parser yields no entries
-

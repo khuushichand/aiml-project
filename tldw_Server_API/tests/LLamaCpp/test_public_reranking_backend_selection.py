@@ -48,4 +48,3 @@ def test_backend_llamacpp_selected(mock_factory, client: TestClient):
     assert resp.status_code == 200
     called_args, _ = mock_factory.call_args
     assert called_args[0] == RerankingStrategy.LLAMA_CPP
-

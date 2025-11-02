@@ -149,26 +149,26 @@ async def test_vibevoice():
         "vibevoice_use_quantization": True,  # If bitsandbytes installed
         "vibevoice_auto_cleanup": True
     })
-    
+
     # Initialize
     if await adapter.initialize():
         print("✓ VibeVoice initialized successfully")
-        
+
         # Check capabilities
         caps = await adapter.get_capabilities()
         print(f"✓ Provider: {caps.provider_name}")
         print(f"✓ Max context: {caps.max_text_length} tokens")
-        
+
         # Test generation
         request = TTSRequest(
             text="Hello, this is a test of the enhanced VibeVoice system.",
             voice="speaker_1",
             format=AudioFormat.WAV
         )
-        
+
         response = await adapter.generate(request)
         print("✓ Audio generated successfully")
-        
+
         # Check memory usage
         memory = adapter.get_memory_usage()
         print(f"✓ VRAM usage: {memory['current_vram_gb']:.2f} GB")

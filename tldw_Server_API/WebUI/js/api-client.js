@@ -17,7 +17,7 @@ class APIClient {
         this.includeTokenInCurl = false; // UI preference for cURL token masking
         this.init();
     }
-    
+
     // Cleanup method to close all connections
     cleanup() {
         // Close all WebSocket connections
@@ -27,7 +27,7 @@ class APIClient {
             }
         });
         this.websockets.clear();
-        
+
         // Abort all active requests
         this.activeRequests.forEach((controller, key) => {
             if (controller) {
@@ -36,11 +36,11 @@ class APIClient {
         });
         this.activeRequests.clear();
     }
-    
+
     // Create or get WebSocket connection
     getWebSocket(url, options = {}) {
         const key = `${url}_${JSON.stringify(options)}`;
-        
+
         // Check if we have an existing connection
         if (this.websockets.has(key)) {
             const ws = this.websockets.get(key);
@@ -50,22 +50,22 @@ class APIClient {
             // Connection is closed, remove it
             this.websockets.delete(key);
         }
-        
+
         // Create new WebSocket
         const ws = new WebSocket(url);
-        
+
         // Set up auto-cleanup on close
         ws.addEventListener('close', () => {
             this.websockets.delete(key);
         });
-        
+
         ws.addEventListener('error', () => {
             this.websockets.delete(key);
         });
-        
+
         // Store the connection
         this.websockets.set(key, ws);
-        
+
         return ws;
     }
 
@@ -76,21 +76,21 @@ class APIClient {
             // We're being served from the FastAPI server - use same origin
             this.baseUrl = window.location.origin;
             console.log('WebUI served from same origin, using:', this.baseUrl);
-            
+
             // Try to load dynamic configuration from the server
             try {
                 const response = await fetch('/webui/config.json');
                 if (response.ok) {
                     const config = await response.json();
-                    
+
                     // Store the loaded config for later use (includes LLM providers)
                     this.loadedConfig = config;
-                    
+
                     // Use apiUrl if provided, otherwise keep same origin
                     if (config.apiUrl) {
                         this.baseUrl = config.apiUrl;
                     }
-                    
+
                     // Store the authentication mode
                     this.authMode = config.mode || 'unknown';
                     // Load multi-user API-key preference
@@ -104,17 +104,17 @@ class APIClient {
                             }
                         }
                     } catch (e) { /* ignore */ }
-                    
+
                     // Check for API key (will be present in single user mode)
                     if (config.apiKey && config.apiKey !== '') {
                         this.token = config.apiKey;
                         this.configLoaded = true;
                         console.log(`✅ Auto-configured for ${this.authMode} mode`);
-                        
+
                         // Show success message if we got an API key
                         if (this.authMode === 'single-user') {
                             console.log('🔑 API key automatically configured from server');
-                            
+
                             // Update the UI to show auto-configuration
                             setTimeout(() => {
                                 const apiKeyInput = document.getElementById('apiKeyInput');
@@ -123,7 +123,7 @@ class APIClient {
                                     apiKeyInput.disabled = true;
                                     apiKeyInput.style.backgroundColor = '#e8f5e9';
                                 }
-                                
+
                                 // Update any status message
                                 const statusElement = document.querySelector('.api-status-text');
                                 if (statusElement) {
@@ -284,11 +284,11 @@ class APIClient {
         if (customTimeout !== undefined) {
             return customTimeout;
         }
-        
+
         // Define longer timeouts for specific endpoints
         const longTimeoutEndpoints = {
             '/api/v1/media/process-videos': 600000,    // 10 minutes
-            '/api/v1/media/process-audios': 600000,    // 10 minutes  
+            '/api/v1/media/process-audios': 600000,    // 10 minutes
             '/api/v1/media/process-ebooks': 300000,    // 5 minutes
             '/api/v1/media/process-documents': 300000, // 5 minutes
             '/api/v1/media/process-pdfs': 300000,      // 5 minutes
@@ -298,7 +298,7 @@ class APIClient {
             '/api/v1/media/mediawiki/ingest-dump': 600000, // 10 minutes
             '/api/v1/media/mediawiki/process-dump': 600000, // 10 minutes
         };
-        
+
         // Check if path matches any long timeout endpoint
         for (const [endpoint, timeout] of Object.entries(longTimeoutEndpoints)) {
             if (path.includes(endpoint)) {
@@ -306,7 +306,7 @@ class APIClient {
                 return timeout;
             }
         }
-        
+
         // Default timeout for regular endpoints
         return 30000; // 30 seconds
     }
@@ -343,7 +343,7 @@ class APIClient {
         if (credsMode) {
             fetchOptions.credentials = credsMode;
         }
-        
+
         // Add appropriate authentication header based on mode
         if (this.token) {
             if (this.authMode === 'single-user') {
@@ -387,18 +387,18 @@ class APIClient {
             // Create abort controller for timeout and tracking
             const controller = new AbortController();
             this.activeRequests.set(requestKey, controller);
-            
+
             const timeoutId = setTimeout(() => {
                 controller.abort();
                 this.activeRequests.delete(requestKey);
             }, timeout);
-            
+
             fetchOptions.signal = controller.signal;
-            
+
             const response = await fetch(url.toString(), fetchOptions);
             clearTimeout(timeoutId);
             this.activeRequests.delete(requestKey);
-            
+
             const duration = Date.now() - startTime;
 
             this._syncCsrfFromResponse(response);
@@ -417,7 +417,7 @@ class APIClient {
             if (!response.ok) {
                 let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
                 let errorDetails = null;
-                
+
                 try {
                     const contentType = response.headers.get('content-type');
                     if (contentType && contentType.includes('application/json')) {
@@ -435,7 +435,7 @@ class APIClient {
                                     errorMessage = errorDetails.detail;
                                 } else if (Array.isArray(errorDetails.detail)) {
                                     // Validation errors array
-                                    errorMessage = errorDetails.detail.map(err => 
+                                    errorMessage = errorDetails.detail.map(err =>
                                         err.msg || err.message || JSON.stringify(err)
                                     ).join(', ');
                                 } else if (typeof errorDetails.detail === 'object') {
@@ -458,11 +458,11 @@ class APIClient {
                     // If response parsing fails, use original message
                     console.warn('Failed to parse error response:', e);
                 }
-                
+
                 if (response.status === 403) {
                     const notifyCsrfReset = () => {
                         if (typeof Toast !== 'undefined') {
-                            Toast.warning('Your session security token expired. A new one was issued—please retry the action.');
+                            Toast.warning('Your session security token expired. A new one was issued-please retry the action.');
                         }
                     };
                     try {
@@ -515,7 +515,7 @@ class APIClient {
         } catch (error) {
             // Enhanced error handling
             const duration = Date.now() - startTime;
-            
+
             // Check if it's a timeout error
             let finalError = error;
             if (error.name === 'AbortError') {
@@ -526,7 +526,7 @@ class APIClient {
                 finalError.isTimeout = true;
                 finalError.originalError = error;
             }
-            
+
             // Record error in history with more details
             this.addToHistory({
                 method,
@@ -538,7 +538,7 @@ class APIClient {
                 errorStatus: finalError.status,
                 success: false
             });
-            
+
             // Add request context to error
             finalError.request = {
                 method,
@@ -546,7 +546,7 @@ class APIClient {
                 url: url.toString(),
                 duration
             };
-            
+
             throw finalError;
         }
     }
@@ -809,12 +809,12 @@ class APIClient {
                 curl += ` \\
   -H "Authorization: Bearer ${shownToken}"`;
             } else {
-                // Unknown mode — default to API key header
+                // Unknown mode - default to API key header
                 curl += ` \\
   -H "X-API-KEY: ${shownToken}"`;
             }
         }
-        
+
         Object.keys(headers).forEach(key => {
             curl += ` \\
   -H "${key}: ${headers[key]}"`;
@@ -865,7 +865,7 @@ class APIClient {
     async getAvailableProviders() {
         try {
             // Check if providers are already cached in config
-            if (this.cachedProviders && this.cacheTimestamp && 
+            if (this.cachedProviders && this.cacheTimestamp &&
                 (Date.now() - this.cacheTimestamp) < 300000) { // Cache for 5 minutes
                 return this.cachedProviders;
             }
@@ -931,7 +931,7 @@ class APIClient {
         this.cachedProviders = null;
         this.cacheTimestamp = null;
     }
-    
+
     /**
      * Populate all model select dropdowns with available LLM providers and models
      */
@@ -939,7 +939,7 @@ class APIClient {
         try {
             // Get available providers from API
             const providersInfo = await this.getAvailableProviders();
-            
+
             if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
                 console.warn('No LLM providers configured');
                 // Update dropdowns to show no providers available
@@ -948,62 +948,62 @@ class APIClient {
                 });
                 return;
             }
-            
+
             // Build options HTML grouped by provider
             let optionsHtml = '';
             const defaultProvider = providersInfo.default_provider;
             let defaultModel = null;
-            
+
             // Sort providers by type (commercial first, then local)
             const sortedProviders = providersInfo.providers.sort((a, b) => {
                 if (a.type === 'commercial' && b.type === 'local') return -1;
                 if (a.type === 'local' && b.type === 'commercial') return 1;
                 return a.display_name.localeCompare(b.display_name);
             });
-            
+
             // Group models by provider
             sortedProviders.forEach(provider => {
                 if (provider.models && provider.models.length > 0) {
                     // Add indicator if provider is not configured
                     const configStatus = provider.is_configured === false ? ' (Not Configured)' : '';
                     const labelStyle = provider.is_configured === false ? ' style="color: #888;"' : '';
-                    
+
                     optionsHtml += `<optgroup label="${provider.display_name}${configStatus}"${labelStyle}>`;
-                    
+
                     provider.models.forEach(model => {
                         const value = `${provider.name}/${model}`;
                         const displayName = model;
                         const isDefault = provider.name === defaultProvider && provider.default_model === model;
-                        
+
                         if (isDefault) {
                             defaultModel = value;
                         }
-                        
+
                         // Disable option if provider is not configured
                         const disabled = provider.is_configured === false ? ' disabled' : '';
                         const disabledText = provider.is_configured === false ? ' (requires API key)' : '';
-                        
+
                         optionsHtml += `<option value="${value}"${isDefault ? ' data-default="true"' : ''}${disabled}>${displayName}${isDefault ? ' (default)' : ''}${disabledText}</option>`;
                     });
-                    
+
                     optionsHtml += '</optgroup>';
                 }
             });
-            
+
             // Update all model select dropdowns
             document.querySelectorAll('.llm-model-select').forEach(select => {
                 const currentValue = select.value;
                 const hasUseDefault = select.querySelector('option[value=""]');
-                
+
                 // Build the complete HTML
                 let html = '';
                 if (hasUseDefault && hasUseDefault.textContent.includes('Use default')) {
                     html = '<option value="">Use default</option>';
                 }
                 html += optionsHtml;
-                
+
                 select.innerHTML = html;
-                
+
                 // Restore previous selection or set default
                 if (currentValue) {
                     select.value = currentValue;
@@ -1011,9 +1011,9 @@ class APIClient {
                     select.value = defaultModel;
                 }
             });
-            
+
             console.log(`Populated model dropdowns with ${providersInfo.total_configured || providersInfo.providers.length} providers`);
-            
+
         } catch (error) {
             console.error('Failed to populate model dropdowns:', error);
             // Show error in dropdowns
@@ -1053,7 +1053,7 @@ class APIClient {
 
         // Convert HTTP URL to WebSocket URL
         const wsUrl = this.baseUrl.replace(/^http/, 'ws') + path;
-        
+
         // Add token to URL if available
         const url = new URL(wsUrl);
         if (this.token) {
@@ -1178,7 +1178,7 @@ class WebSocketManager {
             console.log('WebSocket connected:', this.url);
             this.reconnectCount = 0;
             this.reconnectDelay = this.constructor.reconnectDelay;
-            
+
             // Process queued messages
             while (this.messageQueue.length > 0) {
                 const message = this.messageQueue.shift();
@@ -1214,7 +1214,7 @@ class WebSocketManager {
         this.ws.onclose = (event) => {
             console.log('WebSocket closed:', event.code, event.reason);
             this.stopHeartbeat();
-            
+
             if (this.onClose) this.onClose(event);
 
             if (!this.isIntentionallyClosed && this.reconnect) {
@@ -1236,7 +1236,7 @@ class WebSocketManager {
         );
 
         console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectCount})`);
-        
+
         if (this.onReconnecting) {
             this.onReconnecting(this.reconnectCount, delay);
         }
@@ -1248,7 +1248,7 @@ class WebSocketManager {
 
     startHeartbeat() {
         this.stopHeartbeat();
-        
+
         if (this.heartbeatInterval && this.heartbeatMessage) {
             this.heartbeatTimeout = setTimeout(() => {
                 if (this.isConnected()) {
@@ -1298,7 +1298,7 @@ class WebSocketManager {
      */
     close(code = 1000, reason = 'Normal closure') {
         this.isIntentionallyClosed = true;
-        
+
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = null;

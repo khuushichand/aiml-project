@@ -50,4 +50,3 @@ export function HotkeysOverlay({ entries, title = 'Keyboard Shortcuts' }: { entr
 }
 
 export default HotkeysOverlay;
-

@@ -262,15 +262,3 @@ To Do:
       Issue: The process_videos function uses a regular expression to extract the summary text from a formatted string (all_summaries) for the run_geval check. This relies heavily on the exact string format and can easily break if the format changes.
         Recommendation: Make process_single_video return a structured dictionary like {"video_input": ..., "status": ..., "transcript": ..., "summary": ..., "db_id": ...}. Then, process_videos can collect these dictionaries in its results list. When running the confabulation check, iterate through the results list and directly access item['transcript'] and item['summary'] to pass to run_geval. This avoids fragile string parsing.
 - [ ] Set proper paths for model files in config.txt
-
-
-
-
-
-
-
-
-
-
-
-

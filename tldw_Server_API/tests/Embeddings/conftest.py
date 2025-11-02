@@ -132,7 +132,7 @@ def redis_client():
 def test_client(disable_heavy_startup):
     """Minimal TestClient with CSRF and auth header set.
 
-    Scope: function — keeps isolation across property-based runs.
+    Scope: function - keeps isolation across property-based runs.
     """
     try:
         csrf = "test-csrf"
@@ -238,7 +238,7 @@ def _patch_hypothesis_local_constants(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Optional PGVector fixtures — skip when not available in this environment
+# Optional PGVector fixtures - skip when not available in this environment
 # ---------------------------------------------------------------------------
 
 @pytest.fixture

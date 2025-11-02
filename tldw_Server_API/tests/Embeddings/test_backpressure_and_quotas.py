@@ -85,4 +85,3 @@ def test_tenant_quota_429(monkeypatch):
     assert r2.status_code == 429
     assert r2.headers.get("Retry-After") == "1"
     app.dependency_overrides.pop(get_request_user, None)
-

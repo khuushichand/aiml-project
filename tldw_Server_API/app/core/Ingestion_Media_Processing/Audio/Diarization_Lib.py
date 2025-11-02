@@ -217,21 +217,13 @@ def _lazy_import_numpy():
 
 
 def _lazy_import_silero_vad():
-    """Lazy import Silero VAD model.
+    """
+    Load and cache the Silero VAD model and its utility functions from the torch hub.
 
-    This function loads the Silero VAD model from torch hub.
-    The model returns a tuple of (model, utils) where utils is a tuple of functions.
+    This function configures a torch hub cache directory (derived from TORCH_HOME or TORCH_HUB), attempts to load the Silero VAD package via torch.hub.load, validates the returned (model, utils) tuple, and stores them in module-level cache variables for reuse. On failure the cache is left unset and the function returns (None, None).
 
     Returns:
-        tuple: (model, utils) or (None, None) if loading fails
-
-    Note:
-        The utils tuple order is critical and can break between versions:
-        - utils[0]: get_speech_timestamps - Main VAD function
-        - utils[1]: save_audio - Save audio to file
-        - utils[2]: read_audio - Read audio from file
-        - utils[3]: VADIterator - Class for streaming VAD
-        - utils[4]: collect_chunks - Collect speech chunks
+        tuple: `(model, utils)` on success where `utils` is a sequence whose first five items are, in order, `get_speech_timestamps`, `save_audio`, `read_audio`, `VADIterator`, and `collect_chunks`; `(None, None)` if loading or validation fails.
     """
     global _silero_vad_model, _silero_vad_utils
 
@@ -252,10 +244,19 @@ def _lazy_import_silero_vad():
     try:
         logger.info("Loading Silero VAD model from torch hub...")
 
-        # Set torch hub directory if not set
-        default_hub_dir = str(Path.home() / '.cache' / 'torch' / 'hub')
-        hub_dir = Path(os.environ.get('TORCH_HUB', default_hub_dir))
+        # Configure torch hub cache directory
+        # Prefer TORCH_HOME (root), fallback to default; allow explicit TORCH_HUB as hub dir
+        default_home_dir = Path.home() / '.cache' / 'torch'
+        torch_home = Path(os.environ.get('TORCH_HOME', str(default_home_dir)))
+        # If TORCH_HUB is set, treat it as explicit hub dir; otherwise derive from TORCH_HOME
+        hub_dir = Path(os.environ.get('TORCH_HUB', str(torch_home / 'hub')))
         hub_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Ensure torch uses the directory we just created
+            if hasattr(torch, 'hub') and hasattr(torch.hub, 'set_dir'):
+                torch.hub.set_dir(str(hub_dir))
+        except Exception as _hub_dir_err:  # pragma: no cover - best-effort
+            logger.debug(f"torch.hub.set_dir failed: {_hub_dir_err}")
 
         # Load model with explicit parameters
         result = torch.hub.load(
@@ -497,12 +498,42 @@ class DiarizationService:
         return True
 
     def _get_default_config(self) -> Dict[str, Any]:
-        """Get default configuration."""
+        """
+        Provide the default configuration dictionary used by DiarizationService.
+
+        Returns:
+            dict: Mapping of configuration option names to their default values. Main keys include:
+                - vad_threshold: float threshold for voice activity detection.
+                - vad_min_speech_duration: minimum speech duration (seconds) to consider as speech.
+                - vad_min_silence_duration: minimum silence duration (seconds) used by VAD.
+                - allow_vad_fallback: allow a full-span fallback region if VAD is unavailable or fails.
+                - enable_torch_hub_fetch: allow fetching Silero VAD from torch.hub when not cached.
+                - segment_duration: target segment length (seconds).
+                - segment_overlap: overlap between consecutive segments (seconds).
+                - min_segment_duration / max_segment_duration: bounds for created segments (seconds).
+                - embedding_model: pretrained embedding model identifier.
+                - embedding_device: device selection for embeddings (AUTO/CPU/CUDA).
+                - embedding_local_only: require local embedding files when True.
+                - clustering_method: clustering algorithm to use (SPECTRAL/AGGLOMERATIVE).
+                - similarity_threshold: similarity cutoff used for single-speaker detection.
+                - min_speakers / max_speakers: allowed speaker count bounds for clustering.
+                - merge_threshold: maximum gap (seconds) to merge adjacent same-speaker segments.
+                - min_speaker_duration: minimum total duration (seconds) for a speaker to be kept.
+                - embedding_batch_size: number of segments processed per embedding batch.
+                - memory_efficient: enable memory-efficient mode for waveform handling.
+                - max_memory_mb: memory budget in megabytes when memory_efficient is enabled.
+                - detect_overlapping_speech: enable overlapping-speech detection post-processing.
+                - overlap_confidence_threshold: confidence threshold for marking overlaps.
+        """
         return {
             # VAD settings
             'vad_threshold': DEFAULT_VAD_THRESHOLD,
             'vad_min_speech_duration': 0.25,
             'vad_min_silence_duration': 0.25,
+            # Allow fallback when VAD unavailable (e.g., no network/cache)
+            'allow_vad_fallback': True,
+            # Allow torch.hub to fetch Silero VAD when not cached (set False to fail fast)
+            'enable_torch_hub_fetch': True,
 
             # Segmentation settings
             'segment_duration': DEFAULT_SEGMENT_DURATION,
@@ -513,6 +544,7 @@ class DiarizationService:
             # Embedding model
             'embedding_model': DEFAULT_EMBEDDING_MODEL,
             'embedding_device': EmbeddingDevice.AUTO.value,
+            'embedding_local_only': False,  # If True, do not download; require local model files
 
             # Clustering settings
             'clustering_method': ClusteringMethod.SPECTRAL.value,
@@ -626,7 +658,11 @@ class DiarizationService:
         return self.config['embedding_device']
 
     def _load_embedding_model(self):
-        """Load the speaker embedding model (lazy loading)."""
+        """
+        Load and cache the speaker embedding model according to the current configuration.
+
+        This method ensures a SpeechBrain EncoderClassifier is initialized and stored on the service instance for reuse. It selects the device from the service configuration, prefers a local model path or cached model directory when available, and enforces local-only mode if configured (raising DiarizationError when local files are required but missing). On failure to obtain or initialize the model it raises DiarizationError.
+        """
         with self._model_lock:
             if self._embedding_model is None:
                 logger.info(f"Loading embedding model: {self.config['embedding_model']}")
@@ -642,27 +678,62 @@ class DiarizationService:
 
                     # Use pathlib for path construction
                     model_dir = Path('pretrained_models') / safe_model_name
+                    model_dir.mkdir(parents=True, exist_ok=True)
 
-                    self._embedding_model = EncoderClassifier.from_hparams(
-                        source=self.config['embedding_model'],
-                        savedir=str(model_dir),
-                        run_opts={"device": device}
-                    )
+                    # Local-only behavior: never fetch from network; require local files
+                    local_only = bool(self.config.get('embedding_local_only', False))
+                    local_source: Optional[Path] = None
+                    # If user provided a path that exists, prefer it
+                    candidate_path = Path(model_name)
+                    if candidate_path.exists():
+                        local_source = candidate_path
+                    elif model_dir.exists() and any(model_dir.iterdir()):
+                        # Use pre-populated cache directory
+                        local_source = model_dir
+
+                    if local_only:
+                        if not local_source:
+                            raise DiarizationError(
+                                "Embedding model files not found locally. "
+                                "Set embedding_local_only=false to allow download or provide a local path in embedding_model."
+                            )
+                        self._embedding_model = EncoderClassifier.from_hparams(
+                            source=str(local_source),
+                            savedir=str(local_source),
+                            run_opts={"device": device}
+                        )
+                    else:
+                        # Allow download/resolve from repo string, but cache under model_dir
+                        self._embedding_model = EncoderClassifier.from_hparams(
+                            source=model_name,
+                            savedir=str(model_dir),
+                            run_opts={"device": device}
+                        )
                     logger.info(f"Embedding model loaded successfully on {device}")
                 except Exception as e:
                     logger.error(f"Failed to load embedding model: {e}")
                     raise DiarizationError(f"Failed to load embedding model: {e}") from e
 
     def _load_vad_model(self):
-        """Load the VAD model (lazy loading).
+        """
+        Load and validate the Silero voice-activity-detection (VAD) model and its utilities into the instance.
 
-        This method loads the Silero VAD model and its utility functions.
-        The VAD utilities are particularly brittle as they return as a tuple
-        in a specific order that can change between versions.
+        This method lazy-loads the Silero VAD model and maps its returned utilities into self._vad_model and a dict self._vad_utils with keys
+        'get_speech_timestamps', 'save_audio', 'read_audio', 'VADIterator', and 'collect_chunks'. It validates the utilities' presence and
+        that each utility is callable (except 'VADIterator', which is expected to be a class). Loading may be skipped when the configuration
+        flag 'enable_torch_hub_fetch' is False.
+
+        Raises:
+            DiarizationError: If loading or validation fails, or if torch hub fetch is disabled by configuration.
         """
         with self._model_lock:  # Add thread safety
             if self._vad_model is None:
                 try:
+                    # Optionally prevent torch.hub fetching for locked-down environments
+                    if not bool(self.config.get('enable_torch_hub_fetch', True)):
+                        raise DiarizationError(
+                            "Silero VAD load skipped: enable_torch_hub_fetch is False"
+                        )
                     model, utils = _lazy_import_silero_vad()
                     if not model or not utils:
                         raise DiarizationError("Silero VAD model or utilities not available")
@@ -744,19 +815,27 @@ class DiarizationService:
             progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None
     ) -> Dict[str, Any]:
         """
-        Perform speaker diarization on audio file.
+            Perform speaker diarization for an audio file and return time-aligned segments with speaker assignments.
 
-        Args:
-            audio_path: Path to audio file. For best performance, provide a
-                        16kHz mono WAV file, though the service will attempt to
-                        convert other common audio formats
-            transcription_segments: Optional transcription segments to align with
-            num_speakers: Optional number of speakers (if known)
-            progress_callback: Optional callback for progress updates
+            This method runs voice-activity detection, creates analysis segments, extracts speaker embeddings, clusters segments into speakers, optionally detects overlapping speech, merges adjacent segments for the same speaker, and optionally aligns results to provided transcription segments.
 
-        Returns:
-            Dict with diarization results including segments with speaker IDs
-        """
+            Parameters:
+                audio_path: Path to the input audio file. Prefer a 16 kHz mono WAV for best results; common audio formats will be converted when possible.
+                transcription_segments: Optional list of transcription segment dictionaries to align diarization output to; if provided, aligned segments will inherit timestamps/text from these entries with speaker assignments applied.
+                num_speakers: Optional fixed number of speakers to force; when omitted the service will estimate the speaker count within configured min/max limits.
+                progress_callback: Optional callable invoked with progress updates: (progress_percent: float, message: str, metadata: Optional[dict]). Metadata (when provided) may include final 'num_speakers' and 'duration'.
+
+            Returns:
+                A dictionary with diarization results:
+                    - 'segments': list of segment dictionaries (each includes start, end, speaker_id, speaker_label and related metadata).
+                    - 'speakers': list of per-speaker statistics dictionaries (total_time, segment_count, first_appearance, last_appearance, etc.).
+                    - 'duration': audio duration in seconds.
+                    - 'num_speakers': number of unique speakers identified.
+                    - 'processing_time': wall-clock time in seconds spent performing diarization.
+
+            Raises:
+                DiarizationError: If required dependencies are missing or an error occurs during processing.
+            """
         if not self.is_available:
             raise DiarizationError("Diarization service is not available due to missing dependencies")
 
@@ -778,7 +857,7 @@ class DiarizationService:
             # Use streaming VAD if memory-efficient mode is enabled
             streaming_vad = self.config.get('memory_efficient', False)
             speech_timestamps = self._detect_speech(waveform, sample_rate, streaming=streaming_vad)
-            logger.info(f"Found {len(speech_timestamps)} speech segments")
+            logger.debug(f"Found {len(speech_timestamps)} speech segments")
 
             if not speech_timestamps:
                 logger.warning("No speech detected in audio")
@@ -794,23 +873,29 @@ class DiarizationService:
                 progress_callback(20, "Creating analysis segments...", None)
 
             segments = self._create_segments(waveform, speech_timestamps, sample_rate)
-            logger.info(f"Created {len(segments)} analysis segments")
+            logger.debug(f"Created {len(segments)} analysis segments")
 
             # Step 3: Extract embeddings
             if progress_callback:
                 progress_callback(30, "Extracting speaker embeddings...", None)
 
             embeddings = self._extract_embeddings(segments, progress_callback)
-            logger.info(f"Extracted {len(embeddings)} embeddings")
+            logger.debug(f"Extracted {len(embeddings)} embeddings")
 
-            # Step 4: Cluster speakers
+            # Step 4: Determine speakers (fast path for single-speaker)
             if progress_callback:
                 progress_callback(70, "Clustering speakers...", None)
 
-            speaker_labels = self._cluster_speakers(
-                embeddings,
-                num_speakers=num_speakers
-            )
+            if num_speakers == 1:
+                np = _lazy_import_numpy()
+                if not np:
+                    raise DiarizationError("NumPy not available for single-speaker labeling")
+                speaker_labels = np.zeros(len(embeddings), dtype=int)
+            else:
+                speaker_labels = self._cluster_speakers(
+                    embeddings,
+                    num_speakers=num_speakers
+                )
 
             # Count unique speakers
             unique_speakers = len(set(speaker_labels))
@@ -872,7 +957,17 @@ class DiarizationService:
             raise DiarizationError(f"Diarization failed: {str(e)}") from e
 
     def _load_audio(self, audio_path: str):
-        """Load audio file and convert to correct format."""
+        """
+        Load an audio file and return a mono waveform sampled at 16 kHz.
+
+        Tries to load using torchaudio (converting multi-channel audio to mono and resampling to 16 kHz if needed). If torchaudio is unavailable or fails, falls back to the Silero VAD `read_audio` utility. Raises DiarizationError if neither loader can produce a valid waveform.
+
+        Returns:
+            A 1-D tensor or array of audio samples resampled to 16 kHz.
+
+        Raises:
+            DiarizationError: If audio cannot be loaded by either torchaudio or Silero VAD.
+        """
         torchaudio = _lazy_import_torchaudio()
         torch = _lazy_import_torch()
 
@@ -930,107 +1025,124 @@ class DiarizationService:
                 ) from e
 
     def _detect_speech(self, waveform, sample_rate: int, streaming: bool = False) -> List[Dict]:
-        """Detect speech segments using VAD.
+        """
+        Detect speech regions in an audio waveform using the configured VAD, optionally in streaming mode, and fall back to a single full-span region when VAD is unavailable.
 
-        Args:
-            waveform: Audio waveform tensor
-            sample_rate: Sample rate of the audio
-            streaming: If True, use streaming VAD for lower memory usage
+        Parameters:
+            waveform: Audio waveform tensor or sequence of samples.
+            sample_rate (int): Sampling rate of the waveform in Hz.
+            streaming (bool): If True, attempt a lower-memory streaming VAD pass; falls back to standard VAD on failure.
 
         Returns:
-            List of speech segments with start/end times
+            List[Dict]: A list of speech segments where each dict contains numeric `start` and `end` keys expressed in seconds.
 
         Raises:
-            DiarizationError: If VAD fails or utilities are not properly loaded
+            DiarizationError: If VAD is unavailable and `allow_vad_fallback` in the configuration is False.
         """
-        # Ensure VAD model is loaded
-        if not self._vad_model:
-            self._load_vad_model()
+        allow_fallback: bool = bool(self.config.get('allow_vad_fallback', True))
 
-        # Validate VAD utilities are loaded
-        if not self._vad_utils or 'get_speech_timestamps' not in self._vad_utils:
-            raise DiarizationError(
-                "VAD utilities not properly loaded. Missing 'get_speech_timestamps' function."
-            )
+        def _fallback_full_span() -> List[Dict]:
+            """
+            Produce a single full-span speech region covering the entire waveform or raise an error if fallback is disabled.
 
-        if streaming and 'VADIterator' in self._vad_utils:
-            # Use streaming VAD for lower memory usage
-            try:
-                VADIterator = self._get_vad_utility('VADIterator')
-                vad_iterator = VADIterator(
-                    model=self._vad_model,
-                    threshold=self.config['vad_threshold'],
-                    sampling_rate=sample_rate,
-                    min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000),
-                    speech_pad_ms=int(self.config.get('vad_speech_pad_ms', 30))
-                )
+            Returns:
+                list[dict]: A list with one timestamp dict {'start': 0.0, 'end': <duration_seconds>} giving the speech region in seconds.
 
-                # Process in chunks for streaming
-                chunk_size = int(sample_rate * 10)  # 10 second chunks
-                speech_timestamps = []
+            Raises:
+                DiarizationError: If fallback is not allowed.
+            """
+            dur = float(len(waveform) / max(1, sample_rate))
+            if allow_fallback:
+                logger.warning("VAD unavailable; falling back to single full-span speech region")
+                return [{'start': 0.0, 'end': dur}]
+            raise DiarizationError("VAD unavailable and allow_vad_fallback is False")
 
-                for i in range(0, len(waveform), chunk_size):
-                    chunk = waveform[i:i + chunk_size]
-                    speech_dict = vad_iterator(chunk, return_seconds=False)
+        try:
+            # Ensure VAD model is loaded
+            if not self._vad_model:
+                self._load_vad_model()
 
-                    if speech_dict:
-                        # Adjust timestamps for chunk offset
-                        for ts in speech_dict.get('speech_timestamps', []):
-                            ts['start'] = ts['start'] + i
-                            ts['end'] = ts['end'] + i
-                            speech_timestamps.append(ts)
+            # Validate VAD utilities are loaded
+            if not self._vad_utils or 'get_speech_timestamps' not in self._vad_utils:
+                logger.debug("VAD utilities missing get_speech_timestamps; using fallback")
+                return _fallback_full_span()
 
-                # Reset iterator
-                vad_iterator.reset_states()
-
-            except Exception as e:
-                logger.warning(f"Streaming VAD failed, falling back to standard VAD: {e}")
-                streaming = False
-
-        if not streaming:
-            # Standard (non-streaming) VAD
-            # Get the speech detection function using safe getter
-            get_speech_timestamps = self._get_vad_utility('get_speech_timestamps')
-
-            try:
-                # Call the VAD function with proper parameters
-                # NOTE: Parameter names and order are critical for Silero VAD
-                speech_timestamps = get_speech_timestamps(
-                    waveform,
-                    self._vad_model,
-                    sampling_rate=sample_rate,  # Must be 'sampling_rate', not 'sample_rate'
-                    threshold=self.config['vad_threshold'],
-                    min_speech_duration_ms=int(self.config['vad_min_speech_duration'] * 1000),
-                    min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000)
-                )
-
-                # Validate the output format
-                if not isinstance(speech_timestamps, list):
-                    raise DiarizationError(
-                        f"Expected list of timestamps, got {type(speech_timestamps).__name__}"
+            if streaming and 'VADIterator' in self._vad_utils:
+                # Use streaming VAD for lower memory usage
+                try:
+                    VADIterator = self._get_vad_utility('VADIterator')
+                    vad_iterator = VADIterator(
+                        model=self._vad_model,
+                        threshold=self.config['vad_threshold'],
+                        sampling_rate=sample_rate,
+                        min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000),
+                        speech_pad_ms=int(self.config.get('vad_speech_pad_ms', 30))
                     )
 
-                # Validate each timestamp has required fields
-                for i, ts in enumerate(speech_timestamps):
-                    if not isinstance(ts, dict):
-                        raise DiarizationError(
-                            f"Timestamp {i} is not a dict: {type(ts).__name__}"
-                        )
-                    if 'start' not in ts or 'end' not in ts:
-                        raise DiarizationError(
-                            f"Timestamp {i} missing 'start' or 'end' field: {ts.keys()}"
-                        )
+                    # Process in chunks for streaming
+                    chunk_size = int(sample_rate * 10)  # 10 second chunks
+                    speech_timestamps = []
 
-            except Exception as e:
-                logger.error(f"VAD detection failed: {e}")
-                raise DiarizationError(f"Speech detection failed: {str(e)}") from e
+                    for i in range(0, len(waveform), chunk_size):
+                        chunk = waveform[i:i + chunk_size]
+                        speech_dict = vad_iterator(chunk, return_seconds=False)
 
-        # Convert to seconds
-        for ts in speech_timestamps:
-            ts['start'] = ts['start'] / sample_rate
-            ts['end'] = ts['end'] / sample_rate
+                        if speech_dict:
+                            # Adjust timestamps for chunk offset
+                            for ts in speech_dict.get('speech_timestamps', []):
+                                ts['start'] = ts['start'] + i
+                                ts['end'] = ts['end'] + i
+                                speech_timestamps.append(ts)
 
-        return speech_timestamps
+                    # Reset iterator
+                    vad_iterator.reset_states()
+
+                except Exception as e:
+                    logger.warning(f"Streaming VAD failed, falling back to standard VAD: {e}")
+                    streaming = False
+
+            if not streaming:
+                # Standard (non-streaming) VAD
+                # Get the speech detection function using safe getter
+                get_speech_timestamps = self._get_vad_utility('get_speech_timestamps')
+
+                try:
+                    # Call the VAD function with proper parameters
+                    # NOTE: Parameter names and order are critical for Silero VAD
+                    speech_timestamps = get_speech_timestamps(
+                        waveform,
+                        self._vad_model,
+                        sampling_rate=sample_rate,  # Must be 'sampling_rate', not 'sample_rate'
+                        threshold=self.config['vad_threshold'],
+                        min_speech_duration_ms=int(self.config['vad_min_speech_duration'] * 1000),
+                        min_silence_duration_ms=int(self.config['vad_min_silence_duration'] * 1000)
+                    )
+
+                    # Validate the output format
+                    if not isinstance(speech_timestamps, list):
+                        logger.debug("Unexpected VAD output type; using fallback full-span")
+                        return _fallback_full_span()
+
+                    # Validate each timestamp has required fields
+                    for i, ts in enumerate(speech_timestamps):
+                        if not isinstance(ts, dict) or 'start' not in ts or 'end' not in ts:
+                            logger.debug("Invalid VAD timestamp format; using fallback full-span")
+                            return _fallback_full_span()
+
+                except Exception as e:
+                    logger.warning(f"VAD detection failed: {e}; using fallback full-span")
+                    return _fallback_full_span()
+
+            # Convert to seconds
+            for ts in speech_timestamps:
+                ts['start'] = ts['start'] / sample_rate
+                ts['end'] = ts['end'] / sample_rate
+
+            return speech_timestamps
+
+        except Exception as outer:
+            logger.warning(f"VAD unavailable or failed early: {outer}; using fallback full-span")
+            return _fallback_full_span()
 
     def _create_segments(
             self,
@@ -1038,10 +1150,28 @@ class DiarizationService:
             speech_timestamps: List[Dict],
             sample_rate: int
     ) -> List[SegmentDict]:
-        """Create fixed-length overlapping segments from speech regions.
-
-        In memory-efficient mode, stores segment indices instead of waveform copies.
         """
+            Create fixed-length, overlapping speech segments from detected speech regions.
+
+            Segments cover each speech region with windows of length `segment_duration` and overlap `segment_overlap`
+            (from the instance configuration). Short regions are either padded up to the minimum segment duration
+            or emitted as shorter padded segments at the end of a region depending on their length relative to
+            `min_segment_duration`. When the `memory_efficient` config flag is enabled, segments store index
+            references into the original waveform (`start_sample`, `end_sample`, `waveform_ref`) and padding metadata
+            instead of copying waveform tensors.
+
+            Parameters:
+                waveform (torch.Tensor): Mono audio samples (1D tensor) used as the source for segment extraction.
+                speech_timestamps (List[Dict]): List of speech region dictionaries with numeric `start` and `end`
+                    values given in seconds.
+                sample_rate (int): Sampling rate of `waveform` in Hz.
+
+            Returns:
+                List[SegmentDict]: A list of segment dictionaries. Each segment includes start/end times (seconds),
+                either a `waveform` tensor (copied and possibly padded) or `waveform_ref` with `start_sample`/`end_sample`
+                when memory-efficient mode is active, an `is_padded` flag, and other metadata such as `original_duration`
+                and `speech_region`.
+            """
         torch = _lazy_import_torch()
         if not torch:
             raise DiarizationError("PyTorch not available for segment creation")
@@ -1164,10 +1294,17 @@ class DiarizationService:
             segments: List[SegmentDict],
             progress_callback: Optional[Callable[[float, str, Optional[Dict]], None]] = None
     ) -> "np.ndarray":
-        """Extract speaker embeddings for each segment using batch processing.
-
-        Supports memory-efficient mode by loading waveforms on-demand.
         """
+            Compute speaker embeddings for each provided segment in batches.
+
+            Processes segments in configurable batches, supports memory-efficient on-demand waveform loading, and returns a 2-D NumPy array with one embedding vector per segment.
+
+            Returns:
+                np.ndarray: 2-D array of shape (n_segments, embedding_dim) containing embeddings for each segment.
+
+            Raises:
+                DiarizationError: If PyTorch or NumPy are unavailable, or if batching/embedding extraction fails.
+            """
         # Load embedding model if not already loaded
         self._load_embedding_model()
 
@@ -1215,16 +1352,31 @@ class DiarizationService:
 
             # Extract embeddings for the batch
             try:
-                if hasattr(torch, 'no_grad'):
+                # Prefer inference_mode (lower autograd overhead), fallback to no_grad, then raw call
+                if hasattr(torch, 'inference_mode'):
+                    try:
+                        with torch.inference_mode():  # type: ignore[attr-defined]
+                            batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                    except Exception as e:
+                        logger.debug(f"torch.inference_mode failed: {e}; trying no_grad")
+                        if hasattr(torch, 'no_grad'):
+                            try:
+                                with torch.no_grad():
+                                    batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                            except Exception as e2:
+                                logger.debug(f"torch.no_grad failed: {e2}; calling directly")
+                                batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                        else:
+                            batch_embeddings = self._embedding_model.encode_batch(waveforms)
+                elif hasattr(torch, 'no_grad'):
                     try:
                         with torch.no_grad():
                             batch_embeddings = self._embedding_model.encode_batch(waveforms)
-                    except (AttributeError, RuntimeError) as e:
-                        logger.debug(f"Failed to use torch.no_grad(): {e}")
-                        # Fallback without no_grad context
+                    except Exception as e:
+                        logger.debug(f"torch.no_grad failed: {e}; calling directly")
                         batch_embeddings = self._embedding_model.encode_batch(waveforms)
                 else:
-                    # No no_grad available, run without context manager
+                    # No inference helpers available, run without context manager
                     batch_embeddings = self._embedding_model.encode_batch(waveforms)
 
                 # Convert to numpy
@@ -1263,7 +1415,27 @@ class DiarizationService:
             embeddings: "np.ndarray",
             num_speakers: Optional[int] = None
     ) -> "np.ndarray":
-        """Cluster embeddings to identify speakers."""
+        """
+            Perform speaker clustering on precomputed embeddings and return integer cluster labels.
+
+            Clusters the provided L2-normalized embeddings into speaker groups using either spectral
+            or agglomerative clustering as configured. If `num_speakers` is 1 or the embeddings are
+            determined to come from a single speaker, all labels will be zero. When `num_speakers`
+            is None the method will attempt to estimate an appropriate number of speakers.
+
+            Parameters:
+                embeddings (np.ndarray): 2D array of embedding vectors (one row per segment).
+                num_speakers (Optional[int]): Desired number of speaker clusters; when None the
+                    method will estimate the number of speakers. If set to 1, all segments are
+                    assigned the same speaker label.
+
+            Returns:
+                np.ndarray: 1D integer array of cluster labels with length equal to the number
+                of input embeddings.
+
+            Raises:
+                DiarizationError: If NumPy or scikit-learn modules are not available for clustering.
+            """
         np = _lazy_import_numpy()
         if not np:
             raise DiarizationError("NumPy not available for clustering")
@@ -1301,11 +1473,20 @@ class DiarizationService:
             )
         else:  # agglomerative
             AgglomerativeClustering = sklearn_modules['AgglomerativeClustering']
-            clustering = AgglomerativeClustering(
-                n_clusters=num_speakers,
-                affinity='cosine',
-                linkage='average'
-            )
+            # scikit-learn >= 1.4 uses 'metric' instead of deprecated 'affinity'
+            try:
+                clustering = AgglomerativeClustering(
+                    n_clusters=num_speakers,
+                    linkage='average',
+                    metric='cosine',
+                )
+            except TypeError:
+                # Backward compatibility with older sklearn versions
+                clustering = AgglomerativeClustering(
+                    n_clusters=num_speakers,
+                    affinity='cosine',
+                    linkage='average',
+                )
 
         labels = clustering.fit_predict(embeddings)
         return labels
@@ -1506,16 +1687,17 @@ class DiarizationService:
             embeddings: "np.ndarray",
             primary_labels: "np.ndarray"
     ) -> List[Dict]:
-        """Detect potential overlapping speech in segments.
-
-        Args:
-            segments: List of segment dictionaries
-            embeddings: Speaker embeddings for each segment
-            primary_labels: Primary speaker labels from clustering
-
-        Returns:
-            Updated segments with overlap information
         """
+            Annotate segments that likely contain overlapping speech based on embedding similarities.
+
+            This function compares each segment's embedding to cluster centroids derived from the provided primary labels and annotates segments where the primary-speaker confidence falls below the configured overlap_confidence_threshold. Annotated fields added or updated on segments:
+            - `is_overlapping` (bool): whether the segment is likely overlapping speech.
+            - `primary_confidence` (float): similarity score of the segment to its primary cluster.
+            - `secondary_speakers` (list[dict]): up to two candidate secondary speakers with keys `speaker_id` (int) and `confidence` (float).
+
+            Returns:
+                List[Dict]: The same list of segments with added overlap-related annotations where applicable.
+            """
         # Get threshold from config
         confidence_threshold = self.config.get('overlap_confidence_threshold', 0.7)
 
@@ -1534,8 +1716,9 @@ class DiarizationService:
             # Get cosine_similarity function
             cosine_similarity = sklearn_modules['cosine_similarity']
 
-            # Get cluster centers (mean of embeddings per cluster)
+            # Get cluster centers (mean of embeddings per cluster) with explicit label→index mapping
             unique_labels = sorted(set(primary_labels))
+            label_to_index = {lbl: idx for idx, lbl in enumerate(unique_labels)}
             cluster_centers = []
             for label in unique_labels:
                 mask = primary_labels == label
@@ -1549,17 +1732,19 @@ class DiarizationService:
 
             # Detect overlapping speech
             for i, (segment, sim_scores) in enumerate(zip(segments, similarities)):
-                primary_speaker = primary_labels[i]
-                primary_confidence = sim_scores[primary_speaker]
+                primary_label = primary_labels[i]
+                primary_index = label_to_index.get(primary_label, 0)
+                primary_confidence = sim_scores[primary_index]
 
                 # Check if confidence is low (potential overlap)
                 if primary_confidence < confidence_threshold:
                     # Find secondary speaker(s)
                     secondary_speakers = []
-                    for speaker_id, confidence in enumerate(sim_scores):
-                        if speaker_id != primary_speaker and confidence > 0.3:
+                    for idx, confidence in enumerate(sim_scores):
+                        label = unique_labels[idx]
+                        if label != primary_label and confidence > 0.3:
                             secondary_speakers.append({
-                                'speaker_id': speaker_id,
+                                'speaker_id': int(label),
                                 'confidence': float(confidence)
                             })
 
@@ -1573,7 +1758,7 @@ class DiarizationService:
                         )[:2]  # Keep top 2 secondary speakers
                         logger.debug(
                             f"Potential overlap detected at {segment['start']:.2f}s: "
-                            f"Primary speaker {primary_speaker} ({primary_confidence:.2f}), "
+                            f"Primary speaker {primary_label} ({primary_confidence:.2f}), "
                             f"Secondary: {secondary_speakers[0]}"
                         )
                 else:
@@ -1628,20 +1813,20 @@ def audio_diarization(
 ) -> List[Dict[str, Any]]:
     """
     Backward compatibility wrapper for audio diarization.
-    
+
     This function provides compatibility with code expecting the old PyAnnote-based
     diarization interface. It wraps the new DiarizationService class.
-    
+
     Args:
         audio_file_path: Path to the audio file to diarize
         config_path: Path to configuration file (ignored - uses config.py)
         num_speakers: Number of speakers (if known)
         min_speakers: Minimum number of speakers
         max_speakers: Maximum number of speakers
-    
+
     Returns:
         List of diarization segments with speaker labels
-    
+
     Raises:
         DiarizationError: If diarization fails
     """
@@ -1654,24 +1839,24 @@ def audio_diarization(
             config['min_speakers'] = min_speakers
         if max_speakers is not None:
             config['max_speakers'] = max_speakers
-            
+
         service = DiarizationService(config=config)
-        
+
         if not service.is_available:
             raise DiarizationError(
                 "Diarization dependencies not available. "
                 "Install with: pip install tldw-server[diarization]"
             )
-        
+
         # Perform diarization
         result = service.diarize(audio_path=audio_file_path)
-        
+
         # Extract segments from result
         if result and 'segments' in result:
             return result['segments']
         else:
             return []
-            
+
     except Exception as e:
         if isinstance(e, DiarizationError):
             raise
@@ -1685,14 +1870,14 @@ def combine_transcription_and_diarization(
 ) -> List[Dict[str, Any]]:
     """
     Backward compatibility wrapper for combining transcription and diarization.
-    
+
     With the new implementation, this is handled internally by DiarizationService.diarize()
     when transcription_segments are provided. This function exists for compatibility.
-    
+
     Args:
         transcription_segments: List of transcription segments
         diarization_segments: List of diarization segments (ignored in new implementation)
-    
+
     Returns:
         Combined segments with speaker labels
     """
@@ -1700,39 +1885,39 @@ def combine_transcription_and_diarization(
     # when transcription segments are provided
     if not transcription_segments:
         return []
-    
+
     # If segments already have speaker info, return as-is
     if transcription_segments and 'speaker' in transcription_segments[0]:
         return transcription_segments
-    
+
     # Otherwise, perform diarization with transcription
     try:
         service = DiarizationService()
-        
+
         if not service.is_available:
             logger.warning("Diarization not available, returning transcription without speakers")
             return transcription_segments
-        
+
         # Get audio path from first segment if available
         audio_path = None
         if transcription_segments and 'audio_path' in transcription_segments[0]:
             audio_path = transcription_segments[0]['audio_path']
-        
+
         if not audio_path:
             logger.warning("No audio path found in segments, returning transcription without speakers")
             return transcription_segments
-        
+
         # Perform diarization with transcription segments
         result = service.diarize(
             audio_path=audio_path,
             transcription_segments=transcription_segments
         )
-        
+
         if result and 'segments' in result:
             return result['segments']
         else:
             return transcription_segments
-            
+
     except Exception as e:
         logger.warning(f"Failed to combine transcription and diarization: {e}")
         return transcription_segments

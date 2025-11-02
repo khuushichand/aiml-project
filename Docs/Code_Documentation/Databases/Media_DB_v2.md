@@ -2,13 +2,13 @@
 
 ## Overview
 
-The `Media_DB_v2` module provides a robust content database tailored for media content and related metadata. It is designed with a focus on multi‑instance database management, where each `MediaDatabase` object corresponds to a distinct database (SQLite by default; PostgreSQL is supported via a backend abstraction). A key feature is its internal handling of synchronization metadata and Full‑Text Search (FTS) updates, simplifying client‑side logic.
+The `Media_DB_v2` module provides a robust content database tailored for media content and related metadata. It is designed with a focus on multi-instance database management, where each `MediaDatabase` object corresponds to a distinct database (SQLite by default; PostgreSQL is supported via a backend abstraction). A key feature is its internal handling of synchronization metadata and Full-Text Search (FTS) updates, simplifying client-side logic.
 
 Each `MediaDatabase` instance requires a `client_id` upon initialization, which is used to attribute all changes made through that instance. The library automatically logs create, update, delete, link, and unlink operations to an internal `sync_log` table. This log is intended for consumption by external synchronization mechanisms to keep multiple database instances consistent.
 
 ## Key Features
 
-*   **Instance-Based:** Each `MediaDatabase` object encapsulates a connection and operations for a specific database file (or in‑memory SQLite).
+*   **Instance-Based:** Each `MediaDatabase` object encapsulates a connection and operations for a specific database file (or in-memory SQLite).
 *   **Client ID Tracking:** All data modifications are attributed to a `client_id` provided during `Database` initialization.
 *   **Internal Sync Logging:** Automatically records changes to a `sync_log` table, facilitating external synchronization processes. This includes changes to main entities and relationships (e.g., `MediaKeywords` links).
 *   **Internal FTS Management:** Transparently manages updates to associated FTS5 tables (`media_fts`, `keyword_fts`) and maintains a `claims_fts` index via triggers.
@@ -54,7 +54,7 @@ class MediaDatabase:
 def __init__(self, db_path: Union[str, Path], client_id: str, *, backend: Optional[DatabaseBackend] = None, config: Optional[ConfigParser] = None)
 ```
 
-*   **Purpose**: Initializes a `MediaDatabase` instance, connecting to the specified database (SQLite file path or `':memory:'`). It sets up thread‑local connection management and ensures the database schema is initialized/migrated to the current version. If a backend is not provided, a backend is resolved from configuration (defaults to SQLite; can select PostgreSQL when enabled).
+*   **Purpose**: Initializes a `MediaDatabase` instance, connecting to the specified database (SQLite file path or `':memory:'`). It sets up thread-local connection management and ensures the database schema is initialized/migrated to the current version. If a backend is not provided, a backend is resolved from configuration (defaults to SQLite; can select PostgreSQL when enabled).
 *   **Args**:
     *   `db_path (Union[str, Path])`: Path to the database (SQLite file path or `':memory:'`).
     *   `client_id (str)`: A unique identifier for the client application or process instance making changes to this database. This ID is recorded in the `sync_log` and on modified records.
@@ -88,7 +88,7 @@ export TLDW_CONTENT_PG_PASSWORD=secret
 export TLDW_CONTENT_PG_SSLMODE=prefer
 ```
 
-Then instantiate normally (backend is auto‑resolved):
+Then instantiate normally (backend is auto-resolved):
 ```python
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -564,11 +564,11 @@ The current database schema consists of the following main tables:
 *   **`DocumentVersions`**: Stores historical versions of a media item's content, with associated `prompt`, `analysis_content`, and `safe_metadata` (JSON). Includes UUID and sync metadata.
 *   **`Claims`**: Stores factual claims extracted at ingestion time, attached to a media chunk (with indices/spans, extractor metadata, confidence). Maintained with FTS via triggers.
 *   **`sync_log`**: Records all CUD (Create, Update, Delete) operations, as well as link/unlink operations on entities, along with `client_id`, `timestamp`, `version`, and an optional `payload` (JSON of changed data).
-*   **`ChunkingTemplates`**: Stores reusable chunking templates (JSON) with metadata, tags, ownership, and soft‑delete/version metadata.
+*   **`ChunkingTemplates`**: Stores reusable chunking templates (JSON) with metadata, tags, ownership, and soft-delete/version metadata.
 *   **FTS Tables**:
     *   **`media_fts`**: FTS5 virtual table for full-text searching `Media.title` and `Media.content`.
     *   **`keyword_fts`**: FTS5 virtual table for full-text searching `Keywords.keyword`.
-    *   **`claims_fts`**: FTS5 virtual table for full‑text search over `Claims.claim_text` with triggers to maintain sync.
+    *   **`claims_fts`**: FTS5 virtual table for full-text search over `Claims.claim_text` with triggers to maintain sync.
 
 All primary entities (`Media`, `Keywords`, `Transcripts`, `MediaChunks`, `UnvectorizedMediaChunks`, `DocumentVersions`) include standard columns for synchronization and optimistic locking:
 *   `uuid`: A universally unique identifier for the record.
@@ -579,7 +579,7 @@ All primary entities (`Media`, `Keywords`, `Transcripts`, `MediaChunks`, `Unvect
 *   `prev_version`: Placeholder for previous version tracking (usage may vary).
 *   `merge_parent_uuid`: Placeholder for tracking merge history (usage may vary).
 
-Database triggers validate updates on major tables (`version` must increment by 1, `client_id` must be non‑empty, `uuid` cannot change). Additional triggers maintain the `claims_fts` index.
+Database triggers validate updates on major tables (`version` must increment by 1, `client_id` must be non-empty, `uuid` cannot change). Additional triggers maintain the `claims_fts` index.
 
 ## Example Usage (Conceptual)
 
@@ -662,7 +662,7 @@ finally:
 
 - Upgrades and `safe_metadata`
   - Symptom: Older DBs may lack `safe_metadata` column; insert paths catch and adapt, but queries may fail.
-  - Fix: Initialize via current code path to let migrations add new columns, or recreate the DB and re‑ingest.
+  - Fix: Initialize via current code path to let migrations add new columns, or recreate the DB and re-ingest.
 
 ### Common Migration Tasks
 
@@ -689,6 +689,6 @@ finally:
   - Move file to `Databases/user_databases/<user_id>/Media_DB_v2.db` and update config (`USER_DB_BASE_DIR` or content DB settings).
 
 - Migrate SQLite → PostgreSQL
-  - Recommended: re‑ingest via the library (mutators handle sync/versioning/metadata) into a Postgres‑backed `MediaDatabase`.
+  - Recommended: re-ingest via the library (mutators handle sync/versioning/metadata) into a Postgres-backed `MediaDatabase`.
   - Programmatic: read from SQLite and call `add_media_with_keywords`, `create_document_version`, `process_unvectorized_chunks`, `upsert_claims` on the PG instance.
-  - Note: FTS virtual tables are SQLite‑specific; Postgres backend uses LIKE/ILIKE fallbacks in search.
+  - Note: FTS virtual tables are SQLite-specific; Postgres backend uses LIKE/ILIKE fallbacks in search.

@@ -20,7 +20,7 @@ Configuration ([Moderation] in `tldw_Server_API/Config_Files/config.txt`)
 - `blocklist_file` (path): default `tldw_Server_API/Config_Files/moderation_blocklist.txt`.
 - `user_overrides_file` (path): JSON mapping of user_id -> overrides.
 - `per_user_overrides` (bool): enable per-user overrides.
-- `pii_enabled` (bool): include built‑in PII redaction rules (defaults off).
+- `pii_enabled` (bool): include built-in PII redaction rules (defaults off).
 - `categories_enabled` (csv): categories to permit globally (empty = allow all).
 - `runtime_overrides_file` (path): default `tldw_Server_API/Config_Files/moderation_runtime_overrides.json`.
 - Performance/Safety (optional):

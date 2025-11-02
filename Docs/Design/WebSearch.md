@@ -7,7 +7,7 @@ This page serves as documentation regarding the web search functionality within 
     2. User selects a search engine (Option for default search engine + default query options in config file).
     3. User may select `Advanced Search` for additional search parameters (Language, Date Range, etc).
     4. The user presses 'Search'.
-    5. Search is performed -> Results obtained, 
+    5. Search is performed -> Results obtained,
     6. Each individual item is first analyzed based on snippet, if relevant, entire page is fetched and analyzed, this is then stored in the results dictionary, and the process is repeated until all results are analyzed/limit is hit.
     7. Once all results are collected, they are then operated on, being used to create whatever final product is desired by the user.
     8. The final product is then passed back to the UI for display to the user.
@@ -104,11 +104,11 @@ def perform_websearch(search_engine
                       result_count, - Number of results to return(not applicable to all engines, but necessary for consistency)
                       date_range=None,
                       safesearch=None,
-                      site_blacklist=None, 
-                      exactTerms=None, 
-                      excludeTerms=None, 
-                      filter=None, 
-                      geolocation=None, 
+                      site_blacklist=None,
+                      exactTerms=None,
+                      excludeTerms=None,
+                      filter=None,
+                      geolocation=None,
                       search_result_language=None
                       sort_results_by=None):
 ```
@@ -134,7 +134,7 @@ search_result_blacklist = []
 search_result_display_type = list - Display type for search results, does nothing right now.
 search_result_display_metadata = False - Display metadata for search results, does nothing right now.
 search_result_save_to_db = True - Save search results to the database (not implemented yet)
-# How you want the results to be written, think 'style' or voice 
+# How you want the results to be written, think 'style' or voice
 search_result_analysis_tone = neutral - Tone of the analysis (not implemented yet)
 relevance_analysis_llm = openai - LLM to use for relevance analysis
 final_answer_llm = openai - LLM to use for final answer generation
@@ -324,7 +324,7 @@ Generate a comprehensive, well-structured, and informative answer for a given qu
     • Use markdown formatting (e.g., **bold**, bullet points, ## headings) to organize the information.
     • If the provided results are insufficient to answer the question, explicitly state what information is missing or unclear.
     Structure your answer like this:
-    1. **Short introduction**: Briefly summarize the topic (1–2 sentences).
+    1. **Short introduction**: Briefly summarize the topic (1-2 sentences).
     2. **Bulleted points**: Present key details, each with appropriate citations.
     3. **Conclusion**: Summarize the findings or restate the core answer (with citations if needed).
     Example:

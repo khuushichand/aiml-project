@@ -8,4 +8,3 @@ def test_auto_apply_selects_higher_score():
     s2 = TemplateClassifier.score(t2, media_type="document", title="Other", url=None, filename="file.pdf")
     # Both non-zero; ensure at least one scores
     assert max(s1, s2) > 0
-

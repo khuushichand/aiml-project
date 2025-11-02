@@ -96,4 +96,3 @@ def delete_outputs_by_ids(cdb, user_id: int, ids: List[int]) -> int:
     except Exception as e:
         logger.error(f"outputs_service.purge: delete failed: {e}")
         raise
-

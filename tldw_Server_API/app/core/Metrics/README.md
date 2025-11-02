@@ -230,15 +230,15 @@ async def complex_operation():
     async with start_span("complex_operation") as span:
         # Add attributes
         span.set_attribute("operation.type", "batch_processing")
-        
+
         # Add events
         add_span_event("Processing started", {"batch_size": 100})
-        
+
         # Process data
         result = await process_batch()
-        
+
         add_span_event("Processing completed", {"items_processed": len(result)})
-        
+
         return result
 ```
 
@@ -297,9 +297,9 @@ from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogra
 async def rag_search(query: str):
     # Track query
     increment_counter("rag_queries_total", labels={"pipeline": "standard"})
-    
+
     start_time = time.time()
-    
+
     # Check cache
     cached = await check_cache(query)
     if cached:
@@ -307,15 +307,15 @@ async def rag_search(query: str):
         return cached
     else:
         increment_counter("rag_cache_misses_total")
-    
+
     # Retrieve documents
     documents = await retrieve_documents(query)
     observe_histogram("rag_documents_retrieved", len(documents))
-    
+
     # Track latency
     latency = time.time() - start_time
     observe_histogram("rag_retrieval_latency_seconds", latency)
-    
+
     return documents
 ```
 

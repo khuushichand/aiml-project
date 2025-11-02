@@ -42,4 +42,3 @@ def get_session_manager() -> SessionManager:
     if _singleton is None:
         _singleton = SessionManager()
     return _singleton
-

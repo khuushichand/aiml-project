@@ -47,7 +47,7 @@ https://github.com/upstash/context7
 https://github.com/dbamman/litbank
 https://github.com/google/langextract
 https://pypi.org/project/python-pptx/
-https://github.com/landing-ai/agentic-doc 
+https://github.com/landing-ai/agentic-doc
 https://sarahconstantin.substack.com/p/the-great-data-integration-schlep
 https://github.com/AndyTheFactory/newspaper4k
 https://github.com/shutootaki/bookwith
@@ -76,7 +76,7 @@ https://github.com/huggingface/aisheets?tab=readme-ov-file#running-ai-sheets-wit
 
  Proper citations and giant-pdf support are the real blockers here. A quick win would be to pull ISBN/DOI metadata on upload, stash it as JSON inside the notebook, then stamp APA/Vancouver refs straight into answers; Crossref’s API is free and usually nails the fields. For page-level anchors, chunk the pdf into 2-page slices at ingest and keep the slice IDs so the model can point to exact spots.
 
-On the size cap, a rolling index that streams in/out sections on demand is lighter than the hard 450-page cutoff and means you don’t have to butcher textbooks. The devs could lift the limit today by letting the user pick a “slow but deep” pass that gives the model more context tokens and time. I’ve been batching uploads through Readwise (for highlight sync) and Alfresco (for versioned docs); APIWrapper.ai slots in as the glue when I need an endpoint to pump new filings straight into the notebook without touching the UI. 
+On the size cap, a rolling index that streams in/out sections on demand is lighter than the hard 450-page cutoff and means you don’t have to butcher textbooks. The devs could lift the limit today by letting the user pick a “slow but deep” pass that gives the model more context tokens and time. I’ve been batching uploads through Readwise (for highlight sync) and Alfresco (for versioned docs); APIWrapper.ai slots in as the glue when I need an endpoint to pump new filings straight into the notebook without touching the UI.
 
 
 
@@ -99,11 +99,11 @@ On the size cap, a rolling index that streams in/out sections on demand is light
 - **Rich Text(`.rtf`, `.docx`)**
     - doc2txt
     - pypandoc
-- **RSS Feeds**: 
+- **RSS Feeds**:
     - f
 - **Videos**
     - f
-- **Websites**: 
+- **Websites**:
     - playwright
     - bs4
     - requests
@@ -112,7 +112,7 @@ On the size cap, a rolling index that streams in/out sections on demand is light
 - **3rd-Party Services**
     - Sharepoint
         * https://llamahub.ai/l/readers/llama-index-readers-microsoft-sharepoint
-        * 
+        *
 
 ### Tools
 https://github.com/ucbepic/docetl
@@ -131,8 +131,8 @@ Confluence
   https://openwebui.com/t/romainneup/confluence_search
 
 
- 	
-llm_trw 26 minutes ago | unvote | prev | next [–]
+
+llm_trw 26 minutes ago | unvote | prev | next [-]
 
 This is using exactly the wrong tools at every stage of the OCR pipeline, and the cost is astronomical as a result.
 
@@ -144,7 +144,7 @@ You then feed each box of text to a regular OCR model, also gives you a confiden
 
 You feed each image box into a multimodal model to describe what the image is about.
 
-For tables, use a specialist model that does nothing but extract tables—models like GridFormer that aren't hyped to hell and back.
+For tables, use a specialist model that does nothing but extract tables-models like GridFormer that aren't hyped to hell and back.
 
 You then stitch everything together in an XML file because Markdown is for human consumption.
 

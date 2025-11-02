@@ -75,4 +75,3 @@ async def encode_waveform_to_bytes(
     ):
         out += chunk
     return bytes(out)
-

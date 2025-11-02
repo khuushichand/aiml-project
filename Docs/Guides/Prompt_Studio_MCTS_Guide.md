@@ -1,4 +1,4 @@
-# Prompt Studio — Running MCTS (Canary)
+# Prompt Studio - Running MCTS (Canary)
 
 This guide walks you through running the MCTS optimizer, controlling costs, and watching WebSocket progress.
 
@@ -59,4 +59,3 @@ Throttle interval defaults to roughly `n_sims/50` (configurable via `ws_throttle
 The optimization row includes `final_metrics` with:
 - `tree_nodes`, `avg_branching`, `tokens_spent`, `duration_ms`, `best_reward`, `errors`, and `applied_params`.
 - A compact `trace` with `best_path` and `top_candidates`. Set `PROMPT_STUDIO_MCTS_DEBUG_DECISIONS=true` to include `debug_top_scores_by_depth`.
-

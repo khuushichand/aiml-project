@@ -34,7 +34,7 @@ __all__ = [
     'BackendFeatures',
     'DatabaseError',
     'NotSupportedError',
-    
+
     # Factory
     'DatabaseBackendFactory',
     'BackendFactory',

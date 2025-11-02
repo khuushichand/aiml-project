@@ -60,4 +60,3 @@ def test_multi_user_register_login_and_admin_access(api_client, test_user_creden
         headers = {"Authorization": f"Bearer {admin_token}"}
         r2 = api_client.client.get("/api/v1/admin/users", headers=headers)
         assert r2.status_code == 200
-

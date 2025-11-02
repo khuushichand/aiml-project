@@ -9,4 +9,3 @@ def test_feature_flags_present():
     assert isinstance(settings.get("PERSONALIZATION_ENABLED"), (bool, int))
     assert "PERSONA_ENABLED" in settings
     assert isinstance(settings.get("PERSONA_ENABLED"), (bool, int))
-

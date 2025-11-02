@@ -26,4 +26,3 @@ def test_apply_tool_choice_sets_when_tools_present():
     tool_choice = {"type": "function", "function": {"name": "f", "arguments": "{}"}}
     _apply_tool_choice(payload, tools=[{"type": "function", "function": {"name": "f"}}], tool_choice=tool_choice)
     assert payload.get("tool_choice") == tool_choice
-

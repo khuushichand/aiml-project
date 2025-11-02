@@ -1,6 +1,6 @@
 """
 test_mcp_basic.py
-Description: MCP E2E — health/status, tools list, HTTP tool call, WS initialize, metrics access.
+Description: MCP E2E - health/status, tools list, HTTP tool call, WS initialize, metrics access.
 """
 
 import os
@@ -77,8 +77,6 @@ def test_mcp_http_and_ws(api_client):
     except Exception as e:
         pytest.skip(f"MCP WS not available/configured: {e}")
 
-    # 5) Metrics (may require admin) — allow 200/401/403
+    # 5) Metrics (may require admin) - allow 200/401/403
     m = api_client.client.get("/api/v1/mcp/metrics")
     assert m.status_code in (200, 401, 403)
-
-

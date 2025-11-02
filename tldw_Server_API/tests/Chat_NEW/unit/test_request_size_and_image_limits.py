@@ -40,10 +40,10 @@ def test_validator_allows_large_data_image_when_redacted(monkeypatch):
         ],
     }
 
-    # As dict (object) — validator will sanitize recursively
+    # As dict (object) - validator will sanitize recursively
     assert validate_request_size(req_obj) is True
 
-    # As a JSON string — validator will redact in-string data:image as well
+    # As a JSON string - validator will redact in-string data:image as well
     req_json = json.dumps(req_obj)
     assert validate_request_size(req_json) is True
 
@@ -69,4 +69,3 @@ def test_image_limit_rejects_oversized_data_image(monkeypatch):
     # MIME should still reflect the declared type
     assert mime == "image/png"
     assert decoded is None
-

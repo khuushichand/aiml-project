@@ -42,4 +42,3 @@ def test_unsupported_provider_returns_501(client):
     assert r.status_code == 501
     body = r.json()
     assert "not implemented" in body.get("detail", "").lower()
-

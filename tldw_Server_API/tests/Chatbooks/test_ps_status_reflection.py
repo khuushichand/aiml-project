@@ -9,10 +9,10 @@ class _FakePSAdapter:
         self._status = "queued"
         self.created_id = 1001
 
-    def create_export_job(self, payload):
+    def create_export_job(self, payload, *, request_id=None):
         return {"id": self.created_id}
 
-    def create_import_job(self, payload):
+    def create_import_job(self, payload, *, request_id=None):
         return {"id": self.created_id}
 
     def get(self, job_id: int):
@@ -66,4 +66,3 @@ def test_ps_status_mapping_pending_and_in_progress(client, monkeypatch):
     assert s2.status_code in (200, 401, 403, 422)
     if s2.status_code == 200:
         assert s2.json().get("status") == "in_progress"
-

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Transcribes audio inputs (URLs or local files), optionally chunks text, and runs analysis/summarization. Batch-oriented, DB‑agnostic; returns structured results for each input.
+Transcribes audio inputs (URLs or local files), optionally chunks text, and runs analysis/summarization. Batch-oriented, DB-agnostic; returns structured results for each input.
 
 ## Primary Function
 
@@ -53,7 +53,7 @@ process_audio_files(
 - perform_analysis: use LLM summarization via `analyze`; `api_name` selects provider (keys from server config).
 - summarize_recursively: combine per-chunk summaries into a higher-level summary.
  - temp_dir: parent directory for temporary work files.
- 
+
  Tip: To check if a model is ready/downloaded before processing, use `check_transcription_model_status(model_name)` from the same module.
 
 ### Return Structure (batch)

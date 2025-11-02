@@ -104,4 +104,3 @@ def test_tts_voices_catalog_and_nonstream_synthesis(api_client):
     ct = r.headers.get("content-type", "")
     assert ("audio/" in ct) or (ct == "application/octet-stream")
     assert len(r.content) > 100  # basic length check
-

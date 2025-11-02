@@ -40,7 +40,7 @@ def test_user():
 def auth_token(test_user):
     """Generate authentication token based on auth mode."""
     settings = get_settings()
-    
+
     if settings.AUTH_MODE == "multi_user":
         jwt_service = get_jwt_service()
         access_token = jwt_service.create_access_token(
@@ -62,9 +62,9 @@ def test_chacha_db(test_user):
     """Create a real test ChaChaNotes database."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     db = CharactersRAGDB(db_path, f"user_{test_user.id}")
-    
+
     # Add default character with the expected name
     char_id = db.add_character_card({
         "name": DEFAULT_CHARACTER_NAME,
@@ -74,9 +74,9 @@ def test_chacha_db(test_user):
         "system_prompt": "You are a helpful AI assistant."
     })
     print(f"Created default character with ID: {char_id}")
-    
+
     yield db
-    
+
     # Cleanup
     try:
         os.unlink(db_path)
@@ -88,14 +88,14 @@ def test_chacha_db(test_user):
 def test_media_db(test_user):
     """Create a real test media database."""
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-    
+
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
-    
+
     db = MediaDatabase(db_path, f"user_{test_user.id}")
-    
+
     yield db
-    
+
     # Cleanup
     try:
         os.unlink(db_path)
@@ -107,19 +107,19 @@ def test_media_db(test_user):
 def setup_dependencies(test_user, test_chacha_db, test_media_db):
     """Override dependencies to use test databases."""
     settings = get_settings()
-    
+
     # Override authentication for single-user mode
     if settings.AUTH_MODE == "single_user":
         async def mock_get_request_user(api_key=None, token=None):
             return test_user
         app.dependency_overrides[get_request_user] = mock_get_request_user
-    
+
     # Override databases to use test instances
     app.dependency_overrides[get_chacha_db_for_user] = lambda: test_chacha_db
     app.dependency_overrides[get_media_db_for_user] = lambda: test_media_db
-    
+
     yield
-    
+
     # Cleanup - don't clear, let the autouse fixture handle it
 
 
@@ -132,15 +132,15 @@ def client():
         csrf_token = response.cookies.get("csrf_token", "")
         test_client.csrf_token = csrf_token
         test_client.cookies = {"csrf_token": csrf_token}
-        
+
         yield test_client
 
 
 def test_chat_completion_integration(client, auth_token, test_chacha_db, setup_dependencies, configure_for_mock_server):
     """Test chat completion with real database and no mocking."""
-    
+
     settings = get_settings()
-    
+
     # Note: We're using "openai" as a test provider with the mock server
     # The configure_for_mock_server fixture sets up a mock OpenAI server
     request_data = ChatCompletionRequest(
@@ -150,7 +150,7 @@ def test_chat_completion_integration(client, auth_token, test_chacha_db, setup_d
         ],
         api_provider="openai"  # Use openai provider with mock server
     )
-    
+
     # Build headers
     headers = {"X-CSRF-Token": client.csrf_token}
     if settings.AUTH_MODE == "multi_user":
@@ -158,17 +158,17 @@ def test_chat_completion_integration(client, auth_token, test_chacha_db, setup_d
     else:
         # Use X-API-KEY header as expected by the endpoint in single-user mode
         headers["X-API-KEY"] = auth_token
-    
+
     print(f"AUTH_MODE: {settings.AUTH_MODE}")
     print(f"Headers being sent: {headers}")
-    
+
     # Make the request
     response = client.post(
         "/api/v1/chat/completions",
         json=request_data.model_dump(),
         headers=headers
     )
-    
+
     # Check response
     print(f"Status: {response.status_code}")
     if response.status_code != 200:
@@ -176,16 +176,16 @@ def test_chat_completion_integration(client, auth_token, test_chacha_db, setup_d
         # Try to get more details about the error
         if response.status_code == 500:
             print("500 error - checking server logs")
-    
+
     # For integration test with mock server, we expect:
     # - 200 OK if mock server is running and working properly
     # - 503 Service Unavailable if mock server isn't running
     # - 500 Internal Server Error if there's a configuration issue
-    
+
     # With the mock server fixture, we expect a 200 OK response
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_503_SERVICE_UNAVAILABLE, status.HTTP_500_INTERNAL_SERVER_ERROR], \
         f"Expected 200, 503, or 500 but got {response.status_code}: {response.text}"
-    
+
     if response.status_code == status.HTTP_200_OK:
         data = response.json()
         assert "choices" in data

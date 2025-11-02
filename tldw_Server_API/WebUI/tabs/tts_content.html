@@ -4,7 +4,7 @@
         <h2 class="tab-title">
             <i class="fas fa-microphone-alt"></i> Text-to-Speech System
         </h2>
-        
+
         <!-- Provider Status Bar -->
         <div class="provider-status-bar">
             <div class="status-grid">
@@ -75,10 +75,10 @@
                     <span class="char-counter" id="tts-char-counter">0 / 5000</span>
                 </div>
                 <div class="card-body">
-                    <textarea id="tts-text-input" class="form-control" rows="6" 
+                    <textarea id="tts-text-input" class="form-control" rows="6"
                         placeholder="Enter the text you want to convert to speech..."
                         maxlength="5000"></textarea>
-                    
+
                     <div class="input-controls">
                         <button class="btn btn-sm btn-secondary" id="btnTtsLoadSample">
                             <i class="fas fa-file-alt"></i> Load Sample
@@ -154,9 +154,9 @@
                                                 min="3"
                                                 max="60"
                                                 style="width:64px;"
-                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                                title="3-15 seconds recommended. Longer clips increase CPU usage and latency."
                                             />
-                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                            <span class="help-tip" title="3-15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
                                         <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="vibevoice">Reset</a></small>
                                     </div>
@@ -164,49 +164,49 @@
                             </div>
                             <div class="setting-group">
                                 <label>Speaker Count</label>
-                                <input type="number" id="vibevoice-speakers" class="form-control" 
+                                <input type="number" id="vibevoice-speakers" class="form-control"
                                     min="1" max="4" value="1">
                             </div>
                             <div class="setting-group">
                                 <label>Features</label>
                                 <div class="checkbox-group">
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="vibevoice-music"> 
+                                        <input type="checkbox" id="vibevoice-music">
                                         Background Music
                                     </label>
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="vibevoice-singing"> 
+                                        <input type="checkbox" id="vibevoice-singing">
                                         Enable Singing
                                     </label>
                                 </div>
                             </div>
                             <div class="setting-group">
                                 <label>CFG Scale <span class="param-value" id="vibevoice-cfg-value">1.3</span></label>
-                                <input type="range" id="vibevoice-cfg" class="form-control-range" 
+                                <input type="range" id="vibevoice-cfg" class="form-control-range"
                                     min="1.0" max="2.0" step="0.1" value="1.3">
                                 <small class="form-text text-muted">Controls generation guidance strength</small>
                             </div>
                             <div class="setting-group">
                                 <label>Diffusion Steps <span class="param-value" id="vibevoice-steps-value">20</span></label>
-                                <input type="range" id="vibevoice-steps" class="form-control-range" 
+                                <input type="range" id="vibevoice-steps" class="form-control-range"
                                     min="5" max="100" step="5" value="20">
                                 <small class="form-text text-muted">Quality vs speed tradeoff</small>
                             </div>
                             <div class="setting-group">
                                 <label>Temperature <span class="param-value" id="vibevoice-temp-value">1.0</span></label>
-                                <input type="range" id="vibevoice-temperature" class="form-control-range" 
+                                <input type="range" id="vibevoice-temperature" class="form-control-range"
                                     min="0.1" max="2.0" step="0.1" value="1.0">
                                 <small class="form-text text-muted">Sampling randomness</small>
                             </div>
                             <div class="setting-group">
                                 <label>Top-p <span class="param-value" id="vibevoice-topp-value">0.95</span></label>
-                                <input type="range" id="vibevoice-topp" class="form-control-range" 
+                                <input type="range" id="vibevoice-topp" class="form-control-range"
                                     min="0.1" max="1.0" step="0.05" value="0.95">
                                 <small class="form-text text-muted">Nucleus sampling</small>
                             </div>
                             <div class="setting-group">
                                 <label>Seed (optional)</label>
-                                <input type="number" id="vibevoice-seed" class="form-control" 
+                                <input type="number" id="vibevoice-seed" class="form-control"
                                     placeholder="Random" min="0" max="4294967295">
                                 <small class="form-text text-muted">For reproducible generation</small>
                             </div>
@@ -267,13 +267,13 @@
                             </div>
                             <div class="setting-group">
                                 <label>Voice Mixing</label>
-                                <input type="text" id="kokoro-voice-mix" class="form-control" 
+                                <input type="text" id="kokoro-voice-mix" class="form-control"
                                     placeholder="e.g., af_bella(2)+af_sky(1)">
                                 <small class="text-muted">Mix voices with weights</small>
                             </div>
                             <div class="setting-group">
                                 <label>Speed</label>
-                                <input type="range" id="kokoro-speed" class="form-control-range" 
+                                <input type="range" id="kokoro-speed" class="form-control-range"
                                     min="0.5" max="2.0" value="1.0" step="0.1">
                                 <span id="kokoro-speed-value">1.0x</span>
                             </div>
@@ -320,14 +320,14 @@
                             </div>
                             <div class="setting-group">
                                 <label>Voice Clone (3-10s audio)</label>
-                                <input type="file" id="higgs-voice-upload" class="form-control-file" 
+                                <input type="file" id="higgs-voice-upload" class="form-control-file"
                                     accept="audio/*">
                                 <button class="btn btn-sm btn-primary mt-2" id="higgs-upload-voice-clone">
                                     <i class="fas fa-clone"></i> Clone Voice
                                 </button>
                             </div>
                             <div class="setting-group">
-                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3–15 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
+                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3-15 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                                     <button class="btn btn-sm btn-outline-primary" id="higgs-rec-start">
                                         <i class="fas fa-microphone"></i> Record
@@ -356,9 +356,9 @@
                                                 min="3"
                                                 max="60"
                                                 style="width:64px;"
-                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                                title="3-15 seconds recommended. Longer clips increase CPU usage and latency."
                                             />
-                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                            <span class="help-tip" title="3-15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
                                         <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="higgs">Reset</a></small>
                                     </div>
@@ -368,7 +368,7 @@
                                 <label>Features</label>
                                 <div class="checkbox-group">
                                     <label class="checkbox-label">
-                                        <input type="checkbox" id="higgs-music"> 
+                                        <input type="checkbox" id="higgs-music">
                                         Generate Music
                                     </label>
                                 </div>
@@ -408,20 +408,20 @@
                             </div>
                             <div class="setting-group">
                                 <label>Emotion Intensity</label>
-                                <input type="range" id="chatterbox-intensity" class="form-control-range" 
+                                <input type="range" id="chatterbox-intensity" class="form-control-range"
                                     min="0" max="100" value="50">
                                 <span id="chatterbox-intensity-value">50%</span>
                             </div>
                             <div class="setting-group">
                                 <label>Voice Clone (5-20s audio)</label>
-                                <input type="file" id="chatterbox-voice-upload" class="form-control-file" 
+                                <input type="file" id="chatterbox-voice-upload" class="form-control-file"
                                     accept="audio/*">
                                 <button class="btn btn-sm btn-primary mt-2" id="chatterbox-upload-voice-clone">
                                     <i class="fas fa-clone"></i> Clone Voice
                                 </button>
                             </div>
                             <div class="setting-group">
-                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 5–20 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
+                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 5-20 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                                     <button class="btn btn-sm btn-outline-primary" id="chatterbox-rec-start">
                                         <i class="fas fa-microphone"></i> Record
@@ -450,9 +450,9 @@
                                                 min="3"
                                                 max="60"
                                                 style="width:64px;"
-                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                                title="3-15 seconds recommended. Longer clips increase CPU usage and latency."
                                             />
-                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                            <span class="help-tip" title="3-15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
                                         <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="chatterbox">Reset</a></small>
                                     </div>
@@ -491,7 +491,7 @@
                             </div>
                             <div class="setting-group">
                                 <label>Speed</label>
-                                <input type="range" id="openai-speed" class="form-control-range" 
+                                <input type="range" id="openai-speed" class="form-control-range"
                                     min="0.25" max="4.0" value="1.0" step="0.25">
                                 <span id="openai-speed-value">1.0x</span>
                             </div>
@@ -528,13 +528,13 @@
                             </div>
                             <div class="setting-group">
                                 <label>Voice Stability</label>
-                                <input type="range" id="elevenlabs-stability" class="form-control-range" 
+                                <input type="range" id="elevenlabs-stability" class="form-control-range"
                                     min="0" max="100" value="50">
                                 <span id="elevenlabs-stability-value">50%</span>
                             </div>
                             <div class="setting-group">
                                 <label>Clarity + Similarity</label>
-                                <input type="range" id="elevenlabs-clarity" class="form-control-range" 
+                                <input type="range" id="elevenlabs-clarity" class="form-control-range"
                                     min="0" max="100" value="75">
                                 <span id="elevenlabs-clarity-value">75%</span>
                             </div>
@@ -560,7 +560,7 @@
                                 </select>
                             </div>
                             <div class="setting-group">
-                                <label>Reference Audio (3–15s)</label>
+                                <label>Reference Audio (3-15s)</label>
                                 <input type="file" id="neutts-ref-audio" class="form-control" accept="audio/*" />
                                 <small class="text-muted" title="If a recording is present, it overrides the selected file.">Note: recording overrides file selection.</small>
                             </div>
@@ -569,7 +569,7 @@
                                 <input type="text" id="neutts-ref-text" class="form-control" placeholder="What is said in the reference clip" />
                             </div>
                             <div class="setting-group">
-                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3–10 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
+                                <label>Quick Record (mic) <span class="help-tip" title="Record a clean mono clip of 3-10 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span></label>
                                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                                     <button class="btn btn-sm btn-outline-primary" id="neutts-rec-start">
                                         <i class="fas fa-microphone"></i> Record
@@ -597,9 +597,9 @@
                                                 min="3"
                                                 max="60"
                                                 style="width:64px;"
-                                                title="3–15 seconds recommended. Longer clips increase CPU usage and latency."
+                                                title="3-15 seconds recommended. Longer clips increase CPU usage and latency."
                                             />
-                                            <span class="help-tip" title="3–15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
+                                            <span class="help-tip" title="3-15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                         </label>
                                         <small style="margin-left:8px;"><a href="#" class="rec-reset" data-provider="neutts">Reset</a></small>
                                     </div>
@@ -719,7 +719,7 @@
             </div>
             <div class="form-group">
                 <label>Description</label>
-                <textarea id="voice-upload-description" class="form-control" rows="2" 
+                <textarea id="voice-upload-description" class="form-control" rows="2"
                     placeholder="Optional description"></textarea>
             </div>
             <div class="form-group">

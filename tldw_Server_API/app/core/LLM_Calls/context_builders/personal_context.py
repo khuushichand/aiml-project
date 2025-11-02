@@ -22,4 +22,3 @@ def build_personal_context(user_id: str, query_text: str, top_k: int = 3) -> Opt
     summary = "User has enabled personalization."
     mems = []
     return PersonalContext(profile_summary=summary, memories=mems)
-

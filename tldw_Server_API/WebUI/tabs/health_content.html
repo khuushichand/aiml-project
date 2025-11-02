@@ -3,7 +3,7 @@
     <div class="endpoint-section">
         <h2>System Health Dashboard</h2>
         <p>Monitor the health status of all API services</p>
-        
+
         <div class="btn-group">
             <button class="btn btn-primary" onclick="checkAllHealth()">
                 Check All Services
@@ -12,7 +12,7 @@
                 Clear Results
             </button>
         </div>
-        
+
         <div id="health-status-grid" style="margin-top: 20px;">
             <!-- Health status cards will be dynamically inserted here -->
         </div>
@@ -22,7 +22,7 @@
 <div id="tabHealthDetails" class="tab-content" role="tabpanel">
     <div class="endpoint-section">
         <h2>Individual Health Checks</h2>
-        
+
         <div class="health-check-item">
             <h3>Main API Health</h3>
             <p>Check the main API server status</p>
@@ -31,7 +31,7 @@
             </button>
             <pre id="health_main_response"></pre>
         </div>
-        
+
         <div class="health-check-item">
             <h3>API V1 Health</h3>
             <p>Check the API v1 endpoints health</p>
@@ -40,7 +40,7 @@
             </button>
             <pre id="health_apiv1_response"></pre>
         </div>
-        
+
         <div class="health-check-item">
             <h3>RAG Service Health</h3>
             <p>Check RAG (Retrieval-Augmented Generation) service status</p>
@@ -49,7 +49,7 @@
             </button>
             <pre id="health_rag_response"></pre>
         </div>
-        
+
         <div class="health-check-item">
             <h3>Embeddings Service Health</h3>
             <p>Check embeddings service status and metrics</p>
@@ -58,7 +58,7 @@
             </button>
             <pre id="health_embeddings_response"></pre>
         </div>
-        
+
         <div class="health-check-item">
             <h3>MCP Service Health</h3>
             <p>Check Model Context Protocol service status</p>
@@ -67,7 +67,7 @@
             </button>
             <pre id="health_mcp_response"></pre>
         </div>
-        
+
         <div class="health-check-item">
             <h3>Web Scraping Service Status</h3>
             <p>Check web scraping service status</p>
@@ -76,7 +76,7 @@
             </button>
             <pre id="health_webscraping_response"></pre>
         </div>
-        
+
         <div class="health-check-item">
             <h3>Llama.cpp Server Status</h3>
             <p>Check local LLM server status</p>
@@ -174,19 +174,19 @@ const healthServices = [
 async function checkHealth(serviceId, endpoint) {
     const responseEl = document.getElementById(`health_${serviceId}_response`);
     if (!responseEl) return;
-    
+
     responseEl.textContent = 'Checking...';
-    
+
     try {
         const startTime = Date.now();
         const response = await apiClient.get(endpoint);
         const duration = Date.now() - startTime;
-        
+
         responseEl.textContent = JSON.stringify({
             ...response,
             response_time_ms: duration
         }, null, 2);
-        
+
         return { success: true, data: response, duration };
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
@@ -198,13 +198,13 @@ async function checkHealth(serviceId, endpoint) {
 async function checkAllHealth() {
     const grid = document.getElementById('health-status-grid');
     grid.innerHTML = '';
-    
+
     // Create cards for each service
     healthServices.forEach(service => {
         const card = createHealthCard(service);
         grid.appendChild(card);
     });
-    
+
     // Check each service asynchronously
     healthServices.forEach(async service => {
         await updateHealthCard(service);
@@ -229,30 +229,30 @@ function createHealthCard(service) {
 async function updateHealthCard(service) {
     const card = document.getElementById(`health-card-${service.id}`);
     if (!card) return;
-    
+
     try {
         const startTime = Date.now();
         const response = await apiClient.get(service.endpoint);
         const duration = Date.now() - startTime;
-        
+
         // Determine health status
-        const isHealthy = response.status === 'healthy' || 
-                         response.status === 'ok' || 
+        const isHealthy = response.status === 'healthy' ||
+                         response.status === 'ok' ||
                          response.healthy === true ||
                          response.running === true ||
                          (response.status && typeof response.status === 'object');
-        
+
         card.className = `health-card ${isHealthy ? 'healthy' : 'unhealthy'}`;
         card.querySelector('.health-status-icon').textContent = isHealthy ? '✅' : '❌';
         card.querySelector('.health-status-text').textContent = isHealthy ? 'Healthy' : 'Unhealthy';
         card.querySelector('.response-time').textContent = `${duration}ms`;
-        
+
         // Store full response for tooltip/details
         card.dataset.response = JSON.stringify(response);
         card.title = 'Click for details';
         card.style.cursor = 'pointer';
         card.onclick = () => showHealthDetails(service, response);
-        
+
     } catch (error) {
         card.className = 'health-card unhealthy';
         card.querySelector('.health-status-icon').textContent = '❌';
@@ -285,7 +285,7 @@ ${JSON.stringify(response, null, 2)}
 // Clear all health check results
 function clearHealthResults() {
     document.getElementById('health-status-grid').innerHTML = '';
-    
+
     // Clear individual response areas
     healthServices.forEach(service => {
         const responseEl = document.getElementById(`health_${service.id}_response`);

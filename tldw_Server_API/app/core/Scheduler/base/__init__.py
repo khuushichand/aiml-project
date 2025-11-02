@@ -41,15 +41,15 @@ __all__ = [
     'Task',
     'TaskStatus',
     'TaskPriority',
-    
+
     # Backend
     'QueueBackend',
-    
+
     # Registry
     'TaskRegistry',
     'get_registry',
     'task',
-    
+
     # Exceptions
     'SchedulerError',
     'QueueError',

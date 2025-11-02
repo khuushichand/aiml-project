@@ -332,10 +332,10 @@ Example request body for `/api/v1/chunking/chunk`:
     "method": "propositions",
     "max_size": 3,
     "overlap": 1,
-    "proposition_engine": "auto",           
-    "proposition_aggressiveness": 2,         
+    "proposition_engine": "auto",
+    "proposition_aggressiveness": 2,
     "proposition_min_proposition_length": 15,
-    "proposition_prompt_profile": "claimify" 
+    "proposition_prompt_profile": "claimify"
   }
 }
 ```
@@ -354,16 +354,16 @@ Tests are located in `/tests/Chunking/test_chunking_templates.py`:
 ```python
 class TestDatabaseOperations:
     """Test database CRUD operations"""
-    
+
 class TestTemplateInitialization:
     """Test template loading and seeding"""
-    
+
 class TestAPIEndpoints:
     """Test REST API endpoints"""
-    
+
 class TestTemplateProcessing:
     """Test template processing logic"""
-    
+
 class TestIntegration:
     """Test integration scenarios"""
 ```

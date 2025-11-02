@@ -13,7 +13,7 @@ This design adds context7-like functionality via MCP tools to search and retriev
 - Per-source MCP tools for search/get
 - Cross-source aggregator tools for unified search/get
 - Strict per-user database derivation (no cross-user access)
-- Normalized scoring (0–1) across sources
+- Normalized scoring (0-1) across sources
 - Configurable snippet length (default 300)
 - Retrieval modes: snippet, chunk, chunk_with_siblings (budgeted), full
 
@@ -26,9 +26,9 @@ Add session-aware search and light client adaptation inspired by a reference MCP
 - Per-session state keyed by `RequestContext.session_id` (WS) or `mcp-session-id` (HTTP). Store a bounded set of previously returned URIs to avoid repeating identical results across successive searches, plus a small recent query history to bias snippets.
 - HTTP sessions: accept an optional `mcp-session-id` header or query param. If missing on first initialize, generate one and include it in the response (design-only; implementation later). Optionally support session cleanup via HTTP DELETE with the same header.
 - Client detection: read `initialize.params.clientInfo.name` and save in `RequestContext.metadata.client` for compatibility tweaks (e.g., tool aliases or alternate output shapes for specific clients).
-- Optional client aliases: when a client requires deep‑research naming, expose `search` (alias of `knowledge.search`) and `fetch` (alias of `knowledge.get`). Canonical tools remain available.
+- Optional client aliases: when a client requires deep-research naming, expose `search` (alias of `knowledge.search`) and `fetch` (alias of `knowledge.get`). Canonical tools remain available.
 
-## Security & Per‑User Enforcement
+## Security & Per-User Enforcement
 
 - MCPProtocol injects immutable per-request `_context` with `{ user_id, client_id, db_paths }` derived from authentication (AuthNZ JWT or API key). Callers cannot supply/override these.
 - DB paths are resolved via `DatabasePaths`:
@@ -38,17 +38,17 @@ Add session-aware search and light client adaptation inspired by a reference MCP
 - In single-user mode, `user_id = DatabasePaths.get_single_user_id()`.
 - Modules use `_context.db_paths` and never accept `user_id` in input.
 
-## Safe, Per‑Request Config (Non‑secret)
+## Safe, Per-Request Config (Non-secret)
 
-Permit an optional base64‑encoded `config` JSON on HTTP requests. Parsed keys are merged as soft defaults into `RequestContext.metadata.config` and can include:
+Permit an optional base64-encoded `config` JSON on HTTP requests. Parsed keys are merged as soft defaults into `RequestContext.metadata.config` and can include:
 
 - `snippet_length` (default 300; clamp bounds)
 - `max_tokens` (default ~5000; clamp bounds)
-- `sibling_window` (default 1–2; clamp bounds)
+- `sibling_window` (default 1-2; clamp bounds)
 - `order_by` ("relevance" | "recent")
 - `chars_per_token` (default 4)
 
-Never accept credentials or cross‑user hints in this config. WS can pass similar knobs in the first `initialize`.
+Never accept credentials or cross-user hints in this config. WS can pass similar knobs in the first `initialize`.
 
 ## Sources & Tools
 
@@ -56,7 +56,7 @@ Implemented sources (read-only v1): `notes`, `media`, `chats`, `characters`, `pr
 
 Each source provides `search` and `get` tools (see schemas). An `aggregator` provides `knowledge.search` and `knowledge.get` to fan-out and normalize across sources.
 
-Read‑only hint: include `metadata.readOnlyHint = true` in tool definitions for search/get tools to help UI surfaces.
+Read-only hint: include `metadata.readOnlyHint = true` in tool definitions for search/get tools to help UI surfaces.
 
 ## Result Schema (Common)
 
@@ -109,10 +109,10 @@ GetResponse = {
 }
 ```
 
-## Scoring Normalization (0–1)
+## Scoring Normalization (0-1)
 
 - PostgreSQL: use `ts_rank(...)`; normalize by dividing by per-query max `ts_rank` in the result set.
-- SQLite/FTS5: when available, use `bm25(table)`; map to 0–1 via:
+- SQLite/FTS5: when available, use `bm25(table)`; map to 0-1 via:
   - `score = (max_bm25 - bm25) / (max_bm25 - min_bm25 + 1e-9)`
   - If BM25 unavailable, fallback to positional decay: `score = 1 / (1 + rank_index)`
 - Aggregator merges by normalized score, then by `last_modified` (desc) if `order_by=relevance` (default). `order_by=recent` sorts purely by recency.
@@ -152,7 +152,7 @@ Behavior:
 Token estimation uses `chars_per_token` as a multiplier to convert characters → tokens (`tokens ≈ ceil(chars / cpt)`).
 
 Anchor identification (`loc`):
-- `media`: prefers stored chunks from `UnvectorizedMediaChunks` (by `chunk_index` or `uuid`). When a prechunked table exists, `media.search` attempts to map the first match offset to a precise `loc.chunk_index`; `media.get` uses `chunk_index`/`chunk_uuid` to anchor and then expands to siblings under the token budget. If no prechunked chunks exist, it falls back to on‑the‑fly chunking with approximate offsets.
+- `media`: prefers stored chunks from `UnvectorizedMediaChunks` (by `chunk_index` or `uuid`). When a prechunked table exists, `media.search` attempts to map the first match offset to a precise `loc.chunk_index`; `media.get` uses `chunk_index`/`chunk_uuid` to anchor and then expands to siblings under the token budget. If no prechunked chunks exist, it falls back to on-the-fly chunking with approximate offsets.
 - `notes`: FTS match → approximate offset or sentence-chunk boundary (on-the-fly chunking with `Chunker`).
 - `chats`: treat each message as a “chunk”; siblings are adjacent messages. The anchor is `message_id`.
 - `characters`/`prompts`: if needed, chunk on-the-fly by sentences/paragraphs.
@@ -311,7 +311,7 @@ knowledge.get
 
 Notes
 - `media.search` now returns a more precise `loc` when prechunked data exists: `{ "chunk_index": N }` rather than only `{ "approx_offset" }`.
-- `media.get` prefers `UnvectorizedMediaChunks` for `mode = "chunk" | "chunk_with_siblings" | "auto"`. It anchors by `chunk_index` or `chunk_uuid` when provided, otherwise maps an `approx_offset` to a `chunk_index`. If prechunked data is not available, it falls back to on‑the‑fly chunking.
+- `media.get` prefers `UnvectorizedMediaChunks` for `mode = "chunk" | "chunk_with_siblings" | "auto"`. It anchors by `chunk_index` or `chunk_uuid` when provided, otherwise maps an `approx_offset` to a `chunk_index`. If prechunked data is not available, it falls back to on-the-fly chunking.
 ```
 
 ## Location (loc) Semantics by Source
@@ -342,12 +342,12 @@ When `loc` is missing, `get` will attempt to determine an anchor via a light sea
 
 ### Client Aliases & Output Shapes (Optional)
 
-- When `metadata.client` indicates a deep‑research client, register aliases `search` → `knowledge.search`, `fetch` → `knowledge.get` in tools.list. Preserve canonical tools.
-- If the client requests a compact deep‑research shape via a mode flag, return a compact list `{id, title, text, url, metadata}`; otherwise use the canonical schema.
+- When `metadata.client` indicates a deep-research client, register aliases `search` → `knowledge.search`, `fetch` → `knowledge.get` in tools.list. Preserve canonical tools.
+- If the client requests a compact deep-research shape via a mode flag, return a compact list `{id, title, text, url, metadata}`; otherwise use the canonical schema.
 
 ### HTTP Sessions (Design)
 
-- Honor `mcp-session-id` on HTTP requests. Create and return one for first‑time sessions. Optionally support an HTTP DELETE to clear the session early; otherwise TTL reaper cleans up.
+- Honor `mcp-session-id` on HTTP requests. Create and return one for first-time sessions. Optionally support an HTTP DELETE to clear the session early; otherwise TTL reaper cleans up.
 
 ## Testing
 
@@ -358,7 +358,7 @@ When `loc` is missing, `get` will attempt to determine an anchor via a light sea
   - `chunk_with_siblings` respects token budget
 - E2E tests for MCP over HTTP and WebSocket with minimal fixtures.
  - Session dedupe: repeated searches in a session avoid returning identical URIs until the result space is exhausted.
- - Client aliasing/shape: deep‑research mode shows aliases and honors shape toggle.
+ - Client aliasing/shape: deep-research mode shows aliases and honors shape toggle.
 
 ## Open Items
 

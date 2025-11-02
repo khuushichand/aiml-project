@@ -199,7 +199,7 @@ Idempotency invariants
 - Replaying the same `(collection_name, chunk_id)` must overwrite the vector and metadata but must not create duplicates.
 - Storage must be safe under at-least-once delivery and partial batch failures.
 
-## Security & Multi‑Tenancy
+## Security & Multi-Tenancy
 
 - Enforce user isolation in collection naming and SQL writes; ensure no cross-tenant leakage via message payloads.
 - Quotas and per-tier concurrency limits enforced by Job Manager.

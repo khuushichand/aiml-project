@@ -1,7 +1,7 @@
 # Chatbook Features API Documentation
 
 ## Overview
-This document describes the current, implemented API surface for Chatbook‑adjacent features in the multi‑user API: Chat Dictionaries, World Books (lorebooks), Document Generator, and Chatbooks (import/export). It reflects the code as of v0.1.0 in `tldw_Server_API` and corrects any previously published mismatches.
+This document describes the current, implemented API surface for Chatbook-adjacent features in the multi-user API: Chat Dictionaries, World Books (lorebooks), Document Generator, and Chatbooks (import/export). It reflects the code as of v0.1.0 in `tldw_Server_API` and corrects any previously published mismatches.
 
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
@@ -822,11 +822,11 @@ Lightweight health indicator for the Chatbooks subsystem.
 
 ## Error Responses
 
-Endpoints return standard FastAPI error responses with meaningful HTTP status codes and a `detail` message. Some success responses include a `success` boolean for convenience (e.g., Chatbooks export/import). Domain‑specific errors may include additional fields (see response schemas).
+Endpoints return standard FastAPI error responses with meaningful HTTP status codes and a `detail` message. Some success responses include a `success` boolean for convenience (e.g., Chatbooks export/import). Domain-specific errors may include additional fields (see response schemas).
 
 ## Rate Limiting
 
-Endpoint‑specific limits are enforced with SlowAPI where applied:
+Endpoint-specific limits are enforced with SlowAPI where applied:
 - Chatbooks `POST /export`: 5/minute
 - Chatbooks `POST /import`: 5/minute
 - Chatbooks `POST /preview`: 10/minute
@@ -852,7 +852,7 @@ class ChatbookAPI:
     def __init__(self, base_url, token):
         self.base_url = base_url
         self.headers = {"Authorization": f"Bearer {token}"}
-    
+
     def create_dictionary(self, name, description):
         response = requests.post(
             f"{self.base_url}/api/v1/chat/dictionaries",
@@ -860,7 +860,7 @@ class ChatbookAPI:
             headers=self.headers
         )
         return response.json()
-    
+
     def process_text(self, text, token_budget=1000, dictionary_id=None):
         response = requests.post(
             f"{self.base_url}/api/v1/chat/dictionaries/process",
@@ -880,7 +880,7 @@ class ChatbookAPI {
       'Content-Type': 'application/json'
     };
   }
-  
+
   async exportChatbook(req) {
     const response = await fetch(`${this.baseUrl}/api/v1/chatbooks/export`, {
       method: 'POST',
@@ -889,7 +889,7 @@ class ChatbookAPI {
     });
     return response.json();
   }
-  
+
   async getExportStatus(jobId) {
     const response = await fetch(
       `${this.baseUrl}/api/v1/chatbooks/export/jobs/${jobId}`,
@@ -905,7 +905,7 @@ class ChatbookAPI {
 For users migrating from the TUI application:
 
 1. Authentication is required for all API calls.
-2. User content is isolated per‑user (per‑user DBs, per‑user export/import paths).
+2. User content is isolated per-user (per-user DBs, per-user export/import paths).
 3. Large operations support async jobs with status polling and secure download URLs.
 4. Import conflict resolution supports `skip`, `overwrite`, `rename`, and `merge`.
-5. Endpoint‑level rate limiting is enforced; plan for 429 handling.
+5. Endpoint-level rate limiting is enforced; plan for 429 handling.

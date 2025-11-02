@@ -93,15 +93,15 @@ Response:
 ```
 
 Matching methods:
-- `semantic`: TF‑IDF cosine similarity (falls back to Jaccard if scikit-learn unavailable)
+- `semantic`: TF-IDF cosine similarity (falls back to Jaccard if scikit-learn unavailable)
 - `jaccard`: token-based Jaccard similarity
 
 Notes:
-- When `semantic` is selected but scikit‑learn is unavailable, matching falls back to Jaccard with a default threshold of 0.6.
+- When `semantic` is selected but scikit-learn is unavailable, matching falls back to Jaccard with a default threshold of 0.6.
 
 The service stores results in the evaluations database with type `proposition_extraction`.
 
-### Run‑Managed Evaluations
+### Run-Managed Evaluations
 
 You can define an evaluation with `eval_type="proposition_extraction"` and provide an inline dataset of samples where each sample contains:
 

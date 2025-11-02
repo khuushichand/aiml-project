@@ -1353,5 +1353,3 @@ class WorkflowScheduler:
             except Exception:
                 pass
         threading.Thread(target=_runner, name="workflow-engine", daemon=True).start()
-
-    

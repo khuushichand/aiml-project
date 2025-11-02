@@ -103,7 +103,7 @@ const Utils = {
         };
         return text.replace(/[&<>"'/]/g, (char) => map[char]);
     },
-    
+
     /**
      * Safely set HTML content with proper escaping
      */
@@ -117,13 +117,13 @@ const Utils = {
             element.textContent = html;
         }
     },
-    
+
     /**
      * Create DOM elements safely from untrusted content
      */
     createSafeElement(tag, attrs = {}, textContent = '') {
         const elem = document.createElement(tag);
-        
+
         // Whitelist safe attributes
         const safeAttrs = ['className', 'id', 'type', 'placeholder', 'aria-label', 'aria-describedby', 'role'];
         for (const [key, value] of Object.entries(attrs)) {
@@ -135,7 +135,7 @@ const Utils = {
                 }
             }
         }
-        
+
         if (textContent) {
             elem.textContent = textContent;
         }
@@ -208,7 +208,7 @@ const Utils = {
         try {
             const itemStr = localStorage.getItem(key);
             if (!itemStr) return null;
-            
+
             const item = JSON.parse(itemStr);
             if (item.expiry && Date.now() > item.expiry) {
                 localStorage.removeItem(key);
@@ -260,11 +260,11 @@ const Utils = {
      */
     validateId(id, type = 'any') {
         if (!id) return false;
-        
+
         // Check for basic ID format (alphanumeric with underscores/hyphens)
         const idPattern = /^[a-zA-Z0-9_-]+$/;
         if (!idPattern.test(id)) return false;
-        
+
         // Type-specific validation
         switch(type) {
             case 'character':
@@ -277,7 +277,7 @@ const Utils = {
                 return true;
         }
     },
-    
+
     /**
      * Validate and parse JSON safely
      */
@@ -287,32 +287,32 @@ const Utils = {
             if (typeof jsonStr !== 'string') {
                 return defaultValue;
             }
-            
+
             // Trim whitespace
             jsonStr = jsonStr.trim();
-            
+
             // Check for empty strings
             if (!jsonStr || jsonStr === '{}' || jsonStr === '[]') {
                 return defaultValue || (jsonStr === '[]' ? [] : {});
             }
-            
+
             // Parse and validate
             const parsed = JSON.parse(jsonStr);
-            
+
             // Additional security checks
             const jsonString = JSON.stringify(parsed);
             if (jsonString.length > 1000000) { // 1MB limit
                 console.warn('JSON too large, rejecting');
                 return defaultValue;
             }
-            
+
             return parsed;
         } catch (e) {
             console.error('Failed to parse JSON:', e.message);
             return defaultValue;
         }
     },
-    
+
     /**
      * Validate file upload
      */
@@ -322,19 +322,19 @@ const Utils = {
             allowedTypes = [],
             allowedExtensions = []
         } = options;
-        
+
         if (!file) return { valid: false, error: 'No file provided' };
-        
+
         // Check file size
         if (file.size > maxSize) {
             return { valid: false, error: `File too large. Maximum size: ${this.formatBytes(maxSize)}` };
         }
-        
+
         // Check file type
         if (allowedTypes.length > 0 && !allowedTypes.includes(file.type)) {
             return { valid: false, error: `Invalid file type. Allowed: ${allowedTypes.join(', ')}` };
         }
-        
+
         // Check file extension
         if (allowedExtensions.length > 0) {
             const ext = file.name.split('.').pop().toLowerCase();
@@ -342,7 +342,7 @@ const Utils = {
                 return { valid: false, error: `Invalid file extension. Allowed: ${allowedExtensions.join(', ')}` };
             }
         }
-        
+
         return { valid: true };
     },
 
@@ -357,45 +357,45 @@ const Utils = {
             backoffFactor = 2,
             shouldRetry = (error) => true
         } = options;
-        
+
         let lastError;
-        
+
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 return await fn();
             } catch (error) {
                 lastError = error;
-                
+
                 // Check if we should retry
                 if (attempt === maxRetries || !shouldRetry(error)) {
                     throw error;
                 }
-                
+
                 // Calculate delay with exponential backoff
                 const delay = Math.min(
                     initialDelay * Math.pow(backoffFactor, attempt),
                     maxDelay
                 );
-                
+
                 console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
-        
+
         throw lastError;
     },
-    
+
     /**
      * Error handler with user-friendly messages
      */
     handleError(error, context = '') {
         console.error(`Error in ${context}:`, error);
-        
+
         // Determine error type and provide user-friendly message
         let userMessage = 'An unexpected error occurred';
         let technicalDetails = error.message || 'Unknown error';
         let recoveryAction = null;
-        
+
         if (error.name === 'AbortError') {
             userMessage = 'Request timed out';
             recoveryAction = 'Try again with a shorter request or check your connection';
@@ -421,7 +421,7 @@ const Utils = {
             userMessage = 'Invalid data format';
             recoveryAction = 'Check your input data and try again';
         }
-        
+
         return {
             userMessage,
             technicalDetails,
@@ -429,7 +429,7 @@ const Utils = {
             originalError: error
         };
     },
-    
+
     /**
      * Format timestamp to readable date
      */

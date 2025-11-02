@@ -81,5 +81,5 @@ Notes:
 
 ## Error Handling & Notes
 
-- Graceful decoding fallback from UTF‑8 to latin‑1; errors recorded.
+- Graceful decoding fallback from UTF-8 to latin-1; errors recorded.
 - Unsupported file types raise `ValueError` with details.

@@ -64,9 +64,9 @@ async def get_current_user_profile(
 ) -> UserResponse:
     """
     Get current user profile
-    
+
     Returns the authenticated user's profile information.
-    
+
     Returns:
         UserResponse with user details
     """
@@ -74,7 +74,7 @@ async def get_current_user_profile(
     user_uuid = current_user.get('uuid', '')
     if user_uuid and not isinstance(user_uuid, str):
         user_uuid = str(user_uuid)
-    
+
     return UserResponse(
         id=current_user['id'],
         uuid=user_uuid,
@@ -98,19 +98,19 @@ async def update_user_profile(
 ) -> UserResponse:
     """
     Update current user profile
-    
+
     Allows users to update their email address.
     Username changes are not allowed for security reasons.
-    
+
     Args:
         request: UpdateProfileRequest with new email address (optional)
-        
+
     Returns:
         Updated UserResponse
     """
     try:
         updates_made = False
-        
+
         if request.email and request.email != current_user.get('email'):
             # Update email
             is_pg = await is_postgres_backend()
@@ -127,20 +127,20 @@ async def update_user_profile(
                     (request.email.lower(), current_user['id'])
                 )
                 await db.commit()
-            
+
             updates_made = True
             current_user['email'] = request.email.lower()
             logger.info(f"Updated email for user {current_user['username']} (ID: {current_user['id']})")
-        
+
         if not updates_made:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No updates provided"
             )
-        
+
         # Return updated user info
         return await get_current_user_profile(current_user)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -164,15 +164,15 @@ async def change_password(
 ) -> MessageResponse:
     """
     Change user password
-    
+
     Allows users to change their password by providing the current password.
-    
+
     Args:
         request: PasswordChangeRequest with current and new passwords
-        
+
     Returns:
         MessageResponse confirming password change
-        
+
     Raises:
         HTTPException: 401 if current password is incorrect, 400 if new password is weak
     """
@@ -193,16 +193,16 @@ async def change_password(
             )
             row = await cursor.fetchone()
             password_hash = row[0] if row else None
-        
+
         if not password_hash:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
-        
+
         # Verify current password
         is_valid, _ = password_service.verify_password(
-            request.current_password, 
+            request.current_password,
             password_hash
         )
         if not is_valid:
@@ -211,7 +211,7 @@ async def change_password(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Current password is incorrect"
             )
-        
+
         # Validate new password strength
         try:
             password_service.validate_password_strength(
@@ -223,25 +223,25 @@ async def change_password(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e)
             )
-        
+
         # Hash new password
         new_hash = password_service.hash_password(request.new_password)
-        
+
         # Update password in database
         is_pg = await is_postgres_backend()
         if is_pg:
             # PostgreSQL
             await db.execute(
                 """
-                UPDATE users 
-                SET password_hash = $1, 
+                UPDATE users
+                SET password_hash = $1,
                     password_changed_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $2
                 """,
                 new_hash, current_user['id']
             )
-            
+
             # Add to password history
             await db.execute(
                 "INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)",
@@ -251,29 +251,29 @@ async def change_password(
             # SQLite
             await db.execute(
                 """
-                UPDATE users 
-                SET password_hash = ?, 
+                UPDATE users
+                SET password_hash = ?,
                     password_changed_at = datetime('now'),
                     updated_at = datetime('now')
                 WHERE id = ?
                 """,
                 (new_hash, current_user['id'])
             )
-            
+
             # Add to password history
             await db.execute(
                 "INSERT INTO password_history (user_id, password_hash) VALUES (?, ?)",
                 (current_user['id'], new_hash)
             )
             await db.commit()
-        
+
         logger.info(f"Password changed for user {current_user['username']} (ID: {current_user['id']})")
-        
+
         return MessageResponse(
             message="Password changed successfully",
             details={"user_id": current_user['id']}
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -398,13 +398,13 @@ async def list_user_sessions(
 ) -> List[SessionResponse]:
     """
     List all active sessions for the current user
-    
+
     Returns:
         List of SessionResponse objects
     """
     try:
         sessions = await session_manager.get_user_sessions(current_user['id'])
-        
+
         return [
             SessionResponse(
                 id=session['id'],
@@ -416,7 +416,7 @@ async def list_user_sessions(
             )
             for session in sessions
         ]
-        
+
     except Exception as e:
         logger.error(f"Failed to list user sessions: {e}")
         # In test mode, surface the underlying error to aid debugging
@@ -440,15 +440,15 @@ async def revoke_session(
 ) -> MessageResponse:
     """
     Revoke a specific session
-    
+
     Allows users to log out specific sessions (e.g., on other devices).
-    
+
     Args:
         session_id: ID of the session to revoke
-        
+
     Returns:
         MessageResponse confirming revocation
-        
+
     Raises:
         HTTPException: 404 if session not found or doesn't belong to user
     """
@@ -456,7 +456,7 @@ async def revoke_session(
         # Get session to verify ownership
         sessions = await session_manager.get_user_sessions(current_user['id'])
         session_ids = [s['id'] for s in sessions]
-        
+
         if session_id not in session_ids:
             # Return success for idempotency - session is already not active
             logger.info(f"Session {session_id} not found for user {current_user['id']} - treating as already revoked")
@@ -464,21 +464,21 @@ async def revoke_session(
                 message="Session revoked successfully",
                 details={"session_id": session_id, "note": "Session was already inactive or did not exist"}
             )
-        
+
         # Revoke the session
         await session_manager.revoke_session(
             session_id,
             revoked_by=current_user['id'],
             reason="User requested revocation"
         )
-        
+
         logger.info(f"User {current_user['username']} revoked session {session_id}")
-        
+
         return MessageResponse(
             message="Session revoked successfully",
             details={"session_id": session_id}
         )
-        
+
     except HTTPException:
         raise
     except SessionError as e:
@@ -502,9 +502,9 @@ async def revoke_all_sessions(
 ) -> MessageResponse:
     """
     Revoke all sessions for the current user
-    
+
     Logs out the user from all devices.
-    
+
     Returns:
         MessageResponse confirming revocation
     """
@@ -513,14 +513,14 @@ async def revoke_all_sessions(
             current_user['id'],
             reason="User requested logout from all devices"
         )
-        
+
         logger.info(f"User {current_user['username']} revoked all {count} sessions")
-        
+
         return MessageResponse(
             message=f"Successfully revoked {count} sessions",
             details={"sessions_revoked": count}
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to revoke all sessions: {e}")
         raise HTTPException(
@@ -540,7 +540,7 @@ async def get_storage_quota(
 ) -> StorageQuotaResponse:
     """
     Get storage quota information for current user
-    
+
     Returns:
         StorageQuotaResponse with usage details
     """
@@ -550,7 +550,7 @@ async def get_storage_quota(
             current_user['id'],
             update_database=False  # Don't update unless explicitly requested
         )
-        
+
         return StorageQuotaResponse(
             user_id=current_user['id'],
             storage_used_mb=storage_info['total_mb'],
@@ -558,7 +558,7 @@ async def get_storage_quota(
             available_mb=storage_info['available_mb'],
             usage_percentage=storage_info['usage_percentage']
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to get storage quota: {e}")
         # Return from database values if calculation fails
@@ -578,9 +578,9 @@ async def recalculate_storage(
 ) -> StorageQuotaResponse:
     """
     Recalculate storage usage for current user
-    
+
     Forces a recalculation of actual disk usage and updates the database.
-    
+
     Returns:
         StorageQuotaResponse with updated usage details
     """
@@ -590,9 +590,9 @@ async def recalculate_storage(
             current_user['id'],
             update_database=True
         )
-        
+
         logger.info(f"Recalculated storage for user {current_user['username']}: {storage_info['total_mb']:.2f}MB")
-        
+
         return StorageQuotaResponse(
             user_id=current_user['id'],
             storage_used_mb=storage_info['total_mb'],
@@ -600,7 +600,7 @@ async def recalculate_storage(
             available_mb=storage_info['available_mb'],
             usage_percentage=storage_info['usage_percentage']
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to recalculate storage: {e}")
         raise HTTPException(

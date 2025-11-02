@@ -16,16 +16,16 @@ class WordChunkingStrategy(BaseChunkingStrategy):
     Chunks text by word count.
     Supports multiple languages and various word tokenization methods.
     """
-    
+
     def __init__(self, language: str = 'en'):
         """
         Initialize word chunking strategy.
-        
+
         Args:
             language: Language code for text processing
         """
         super().__init__(language)
-        
+
         # Language-specific word tokenizers
         self._word_tokenizers = {
             'zh': self._tokenize_chinese,
@@ -36,9 +36,9 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             'th': self._tokenize_thai,
             'default': self._tokenize_default
         }
-        
+
         logger.debug(f"WordChunkingStrategy initialized for language: {language}")
-    
+
     def chunk(self,
               text: str,
               max_size: int,
@@ -46,7 +46,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
               **options) -> List[str]:
         """
         Chunk text by word count.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum words per chunk
@@ -54,45 +54,45 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             **options: Additional options:
                 - preserve_sentences: Try to break at sentence boundaries
                 - min_chunk_size: Minimum words per chunk
-                
+
         Returns:
             List of text chunks
         """
         if not self.validate_parameters(text, max_size, overlap):
             return []
-        
+
         # Adjust overlap if needed
         if overlap >= max_size:
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
             overlap = max_size - 1
-        
+
         records, tokens, _spans = self._prepare_chunk_records(text, max_size, overlap, **options)
         if not tokens or not records:
             return []
-        
+
         logger.debug(f"Chunking {len(tokens)} words with max_size={max_size}, overlap={overlap}")
         chunks = [record['text'] for record in records]
         logger.debug(f"Created {len(chunks)} chunks from {len(tokens)} words")
         return chunks
-    
+
     def _tokenize_text(self, text: str) -> List[str]:
         """
         Tokenize text into words based on language.
-        
+
         Args:
             text: Text to tokenize
-            
+
         Returns:
             List of words
         """
         # Get appropriate tokenizer for language
         tokenizer = self._word_tokenizers.get(
-            self.language, 
+            self.language,
             self._word_tokenizers['default']
         )
-        
+
         return tokenizer(text)
-    
+
     def _tokenize_with_spans(self, text: str) -> tuple[List[str], List[tuple[int, int]]]:
         """Tokenize text and return tokens with character spans.
 
@@ -137,7 +137,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             cursor = end
 
         return tokens, spans
-    
+
     def _prepare_chunk_records(
         self,
         text: str,
@@ -158,14 +158,14 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         min_size = max(0, min_size)
         preserve_sentences = bool(options.get('preserve_sentences', False))
         no_space_languages = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
-        
+
         for i in range(0, len(tokens), step):
             end = min(i + max_size, len(tokens))
             if end <= i:
                 continue
             token_indices = list(range(i, end))
             chunk_tokens = [tokens[idx] for idx in token_indices]
-            
+
             # Optional sentence boundary preservation (mirrors original logic)
             if preserve_sentences and end < len(tokens) and self.language not in no_space_languages:
                 chunk_text_tmp = ' '.join(chunk_tokens)
@@ -180,12 +180,12 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                     if count > 0:
                         token_indices = token_indices[:count]
                         chunk_tokens = chunk_tokens[:count]
-            
+
             if not token_indices:
                 continue
-            
+
             chunk_text = self._join_words(chunk_tokens)
-            
+
             if len(token_indices) >= min_size or not records:
                 records.append({
                     'token_indices': token_indices[:],
@@ -196,30 +196,30 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                 prev['token_indices'].extend(token_indices)
                 merge_suffix = ' ' + chunk_text if chunk_text else ' '
                 prev['text'] = prev['text'] + merge_suffix
-        
+
         return records, tokens, spans
-    
+
     def _tokenize_default(self, text: str) -> List[str]:
         """
         Default word tokenization using simple splitting.
-        
+
         Args:
             text: Text to tokenize
-            
+
         Returns:
             List of words
         """
         # Simple word splitting on whitespace and punctuation
         words = text.split()
         return words
-    
+
     def _tokenize_chinese(self, text: str) -> List[str]:
         """
         Chinese word tokenization.
-        
+
         Args:
             text: Chinese text to tokenize
-            
+
         Returns:
             List of words
         """
@@ -249,14 +249,14 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             if tail:
                 words.extend(list(tail))
             return words
-    
+
     def _tokenize_japanese(self, text: str) -> List[str]:
         """
         Japanese word tokenization.
-        
+
         Args:
             text: Japanese text to tokenize
-            
+
         Returns:
             List of words
         """
@@ -288,14 +288,14 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         if tail:
             words.extend(list(tail))
         return words
-    
+
     def _tokenize_korean(self, text: str) -> List[str]:
         """
         Korean word tokenization.
-        
+
         Args:
             text: Korean text to tokenize
-            
+
         Returns:
             List of words
         """
@@ -308,14 +308,14 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         except ImportError:
             logger.warning("KoNLPy not available, using space splitting for Korean")
             return text.split()
-    
+
     def _tokenize_thai(self, text: str) -> List[str]:
         """
         Thai word tokenization.
-        
+
         Args:
             text: Thai text to tokenize
-            
+
         Returns:
             List of words
         """
@@ -328,14 +328,14 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             logger.warning("PyThaiNLP not available, using character splitting for Thai")
             # Thai doesn't use spaces between words
             return [ch for ch in text if ch != '\r']
-    
+
     def _join_words(self, words: List[str]) -> str:
         """
         Join words back into text based on language.
-        
+
         Args:
             words: List of words to join
-            
+
         Returns:
             Joined text
         """
@@ -345,7 +345,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         else:
             # For languages with spaces
             return ' '.join(words)
-    
+
     def chunk_generator(self,
                        text: str,
                        max_size: int,
@@ -353,35 +353,35 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                        **options) -> Generator[str, None, None]:
         """
         Memory-efficient generator version of chunk.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum words per chunk
             overlap: Number of words to overlap between chunks
             **options: Additional options
-            
+
         Yields:
             Individual text chunks
         """
         if not self.validate_parameters(text, max_size, overlap):
             return
-        
+
         # Adjust overlap if needed
         if overlap >= max_size:
             overlap = max_size - 1
-        
+
         words = self._tokenize_text(text)
         step = max(1, max_size - overlap)
-        
+
         for i in range(0, len(words), step):
             chunk_words = words[i:i + max_size]
             chunk = self._join_words(chunk_words)
-            
+
             # Apply minimum size if specified
             min_size = options.get('min_chunk_size', 0)
             if len(chunk_words) >= min_size:
                 yield chunk
-    
+
     def chunk_with_metadata(self,
                             text: str,
                             max_size: int,
@@ -390,20 +390,20 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         """Chunk text and return metadata with accurate offsets."""
         if not self.validate_parameters(text, max_size, overlap):
             return []
-        
+
         if overlap >= max_size:
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), setting to max_size - 1")
             overlap = max_size - 1
-        
+
         records, tokens, spans = self._prepare_chunk_records(text, max_size, overlap, **options)
         if not records:
             return []
-        
+
         try:
             min_size_opt = int(options.get('min_chunk_size', 0))
         except Exception:
             min_size_opt = 0
-        
+
         results: List[ChunkResult] = []
         total = len(records)
         for idx, record in enumerate(records):
@@ -435,6 +435,6 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                 }
             )
             results.append(ChunkResult(text=chunk_text, metadata=metadata))
-        
+
         logger.debug(f"Created {len(results)} chunks with metadata from {len(tokens)} words")
         return results

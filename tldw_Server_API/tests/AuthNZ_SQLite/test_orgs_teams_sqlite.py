@@ -52,4 +52,3 @@ async def test_orgs_teams_crud_sqlite(tmp_path):
 
     members = await list_team_members(team_id=team['id'])
     assert len(members) == 1 and members[0]['user_id'] == user_id
-

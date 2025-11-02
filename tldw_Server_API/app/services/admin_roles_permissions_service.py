@@ -19,14 +19,24 @@ async def list_roles(db) -> List[Dict[str, Any]]:
 
 
 async def create_role(db, name: str, description: Optional[str] = None, is_system: bool = False) -> Dict[str, Any]:
+    from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateRoleError
     is_pg = await is_postgres_backend()
     try:
         if is_pg:
+            # Pre-check case-insensitive
+            exists = await db.fetchrow("SELECT 1 FROM roles WHERE LOWER(name) = LOWER($1)", name)
+            if exists:
+                raise DuplicateRoleError(name)
             row = await db.fetchrow(
                 "INSERT INTO roles (name, description, is_system) VALUES ($1, $2, $3) RETURNING id, name, description, is_system",
                 name, description, is_system,
             )
             return dict(row)
+        # SQLite path
+        # Pre-check duplicate (case-insensitive)
+        curx = await db.execute("SELECT 1 FROM roles WHERE LOWER(name) = LOWER(?)", (name,))
+        if await curx.fetchone():
+            raise DuplicateRoleError(name)
         cur = await db.execute("INSERT INTO roles (name, description, is_system) VALUES (?, ?, ?)", (name, description, 1 if is_system else 0))
         commit = getattr(db, "commit", None)
         if callable(commit):
@@ -185,4 +195,3 @@ async def revoke_tool_permission_from_role(db, role_id: int, permission_name: st
     except Exception as e:
         logger.error(f"admin_service.revoke_tool_permission_from_role failed: {e}")
         raise
-

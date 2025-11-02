@@ -76,20 +76,20 @@ Exposed via API endpoints to enqueue work per media or in bulk.
 
 Base prefix: `/api/v1/claims`
 
-- `GET /{media_id}` — List claims for a media item
+- `GET /{media_id}` - List claims for a media item
   - Optional query params (admin only): `user_id` to select another user’s media DB
   - Response: `List[ClaimRow]` (DB rows excluding `deleted`), ordered by `chunk_index` then `id`
 
-- `POST /{media_id}/rebuild` — Enqueue rebuild for a media item
+- `POST /{media_id}/rebuild` - Enqueue rebuild for a media item
   - Optional (admin): `user_id` to target another user DB
   - Response: `{ "status": "accepted", "media_id": <id> }`
 
-- `POST /rebuild/all` — Enqueue rebuild across media
+- `POST /rebuild/all` - Enqueue rebuild across media
   - Query param `policy`: `missing` (default)|`all`|`stale`
   - Optional (admin): `user_id`
   - Response: `{ "status": "accepted", "enqueued": <count>, "policy": "..." }`
 
-- `POST /rebuild_fts` — Rebuild `claims_fts` from `Claims`
+- `POST /rebuild_fts` - Rebuild `claims_fts` from `Claims`
   - Optional (admin): `user_id`
   - Response: `{ "status": "ok", "indexed": <count> }`
 
@@ -149,4 +149,3 @@ curl -s -X POST -H "Authorization: Bearer <JWT>" \
 
 - Ingestion-time extraction can be enabled selectively; not all ingestion paths invoke it by default.
 - The answer-time Claims Engine (APS/LLM extractor + Hybrid verifier) is documented in design and is separate from these API endpoints.
-

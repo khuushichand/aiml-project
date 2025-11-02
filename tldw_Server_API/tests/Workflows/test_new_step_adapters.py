@@ -176,4 +176,3 @@ def test_stt_transcribe_with_mock(monkeypatch, tmp_path, client_with_wf: TestCli
     assert data["status"] == "succeeded"
     out = data.get("outputs") or {}
     assert "hello world" in out.get("text", "")
-

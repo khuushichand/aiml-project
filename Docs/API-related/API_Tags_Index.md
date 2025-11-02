@@ -1,6 +1,6 @@
 # API Tag Index
 
-This index maps OpenAPI tags to the most relevant documentation pages in the docs site. Tags follow a consistent kebab‑case convention to make navigation and grouping predictable in Swagger and ReDoc.
+This index maps OpenAPI tags to the most relevant documentation pages in the docs site. Tags follow a consistent kebab-case convention to make navigation and grouping predictable in Swagger and ReDoc.
 
 Notes:
 - Some tags group multiple endpoints; the linked doc covers the primary usage and examples.

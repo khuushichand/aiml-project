@@ -76,7 +76,7 @@ class EvaluationResponse(TimestampMixin, UUIDMixin):
     error_message: Optional[str] = Field(None, description="Error message if failed")
     tags: List[str] = Field(default_factory=list, description="Tags")
     completed_at: Optional[str] = Field(None, description="Completion timestamp")
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class EvaluationList(BaseModel):
@@ -147,7 +147,7 @@ class OptimizationResponse(TimestampMixin, UUIDMixin):
     best_score: Optional[float] = Field(None, description="Best score")
     results: Dict[str, Any] = Field(default_factory=dict, description="Results")
     error_message: Optional[str] = Field(None, description="Error message")
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class OptimizationList(BaseModel):
@@ -216,7 +216,7 @@ class JobResponse(TimestampMixin, UUIDMixin):
     scheduled_at: Optional[datetime] = Field(None, description="Scheduled time")
     started_at: Optional[datetime] = Field(None, description="Start time")
     completed_at: Optional[datetime] = Field(None, description="Completion time")
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class JobList(BaseModel):

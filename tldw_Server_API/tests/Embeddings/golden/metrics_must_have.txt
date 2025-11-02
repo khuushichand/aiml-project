@@ -5,4 +5,3 @@ orchestrator_sse_disconnects_total
 orchestrator_summary_failures_total
 embedding_queue_age_current_seconds
 embedding_stage_flag
-

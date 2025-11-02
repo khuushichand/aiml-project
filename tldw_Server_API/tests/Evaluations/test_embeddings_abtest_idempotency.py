@@ -67,4 +67,3 @@ def test_abtest_delete_idempotency(monkeypatch):
     assert d2.status_code == 200
     assert d1.json().get("status") == "deleted"
     assert d2.json().get("status") == "deleted"
-

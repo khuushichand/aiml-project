@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     DatabaseError, InputError, ConflictError
 )
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
 ########################################################################################################################
 # Router Setup
@@ -65,6 +66,7 @@ router = APIRouter(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_project_simple(
     project_data: ProjectCreate,
+    request: Request,
     user_context: Dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> Dict[str, Any]:
@@ -73,7 +75,12 @@ async def create_project_simple(
     Mirrors the pattern used by test-cases simple create.
     """
     # Delegate to the primary creation endpoint to keep behavior consistent
-    resp = await create_project(project_data, user_context, db)  # type: ignore[arg-type]
+    resp = await create_project(
+        project_data=project_data,
+        request=request,
+        user_context=user_context,
+        db=db,
+    )  # type: ignore[arg-type]
     # Unwrap StandardResponse regardless of Pydantic/dict
     if hasattr(resp, "model_dump"):
         obj = resp.model_dump()
@@ -141,19 +148,20 @@ async def _rl_create_project(
 )
 async def create_project(
     project_data: ProjectCreate,
+    request: Request,
     user_context: Dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     _: bool = Depends(_rl_create_project),
-    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ) -> StandardResponse:
     """
     Create a new Prompt Studio project.
-    
+
     Args:
         project_data: Project creation data
         user_context: Current user context
         db: Database instance
-        
+
     Returns:
         Created project details
     """
@@ -179,7 +187,11 @@ async def create_project(
             user_id=user_id_str
         )
 
-        logger.info(f"User {user_context['user_id']} created project: {project['name']}")
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", traceparent=tp).info(
+            "User {} created project: {}", user_context.get('user_id'), project.get('name')
+        )
 
         # Record idempotency mapping
         if idempotency_key and project.get("id"):
@@ -187,12 +199,12 @@ async def create_project(
                 db.record_idempotency("project", idempotency_key, int(project["id"]), user_id_str)
             except Exception:
                 pass
-        
+
         return StandardResponse(
             success=True,
             data=ProjectResponse(**project)
         )
-        
+
     except ConflictError as e:
         # For compatibility with tests, return existing project as if created
         try:
@@ -251,7 +263,7 @@ async def list_projects(
 ) -> ListResponse:
     """
     List projects for the current user.
-    
+
     Args:
         page: Page number
         per_page: Items per page
@@ -260,7 +272,7 @@ async def list_projects(
         search: Search query
         user_context: Current user context
         db: Database instance
-        
+
     Returns:
         Paginated list of projects
     """
@@ -274,10 +286,10 @@ async def list_projects(
             per_page=per_page,
             search=search
         )
-        
+
         # Convert to response models
         projects = [ProjectListItem(**p) for p in result["projects"]]
-        
+
         # Include both 'metadata' and 'pagination' for compatibility
         return {
             "success": True,
@@ -286,7 +298,7 @@ async def list_projects(
             "pagination": result["pagination"],
             "projects": [p.model_dump() if hasattr(p, 'model_dump') else dict(p) for p in projects]
         }
-        
+
     except DatabaseError as e:
         logger.error(f"Database error listing projects: {e}")
         raise HTTPException(
@@ -329,28 +341,28 @@ async def get_project(
 ) -> StandardResponse:
     """
     Get a specific project by ID.
-    
+
     Args:
         project_id: Project ID
         db: Database instance
-        
+
     Returns:
         Project details
     """
     try:
         project = db.get_project(project_id)
-        
+
         if not project:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
-        
+
         return StandardResponse(
             success=True,
             data=ProjectResponse(**project)
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error getting project: {e}")
         raise HTTPException(
@@ -386,13 +398,13 @@ async def update_project(
 ) -> StandardResponse:
     """
     Update a project.
-    
+
     Args:
         project_id: Project ID
         updates: Fields to update
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Updated project details
     """
@@ -407,27 +419,27 @@ async def update_project(
                 if isinstance(encoded_updates, dict)
                 else {}
             )
-        
+
         if not update_data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No fields to update"
             )
-        
+
         # Convert enum to string if present
         if "status" in update_data and hasattr(update_data["status"], "value"):
             update_data["status"] = update_data["status"].value
-        
+
         # Update project
         project = db.update_project(project_id, update_data)
-        
+
         logger.info(f"User {user_context['user_id']} updated project {project_id}")
-        
+
         return StandardResponse(
             success=True,
             data=ProjectResponse(**project)
         )
-        
+
     except InputError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -455,35 +467,35 @@ async def delete_project(
 ) -> StandardResponse:
     """
     Delete a project (soft delete by default).
-    
+
     Args:
         project_id: Project ID
         permanent: If True, permanently delete the project
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Success response
     """
     try:
         success = db.delete_project(project_id, hard_delete=permanent)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found or already deleted"
             )
-        
+
         logger.info(
             f"User {user_context['user_id']} {'permanently' if permanent else 'soft'} "
             f"deleted project {project_id}"
         )
-        
+
         return StandardResponse(
             success=True,
             data={"message": f"Project {'permanently' if permanent else 'soft'} deleted"}
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error deleting project: {e}")
         # Fallback: try to mark as archived to keep operation idempotent for tests
@@ -510,30 +522,35 @@ async def archive_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> StandardResponse:
     """
     Archive a project (set status to archived).
-    
+
     Args:
         project_id: Project ID
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Updated project details
     """
     try:
         # Update status to archived
         project = db.update_project(project_id, {"status": "archived"})
-        
-        logger.info(f"User {user_context['user_id']} archived project {project_id}")
-        
+
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request)
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", project_id=project_id, traceparent=tp).info(
+            "User {} archived project {}", user_context.get('user_id'), project_id
+        )
+
         return StandardResponse(
             success=True,
             data=ProjectResponse(**project)
         )
-        
+
     except InputError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -556,30 +573,35 @@ async def unarchive_project(
     project_id: int = Path(..., description="Project ID"),
     _: bool = Depends(require_project_write_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: Dict = Depends(get_prompt_studio_user),
+    request: Request = None,
 ) -> StandardResponse:
     """
     Unarchive a project (set status to active).
-    
+
     Args:
         project_id: Project ID
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         Updated project details
     """
     try:
         # Update status to active
         project = db.update_project(project_id, {"status": "active"})
-        
-        logger.info(f"User {user_context['user_id']} unarchived project {project_id}")
-        
+
+        rid = ensure_request_id(request) if request is not None else None
+        tp = ensure_traceparent(request)
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="prompt_studio", project_id=project_id, traceparent=tp).info(
+            "User {} unarchived project {}", user_context.get('user_id'), project_id
+        )
+
         return StandardResponse(
             success=True,
             data=ProjectResponse(**project)
         )
-        
+
     except InputError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -605,18 +627,18 @@ async def get_project_stats(
 ) -> StandardResponse:
     """
     Get statistics for a project.
-    
+
     Args:
         project_id: Project ID
         db: Database instance
-        
+
     Returns:
         Project statistics
     """
     try:
         conn = db.get_connection()
         cursor = conn.cursor()
-        
+
         # Get various counts
         stats_queries = {
             "prompt_count": "SELECT COUNT(*) FROM prompt_studio_prompts WHERE project_id = ? AND deleted = 0",
@@ -629,17 +651,17 @@ async def get_project_stats(
             "total_tokens_used": "SELECT COALESCE(SUM(tokens_used), 0) FROM prompt_studio_test_runs WHERE project_id = ?",
             "total_cost": "SELECT COALESCE(SUM(cost_estimate), 0) FROM prompt_studio_test_runs WHERE project_id = ?"
         }
-        
+
         stats = {}
         for key, query in stats_queries.items():
             cursor.execute(query, (project_id,))
             stats[key] = cursor.fetchone()[0]
-        
+
         return StandardResponse(
             success=True,
             data=stats
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error getting project stats: {e}")
         raise HTTPException(

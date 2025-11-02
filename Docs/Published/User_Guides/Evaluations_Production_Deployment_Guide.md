@@ -8,7 +8,7 @@ This guide covers deploying the tldw_server Evaluations module in a production e
 
 ### System Requirements
 - **OS**: Linux (Ubuntu 20.04+ recommended), macOS, or Windows Server
-- **Python**: 3.10+ 
+- **Python**: 3.10+
 - **RAM**: Minimum 4GB, recommended 8GB+
 - **CPU**: 2+ cores recommended
 - **Disk**: 10GB+ for databases and logs
@@ -218,11 +218,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # Timeouts for long evaluations
         proxy_read_timeout 120s;
         proxy_connect_timeout 10s;
-        
+
         # Response buffering
         proxy_buffering on;
         proxy_buffer_size 4k;
@@ -281,13 +281,13 @@ groups:
         for: 5m
         annotations:
           summary: "High error rate in evaluations"
-      
+
       - alert: CircuitBreakerOpen
         expr: circuit_breaker_state > 0
         for: 1m
         annotations:
           summary: "Circuit breaker {{ $labels.provider }} is open"
-      
+
       - alert: HighResponseTime
         expr: histogram_quantile(0.99, evaluation_duration_seconds) > 5
         for: 5m
@@ -580,5 +580,5 @@ curl http://localhost:8000/api/v1/health/evaluations
 
 ---
 
-Last Updated: 2024-01-16  
+Last Updated: 2024-01-16
 Version: 1.0.0

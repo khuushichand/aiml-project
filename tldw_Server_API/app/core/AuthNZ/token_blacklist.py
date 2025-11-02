@@ -26,11 +26,11 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTok
 class TokenBlacklist:
     """
     Service for managing revoked/blacklisted JWT tokens.
-    
+
     Supports both Redis (for performance) and database (for persistence) storage.
     Automatically cleans up expired tokens to prevent unbounded growth.
     """
-    
+
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
@@ -42,7 +42,7 @@ class TokenBlacklist:
         self._external_db_pool = db_pool is not None
         self.redis_client: Optional[redis_async.Redis] = None
         self._initialized = False
-        
+
         # In-memory LRU cache of recently seen blacklisted JTIs mapped to expiry
         self._local_cache: Dict[str, datetime] = {}
         self._local_order: deque[str] = deque()
@@ -131,18 +131,18 @@ class TokenBlacklist:
         """
         normalized_expiry = self._normalize_expiry_for_storage(expires_at)
         self._cache_add(jti, normalized_expiry)
-        
+
     async def initialize(self):
         """Initialize blacklist service and create tables if needed"""
         if self._initialized:
             return
-        
+
         # Get database pool
         self.db_pool = await self._ensure_db_pool()
-        
+
         # Create blacklist table if it doesn't exist
         await self._create_tables()
-        
+
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
@@ -156,7 +156,7 @@ class TokenBlacklist:
             except (RedisError, Exception) as e:
                 logger.warning(f"Redis unavailable for token blacklist: {e}")
                 self.redis_client = None
-        
+
         self._initialized = True
         logger.info("TokenBlacklist service initialized")
 
@@ -210,7 +210,7 @@ class TokenBlacklist:
             await self.db_pool.initialize()
 
         return self.db_pool
-    
+
     async def _create_tables(self):
         """Create token blacklist table if it doesn't exist"""
         try:
@@ -233,7 +233,7 @@ class TokenBlacklist:
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
-                    
+
                     # Create indexes
                     await conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)"
@@ -244,7 +244,7 @@ class TokenBlacklist:
                     await conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)"
                     )
-                    
+
                 else:
                     # SQLite
                     await conn.execute("""
@@ -261,7 +261,7 @@ class TokenBlacklist:
                             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                         )
                     """)
-                    
+
                     # Create indexes
                     await conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)"
@@ -272,9 +272,9 @@ class TokenBlacklist:
                     await conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)"
                     )
-                    
+
                     await conn.commit()
-                    
+
         except Exception as e:
             logger.error(f"Failed to create token blacklist table: {e}")
             raise DatabaseError(f"Failed to create blacklist table: {e}")
@@ -311,7 +311,7 @@ class TokenBlacklist:
             self._ensured_session_columns = True
         except Exception as exc:
             logger.debug(f"TokenBlacklist: unable to harmonize session columns: {exc}")
-    
+
     async def revoke_token(
         self,
         jti: str,
@@ -324,7 +324,7 @@ class TokenBlacklist:
     ) -> bool:
         """
         Add a token to the blacklist
-        
+
         Args:
             jti: JWT ID (unique identifier for the token)
             expires_at: Token expiration time
@@ -333,13 +333,13 @@ class TokenBlacklist:
             reason: Reason for revocation
             revoked_by: User who revoked the token (for admin actions)
             ip_address: IP address of revocation request
-            
+
         Returns:
             True if successfully blacklisted
         """
         if not self._initialized:
             await self.initialize()
-        
+
         normalized_expiry = self._normalize_expiry_for_storage(expires_at)
 
         # Add to local cache (LRU) with a small grace buffer to account for
@@ -352,13 +352,13 @@ class TokenBlacklist:
             now_utc + min_grace if normalized_expiry <= now_utc + min_grace else normalized_expiry
         )
         self._cache_add(jti, effective_cache_expiry)
-        
+
         # Add to Redis if available
         if self.redis_client:
             try:
                 key = f"blacklist:{jti}"
                 ttl = int((normalized_expiry - datetime.utcnow()).total_seconds())
-                
+
                 if ttl > 0:
                     await self.redis_client.setex(
                         key,
@@ -374,10 +374,10 @@ class TokenBlacklist:
                         logger.debug("Token added to Redis blacklist (details redacted)")
                     else:
                         logger.debug(f"Token {jti} added to Redis blacklist")
-                    
+
             except (RedisError, Exception) as e:
                 logger.warning(f"Failed to add token to Redis blacklist: {e}")
-        
+
         # Add to database for persistence
         try:
             db_pool = await self._ensure_db_pool()
@@ -386,7 +386,7 @@ class TokenBlacklist:
                 if using_postgres:
                     # PostgreSQL
                     await conn.execute("""
-                        INSERT INTO token_blacklist 
+                        INSERT INTO token_blacklist
                         (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
                         ON CONFLICT (jti) DO NOTHING
@@ -396,7 +396,7 @@ class TokenBlacklist:
                     try:
                         await conn.execute(
                             """
-                            INSERT OR IGNORE INTO token_blacklist 
+                            INSERT OR IGNORE INTO token_blacklist
                             (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                             """,
@@ -411,7 +411,7 @@ class TokenBlacklist:
                             try:
                                 await conn.execute(
                                     """
-                                    INSERT OR IGNORE INTO token_blacklist 
+                                    INSERT OR IGNORE INTO token_blacklist
                                     (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
                                     VALUES (?, NULL, ?, ?, ?, ?, ?)
                                     """,
@@ -422,30 +422,30 @@ class TokenBlacklist:
                                 raise
                         else:
                             raise
-            
+
             if self.settings.PII_REDACT_LOGS:
                 logger.info(f"Token blacklisted for authenticated user (details redacted) - Reason: {reason}")
             else:
                 logger.info(f"Token {jti} blacklisted for user {user_id} - Reason: {reason}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to blacklist token: {e}")
             return False
-    
+
     async def is_blacklisted(self, jti: str) -> bool:
         """
         Check if a token is blacklisted
-        
+
         Args:
             jti: JWT ID to check
-            
+
         Returns:
             True if token is blacklisted
         """
         if not jti:
             return False
-        
+
         # Check local cache first (fastest)
         cached_expiry = self._local_cache.get(jti)
         if cached_expiry:
@@ -455,7 +455,7 @@ class TokenBlacklist:
 
         if not self._initialized:
             await self.initialize()
-        
+
         # Check Redis if available
         if self.redis_client:
             try:
@@ -519,9 +519,9 @@ class TokenBlacklist:
             logger.error(f"Database error checking blacklist: {e}")
             # Fail closed - treat as blacklisted on error
             return True
-        
+
         return False
-    
+
     async def revoke_all_user_tokens(
         self,
         user_id: int,
@@ -531,19 +531,19 @@ class TokenBlacklist:
     ) -> int:
         """
         Revoke all tokens for a specific user
-        
+
         Args:
             user_id: User whose tokens to revoke
             reason: Reason for revocation
             revoked_by: User who initiated revocation
             ip_address: IP address of request
-            
+
         Returns:
             Number of tokens revoked
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             using_postgres = getattr(db_pool, "pool", None) is not None
@@ -582,7 +582,7 @@ class TokenBlacklist:
                         }
                         for sqlite_row in sqlite_rows
                     ]
-                
+
                 # Mark sessions as revoked
                 if using_postgres:
                     # PostgreSQL
@@ -615,7 +615,7 @@ class TokenBlacklist:
                         (revoked_by, reason, user_id)
                     )
                     await conn.commit()
-            
+
             def _to_datetime(value: Optional[Any]) -> Optional[datetime]:
                 if value is None:
                     return None
@@ -678,21 +678,21 @@ class TokenBlacklist:
             if mode == "single_user":
                 return sessions_count
             return tokens_revoked
-            
+
         except Exception as e:
             logger.error(f"Failed to revoke user tokens: {e}")
             return 0
-    
+
     async def cleanup_expired(self) -> int:
         """
         Remove expired tokens from the blacklist
-        
+
         Returns:
             Number of tokens removed
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             using_postgres = getattr(db_pool, "pool", None) is not None
@@ -713,34 +713,34 @@ class TokenBlacklist:
                     )
                     await conn.commit()
                     count = cursor.rowcount
-            
+
             if count > 0:
                 logger.info(f"Cleaned up {count} expired tokens from blacklist")
-                
+
             # Clear local cache periodically if it grew too large (soft reset)
             if len(self._local_cache) > self._cache_size_limit * 2:
                 self._local_cache.clear()
                 self._local_order.clear()
-                
+
             return count
-            
+
         except Exception as e:
             logger.error(f"Failed to cleanup expired tokens: {e}")
             return 0
-    
+
     async def get_blacklist_stats(self, user_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Get statistics about blacklisted tokens
-        
+
         Args:
             user_id: Optional user ID to filter by
-            
+
         Returns:
             Dictionary with blacklist statistics
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.acquire() as conn:
@@ -748,7 +748,7 @@ class TokenBlacklist:
                     if hasattr(conn, 'fetchrow'):
                         # PostgreSQL
                         stats = await conn.fetchrow("""
-                            SELECT 
+                            SELECT
                                 COUNT(*) as total,
                                 COUNT(CASE WHEN token_type = 'access' THEN 1 END) as access_tokens,
                                 COUNT(CASE WHEN token_type = 'refresh' THEN 1 END) as refresh_tokens,
@@ -760,7 +760,7 @@ class TokenBlacklist:
                     else:
                         # SQLite
                         cursor = await conn.execute("""
-                            SELECT 
+                            SELECT
                                 COUNT(*) as total,
                                 SUM(CASE WHEN token_type = 'access' THEN 1 ELSE 0 END) as access_tokens,
                                 SUM(CASE WHEN token_type = 'refresh' THEN 1 ELSE 0 END) as refresh_tokens,
@@ -774,7 +774,7 @@ class TokenBlacklist:
                     if hasattr(conn, 'fetchrow'):
                         # PostgreSQL - global stats
                         stats = await conn.fetchrow("""
-                            SELECT 
+                            SELECT
                                 COUNT(*) as total,
                                 COUNT(DISTINCT user_id) as unique_users,
                                 COUNT(CASE WHEN token_type = 'access' THEN 1 END) as access_tokens,
@@ -785,7 +785,7 @@ class TokenBlacklist:
                     else:
                         # SQLite - global stats
                         cursor = await conn.execute("""
-                            SELECT 
+                            SELECT
                                 COUNT(*) as total,
                                 COUNT(DISTINCT user_id) as unique_users,
                                 SUM(CASE WHEN token_type = 'access' THEN 1 ELSE 0 END) as access_tokens,
@@ -794,7 +794,7 @@ class TokenBlacklist:
                             WHERE expires_at > ?
                         """, (datetime.utcnow().isoformat(),))
                         stats = await cursor.fetchone()
-                
+
                 # Convert to dictionary
                 if stats:
                     return dict(stats) if hasattr(stats, 'keys') else {
@@ -803,10 +803,10 @@ class TokenBlacklist:
                         "access_tokens": stats[2] if not user_id else stats[1],
                         "refresh_tokens": stats[3] if not user_id else stats[2]
                     }
-                    
+
         except Exception as e:
             logger.error(f"Failed to get blacklist stats: {e}")
-        
+
         return {
             "total": 0,
             "unique_users": 0,

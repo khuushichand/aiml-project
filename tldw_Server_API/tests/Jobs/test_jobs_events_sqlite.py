@@ -60,7 +60,7 @@ def test_events_emitted_for_core_paths_sqlite(tmp_path, monkeypatch, events):
     assert isinstance(deleted, int)
     assert any(n == "jobs.pruned" for (n, _j, _a) in events)
 
-    # TTL sweep (emits jobs.ttl_sweep) — cancel queued immediately via age_seconds=0
+    # TTL sweep (emits jobs.ttl_sweep) - cancel queued immediately via age_seconds=0
     affected = jm.apply_ttl_policies(age_seconds=0, runtime_seconds=None, action="cancel", domain="d")
     assert isinstance(affected, int)
     assert any(n == "jobs.ttl_sweep" for (n, _j, _a) in events)

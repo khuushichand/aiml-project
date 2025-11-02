@@ -657,7 +657,7 @@ class FileValidator:
                                 logging.warning(f"Skipping potentially malicious archive member: {member_filename}")
                                 issues.append(f"Archive contains potentially malicious path: {member_filename}")
                                 continue
-                            
+
                             # Additional check: ensure the extracted path stays within extract_dir
                             intended_path = (extract_dir / member_filename).resolve()
                             if not str(intended_path).startswith(str(extract_dir.resolve())):

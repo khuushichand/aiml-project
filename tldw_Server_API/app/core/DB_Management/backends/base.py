@@ -44,7 +44,7 @@ class BackendFeatures:
     upsert_support: bool = False
     returning_clause: bool = False
     listen_notify: bool = False
-    
+
     def require(self, feature: str) -> None:
         """Check if a feature is supported, raise if not."""
         if not getattr(self, feature, False):
@@ -58,18 +58,18 @@ class DatabaseConfig:
     connection_string: Optional[str] = None
     # Optional client identifier for logging/telemetry correlation (non-functional)
     client_id: Optional[str] = None
-    
+
     # Connection pool settings
     pool_size: int = 10
     max_overflow: int = 20
     pool_timeout: float = 30.0
     pool_recycle: int = 3600
-    
+
     # SQLite specific
     sqlite_path: Optional[str] = None
     sqlite_wal_mode: bool = True
     sqlite_foreign_keys: bool = True
-    
+
     # PostgreSQL specific
     pg_host: Optional[str] = None
     pg_port: int = 5432
@@ -77,12 +77,12 @@ class DatabaseConfig:
     pg_user: Optional[str] = None
     pg_password: Optional[str] = None
     pg_sslmode: str = "prefer"
-    
+
     # Common settings
     echo: bool = False
     isolation_level: Optional[str] = None
     connect_timeout: int = 10
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -213,28 +213,28 @@ class QueryResult:
     lastrowid: Optional[int] = None
     description: Optional[List[Tuple]] = None
     execution_time: Optional[float] = None
-    
+
     def __len__(self) -> int:
         return len(self.rows)
-    
+
     def __iter__(self):
         return iter(self.rows)
-    
+
     def __getitem__(self, index):
         return self.rows[index]
-    
+
     @property
     def first(self) -> Optional[Dict[str, Any]]:
         """Get the first row or None."""
         return self.rows[0] if self.rows else None
-    
+
     @property
     def one(self) -> Dict[str, Any]:
         """Get exactly one row, raise if not exactly one."""
         if len(self.rows) != 1:
             raise DatabaseError(f"Expected 1 row, got {len(self.rows)}")
         return self.rows[0]
-    
+
     @property
     def scalar(self) -> Any:
         """Get the first column of the first row."""
@@ -267,28 +267,28 @@ class FTSQuery:
 
 class ConnectionPool(ABC):
     """Abstract connection pool interface."""
-    
+
     @abstractmethod
     def get_connection(self) -> Any:
         """Get a connection from the pool."""
         pass
-    
+
     @abstractmethod
     def return_connection(self, connection: Any) -> None:
         """Return a connection to the pool."""
         pass
-    
+
     @abstractmethod
     @contextmanager
     def connection(self) -> Generator[Any, None, None]:
         """Context manager for connection handling."""
         pass
-    
+
     @abstractmethod
     def close_all(self) -> None:
         """Close all connections in the pool."""
         pass
-    
+
     @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
         """Get pool statistics."""
@@ -298,15 +298,15 @@ class ConnectionPool(ABC):
 class DatabaseBackend(ABC):
     """
     Abstract base class for database backends.
-    
+
     All database backends must implement this interface to ensure
     compatibility with the application.
     """
-    
+
     def __init__(self, config: DatabaseConfig):
         """
         Initialize the database backend.
-        
+
         Args:
             config: Database configuration
         """
@@ -314,56 +314,56 @@ class DatabaseBackend(ABC):
         self._features = self._get_features()
         self._pool: Optional[ConnectionPool] = None
         self._local = threading.local()
-    
+
     @abstractmethod
     def _get_features(self) -> BackendFeatures:
         """Get the features supported by this backend."""
         pass
-    
+
     @property
     def features(self) -> BackendFeatures:
         """Get backend features."""
         return self._features
-    
+
     @property
     @abstractmethod
     def backend_type(self) -> BackendType:
         """Get the backend type."""
         pass
-    
+
     # Connection Management
-    
+
     @abstractmethod
     def connect(self) -> Any:
         """Create a new database connection."""
         pass
-    
+
     @abstractmethod
     def disconnect(self, connection: Any) -> None:
         """Close a database connection."""
         pass
-    
+
     @abstractmethod
     @contextmanager
     def transaction(self, connection: Optional[Any] = None) -> Generator[Any, None, None]:
         """
         Transaction context manager.
-        
+
         Args:
             connection: Optional existing connection to use
-            
+
         Yields:
             Connection object for the transaction
         """
         pass
-    
+
     @abstractmethod
     def get_pool(self) -> ConnectionPool:
         """Get or create the connection pool."""
         pass
-    
+
     # Query Execution
-    
+
     @abstractmethod
     def execute(
         self,
@@ -373,17 +373,17 @@ class DatabaseBackend(ABC):
     ) -> QueryResult:
         """
         Execute a query and return results.
-        
+
         Args:
             query: SQL query to execute
             params: Query parameters
             connection: Optional connection to use
-            
+
         Returns:
             QueryResult object
         """
         pass
-    
+
     @abstractmethod
     def execute_many(
         self,
@@ -393,44 +393,44 @@ class DatabaseBackend(ABC):
     ) -> QueryResult:
         """
         Execute a query multiple times with different parameters.
-        
+
         Args:
             query: SQL query to execute
             params_list: List of parameter sets
             connection: Optional connection to use
-            
+
         Returns:
             QueryResult object
         """
         pass
-    
+
     # Schema Management
-    
+
     @abstractmethod
     def create_tables(self, schema: str, connection: Optional[Any] = None) -> None:
         """
         Create tables from a schema definition.
-        
+
         Args:
             schema: SQL schema definition
             connection: Optional connection to use
         """
         pass
-    
+
     @abstractmethod
     def table_exists(self, table_name: str, connection: Optional[Any] = None) -> bool:
         """
         Check if a table exists.
-        
+
         Args:
             table_name: Name of the table
             connection: Optional connection to use
-            
+
         Returns:
             True if table exists, False otherwise
         """
         pass
-    
+
     @abstractmethod
     def get_table_info(
         self,
@@ -439,18 +439,18 @@ class DatabaseBackend(ABC):
     ) -> List[Dict[str, Any]]:
         """
         Get information about a table's columns.
-        
+
         Args:
             table_name: Name of the table
             connection: Optional connection to use
-            
+
         Returns:
             List of column information dictionaries
         """
         pass
-    
+
     # Full-Text Search
-    
+
     @abstractmethod
     def create_fts_table(
         self,
@@ -461,7 +461,7 @@ class DatabaseBackend(ABC):
     ) -> None:
         """
         Create a full-text search table.
-        
+
         Args:
             table_name: Name for the FTS table
             source_table: Source table to index
@@ -469,7 +469,7 @@ class DatabaseBackend(ABC):
             connection: Optional connection to use
         """
         pass
-    
+
     @abstractmethod
     def fts_search(
         self,
@@ -478,16 +478,16 @@ class DatabaseBackend(ABC):
     ) -> QueryResult:
         """
         Perform a full-text search.
-        
+
         Args:
             fts_query: Full-text search query configuration
             connection: Optional connection to use
-            
+
         Returns:
             QueryResult with search results
         """
         pass
-    
+
     @abstractmethod
     def update_fts_index(
         self,
@@ -496,59 +496,59 @@ class DatabaseBackend(ABC):
     ) -> None:
         """
         Update the full-text search index.
-        
+
         Args:
             table_name: FTS table to update
             connection: Optional connection to use
         """
         pass
-    
+
     # Utility Methods
-    
+
     @abstractmethod
     def escape_identifier(self, identifier: str) -> str:
         """
         Escape a database identifier (table/column name).
-        
+
         Args:
             identifier: Identifier to escape
-            
+
         Returns:
             Escaped identifier
         """
         pass
-    
+
     @abstractmethod
     def get_last_insert_id(self, connection: Optional[Any] = None) -> Optional[int]:
         """
         Get the last inserted row ID.
-        
+
         Args:
             connection: Optional connection to use
-            
+
         Returns:
             Last insert ID or None
         """
         pass
-    
+
     @abstractmethod
     def vacuum(self, connection: Optional[Any] = None) -> None:
         """
         Vacuum/optimize the database.
-        
+
         Args:
             connection: Optional connection to use
         """
         pass
-    
+
     @abstractmethod
     def get_database_size(self, connection: Optional[Any] = None) -> int:
         """
         Get the database size in bytes.
-        
+
         Args:
             connection: Optional connection to use
-            
+
         Returns:
             Database size in bytes
         """
@@ -563,22 +563,22 @@ class DatabaseBackend(ABC):
         borrowed connection. SQLite backends typically do nothing.
         """
         return None
-    
+
     # Migration Support
-    
+
     @abstractmethod
     def export_schema(self, connection: Optional[Any] = None) -> str:
         """
         Export the database schema as SQL.
-        
+
         Args:
             connection: Optional connection to use
-            
+
         Returns:
             SQL schema definition
         """
         pass
-    
+
     @abstractmethod
     def export_data(
         self,
@@ -587,16 +587,16 @@ class DatabaseBackend(ABC):
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Export data from a table.
-        
+
         Args:
             table_name: Table to export
             connection: Optional connection to use
-            
+
         Yields:
             Row dictionaries
         """
         pass
-    
+
     @abstractmethod
     def import_data(
         self,
@@ -606,12 +606,12 @@ class DatabaseBackend(ABC):
     ) -> int:
         """
         Import data into a table.
-        
+
         Args:
             table_name: Table to import into
             data: List of row dictionaries
             connection: Optional connection to use
-            
+
         Returns:
             Number of rows imported
         """

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Parses PDF files to Markdown/text using PyMuPDF or pymupdf4llm (optionally Docling), extracts metadata, optionally runs OCR on pages with low text, chunks content, and can run analysis/summarization. Returns a single structured result dict; DB‑agnostic.
+Parses PDF files to Markdown/text using PyMuPDF or pymupdf4llm (optionally Docling), extracts metadata, optionally runs OCR on pages with low text, chunks content, and can run analysis/summarization. Returns a single structured result dict; DB-agnostic.
 
 ## Primary Functions
 

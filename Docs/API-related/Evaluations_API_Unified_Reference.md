@@ -4,8 +4,8 @@
 
 The tldw_server Evaluations API provides a comprehensive, OpenAI-compatible evaluation framework for assessing AI-generated content quality. This unified API combines industry-standard evaluation patterns with tldw-specific features for advanced content assessment.
 
-**Version**: 1.0.0 (Unified)  
-**Base URL**: `/api/v1/evaluations`  
+**Version**: 1.0.0 (Unified)
+**Base URL**: `/api/v1/evaluations`
 **Standards**: OpenAI Evals compatible with extensions
 
 Authentication
@@ -278,7 +278,7 @@ Not available on the unified router. Poll `GET /api/v1/evaluations/runs/{run_id}
 ## Specialized Evaluation Endpoints
 
 ### RAG Pipeline Presets
-`POST /api/v1/evaluations/rag/pipeline/presets`  
+`POST /api/v1/evaluations/rag/pipeline/presets`
 Create a named RAG pipeline preset.
 
 Request:
@@ -289,41 +289,41 @@ Request:
 Responses:
 - `201` PipelinePresetResponse `{ "name": "...", "config": {..}, "created_at": 123, "updated_at": 123 }`
 
-`GET /api/v1/evaluations/rag/pipeline/presets`  
+`GET /api/v1/evaluations/rag/pipeline/presets`
 List presets. Response `{ "items": [ {"name": "...", "config": {...}} ], "total": 1 }`
 
-`GET /api/v1/evaluations/rag/pipeline/presets/{name}`  
+`GET /api/v1/evaluations/rag/pipeline/presets/{name}`
 Get a preset by name.
 
-`DELETE /api/v1/evaluations/rag/pipeline/presets/{name}`  
+`DELETE /api/v1/evaluations/rag/pipeline/presets/{name}`
 Delete a preset. Response `204 No Content`.
 
-`POST /api/v1/evaluations/rag/pipeline/cleanup`  
+`POST /api/v1/evaluations/rag/pipeline/cleanup`
 Cleanup ephemeral vector store collections. Response `{ "expired_count": 0, "deleted_count": 0, "errors": [] }`
 
 ### Embeddings A/B Tests
-`POST /api/v1/evaluations/embeddings/abtest`  
+`POST /api/v1/evaluations/embeddings/abtest`
 Create an embeddings A/B test. Request `{ "name": "string", "config": { "arms": [...], "media_ids": [], "chunking": {...}, "retrieval": {...}, "queries": [...] }, "run_immediately": false }`. Response `{ "test_id": "...", "status": "created" }`.
 
-`POST /api/v1/evaluations/embeddings/abtest/{test_id}/run`  
+`POST /api/v1/evaluations/embeddings/abtest/{test_id}/run`
 Start execution. Response `{ "test_id": "...", "status": "running", "progress": { } }`.
 
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}`  
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}`
 Summary: `{ "test_id": "...", "status": "...", "arms": [ {"arm_id":"...","provider":"...","model":"...","metrics": {"ndcg": 0.72}, "latency_ms": {"p50": 30.3} } ] }`.
 
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`  
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/results`
 Paginated results. Response `{ "summary": {...}, "page": 1, "page_size": 50, "total": 120 }`.
 
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`  
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/significance?metric=ndcg`
 Statistical significance for chosen metric.
 
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/events`  
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/events`
 SSE event stream of progress/updates.
 
-`GET /api/v1/evaluations/embeddings/abtest/{test_id}/export?format=json|csv`  
+`GET /api/v1/evaluations/embeddings/abtest/{test_id}/export?format=json|csv`
 Export results (admin-only).
 
-`DELETE /api/v1/evaluations/embeddings/abtest/{test_id}`  
+`DELETE /api/v1/evaluations/embeddings/abtest/{test_id}`
 Delete a test.
 
 ### G-Eval Summarization
@@ -590,9 +590,9 @@ Example response:
 ```
 
 ### OCR Evaluation
-`POST /api/v1/evaluations/ocr` — Evaluate OCR text quality on provided content
+`POST /api/v1/evaluations/ocr` - Evaluate OCR text quality on provided content
 
-`POST /api/v1/evaluations/ocr-pdf` — Evaluate OCR text quality on uploaded PDF
+`POST /api/v1/evaluations/ocr-pdf` - Evaluate OCR text quality on uploaded PDF
 
 ## Webhook Management
 
@@ -690,11 +690,11 @@ Responses from evaluation endpoints also include standard `X-RateLimit-*` header
 
 For create endpoints, supply `Idempotency-Key` to make requests safe to retry. When a prior successful request with the same key exists (scoped per user and entity type), the API returns the original resource instead of creating a duplicate.
 
-- `POST /api/v1/evaluations` — create evaluation definition
-- `POST /api/v1/evaluations/datasets` — create dataset
-- `POST /api/v1/evaluations/{eval_id}/runs` — create run
-- `POST /api/v1/evaluations/embeddings/abtest` — create embeddings A/B test (scaffold)
-- `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` — start A/B test (admin‑gated)
+- `POST /api/v1/evaluations` - create evaluation definition
+- `POST /api/v1/evaluations/datasets` - create dataset
+- `POST /api/v1/evaluations/{eval_id}/runs` - create run
+- `POST /api/v1/evaluations/embeddings/abtest` - create embeddings A/B test (scaffold)
+- `POST /api/v1/evaluations/embeddings/abtest/{test_id}/run` - start A/B test (admin-gated)
 
 Example:
 ```
@@ -862,8 +862,8 @@ See CONTRIBUTING.md for guidelines on contributing to the evaluation module.
 
 ---
 
-*Last Updated: 2024*  
-*Version: 1.0.0*  
+*Last Updated: 2024*
+*Version: 1.0.0*
 *Status: Unified Implementation*
 ## History
 

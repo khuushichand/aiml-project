@@ -9,4 +9,3 @@
   Current price of {{match.group(1)}}:
   ${{get_price(match.group(1))}}
 ---@@@---
-

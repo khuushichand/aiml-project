@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
+import { toBool } from '@/lib/authz';
 
 interface RunRow {
   id: number;
@@ -15,6 +17,13 @@ interface RunRow {
   stats?: { [k: string]: any } | null;
 }
 
+/**
+ * Admin interface for browsing, inspecting, and exporting watchlists runs.
+ *
+ * Provides two viewing modes (by job or global), pagination, optional inclusion of per-run filter tallies and a filtered sample, client-side JSON/CSV exports, and links to server-side CSV exports for large datasets. When the NEXT_PUBLIC_RUNS_REQUIRE_ADMIN flag is set, access is restricted to users with administrative privileges.
+ *
+ * @returns The rendered admin Watchlists Runs page element
+ */
 export default function AdminWatchlistsRunsPage() {
   const { user } = useAuth();
   const { show } = useToast();
@@ -37,8 +46,13 @@ export default function AdminWatchlistsRunsPage() {
   const hasMore = useMemo(() => (page * size) < (total || 0), [page, size, total]);
   const hasMoreByJob = useMemo(() => (pageByJob * sizeByJob) < (total || 0), [pageByJob, sizeByJob, total]);
 
-  const runsRequireAdmin = (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === '1' || (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === 'true';
-  const userIsAdmin = !!((user as any)?.is_admin || (user as any)?.role === 'admin' || (user as any)?.roles?.includes?.('admin'));
+  const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
+  const serverCsvThreshold = (() => {
+    const raw = (process.env.NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD ?? '2000').toString();
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 2000;
+  })();
+  const userIsAdmin = useIsAdmin();
 
   const fetchRunsByJob = async (opts?: { page?: number; size?: number }) => {
     const text = jobIdInput.trim();
@@ -387,7 +401,7 @@ export default function AdminWatchlistsRunsPage() {
               )}
               {/* Prefer server-side CSV export for large datasets */}
               {mode === 'global' ? (
-                (total > 2000) && (
+                (total > serverCsvThreshold) && (
                   <a
                     className="text-sm text-indigo-700 hover:underline"
                     href={`/api/v1/watchlists/runs/export.csv?scope=global&q=${encodeURIComponent(q)}&page=${page}&size=${size}&include_tallies=${includeTallies ? 'true' : 'false'}`}
@@ -399,7 +413,7 @@ export default function AdminWatchlistsRunsPage() {
                 (() => {
                   const idNum = Number(jobIdInput.trim());
                   if (!Number.isFinite(idNum) || idNum <= 0) return null;
-                  return (total > 2000) ? (
+                  return (total > serverCsvThreshold) ? (
                     <a
                       className="text-sm text-indigo-700 hover:underline"
                       href={`/api/v1/watchlists/runs/export.csv?scope=job&job_id=${idNum}&page=${pageByJob}&size=${sizeByJob}&include_tallies=${includeTallies ? 'true' : 'false'}`}

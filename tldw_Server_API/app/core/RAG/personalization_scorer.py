@@ -57,4 +57,3 @@ def rerank(
 
     ranked.sort(key=lambda d: d.get("score", 0.0), reverse=True)
     return ranked, (expl if with_explanations else None)
-

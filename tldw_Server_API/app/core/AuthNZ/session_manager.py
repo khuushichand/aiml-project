@@ -53,7 +53,7 @@ except Exception:  # pragma: no cover - defensive fallback
 
 class SessionManager:
     """Manages user sessions with database persistence, encryption, and optional Redis caching"""
-    
+
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
@@ -71,15 +71,15 @@ class SessionManager:
         self._fernet_candidates: List[Fernet] = []
         self._persisted_key_path: Optional[Path] = None
         self._init_encryption()
-        
+
     async def initialize(self):
         """Initialize session manager and start cleanup scheduler"""
         if self._initialized:
             return
-        
+
         # Get database pool
         self.db_pool = await self._ensure_db_pool()
-        
+
         # Initialize Redis if configured
         if self.settings.REDIS_URL:
             try:
@@ -92,15 +92,15 @@ class SessionManager:
                     max_connections=self.settings.REDIS_MAX_CONNECTIONS,
                     health_check_interval=30
                 )
-                
+
                 # Test connection
                 await self.redis_client.ping()
                 logger.info("Redis connected for session caching")
-                
+
             except (RedisConnectionError, RedisError) as e:
                 logger.warning(f"Redis unavailable, using database only: {e}")
                 self.redis_client = None
-        
+
         # Schedule session cleanup (disable in tests or when explicitly requested)
         _truthy = {"1", "true", "yes", "on", "y"}
         disable_sched = False
@@ -124,7 +124,7 @@ class SessionManager:
             logger.info(
                 f"Session cleanup scheduled every {self.settings.SESSION_CLEANUP_INTERVAL_HOURS} hours"
             )
-        
+
         self._initialized = True
         logger.info("SessionManager initialized with encryption enabled")
 
@@ -174,7 +174,7 @@ class SessionManager:
             await self.db_pool.initialize()
 
         return self.db_pool
-    
+
     def _init_encryption(self):
         """Initialize encryption for session tokens"""
         key_materials = self._get_or_create_encryption_key()
@@ -183,7 +183,7 @@ class SessionManager:
         self._fernet_candidates = [Fernet(key) for key in key_materials]
         self.cipher_suite = self._fernet_candidates[0]
         logger.debug("Session token encryption initialized")
-    
+
     def _get_or_create_encryption_key(self) -> List[bytes]:
         """Resolve ordered list of candidate encryption keys (primary first)."""
         key_bytes: List[bytes] = []
@@ -417,7 +417,7 @@ class SessionManager:
             return (api_root / "Config_Files" / "session_encryption.key").resolve()
         except Exception:
             return None
-    
+
     def _token_hash_candidates(self, token: str) -> List[str]:
         """Return ordered hash candidates for a token across active/legacy secrets."""
         hashes: List[str] = []
@@ -453,20 +453,20 @@ class SessionManager:
         if not candidates:
             raise ValueError("Unable to derive token hash candidates")
         return candidates[0]
-    
+
     def encrypt_token(self, token: str) -> str:
         """Encrypt a token for secure storage"""
         if not self.cipher_suite:
             self._init_encryption()
-        
+
         encrypted = self.cipher_suite.encrypt(token.encode())
         return base64.urlsafe_b64encode(encrypted).decode('utf-8')
-    
+
     def decrypt_token(self, encrypted_token: str) -> str:
         """Decrypt a stored token"""
         if not self.cipher_suite or not self._fernet_candidates:
             self._init_encryption()
-        
+
         try:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode('utf-8'))
         except Exception as e:
@@ -501,7 +501,7 @@ class SessionManager:
             return jti, expires_at
         except Exception:
             return None, None
-    
+
     async def create_session(
         self,
         user_id: int,
@@ -513,7 +513,7 @@ class SessionManager:
     ) -> Dict[str, Any]:
         """
         Create a new session for a user
-        
+
         Args:
             user_id: User's database ID
             access_token: JWT access token
@@ -521,7 +521,7 @@ class SessionManager:
             ip_address: Client IP address
             user_agent: Client user agent string
             device_id: Optional device identifier
-            
+
         Returns:
             Session information dictionary
         """
@@ -529,11 +529,11 @@ class SessionManager:
         log_counter("auth_session_create_attempt")
         if not self._initialized:
             await self.initialize()
-        
+
         # Hash tokens for indexing/lookup
         access_hash = self.hash_token(access_token)
         refresh_hash = self.hash_token(refresh_token)
-        
+
         # Encrypt tokens for secure storage
         encrypted_access = self.encrypt_token(access_token)
         encrypted_refresh = self.encrypt_token(refresh_token)
@@ -550,9 +550,9 @@ class SessionManager:
         refresh_jti, refresh_exp_override = self._extract_token_metadata(refresh_token)
         if refresh_exp_override:
             refresh_expires_at = refresh_exp_override
-        
+
         session_id = None
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
@@ -598,7 +598,7 @@ class SessionManager:
                     )
                     session_id = cursor.lastrowid
                     await conn.commit()
-                
+
                 # Cache in Redis if available
                 if self.redis_client:
                     await self._cache_session(
@@ -609,14 +609,14 @@ class SessionManager:
                         user_active=True,
                         revoked=False,
                     )
-                
+
                 if self.settings.PII_REDACT_LOGS:
                     logger.info("Created session [redacted]")
                 else:
                     logger.info(f"Created session {session_id} for user {user_id}")
                 log_counter("auth_session_create_success")
                 log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
-                
+
                 return {
                     "session_id": session_id,
                     "user_id": user_id,
@@ -624,26 +624,26 @@ class SessionManager:
                     "access_token": access_token,
                     "refresh_token": refresh_token
                 }
-                
+
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
             log_counter("auth_session_create_error")
             log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
             raise SessionError(f"Failed to create session: {e}")
-    
+
     async def validate_session(self, access_token: str) -> Optional[Dict[str, Any]]:
         """
         Validate a session by access token
-        
+
         Args:
             access_token: JWT access token
-            
+
         Returns:
             Session data if valid, None otherwise
         """
         if not self._initialized:
             await self.initialize()
-        
+
         token_hash_candidates = self._token_hash_candidates(access_token)
         if not token_hash_candidates:
             logger.debug("validate_session received token with no hash candidates; treating as invalid")
@@ -657,7 +657,7 @@ class SessionManager:
                 cached = await self._get_cached_session(candidate_hash)
                 if cached:
                     break
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.acquire() as conn:
@@ -733,7 +733,7 @@ class SessionManager:
 
                 await self._update_last_activity(session_data['id'], conn)
 
-            # Outside of the DB context – refresh cache with validation status
+            # Outside of the DB context - refresh cache with validation status
             expires_at = session_data.get('expires_at')
             if isinstance(expires_at, str):
                 expires_at_dt = datetime.fromisoformat(expires_at)
@@ -759,7 +759,7 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error validating session: {e}")
             return None
-    
+
     async def revoke_session(
         self,
         session_id: int,
@@ -769,7 +769,7 @@ class SessionManager:
         """Revoke a specific session"""
         if not self._initialized:
             await self.initialize()
-        
+
         session_details: Optional[Dict[str, Any]] = None
         try:
             db_pool = await self._ensure_db_pool()
@@ -832,16 +832,16 @@ class SessionManager:
                         (revoked_by, reason, session_id)
                     )
                     await conn.commit()
-                
+
                 # Clear from cache
                 if self.redis_client:
                     await self._clear_session_cache(session_id)
-                
+
                 if self.settings.PII_REDACT_LOGS:
                     logger.info("Revoked session [redacted]")
                 else:
                     logger.info(f"Revoked session {session_id}")
-                
+
         except Exception as e:
             logger.error(f"Failed to revoke session: {e}")
             raise SessionError(f"Failed to revoke session: {e}")
@@ -852,7 +852,7 @@ class SessionManager:
                     reason=reason,
                     revoked_by=revoked_by,
                 )
-    
+
     async def revoke_all_user_sessions(
         self,
         user_id: int,
@@ -861,7 +861,7 @@ class SessionManager:
         """Revoke all sessions for a user, optionally except one"""
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
@@ -914,16 +914,16 @@ class SessionManager:
                             (user_id,)
                         )
                     await conn.commit()
-                
+
                 # Clear from cache
                 if self.redis_client:
                     await self._clear_user_sessions_cache(user_id)
-                
+
                 if self.settings.PII_REDACT_LOGS:
                     logger.info("Revoked all sessions [redacted]")
                 else:
                     logger.info(f"Revoked all sessions for user {user_id}")
-                
+
         except Exception as e:
             logger.error(f"Failed to revoke user sessions: {e}")
             raise SessionError(f"Failed to revoke sessions: {e}")
@@ -937,7 +937,7 @@ class SessionManager:
                 logger.warning(f"Failed to blacklist tokens for authenticated user (details redacted): {bl_error}")
             else:
                 logger.warning(f"Failed to blacklist tokens for user {user_id}: {bl_error}")
-    
+
     async def refresh_session(
         self,
         refresh_token: str,
@@ -947,7 +947,7 @@ class SessionManager:
         """Refresh a session with new tokens"""
         if not self._initialized:
             await self.initialize()
-        
+
         refresh_hash_candidates = self._token_hash_candidates(refresh_token)
         if not refresh_hash_candidates:
             raise InvalidSessionError()
@@ -964,7 +964,7 @@ class SessionManager:
             refresh_expires_at = refresh_exp or (
                 datetime.utcnow() + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
             )
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
@@ -1126,7 +1126,7 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Failed to refresh session: {e}")
             raise SessionError(f"Failed to refresh session: {e}")
-    
+
     async def update_session_tokens(
         self,
         session_id: int,
@@ -1136,7 +1136,7 @@ class SessionManager:
         """Update session with actual tokens after creation"""
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Hash tokens for storage
             access_token_hash = self.hash_token(access_token)
@@ -1145,7 +1145,7 @@ class SessionManager:
             refresh_jti, refresh_exp = self._extract_token_metadata(refresh_token)
             encrypted_access_token = self.encrypt_token(access_token)
             encrypted_refresh_token = self.encrypt_token(refresh_token)
-            
+
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
@@ -1241,27 +1241,27 @@ class SessionManager:
                     )
                 except RedisError:
                     pass
-            
+
             logger.debug(f"Updated session {session_id} with token hashes")
-            
+
         except Exception as e:
             logger.error(f"Failed to update session tokens: {e}")
             raise SessionError(f"Failed to update session tokens: {e}")
-    
+
     async def is_token_blacklisted(self, token: str, jti: Optional[str] = None) -> bool:
         """
         Check if a token has been blacklisted/revoked
-        
+
         Args:
             token: JWT token to check
             jti: Optional JWT ID (if already parsed by caller)
-            
+
         Returns:
             True if token is blacklisted, False otherwise
         """
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             # Fail-closed on missing token material
             if not token:
@@ -1293,7 +1293,7 @@ class SessionManager:
                 return True
 
             token_hashes = self._token_hash_candidates(token)
-            
+
             # Check Redis cache first if available (JTI-aligned with TokenBlacklist)
             if self.redis_client:
                 try:
@@ -1302,7 +1302,7 @@ class SessionManager:
                         return True
                 except RedisError:
                     pass  # Fall back to database
-            
+
             # Check database for revoked sessions
             db_pool = await self._ensure_db_pool()
             if getattr(db_pool, "pool", None):
@@ -1362,20 +1362,20 @@ class SessionManager:
                             return True
 
             return False
-            
+
         except Exception as e:
             logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
             return True
-    
+
     async def get_user_sessions(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all sessions for a user (alias for get_active_sessions)"""
         return await self.get_active_sessions(user_id)
-    
+
     async def get_active_sessions(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all active sessions for a user"""
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             db_pool = await self._ensure_db_pool()
             async with db_pool.acquire() as conn:
@@ -1416,21 +1416,21 @@ class SessionManager:
                             "last_activity": row[5],
                             "expires_at": row[6]
                         })
-            
+
             return sessions
-            
+
         except Exception as e:
             logger.error(f"Failed to get active sessions: {e}")
             return []
-    
+
     async def cleanup_expired_sessions(self):
         """Clean up expired sessions from database and cache"""
         if not self._initialized:
             await self.initialize()
-        
+
         try:
             logger.info("Starting session cleanup...")
-            
+
             db_pool = await self._ensure_db_pool()
             async with db_pool.transaction() as conn:
                 # First check if the sessions table exists
@@ -1439,7 +1439,7 @@ class SessionManager:
                     table_exists = await conn.fetchval(
                         """
                         SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
+                            SELECT FROM information_schema.tables
                             WHERE table_name = 'sessions'
                         )
                         """
@@ -1448,17 +1448,17 @@ class SessionManager:
                     # SQLite
                     cursor = await conn.execute(
                         """
-                        SELECT name FROM sqlite_master 
+                        SELECT name FROM sqlite_master
                         WHERE type='table' AND name='sessions'
                         """
                     )
                     result = await cursor.fetchone()
                     table_exists = result is not None
-                
+
                 if not table_exists:
                     logger.debug("Sessions table does not exist, skipping cleanup")
                     return
-                
+
                 # Proceed with cleanup if table exists
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
@@ -1482,17 +1482,17 @@ class SessionManager:
                     )
                     deleted = cursor.rowcount
                     await conn.commit()
-                
+
                 if deleted:
                     logger.info(f"Cleaned up {deleted} expired sessions")
-                
+
                 # Clean Redis cache
                 if self.redis_client:
                     await self._cleanup_redis_cache()
-                    
+
         except Exception as e:
             logger.error(f"Session cleanup failed: {e}")
-    
+
     # Redis cache helpers
     async def _fetch_session_record(
         self,
@@ -1590,7 +1590,7 @@ class SessionManager:
         """Cache session metadata in Redis (validation state included)."""
         if not self.redis_client:
             return
-        
+
         try:
             cache_data = {
                 "user_id": user_id,
@@ -1599,7 +1599,7 @@ class SessionManager:
                 "user_active": bool(user_active),
                 "revoked": bool(revoked),
             }
-            
+
             # Calculate TTL
             ttl = int((expires_at - datetime.utcnow()).total_seconds())
             if ttl > 0:
@@ -1609,19 +1609,19 @@ class SessionManager:
                     ttl,
                     json.dumps(cache_data)
                 )
-                
+
                 # Add to user's session set
                 await self.redis_client.sadd(f"user:{user_id}:sessions", session_id)
                 await self.redis_client.expire(f"user:{user_id}:sessions", ttl)
-                
+
         except RedisError as e:
             logger.warning(f"Failed to cache session: {e}")
-    
+
     async def _get_cached_session(self, token_hash: str) -> Optional[Dict[str, Any]]:
         """Get session metadata from Redis cache (if still valid)."""
         if not self.redis_client:
             return None
-        
+
         try:
             cached = await self.redis_client.get(f"session:{token_hash}")
             if cached:
@@ -1635,15 +1635,15 @@ class SessionManager:
                     # Expired, remove from cache
                     await self.redis_client.delete(f"session:{token_hash}")
             return None
-            
+
         except RedisError:
             return None
-    
+
     async def _clear_session_cache(self, session_id: int):
         """Clear specific session from cache"""
         if not self.redis_client:
             return
-        
+
         try:
             # Find and delete session by scanning (not ideal but necessary)
             async for key in self.redis_client.scan_iter("session:*"):
@@ -1653,15 +1653,15 @@ class SessionManager:
                     if session_data.get('session_id') == session_id:
                         await self.redis_client.delete(key)
                         break
-                        
+
         except RedisError:
             pass
-    
+
     async def _clear_user_sessions_cache(self, user_id: int):
         """Clear all sessions for a user from cache"""
         if not self.redis_client:
             return
-        
+
         try:
             # Clear each session
             async for key in self.redis_client.scan_iter("session:*"):
@@ -1670,18 +1670,18 @@ class SessionManager:
                     session_data = json.loads(data)
                     if session_data.get('user_id') == user_id:
                         await self.redis_client.delete(key)
-            
+
             # Clear user's session set
             await self.redis_client.delete(f"user:{user_id}:sessions")
-            
+
         except RedisError:
             pass
-    
+
     async def _cleanup_redis_cache(self):
         """Clean up expired sessions from Redis"""
         if not self.redis_client:
             return
-        
+
         try:
             count = 0
             async for key in self.redis_client.scan_iter("session:*"):
@@ -1689,13 +1689,13 @@ class SessionManager:
                 if ttl == -1:  # No expiry set
                     await self.redis_client.delete(key)
                     count += 1
-            
+
             if count:
                 logger.info(f"Cleaned {count} sessions from Redis cache")
-                
+
         except RedisError as e:
             logger.warning(f"Redis cache cleanup failed: {e}")
-    
+
     async def _update_last_activity(self, session_id: int, conn):
         """Update last activity timestamp for a session"""
         try:
@@ -1791,7 +1791,7 @@ class SessionManager:
                     )
                 except Exception as exc:
                     logger.debug(f"Failed to persist refresh-token blacklist entry {refresh_jti}: {exc}")
-    
+
     async def shutdown(self):
         """Shutdown session manager and cleanup"""
         # Guard against shutdown being called after the event loop has closed
@@ -1807,7 +1807,7 @@ class SessionManager:
         except Exception as e:
             # In tests, teardown may run after the loop is closed; ignore scheduler shutdown errors
             logger.debug(f"SessionManager scheduler shutdown skipped: {e}")
-        
+
         if self.redis_client:
             try:
                 await self.redis_client.close()
@@ -1815,7 +1815,7 @@ class SessionManager:
                 logger.debug(f"Ignoring Redis client shutdown error: {e}")
             finally:
                 self.redis_client = None
-        
+
         logger.info("SessionManager shutdown complete")
 
 

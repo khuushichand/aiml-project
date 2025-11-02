@@ -25,7 +25,7 @@ class WebhookRegistrationRequest(BaseModel):
     """Request to register a webhook."""
     url: HttpUrl = Field(..., description="Webhook endpoint URL")
     events: List[WebhookEventType] = Field(
-        ..., 
+        ...,
         description="List of events to subscribe to",
         min_length=1
     )
@@ -46,7 +46,7 @@ class WebhookRegistrationRequest(BaseModel):
         le=300,
         description="HTTP timeout for webhook delivery attempts",
     )
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "url": "https://example.com/webhook",
@@ -68,7 +68,7 @@ class WebhookRegistrationResponse(BaseModel):
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     retry_count: int = Field(3, ge=0, le=10, description="Configured retry attempts")
     timeout_seconds: int = Field(30, ge=1, le=300, description="Delivery timeout in seconds")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "webhook_id": 1,
@@ -116,7 +116,7 @@ class WebhookStatusResponse(BaseModel):
         description="Last error message"
     )
     created_at: datetime = Field(..., description="Creation timestamp")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "webhook_id": 1,
@@ -150,7 +150,7 @@ class WebhookTestResponse(BaseModel):
     response_time_ms: Optional[int] = Field(None, description="Response time in milliseconds")
     response_body: Optional[str] = Field(None, description="Response body (truncated)")
     error: Optional[str] = Field(None, description="Error message if failed")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "success": True,
@@ -168,7 +168,7 @@ class WebhookPayloadSchema(BaseModel):
     evaluation_id: str = Field(..., description="Evaluation identifier")
     timestamp: str = Field(..., description="ISO timestamp")
     data: Dict[str, Any] = Field(..., description="Event data")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "event": "evaluation.completed",
@@ -191,7 +191,7 @@ class RateLimitStatusResponse(BaseModel):
     limits: Dict[str, Any] = Field(..., description="Current limits")
     usage: Dict[str, Any] = Field(..., description="Current usage")
     remaining: Dict[str, Any] = Field(..., description="Remaining allowance")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "user_id": "user_123",

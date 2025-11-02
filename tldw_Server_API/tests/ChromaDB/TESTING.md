@@ -1,4 +1,4 @@
-ChromaDB Tests — Running and Skips
+ChromaDB Tests - Running and Skips
 
 This note explains why some ChromaDB tests are skipped/xfail and how to run or avoid them.
 
@@ -36,4 +36,3 @@ Quick recipes
 Notes
 - The `legacy_skip` marker is informational; tests are also marked `xfail(strict=False)` to prevent failures when they run. If a feature is implemented, replace the marker with a real assertion-based test.
 - For CI environments with restricted `/tmp`, set `TMPDIR` to a workspace path: `TMPDIR=$PWD/.tmp pytest ...`.
-

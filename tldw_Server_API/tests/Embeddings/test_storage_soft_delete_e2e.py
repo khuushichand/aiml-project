@@ -73,4 +73,3 @@ def test_soft_delete_uses_delete_by_filter(monkeypatch, store_type):
     # Ensure delete_by_filter was invoked
     assert fake.deleted_filters and fake.deleted_filters[0][0] == msg.collection_name
     assert fake.deleted_filters[0][1] == {"media_id": str(msg.media_id)}
-

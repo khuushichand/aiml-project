@@ -7,7 +7,7 @@ This guide explains how API usage and LLM usage are logged, aggregated, queried,
 - Per-request HTTP usage is recorded in `usage_log` via middleware when enabled.
 - Per-request LLM usage (tokens, cost, provider/model) is recorded in `llm_usage_log` by the chat/embeddings flows.
 - Aggregations can be generated for daily reporting.
-- Admin endpoints and the WebUI provide ad‑hoc queries, summaries, and CSV export.
+- Admin endpoints and the WebUI provide ad-hoc queries, summaries, and CSV export.
 - Retention and cleanup are configurable.
 
 ## Configuration

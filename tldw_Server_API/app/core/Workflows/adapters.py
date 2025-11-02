@@ -1227,7 +1227,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         except Exception as e:
             return {"error": f"xml_process_error:{e}"}
 
-    # MediaWiki dump (file_uri) – ephemeral process
+    # MediaWiki dump (file_uri) - ephemeral process
     if kind == "mediawiki_dump":
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
@@ -1275,7 +1275,7 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
     Config:
       - urls: list[str] | str (newline/comma separated)
       - limit: int (default 10)
-      - include_content: bool (default true) — include summary/content in results
+      - include_content: bool (default true) - include summary/content in results
 
     Output:
       - { results: [{title, link, summary, published}], count, text }
@@ -1804,7 +1804,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
       - url: str (templated)
       - method: str = POST (GET|POST|PUT|PATCH|DELETE)
       - headers: dict[str,str] (templated values)
-      - body: dict|list|str|number|bool|null — request JSON body (supports simple JSON-path injection)
+      - body: dict|list|str|number|bool|null - request JSON body (supports simple JSON-path injection)
         Special string values are supported to inject JSON from context:
           - 'JSON:inputs.qa_samples'  => replaces with context['inputs']['qa_samples'] (not a string)
           - 'JSON:prev.response_json.items|pluck:id' => list of id fields from previous step response
@@ -1988,7 +1988,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 if isinstance(body_r, dict):
                     req_kwargs["params"] = body_r
                 elif body_r is not None:
-                    # Non-dict body for GET — ignore
+                    # Non-dict body for GET - ignore
                     pass
             else:
                 if body_r is not None:

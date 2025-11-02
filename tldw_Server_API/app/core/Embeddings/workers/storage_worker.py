@@ -40,12 +40,12 @@ class StorageWorker(BaseWorker):
         # tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager
         # and have the patched reference persist after the context.
         self._manager_cls = ChromaDBManager
-    
+
     def _parse_message(self, data: Dict[str, Any]) -> StorageMessage:
         """Parse raw message data into StorageMessage"""
         norm = normalize_message("storage", data)
         return StorageMessage(**norm)
-    
+
     async def process_message(self, message: StorageMessage) -> None:
         """Store embeddings and update database"""
         logger.bind(job_id=message.job_id, stage="storage").info(
@@ -463,11 +463,11 @@ class StorageWorker(BaseWorker):
             except Exception:
                 pass
             raise
-    
+
     async def _send_to_next_stage(self, result: Any):
         """Storage is the final stage, no next stage"""
         pass
-    
+
     async def _is_media_soft_deleted(self, media_id: int) -> bool:
         """Return True if the media_id is marked deleted in Media DB.
 
@@ -499,7 +499,7 @@ class StorageWorker(BaseWorker):
             return bool(int(val)) if val is not None else False
         except Exception:
             return False
-    
+
     async def _get_adapter_for_user(self, user_id: str, embedding_dim: int) -> VectorStoreAdapter:
         """Return an initialized adapter for a given user and dimension (cached)."""
         cache_key = f"{user_id}:{embedding_dim}"
@@ -631,18 +631,18 @@ class StorageWorker(BaseWorker):
         except Exception:
             pass
         return int(settings.get('DEFAULT_EMBEDDING_DIM', 1536))
-    
+
     async def _update_database(self, media_id: int, total_chunks: int):
         """Update SQL database with vector processing status"""
         # TODO: Implement database updates when the functions are available
         # For now, we'll just log that we would update the database
         logger.info(f"Would update database for media_id {media_id} with {total_chunks} chunks")
-        
+
         # The following functions need to be implemented:
         # - update_media_table_vector_processing_status
         # - update_media_chunks_table_vector_processing_status
         pass
-    
+
     async def _update_job_progress(self, job_id: str, percentage: float):
         """Update job progress information"""
         job_key = f"job:{job_id}"

@@ -22,4 +22,3 @@ def test_metrics_text_contains_golden_subset():
     )
     missing = [g for g in golden if g and g not in body]
     assert not missing, f"Missing required metrics in /metrics: {missing}"
-

@@ -63,7 +63,7 @@ extra:
       link: https://github.com/rmusser01/tldw_server
       name: GitHub
 copyright: |
-  © 2024 tldw_Server — v0.1.0 — <a href="https://github.com/rmusser01/tldw_server">GitHub</a>
+  © 2024 tldw_Server - v0.1.0 - <a href="https://github.com/rmusser01/tldw_server">GitHub</a>
 
 nav:
   - Home: index.md
@@ -133,7 +133,7 @@ nav:
       - Claims API and Schema: Code_Documentation/Claims_API_and_Schema.md
       - Answer-Time Claims Engine: Code_Documentation/Answer_Time_Claims_Engine.md
       - Documentation Site Guide: Code_Documentation/Docs_Site_Guide.md
-      - DB Backends — Placeholders & FTS: Development/DB-Backends-Query-FTS-Guidelines.md
+      - DB Backends - Placeholders & FTS: Development/DB-Backends-Query-FTS-Guidelines.md
   - Deployment:
       - Overview: Deployment/index.md
       - First-Time Production Setup: Deployment/First_Time_Production_Setup.md
@@ -156,7 +156,7 @@ nav:
   - User Guides:
       - Overview: User_Guides/index.md
       - Media→Embeddings→RAG→Evals Workflow: User_Guides/Media_to_RAG_Evals_Workflow.md
-      - WebUI — Vector Backends: User_Guides/WebUI_Vector_Backends.md
+      - WebUI - Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md
       - Backups using Litestream: User_Guides/Backups_Using_Litestream.md

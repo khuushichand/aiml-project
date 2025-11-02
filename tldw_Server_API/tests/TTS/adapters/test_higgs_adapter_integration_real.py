@@ -80,4 +80,3 @@ async def test_real_higgs_integration_local_weights():
     assert len(chunks) >= 1
 
     await adapter.close()
-

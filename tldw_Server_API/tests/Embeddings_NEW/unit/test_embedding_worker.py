@@ -32,7 +32,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import (
 
 class TestEmbeddingWorkerInitialization:
     """Test embedding worker initialization and configuration."""
-    
+
     @pytest.mark.unit
     def test_worker_initialization_default_model(self):
         """Test worker initialization with default model."""
@@ -49,7 +49,7 @@ class TestEmbeddingWorkerInitialization:
             "dunzhang/stella_en_400M_v5",
             "sentence-transformers/all-MiniLM-L6-v2",
         )
-    
+
     @pytest.mark.unit
     def test_worker_initialization_custom_model(self):
         """Test worker initialization with custom model."""
@@ -64,7 +64,7 @@ class TestEmbeddingWorkerInitialization:
         worker = EmbeddingWorker(cfg)
         assert worker.embedding_config.default_model_name == "BAAI/bge-small-en-v1.5"
         assert worker.embedding_config.max_batch_size == 64
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     def test_model_loading(self, mock_create):
@@ -84,7 +84,7 @@ class TestEmbeddingWorkerInitialization:
         )
         assert len(embeddings) == 1
         mock_create.assert_called_once()
-    
+
     @pytest.mark.unit
     def test_worker_configuration_validation(self):
         """Test worker configuration validation."""
@@ -104,7 +104,7 @@ class TestEmbeddingWorkerInitialization:
 
 class TestEmbeddingGeneration:
     """Test embedding generation functionality."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_single_text_embedding(self, mock_create):
@@ -120,10 +120,10 @@ class TestEmbeddingGeneration:
         text = "This is a test sentence for embedding."
         res = await worker._generate_embeddings([text], HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         embedding = res[0]
-        
+
         assert isinstance(embedding, list)
         assert len(embedding) == 384
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_batch_text_embedding(self, mock_create):
@@ -139,11 +139,11 @@ class TestEmbeddingGeneration:
         worker = EmbeddingWorker(cfg)
         texts = [f"Sentence {i}" for i in range(batch_size)]
         embeddings = await worker._generate_embeddings(texts, HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
-        
+
         assert isinstance(embeddings, list)
         assert len(embeddings) == batch_size
         assert all(len(emb) == 384 for emb in embeddings)
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_empty_text_handling(self, mock_create):
@@ -159,7 +159,7 @@ class TestEmbeddingGeneration:
         res = await worker._generate_embeddings([""], HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         embedding = res[0]
         assert embedding is not None
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_long_text_truncation(self, mock_create):
@@ -172,12 +172,12 @@ class TestEmbeddingGeneration:
             consumer_group="embedding-workers",
         )
         worker = EmbeddingWorker(cfg)
-        
+
         # Create text that would exceed token limit
         long_text = " ".join(["word"] * 1000)
         res = await worker._generate_embeddings([long_text], HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         embedding = res[0]
-        
+
         assert isinstance(embedding, list)
         assert len(embedding) == 384
         # Text should be truncated internally
@@ -188,7 +188,7 @@ class TestEmbeddingGeneration:
 
 class TestJobProcessing:
     """Test job processing functionality."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_process_embedding_job(self, mock_create):
@@ -224,7 +224,7 @@ class TestJobProcessing:
         storage_msg = await worker.process_message(message)
         assert storage_msg is not None
         assert storage_msg.total_chunks == 1
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_process_batch_job(self, mock_create):
@@ -256,7 +256,7 @@ class TestJobProcessing:
         storage_msg = await worker.process_message(message)
         assert storage_msg is not None
         assert storage_msg.total_chunks == 5
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     async def test_job_error_handling(self, mock_create):
@@ -291,7 +291,7 @@ class TestJobProcessing:
 
 class TestPerformanceOptimization:
     """Test performance optimizations in the worker."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     async def test_batch_size_optimization(self, mock_create):
@@ -305,19 +305,19 @@ class TestPerformanceOptimization:
             max_batch_size=32,
         )
         worker = EmbeddingWorker(cfg)
-        
+
         # Test with various input sizes
         small_batch = ["text"] * 5
         medium_batch = ["text"] * 32
         large_batch = ["text"] * 100
-        
+
         # Worker should handle different sizes efficiently
         await worker._generate_embeddings(small_batch, HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         await worker._generate_embeddings(medium_batch, HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         await worker._generate_embeddings(large_batch, HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         # We can't assert internal chunking without reaching into implementation; ensure calls occurred
         assert mock_create.called
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     async def test_memory_efficient_processing(self, mock_create, large_text_corpus):
@@ -336,17 +336,17 @@ class TestPerformanceOptimization:
             max_batch_size=32,
         )
         worker = EmbeddingWorker(cfg)
-        
+
         # Process large corpus
         embeddings = []
         for i in range(0, len(large_text_corpus), worker.batch_size):
             batch = large_text_corpus[i:i + worker.batch_size]
             batch_embeddings = await worker._generate_embeddings(batch, HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
             embeddings.extend(batch_embeddings)
-        
+
         assert len(embeddings) == len(large_text_corpus)
         assert all(len(emb) == 384 for emb in embeddings)
-    
+
     @pytest.mark.unit
     async def test_concurrent_job_processing(self):
         """Test concurrent processing of multiple jobs."""
@@ -354,7 +354,7 @@ class TestPerformanceOptimization:
             mock_model = MagicMock()
             mock_model.encode.return_value = np.random.randn(384)
             mock_transformer.return_value = mock_model
-            
+
             cfg = EmbeddingWorkerConfig(
                 worker_id="w14",
                 worker_type="embedding",
@@ -362,16 +362,16 @@ class TestPerformanceOptimization:
                 consumer_group="embedding-workers",
             )
             worker = EmbeddingWorker(cfg)
-            
+
             # Create multiple concurrent tasks
             tasks = []
             for i in range(10):
                 text = f"Concurrent text {i}"
                 task = asyncio.create_task(worker._generate_embeddings([text], HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface"))
                 tasks.append(task)
-            
+
             results = await asyncio.gather(*tasks)
-            
+
             assert len(results) == 10
             assert all(len(r[0]) == 384 for r in results)
 
@@ -381,7 +381,7 @@ class TestPerformanceOptimization:
 
 class TestModelSpecificBehavior:
     """Test model-specific behaviors and configurations."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     def test_minilm_model_configuration(self, mock_create):
@@ -397,7 +397,7 @@ class TestModelSpecificBehavior:
         worker = EmbeddingWorker(cfg)
         # Implicitly uses dimension=384 via model config expectations
         assert worker.embedding_config.default_model_name == "sentence-transformers/all-MiniLM-L6-v2"
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     def test_mpnet_model_configuration(self, mock_create):
@@ -411,7 +411,7 @@ class TestModelSpecificBehavior:
         )
         worker = EmbeddingWorker(cfg)
         assert worker.embedding_config.default_model_name == "sentence-transformers/all-mpnet-base-v2"
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     async def test_openai_embedding_fallback(self, mock_create):
@@ -433,13 +433,13 @@ class TestModelSpecificBehavior:
 
 class TestErrorRecovery:
     """Test error recovery mechanisms."""
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     async def test_retry_on_transient_error(self, mock_create):
         """Test retry logic for transient errors."""
         call_count = 0
-        
+
         def mock_encode(texts, *args, **kwargs):
             nonlocal call_count
             call_count += 1
@@ -457,7 +457,7 @@ class TestErrorRecovery:
         res = await worker._generate_embeddings(["Test text"], HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
         assert res is not None
         assert call_count == 3
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     async def test_fallback_on_model_failure(self, mock_create):
@@ -479,7 +479,7 @@ class TestErrorRecovery:
         worker = EmbeddingWorker(cfg)
         res = await worker._generate_embeddings(["Test text"], HFModelCfg(model_name_or_path="primary-model", trust_remote_code=False), "huggingface")
         assert res is not None and len(res[0]) == 384
-    
+
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     async def test_graceful_degradation(self, mock_create):
@@ -498,10 +498,10 @@ class TestErrorRecovery:
             max_batch_size=32,
         )
         worker = EmbeddingWorker(cfg)
-        
+
         # Should automatically reduce batch size
         texts = ["text"] * 32
         embeddings = await worker._generate_embeddings(texts, HFModelCfg(model_name_or_path=cfg.default_model_name, trust_remote_code=False), "huggingface")
-        
+
         assert len(embeddings) == 32
         # Should have processed in smaller batches

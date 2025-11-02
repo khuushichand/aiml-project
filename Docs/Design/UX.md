@@ -64,7 +64,7 @@ https://designdetails.fm/episodes
 https://blikket.co/ux-vs-cro-how-harmonizing-design-and-strategy-can-skyrocket-your-ecommerce-revenue/
 https://copycoder.ai/
 https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-951b1c98d4ec
-
+https://www.grug.design/know
 https://uxdesign.cc/building-better-logins-a-ux-and-accessibility-guide-for-developers-9bb356f0a132
 
 https://ieeexplore.ieee.org/document/5387632
@@ -239,7 +239,7 @@ https://github.com/albirrkarim/react-speech-highlight-demo
     - Use relevant labels for buttons - Don't use generic labels like "click here"
     - Use a 'large' font size for buttons.
     - Don't wrap text on buttons - text should be on one line
-    - Use action verbs as button labels 
+    - Use action verbs as button labels
     - Don't use disabled buttons when possible - Show an error or CTA instead
     - Place buttons side-by-side when possible
     - Use standard layout for buttons - Don't use unusual icons or styles for buttons

@@ -47,4 +47,3 @@ def test_evaluations_unified_postgres_presence():
     assert db.backend_type in (BackendType.SQLITE, BackendType.POSTGRESQL)
     if db.backend_type == BackendType.POSTGRESQL:
         assert db._use_unified_table() is True
-

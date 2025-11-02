@@ -18,7 +18,7 @@ class ChatSessionCreate(BaseModel):
     character_id: int = Field(..., description="ID of the character for this chat", gt=0)
     title: Optional[str] = Field(None, description="Optional title for the chat session")
     parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID for forked chats")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "character_id": 1,
@@ -31,7 +31,7 @@ class ChatSessionUpdate(BaseModel):
     """Schema for updating a chat session."""
     title: Optional[str] = Field(None, description="New title for the chat")
     rating: Optional[int] = Field(None, ge=1, le=5, description="Rating for the conversation")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "title": "Updated Chat Title",
@@ -50,7 +50,7 @@ class ChatSessionResponse(BaseModel):
     last_modified: datetime = Field(..., description="Last modification timestamp")
     message_count: Optional[int] = Field(0, description="Number of messages in the chat")
     version: int = Field(1, description="Version number for optimistic locking")
-    
+
     model_config = {"from_attributes": True}
 
 
@@ -76,7 +76,7 @@ class MessageCreate(BaseModel):
     )
     parent_message_id: Optional[str] = Field(None, description="Parent message ID for branching")
     image_base64: Optional[str] = Field(None, description="Optional base64 encoded image")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "role": "user",
@@ -100,7 +100,7 @@ class MessageCreate(BaseModel):
 class MessageUpdate(BaseModel):
     """Schema for updating a message."""
     content: str = Field(..., description="New message content", min_length=1)
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "content": "Updated message content"
@@ -121,7 +121,7 @@ class MessageResponse(BaseModel):
     version: int = Field(1, description="Version number for optimistic locking")
     tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls associated with this message (if any)")
     metadata_extra: Optional[Dict[str, Any]] = Field(None, description="Additional stored metadata for this message (if requested)")
-    
+
     model_config = {"from_attributes": True}
 
 
@@ -145,7 +145,7 @@ class CharacterChatCompletionV1Request(BaseModel):
     stream: bool = Field(False, description="Enable streaming response")
     include_history: bool = Field(True, description="Include conversation history")
     history_limit: Optional[int] = Field(20, ge=0, le=100, description="Number of history messages to include")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "message": "What's your favorite color?",
@@ -161,7 +161,7 @@ class CharacterChatCompletionV1Response(BaseModel):
     response: str = Field(..., description="AI response")
     message_id: str = Field(..., description="ID of the created message")
     usage: Optional[Dict[str, int]] = Field(None, description="Token usage statistics")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "response": "My favorite color is blue, like the vast ocean!",
@@ -200,7 +200,7 @@ class CharacterChatCompletionPrepResponse(BaseModel):
 
 
 class CharacterChatCompletionV2Request(BaseModel):
-    """Character Chat completion (v2) – builds context and calls a provider.
+    """Character Chat completion (v2) - builds context and calls a provider.
 
     Includes provider/model controls, optional appended user message,
     persistence toggle, and streaming control.
@@ -261,8 +261,8 @@ class ChatExportFormat(BaseModel):
     format: Literal["json", "markdown", "text"] = Field("json", description="Export format")
     include_metadata: bool = Field(True, description="Include chat metadata")
     include_character: bool = Field(True, description="Include character information")
-    
-    
+
+
 class ChatHistoryExport(BaseModel):
     """Schema for exported chat history."""
     chat_id: str = Field(..., description="Chat session ID")
@@ -272,7 +272,7 @@ class ChatHistoryExport(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     messages: List[Dict[str, Any]] = Field(..., description="Message history")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "chat_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -306,7 +306,7 @@ class ChatErrorResponse(BaseModel):
     detail: str = Field(..., description="Detailed error message")
     chat_id: Optional[str] = Field(None, description="Related chat ID if applicable")
     message_id: Optional[str] = Field(None, description="Related message ID if applicable")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "error": "ChatNotFound",
@@ -324,7 +324,7 @@ class CharacterTagFilter(BaseModel):
     """Schema for filtering characters by tags."""
     tags: List[str] = Field(..., description="Tags to filter by", min_length=1)
     match_all: bool = Field(False, description="Require all tags to match (AND) vs any tag (OR)")
-    
+
     model_config = {"json_schema_extra": {
         "example": {
             "tags": ["fantasy", "wizard"],

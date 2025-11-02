@@ -37,4 +37,3 @@ Use the links below to jump to common areas, or the sidebar to browse all topics
 ## Evaluations
 - Evaluations Developer Guide: Evaluations_Developer_Guide.md
 - Propositions (Chunking & Evals): Proposition_Chunking_and_Evals.md
-

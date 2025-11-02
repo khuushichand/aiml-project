@@ -1,6 +1,6 @@
 # Jobs Module
 
-The Jobs module provides a reusable, DB‑backed job queue with leasing, retries, cancellation, and metrics. It is domain‑agnostic and used by Chatbooks and Prompt Studio; other subsystems can adopt it incrementally.
+The Jobs module provides a reusable, DB-backed job queue with leasing, retries, cancellation, and metrics. It is domain-agnostic and used by Chatbooks and Prompt Studio; other subsystems can adopt it incrementally.
 
 ## Standard Queues
 
@@ -13,26 +13,26 @@ Use these names across domains to keep operations consistent.
 ## Admin Quick Reference
 
 - Safe reads
-  - `GET /api/v1/jobs/stats` — aggregated counts by `{domain,queue,job_type}` (queued vs scheduled vs processing vs quarantined)
-  - `GET /api/v1/jobs/list` — list jobs with filters (`domain, queue, status, owner_user_id, job_type, limit`, sorting)
-  - `GET /api/v1/jobs/events` — outbox polling (`after_id, limit, domain, queue, job_type`)
-  - `GET /api/v1/jobs/events/stream` — SSE cursor stream (`after_id`)
-  - `GET /api/v1/jobs/queue/status` — `{ paused, drain }` for a queue
-  - `GET /api/v1/jobs/{job_id}/attachments` — list attachments/logs
-  - `GET /api/v1/jobs/sla/policies` — SLA policies (optionally filtered)
-  - `GET /api/v1/jobs/archive/meta` — archive compression metadata for a job (if archived)
+  - `GET /api/v1/jobs/stats` - aggregated counts by `{domain,queue,job_type}` (queued vs scheduled vs processing vs quarantined)
+  - `GET /api/v1/jobs/list` - list jobs with filters (`domain, queue, status, owner_user_id, job_type, limit`, sorting)
+  - `GET /api/v1/jobs/events` - outbox polling (`after_id, limit, domain, queue, job_type`)
+  - `GET /api/v1/jobs/events/stream` - SSE cursor stream (`after_id`)
+  - `GET /api/v1/jobs/queue/status` - `{ paused, drain }` for a queue
+  - `GET /api/v1/jobs/{job_id}/attachments` - list attachments/logs
+  - `GET /api/v1/jobs/sla/policies` - SLA policies (optionally filtered)
+  - `GET /api/v1/jobs/archive/meta` - archive compression metadata for a job (if archived)
 
 - Admin writes (require `X-Confirm: true` unless `dry_run: true`)
-  - `POST /api/v1/jobs/prune` — delete old terminal jobs (supports `dry_run` and `detail_top_k`)
-  - `POST /api/v1/jobs/ttl/sweep` — cancel/fail queued-by-age and processing-by-runtime
+  - `POST /api/v1/jobs/prune` - delete old terminal jobs (supports `dry_run` and `detail_top_k`)
+  - `POST /api/v1/jobs/ttl/sweep` - cancel/fail queued-by-age and processing-by-runtime
     - RBAC special-case: with `JOBS_DOMAIN_SCOPED_RBAC` + `JOBS_RBAC_FORCE` and domain provided, returns `{affected:0}` without `X-Confirm`
-  - `POST /api/v1/jobs/batch/cancel` — cancel queued/processing (scoped)
-  - `POST /api/v1/jobs/batch/reschedule` — delay or set-now queued jobs (scoped)
-  - `POST /api/v1/jobs/batch/requeue_quarantined` — move quarantined back to queued (scoped)
-  - `POST /api/v1/jobs/{job_id}/attachments` — add attachment/log
-  - `POST /api/v1/jobs/sla/policy` — upsert per-job_type SLA policy
-  - `POST /api/v1/jobs/queue/control` — `{ action: 'pause'|'resume'|'drain' }`
-  - `POST /api/v1/jobs/crypto/rotate` — re-encrypt encrypted fields (supports `dry_run`, requires `X-Confirm` to execute)
+  - `POST /api/v1/jobs/batch/cancel` - cancel queued/processing (scoped)
+  - `POST /api/v1/jobs/batch/reschedule` - delay or set-now queued jobs (scoped)
+  - `POST /api/v1/jobs/batch/requeue_quarantined` - move quarantined back to queued (scoped)
+  - `POST /api/v1/jobs/{job_id}/attachments` - add attachment/log
+  - `POST /api/v1/jobs/sla/policy` - upsert per-job_type SLA policy
+  - `POST /api/v1/jobs/queue/control` - `{ action: 'pause'|'resume'|'drain' }`
+  - `POST /api/v1/jobs/crypto/rotate` - re-encrypt encrypted fields (supports `dry_run`, requires `X-Confirm` to execute)
 
 > Destructive Ops
 > - Always include `X-Confirm: true` for prune, TTL sweep, batch cancel/reschedule/requeue, and crypto rotate unless running `dry_run`.
@@ -48,26 +48,26 @@ Use these names across domains to keep operations consistent.
 - `JOBS_LEASE_MAX_SECONDS` (default 3600): Cap for lease extension.
 - `JOBS_ENFORCE_LEASE_ACK` (default true): Explicit override that forces lease enforcement on (takes precedence over the disable flag).
 - `JOBS_DISABLE_LEASE_ENFORCEMENT` (default false): Compatibility switch that allows finalizing without `worker_id`/`lease_id`. Intended for legacy adapters and targeted tests; avoid enabling in production.
-- `JOBS_ALLOWED_QUEUES` / `JOBS_ALLOWED_QUEUES_<DOMAIN>`: Comma‑separated allowlists to restrict queue names (in addition to standard queues).
+- `JOBS_ALLOWED_QUEUES` / `JOBS_ALLOWED_QUEUES_<DOMAIN>`: Comma-separated allowlists to restrict queue names (in addition to standard queues).
 - `JOBS_MAX_JSON_BYTES` (default 1048576): Max serialized bytes for `payload` and `result`.
 - `JOBS_JSON_TRUNCATE` (default false): If true, truncate oversize `payload`/`result` to a small marker instead of rejecting.
 - `JOBS_ARCHIVE_BEFORE_DELETE` (default false): When true, `prune_jobs` copies rows to `jobs_archive` before deletion.
-- `JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE` (default false): Use an optional single‑UPDATE acquisition path on SQLite under contention.
-- `JOBS_ALLOWED_JOB_TYPES` / `JOBS_ALLOWED_JOB_TYPES_<DOMAIN>`: Comma‑separated allowlists of job types. If set, `create_job` enforces membership.
+- `JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE` (default false): Use an optional single-UPDATE acquisition path on SQLite under contention.
+- `JOBS_ALLOWED_JOB_TYPES` / `JOBS_ALLOWED_JOB_TYPES_<DOMAIN>`: Comma-separated allowlists of job types. If set, `create_job` enforces membership.
 - Exactly-once finalize (optional):
   - `JOBS_REQUIRE_COMPLETION_TOKEN` (default false): When true, workers should pass `completion_token` (e.g., the `lease_id`) to `complete_job`/`fail_job` to enforce idempotency.
-  - `completion_token` is stored on finalize; repeated finalize with the same token becomes a no‑op (returns True). A different token after finalization returns False.
+  - `completion_token` is stored on finalize; repeated finalize with the same token becomes a no-op (returns True). A different token after finalization returns False.
 - Audit bridge (optional):
   - `JOBS_AUDIT_ENABLED` (default false): Enable audit logging for job lifecycle events via `unified_audit_service`.
   - `JOBS_AUDIT_DB_PATH`: Optional override for the audit SQLite DB storing job events (`Databases/jobs_audit.db` by default).
   - `JOBS_AUDIT_RETENTION_DAYS`, `JOBS_AUDIT_BUFFER_SIZE`, `JOBS_AUDIT_FLUSH_SECONDS`: Tune retention and buffering for the audit bridge.
 - Poison quarantine (optional):
-  - `JOBS_QUARANTINE_THRESHOLD` (default 3): On repeated retryable failures with the same `error_code`, the job transitions to `quarantined` instead of re‑queuing.
+  - `JOBS_QUARANTINE_THRESHOLD` (default 3): On repeated retryable failures with the same `error_code`, the job transitions to `quarantined` instead of re-queuing.
 - Integrity sweeper (optional):
   - `JOBS_INTEGRITY_SWEEP_ENABLED` (default false), `JOBS_INTEGRITY_SWEEP_INTERVAL_SEC` (default 60), `JOBS_INTEGRITY_SWEEP_FIX` (default false).
-  - Periodically flags (and optionally fixes) impossible states like leases on non‑processing jobs and expired processing leases.
+  - Periodically flags (and optionally fixes) impossible states like leases on non-processing jobs and expired processing leases.
 - Postgres RLS (optional):
-  - `JOBS_PG_RLS_ENABLE` (default false): Enable row‑level security policies that scope access to domains in `current_setting('app.domain_allowlist')`.
+  - `JOBS_PG_RLS_ENABLE` (default false): Enable row-level security policies that scope access to domains in `current_setting('app.domain_allowlist')`.
   - To scope a connection/session, set the allowlist before issuing queries/updates (example):
     - `SELECT set_config('app.domain_allowlist', 'chatbooks,prompt_studio', true);`
     - The policies will then allow access only to rows where `domain` is in that list.
@@ -77,7 +77,7 @@ Use these names across domains to keep operations consistent.
 - Tracing & Events (optional):
   - `JOBS_TRACING` (default false): Log spans for job lifecycle events (create/acquire/complete/fail) with correlation metadata.
   - `JOBS_EVENTS_ENABLED` (default false): Emit event hooks for job state changes.
-  - `JOBS_EVENTS_OUTBOX` (default false): Persist job events to an append‑only outbox table `job_events` for CDC/streaming.
+  - `JOBS_EVENTS_OUTBOX` (default false): Persist job events to an append-only outbox table `job_events` for CDC/streaming.
   - `JOBS_EVENTS_POLL_INTERVAL` (default 1.0): SSE poll interval for `/api/v1/jobs/events/stream`.
   - `JOBS_EVENTS_RATE_LIMIT_HZ` (default 0 = unlimited): Soft rate limit for event emission; excess writes are dropped.
   - Request/Trace correlation:
@@ -106,14 +106,14 @@ Use these names across domains to keep operations consistent.
     - `resume`: clear both pause and drain
   - `GET /api/v1/jobs/queue/status?domain=...&queue=...` → `{ paused: bool, drain: bool }`
 
-### Domain‑Scoped RBAC (Admin)
+### Domain-Scoped RBAC (Admin)
 
 - Flags:
   - `JOBS_DOMAIN_SCOPED_RBAC` (default false): Enforce domain scope for admin endpoints
   - `JOBS_REQUIRE_DOMAIN_FILTER` (default false): Require `domain` query/body field when RBAC is enabled
-  - `JOBS_RBAC_FORCE` (default false): Apply checks even in single‑user mode (useful for tests)
-  - `JOBS_DOMAIN_ALLOWLIST_<USER_ID>`: Comma‑separated domain allowlist for a specific user id
-- TTL special‑case: when RBAC is forced and a `domain` is provided, `POST /api/v1/jobs/ttl/sweep` without `X‑Confirm` returns `{"affected": 0}` (no‑op) instead of 400. This preserves guardrails while enabling RBAC-only validations.
+  - `JOBS_RBAC_FORCE` (default false): Apply checks even in single-user mode (useful for tests)
+  - `JOBS_DOMAIN_ALLOWLIST_<USER_ID>`: Comma-separated domain allowlist for a specific user id
+- TTL special-case: when RBAC is forced and a `domain` is provided, `POST /api/v1/jobs/ttl/sweep` without `X-Confirm` returns `{"affected": 0}` (no-op) instead of 400. This preserves guardrails while enabling RBAC-only validations.
 - Prune & retention (optional):
   - `JOBS_PRUNE_ENFORCE` (default false): Run background prune sweeps.
   - `JOBS_RETENTION_DAYS_TERMINAL` (default 0): Days to retain terminal states (`completed|failed|cancelled|quarantined`).
@@ -132,10 +132,10 @@ Use these names across domains to keep operations consistent.
   - Acquisition gate: on shutdown the server sets a global acquire gate so `acquire_next_job` returns `None` until restart.
 - Testing time control:
    - `JOBS_TEST_NOW_EPOCH` (seconds since epoch): If set, JobManager’s internal clock uses this instant for lease renewals and TTL comparisons it controls, enabling time-travel tests without sleeps.
- - Domain‑scoped RBAC (optional):
+ - Domain-scoped RBAC (optional):
    - `JOBS_DOMAIN_SCOPED_RBAC` (default false): Enforce domain scope for admin endpoints.
-   - `JOBS_REQUIRE_DOMAIN_FILTER` (default false): Require the `domain` query/body field for domain‑scoped endpoints.
-   - `JOBS_DOMAIN_ALLOWLIST_<USER_ID>`: Comma‑separated domain allowlist for a specific user id.
+   - `JOBS_REQUIRE_DOMAIN_FILTER` (default false): Require the `domain` query/body field for domain-scoped endpoints.
+   - `JOBS_DOMAIN_ALLOWLIST_<USER_ID>`: Comma-separated domain allowlist for a specific user id.
 
 Endpoint: `GET /api/v1/config/jobs` lists backend, flags, and standard queues.
 
@@ -165,7 +165,7 @@ lease_id = job["lease_id"]
 # Periodically renew (enforcement on)
 jm.renew_job_lease(job["id"], seconds=lease_seconds, worker_id=worker_id, lease_id=lease_id)
 
-# Complete with enforcement and exactly‑once token (recommended)
+# Complete with enforcement and exactly-once token (recommended)
 jm.complete_job(job["id"], result={"path": "/path/to/file"}, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
 
 # Fail (retryable or terminal) with idempotent finalize token
@@ -192,7 +192,7 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - `queued → processing → {completed, failed, cancelled}`
   - `processing → queued` only on retry (fail_job with retryable=True)
 - `complete_job` and terminal `fail_job` affect rows only when `status='processing'`.
-  - Completing/failing a non‑processing job is a no‑op (returns False, no change).
+  - Completing/failing a non-processing job is a no-op (returns False, no change).
 ```
 
 ## Operational Guidance
@@ -220,8 +220,8 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
       - `older_than_days`: integer days threshold (min 1)
       - Optional filters: `domain`, `queue`, `job_type`
       - Optional `dry_run`: boolean (default false)
-      - Optional `detail_top_k`: integer (0..100). When `dry_run=true`, compute top‑K groups by count (for preview).
-    - Response: `{ "deleted": <int> }` — for dry runs this is the would-delete count.
+      - Optional `detail_top_k`: integer (0..100). When `dry_run=true`, compute top-K groups by count (for preview).
+    - Response: `{ "deleted": <int> }` - for dry runs this is the would-delete count.
   - Examples:
     - Preview prune for a single queue:
       ```bash
@@ -255,10 +255,10 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - Structured failure timeline stored on job rows: `failure_timeline` JSON (last ~10 entries) with `{ts, error_code, retry_backoff}` for WebUI analytics.
 
 - Counters vs Reconcile:
-  - `JOBS_COUNTERS_ENABLED` (default false): enable per‑group counters in `job_counters` to avoid frequent COUNT(*) scans
+  - `JOBS_COUNTERS_ENABLED` (default false): enable per-group counters in `job_counters` to avoid frequent COUNT(*) scans
   - Inline transitions update counters when fully scoped (e.g., create, acquire, finalize, TTL, batch ops)
   - Gauges use counters when available; otherwise they compute fresh counts
-  - `JOBS_GAUGES_DEBOUNCE_MS` (default 0): debounce gauge updates in high‑churn paths
+  - `JOBS_GAUGES_DEBOUNCE_MS` (default 0): debounce gauge updates in high-churn paths
   - Background reconcile (optional):
     - `JOBS_METRICS_GAUGES_ENABLED=true` emits SLO gauges
     - `JOBS_METRICS_RECONCILE_ENABLE=true` enables periodic reconcile of counters/gauges
@@ -273,14 +273,14 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
     - `docker compose up --build`
   - From your host, you can also connect via the published port:
     - `export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users`
-  - The Jobs manager will auto‑provision the schema on first use.
+  - The Jobs manager will auto-provision the schema on first use.
 
 ### Running Postgres Jobs tests
 
 - Ensure a Postgres instance is available (e.g., via Compose above) and set one of:
   - `export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users`
   - or `export POSTGRES_TEST_DSN=postgresql://...`
-- Run only PG‑marked Jobs tests:
+- Run only PG-marked Jobs tests:
   - `python -m pytest -m "pg_jobs" -v tldw_Server_API/tests/Jobs`
 
 - TTL Sweep (optional):
@@ -378,8 +378,8 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 - SSE stream:
   - `GET /api/v1/jobs/events/stream?after_id=<cursor>` (admin-only)
   - Emits text/event-stream with incremental IDs; clients can resume by passing `after_id`.
-  - Requires `JOBS_EVENTS_OUTBOX=true` to persist events; otherwise events are process‑local only.
-  - Admin endpoints set per‑request Postgres RLS context automatically when enabled.
+  - Requires `JOBS_EVENTS_OUTBOX=true` to persist events; otherwise events are process-local only.
+  - Admin endpoints set per-request Postgres RLS context automatically when enabled.
   - Response: `{ non_processing_with_lease: int, processing_expired: int, fixed: int }`
   - When `fix=true`, clears stale lease fields on non-processing rows, and re-queues expired processing rows.
 
@@ -429,8 +429,8 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
 ### Encryption & Rotation
 
 - Enabling encryption
-  - Set `WORKFLOWS_ARTIFACT_ENC_KEY` to a base64‑encoded AES key (16/24/32 bytes)
-  - Enable globally with `JOBS_ENCRYPT=true` or per‑domain with `JOBS_ENCRYPT_<DOMAIN>=true`
+  - Set `WORKFLOWS_ARTIFACT_ENC_KEY` to a base64-encoded AES key (16/24/32 bytes)
+  - Enable globally with `JOBS_ENCRYPT=true` or per-domain with `JOBS_ENCRYPT_<DOMAIN>=true`
   - When enabled, `payload`/`result` are stored as envelopes: `{ "_encrypted": {"_enc":"aesgcm:v1", ... } }`
 - Reading with dual keys (rotation window)
   - Set `JOBS_CRYPTO_SECONDARY_KEY` to the previous key to allow reads during rotation

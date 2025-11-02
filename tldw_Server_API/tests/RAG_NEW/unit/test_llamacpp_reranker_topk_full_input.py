@@ -64,4 +64,3 @@ async def test_llamacpp_reranker_scores_all_docs_and_returns_topk(monkeypatch):
     # Assert ranking corresponds to highest similarity first -> first top_k docs
     ranked_ids = [sd.document.id for sd in result]
     assert ranked_ids == [f"d{i}" for i in range(top_k)]
-

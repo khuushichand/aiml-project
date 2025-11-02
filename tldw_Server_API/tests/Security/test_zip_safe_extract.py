@@ -20,4 +20,3 @@ def test_safe_zip_extraction_blocks_traversal(tmp_path):
     with pytest.raises(Exception):
         # Function should raise due to unsafe path
         dps._extract_zip_and_combine(str(bad))
-

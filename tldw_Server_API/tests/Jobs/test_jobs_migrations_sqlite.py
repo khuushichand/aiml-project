@@ -35,4 +35,3 @@ def test_sqlite_schema_has_expected_columns_and_indexes(tmp_path):
         ensure_jobs_tables(Path(db_path))
     finally:
         conn.close()
-

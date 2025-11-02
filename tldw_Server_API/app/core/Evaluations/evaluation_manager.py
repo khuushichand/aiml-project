@@ -30,7 +30,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 class EvaluationManager:
     """Manages evaluation operations and persistence."""
-    
+
     def __init__(self, db_path: Optional[Union[str, Path]] = None, *, user_id: Optional[int] = None):
         self.config = load_comprehensive_config()
         self._user_id = int(user_id) if user_id is not None else DatabasePaths.get_single_user_id()
@@ -40,7 +40,7 @@ class EvaluationManager:
         self._session_id = uuid.uuid4().hex
         # Track evaluations created since last listing (for property tests)
         self._recent_created_ids: list[str] = []
-    
+
     def _get_db_path(self, explicit_path: Optional[Union[str, Path]] = None) -> Path:
         """Resolve a safe evaluations database path.
 
@@ -102,7 +102,7 @@ class EvaluationManager:
 
         candidate_path.parent.mkdir(parents=True, exist_ok=True)
         return candidate_path
-    
+
     def _init_database(self):
         """Initialize evaluation database using migration system"""
         try:
@@ -114,10 +114,10 @@ class EvaluationManager:
             # This ensures consistency and prevents silent data corruption
             error_msg = f"CRITICAL: Failed to apply database migrations to {self.db_path}: {e}"
             logger.critical(error_msg)
-            
+
             # Check if we're in a production environment
             env = os.getenv('ENVIRONMENT', 'development').lower()
-            
+
             if env in ['production', 'staging']:
                 # Fail loudly in production/staging
                 raise RuntimeError(error_msg) from e
@@ -125,10 +125,10 @@ class EvaluationManager:
                 # In development, log a warning but continue with fallback
                 logger.warning("Running in development mode - using fallback database initialization")
                 self._init_database_fallback()
-    
+
     def _init_database_fallback(self):
         """Fallback database initialization without migrations
-        
+
         WARNING: This method should ONLY be used in development environments.
         Production deployments must use the migration system to ensure
         database schema consistency.
@@ -153,7 +153,7 @@ class EvaluationManager:
                     embedding_model TEXT
                 )
             """)
-            
+
             # Create indexes
             for index_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_type ON internal_evaluations(evaluation_type)",
@@ -165,7 +165,7 @@ class EvaluationManager:
                     conn.execute(index_sql)
                 except sqlite3.OperationalError:
                     pass  # Index might already exist
-            
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS evaluation_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +176,7 @@ class EvaluationManager:
                     FOREIGN KEY (evaluation_id) REFERENCES internal_evaluations(evaluation_id)
                 )
             """)
-            
+
             # Create indexes for metrics table
             for index_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_eval_id ON evaluation_metrics(evaluation_id)",
@@ -187,7 +187,7 @@ class EvaluationManager:
                     conn.execute(index_sql)
                 except sqlite3.OperationalError:
                     pass
-            
+
             # Create webhook registrations table (needed for webhook tests)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS webhook_registrations (
@@ -209,7 +209,7 @@ class EvaluationManager:
                     UNIQUE(user_id, url)
                 )
             """)
-            
+
             # Create webhook deliveries table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS webhook_deliveries (
@@ -232,7 +232,7 @@ class EvaluationManager:
                     FOREIGN KEY (evaluation_id) REFERENCES internal_evaluations(evaluation_id)
                 )
             """)
-            
+
             # Create indexes for webhook tables
             for index_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_webhook_user ON webhook_registrations(user_id)",
@@ -246,9 +246,9 @@ class EvaluationManager:
                     conn.execute(index_sql)
                 except sqlite3.OperationalError:
                     pass  # Index might already exist
-            
+
             conn.commit()
-    
+
     async def store_evaluation(
         self,
         evaluation_type: str,
@@ -258,10 +258,10 @@ class EvaluationManager:
     ) -> str:
         """Store evaluation results"""
         import uuid
-        
+
         evaluation_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc)
-        
+
         # Store main evaluation record
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
@@ -277,7 +277,7 @@ class EvaluationManager:
                 json.dumps(results),
                 json.dumps({**(metadata or {}), "session_id": self._session_id})
             ))
-            
+
             # Store individual metrics for easier querying
             if "metrics" in results:
                 for metric_name, metric_data in results["metrics"].items():
@@ -287,9 +287,9 @@ class EvaluationManager:
                             evaluation_id, metric_name, score, created_at
                         ) VALUES (?, ?, ?, ?)
                     """, (evaluation_id, metric_name, score, created_at))
-            
+
             conn.commit()
-        
+
         logger.info(f"Stored evaluation {evaluation_id} of type {evaluation_type}")
         # Track recent creations for this manager instance
         try:
@@ -297,7 +297,7 @@ class EvaluationManager:
         except Exception:
             pass
         return evaluation_id
-    
+
     async def get_history(
         self,
         evaluation_type: Optional[str] = None,
@@ -344,7 +344,7 @@ class EvaluationManager:
                 item["results"] = json.loads(item["results"])
                 item["metadata"] = json.loads(item["metadata"] if item["metadata"] else "{}")
                 items.append(item)
-            
+
             # Calculate average scores
             avg_query = """
                 SELECT metric_name, AVG(score) as avg_score
@@ -377,14 +377,14 @@ class EvaluationManager:
         trends = None
         if len(items) > 10:
             trends = self._calculate_trends(items)
-        
+
         return {
             "total_count": total_count,
             "items": items,
             "average_scores": average_scores,
             "trends": trends
         }
-    
+
     async def compare_evaluations(
         self,
         evaluation_ids: List[str],
@@ -393,23 +393,23 @@ class EvaluationManager:
         """Compare multiple evaluations"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            
+
             # Get evaluations
             placeholders = ",".join("?" * len(evaluation_ids))
             cursor = conn.execute(
                 f"SELECT * FROM internal_evaluations WHERE evaluation_id IN ({placeholders})",
                 evaluation_ids
             )
-            
+
             evaluations = []
             for row in cursor:
                 eval_dict = dict(row)
                 eval_dict["results"] = json.loads(eval_dict["results"])
                 evaluations.append(eval_dict)
-            
+
             if len(evaluations) != len(evaluation_ids):
                 raise ValueError("Some evaluation IDs not found")
-            
+
             # Get metrics for comparison
             metric_cursor = conn.execute(
                 f"""
@@ -419,53 +419,53 @@ class EvaluationManager:
                 """,
                 evaluation_ids
             )
-            
+
             metric_data = {}
             for row in metric_cursor:
                 eval_id = row[0]
                 metric_name = row[1]
                 score = row[2]
-                
+
                 if metric_name not in metric_data:
                     metric_data[metric_name] = {}
                 metric_data[metric_name][eval_id] = score
-        
+
         # Filter metrics if specified
         if metrics_to_compare:
             metric_data = {k: v for k, v in metric_data.items() if k in metrics_to_compare}
-        
+
         # Format comparison data
         metric_comparisons = {}
         best_performing = {}
-        
+
         for metric_name, scores in metric_data.items():
             # Order scores by evaluation ID order
             ordered_scores = [scores.get(eval_id, 0.0) for eval_id in evaluation_ids]
             metric_comparisons[metric_name] = ordered_scores
-            
+
             # Find best performing
             best_eval_id = max(scores.items(), key=lambda x: x[1])[0]
             best_performing[metric_name] = best_eval_id
-        
+
         # Generate comparison summary
         summary_parts = []
         for metric, best_id in best_performing.items():
             summary_parts.append(f"{metric}: {best_id} performs best")
-        
+
         comparison_summary = "Comparison Results:\n" + "\n".join(summary_parts)
-        
+
         # Statistical analysis
         statistical_analysis = None
         if len(evaluation_ids) > 2:
             statistical_analysis = self._perform_statistical_analysis(metric_comparisons)
-        
+
         return {
             "comparison_summary": comparison_summary,
             "metric_comparisons": metric_comparisons,
             "best_performing": best_performing,
             "statistical_analysis": statistical_analysis
         }
-    
+
     async def evaluate_custom_metric(
         self,
         metric_name: str,
@@ -480,11 +480,11 @@ class EvaluationManager:
         formatted_prompt = evaluation_prompt
         for key, value in input_data.items():
             formatted_prompt = formatted_prompt.replace(f"{{{key}}}", str(value))
-        
+
         # Add scoring criteria to prompt
         criteria_text = "\n".join([f"- {k}: {v}" for k, v in scoring_criteria.items()])
         full_prompt = f"{formatted_prompt}\n\nScoring Criteria:\n{criteria_text}\n\nProvide a score from 1-10 and explanation."
-        
+
         try:
             # Get evaluation from LLM
             response = await asyncio.to_thread(
@@ -496,15 +496,15 @@ class EvaluationManager:
                 temp=0.3,
                 system_message="You are an expert evaluator. Provide scores and detailed explanations."
             )
-            
+
             # Parse response with strict validation
             import re
             import json as json_module
-            
+
             # Try to parse as JSON first (most reliable)
             score = None
             explanation = response
-            
+
             try:
                 # Attempt to parse JSON response
                 parsed = json_module.loads(response)
@@ -524,7 +524,7 @@ class EvaluationManager:
                     r'(\d+(?:\.\d+)?)\s*(?:/\s*10)\s+points?',  # 8/10 points
                     r'^(\d+(?:\.\d+)?)\s*$'  # Just a number on its own line
                 ]
-                
+
                 for pattern in score_patterns:
                     match = re.search(pattern, response, re.MULTILINE)
                     if match:
@@ -536,26 +536,26 @@ class EvaluationManager:
                                 break
                         except (ValueError, IndexError):
                             continue
-                
+
                 # Extract explanation (everything after first score mention or first newline)
                 if '\n' in response:
                     lines = response.split('\n')
                     # Skip lines that contain just the score
                     explanation_lines = [l for l in lines if not re.match(r'^\s*\d+(?:\.\d+)?\s*(?:/\s*10)?\s*$', l)]
                     explanation = '\n'.join(explanation_lines).strip()
-            
+
             # Default to 0.5 if no valid score found
             if score is None:
                 logger.warning(f"Could not parse valid score from response: {response[:100]}...")
                 score = 0.5
-            
+
             return {
                 "metric_name": metric_name,
                 "score": score,
                 "explanation": explanation.strip(),
                 "raw_output": response
             }
-            
+
         except Exception as e:
             logger.error(f"Custom metric evaluation failed: {e}")
             return {
@@ -564,11 +564,11 @@ class EvaluationManager:
                 "explanation": f"Evaluation failed: {str(e)}",
                 "raw_output": None
             }
-    
+
     def _calculate_trends(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate metric trends over time"""
         trends = {}
-        
+
         # Group by metric
         metric_scores = {}
         for item in items:
@@ -580,34 +580,34 @@ class EvaluationManager:
                         "timestamp": item["created_at"],
                         "score": metric_data.get("score", 0.0)
                     })
-        
+
         # Calculate trends
         for metric_name, scores in metric_scores.items():
             if len(scores) > 1:
                 # Sort by timestamp
                 scores.sort(key=lambda x: x["timestamp"])
-                
+
                 # Calculate simple linear trend
                 values = [s["score"] for s in scores]
                 x = np.arange(len(values))
-                
+
                 # Linear regression
                 coeffs = np.polyfit(x, values, 1)
                 trend_direction = "improving" if coeffs[0] > 0 else "declining" if coeffs[0] < 0 else "stable"
-                
+
                 trends[metric_name] = {
                     "direction": trend_direction,
                     "slope": float(coeffs[0]),
                     "recent_average": np.mean(values[-5:]) if len(values) >= 5 else np.mean(values),
                     "overall_average": np.mean(values)
                 }
-        
+
         return trends
-    
+
     def _perform_statistical_analysis(self, metric_comparisons: Dict[str, List[float]]) -> Dict[str, Any]:
         """Perform statistical analysis on comparison data"""
         analysis = {}
-        
+
         for metric_name, scores in metric_comparisons.items():
             if len(scores) > 1:
                 analysis[metric_name] = {
@@ -618,7 +618,7 @@ class EvaluationManager:
                     "range": float(np.max(scores) - np.min(scores)),
                     "cv": float(np.std(scores) / np.mean(scores)) if np.mean(scores) > 0 else 0
                 }
-        
+
         return analysis
 
     # --- Compatibility helpers for tests expecting simple retrieval APIs ---

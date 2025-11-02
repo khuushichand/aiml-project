@@ -46,4 +46,3 @@ def test_pg_dict_row_count_alias_used(monkeypatch, tmp_path):
     # Dry-run path only issues a single COUNT(*) AS c query and returns the count
     n = jm.retry_now_jobs(domain="x", dry_run=True)
     assert n == 42
-

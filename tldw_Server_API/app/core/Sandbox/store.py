@@ -261,6 +261,11 @@ class SQLiteStore(SandboxStore):
         return con
 
     def _init_db(self) -> None:
+        """
+        Initialize the SQLite database schema for sandbox storage and apply a migration to add the `resource_usage` column if it is missing.
+
+        Creates the tables used by the store: `sandbox_runs` (run metadata, including `resource_usage`), `sandbox_idempotency` (idempotency records keyed by endpoint, user_key, and key), and `sandbox_usage` (per-user artifact byte usage). After creating tables, attempts to add the `resource_usage` column to `sandbox_runs` for backfill compatibility; ignores only the specific "column already exists" error and re-raises any other migration failure.
+        """
         with self._conn() as con:
             con.executescript(
                 """
@@ -276,7 +281,8 @@ class SQLiteStore(SandboxStore):
                     finished_at TEXT,
                     message TEXT,
                     image_digest TEXT,
-                    policy_hash TEXT
+                    policy_hash TEXT,
+                    resource_usage TEXT
                 );
                 CREATE TABLE IF NOT EXISTS sandbox_idempotency (
                     endpoint TEXT,
@@ -294,8 +300,39 @@ class SQLiteStore(SandboxStore):
                 );
                 """
             )
+            # Backfill migrations for older schemas: add resource_usage if missing
+            # Only ignore the specific case where the column already exists.
+            try:
+                con.execute("ALTER TABLE sandbox_runs ADD COLUMN resource_usage TEXT")
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if (
+                    "duplicate" in msg
+                    or "already exists" in msg
+                    or "duplicate column" in msg
+                ):
+                    logger.debug(
+                        "SQLite migration: resource_usage column already exists; skipping ALTER TABLE"
+                    )
+                else:
+                    # Log full exception (with stack trace) and re-raise to avoid masking real issues
+                    logger.exception(
+                        "SQLite migration failed adding resource_usage column to sandbox_runs"
+                    )
+                    raise
 
     def _fp(self, body: Dict[str, Any]) -> str:
+        """
+        Compute a stable SHA-256 fingerprint for a JSON-like body.
+
+        The function canonicalizes `body` to a deterministic JSON string (keys sorted, compact separators) and falls back to `str(body)` if serialization fails, then returns the SHA-256 hex digest of that string.
+
+        Parameters:
+            body (Dict[str, Any]): The JSON-like object to fingerprint; should be JSON-serializable when possible.
+
+        Returns:
+            str: Hexadecimal SHA-256 digest of the canonicalized representation.
+        """
         try:
             canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
         except Exception:
@@ -358,9 +395,21 @@ class SQLiteStore(SandboxStore):
                 logger.debug(f"idempotency store failed: {e}")
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
+        """
+        Persist a RunStatus for the given user, replacing any existing record with the same run id.
+
+        Stores the run fields (id, user_id, spec_version, runtime, base_image, phase, exit_code,
+        started_at, finished_at, message, image_digest, policy_hash) into the backend. Timestamps
+        are stored as ISO 8601 strings; if `resource_usage` is a dict it is serialized to JSON and stored,
+        otherwise `resource_usage` is stored as null.
+
+        Parameters:
+            user_id: Identifier of the user who owns the run; converted to a canonical string for storage.
+            st (RunStatus): RunStatus object to persist.
+        """
         with self._lock, self._conn() as con:
             con.execute(
-                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "REPLACE INTO sandbox_runs(id,user_id,spec_version,runtime,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     st.id,
                     self._user_key(user_id),
@@ -374,16 +423,30 @@ class SQLiteStore(SandboxStore):
                     st.message,
                     st.image_digest,
                     st.policy_hash,
+                    (json.dumps(st.resource_usage) if isinstance(st.resource_usage, dict) else None),
                 ),
             )
 
     def get_run(self, run_id: str) -> Optional[RunStatus]:
+        """
+        Retrieve a RunStatus by its run identifier.
+
+        Parses stored fields (including ISO timestamps, enum fields, and JSON-encoded `resource_usage`) and returns a populated RunStatus object.
+
+        Returns:
+            `RunStatus` for the given `run_id`, or `None` if no record exists or if stored data cannot be parsed.
+        """
         with self._lock, self._conn() as con:
             cur = con.execute("SELECT * FROM sandbox_runs WHERE id=?", (run_id,))
             row = cur.fetchone()
             if not row:
                 return None
             try:
+                ru = None
+                try:
+                    ru = json.loads(row["resource_usage"]) if row["resource_usage"] else None
+                except Exception:
+                    ru = None
                 st = RunStatus(
                     id=row["id"],
                     phase=RunPhase(row["phase"]),
@@ -396,6 +459,7 @@ class SQLiteStore(SandboxStore):
                     started_at=(datetime.fromisoformat(row["started_at"]) if row["started_at"] else None),
                     finished_at=(datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None),
                     message=row["message"],
+                    resource_usage=ru,
                 )
                 return st
             except Exception:
@@ -519,9 +583,9 @@ class SQLiteStore(SandboxStore):
 def get_store() -> SandboxStore:
     backend = None
     try:
-        backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "sqlite")).strip().lower()
+        backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
     except Exception:
-        backend = "sqlite"
+        backend = "memory"
     if backend == "memory":
         ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
         return InMemoryStore(idem_ttl_sec=ttl)
@@ -532,3 +596,17 @@ def get_store() -> SandboxStore:
     except Exception:
         db_path = None
     return SQLiteStore(db_path=db_path, idem_ttl_sec=ttl)
+
+
+def get_store_mode() -> str:
+    """Return the configured store mode string for feature discovery.
+
+    Values: memory | sqlite | cluster (future) | unknown
+    """
+    try:
+        backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
+    except Exception:
+        backend = "memory"
+    if backend in {"memory", "sqlite", "cluster"}:
+        return backend
+    return "unknown"

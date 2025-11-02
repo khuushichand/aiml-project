@@ -100,4 +100,3 @@ def test_site_include_only_gating(client_with_user):
     assert stats2.get("filters_include", 0) == 0
     # Filtered count should be >= found
     assert stats2.get("filters_exclude", 0) >= 0
-

@@ -34,4 +34,3 @@ describe('Jobs module', () => {
     expect(s.length).toBeGreaterThan(0);
   });
 });
-

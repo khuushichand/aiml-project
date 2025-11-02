@@ -13,11 +13,11 @@ function updateTTSProviderOptions() {
     const provider = document.getElementById('audioTTS_provider').value;
     const modelSelect = document.getElementById('audioTTS_model');
     const voiceSelect = document.getElementById('audioTTS_voice');
-    
+
     // Clear existing options
     modelSelect.innerHTML = '';
     voiceSelect.innerHTML = '';
-    
+
     // Define provider-specific options
     const providerConfigs = {
         openai: {
@@ -133,10 +133,10 @@ function updateTTSProviderOptions() {
             ]
         }
     };
-    
+
     // Get the configuration for the selected provider
     const config = providerConfigs[provider] || providerConfigs.openai;
-    
+
     // Populate model dropdown
     config.models.forEach(model => {
         const option = document.createElement('option');
@@ -144,7 +144,7 @@ function updateTTSProviderOptions() {
         option.textContent = model.text;
         modelSelect.appendChild(option);
     });
-    
+
     // Populate voice dropdown
     config.voices.forEach(voice => {
         const option = document.createElement('option');
@@ -152,23 +152,23 @@ function updateTTSProviderOptions() {
         option.textContent = voice.text;
         voiceSelect.appendChild(option);
     });
-    
+
     // Show/hide provider-specific options
     const allProviderOptions = document.querySelectorAll('.provider-options');
     allProviderOptions.forEach(el => el.style.display = 'none');
-    
+
     const providerOptionsEl = document.getElementById(`${provider}_options`);
     if (providerOptionsEl) {
         providerOptionsEl.style.display = 'block';
     }
-    
+
     // Show/hide voice cloning section based on provider support
     const voiceCloningSection = document.getElementById('voiceCloning');
     if (voiceCloningSection) {
         const supportsCloningProviders = ['higgs', 'vibevoice', 'chatterbox'];
         voiceCloningSection.style.display = supportsCloningProviders.includes(provider) ? 'block' : 'none';
     }
-    
+
     // Show/hide pitch control based on provider support
     const pitchGroup = document.getElementById('audioTTS_pitch_group');
     if (pitchGroup) {
@@ -274,7 +274,7 @@ function checkTTSProviderStatus() {
     statusIndicators.forEach(dot => {
         dot.classList.add('loading');
     });
-    
+
     // Simulate checking (in real implementation, this would call the API)
     setTimeout(() => {
         statusIndicators.forEach(dot => {
@@ -749,7 +749,7 @@ function segRenderResults(result, totalCount) {
         box.className = 'result-item';
         const speakers = (seg.speakers || []).join(', ');
         const header = document.createElement('div');
-        header.innerHTML = `<strong>Segment ${idx + 1}</strong> | Indices: ${seg.start_index}-${seg.end_index} | Speakers: ${speakers || '—'}`;
+        header.innerHTML = `<strong>Segment ${idx + 1}</strong> | Indices: ${seg.start_index}-${seg.end_index} | Speakers: ${speakers || '-'}`;
 
         const pre = document.createElement('pre');
         pre.textContent = (seg.text || '').slice(0, 800);
@@ -923,7 +923,7 @@ function clearVoiceReference() {
     const voiceRefInfo = document.getElementById('voiceRefInfo');
     const voiceRefInput = document.getElementById('audioTTS_voiceReference');
     const voiceRefPlayer = document.getElementById('voiceRefPlayer');
-    
+
     if (voiceRefInfo) voiceRefInfo.style.display = 'none';
     if (voiceRefInput) voiceRefInput.value = '';
     if (voiceRefPlayer) voiceRefPlayer.src = '';
@@ -1161,7 +1161,7 @@ function updateModelOptions() {
     const languageGroup = document.getElementById('languageGroup');
     const whisperModelGroup = document.getElementById('whisperModelGroup');
     const whisperTaskGroup = document.getElementById('whisperTaskGroup');
-    
+
     if (model === 'parakeet') {
         variantGroup.style.display = 'block';
         languageGroup.style.display = 'none';
@@ -1188,7 +1188,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (ttsProvider) {
             updateTTSProviderOptions();
         }
-        
+
         const sttModel = document.getElementById('streamingModel');
         if (sttModel) {
             updateModelOptions();
@@ -1291,7 +1291,7 @@ function renderFileTranscriptionResult(result) {
             box.className = 'result-item';
             const speakers = (s.speakers || []).join(', ');
             const header = document.createElement('div');
-            header.innerHTML = `<strong>Segment ${i + 1}</strong> | Indices: ${s.start_index}-${s.end_index} | Speakers: ${speakers || '—'}`;
+            header.innerHTML = `<strong>Segment ${i + 1}</strong> | Indices: ${s.start_index}-${s.end_index} | Speakers: ${speakers || '-'}`;
             const pre = document.createElement('pre');
             pre.textContent = (s.text || '').slice(0, 800);
             pre.style.whiteSpace = 'pre-wrap';
@@ -1861,7 +1861,7 @@ function initializeMultiItemAnalysisTab() {
         // Basic initial render
         const queue = Utils.getFromStorage('multi-analysis-queue') || [];
         renderMultiQueue(queue);
-        
+
         // Scrape method field toggles
         const methodSelect = document.getElementById('multi_scrape_method');
         if (methodSelect) {
@@ -2446,18 +2446,18 @@ function toggleToolChoiceJSON() {
 
 async function makeChatCompletionsRequest() {
     const responseEl = document.getElementById('chatCompletions_response');
-    
+
     try {
         // Build the payload with all parameters
         const payload = {};
-        
+
         // Basic Parameters
         const provider = document.getElementById('chatCompletions_provider').value;
         if (provider) payload.api_provider = provider;
-        
+
         const model = document.getElementById('chatCompletions_model').value;
         if (model) payload.model = model;
-        
+
         const messagesText = document.getElementById('chatCompletions_messages').value;
         try {
             const parsedMessages = JSON.parse(messagesText);
@@ -2468,58 +2468,58 @@ async function makeChatCompletionsRequest() {
         } catch (e) {
             throw new Error('Invalid messages JSON format: ' + e.message);
         }
-        
+
         const temperature = parseFloat(document.getElementById('chatCompletions_temperature').value);
         if (!isNaN(temperature)) payload.temperature = temperature;
-        
+
         const maxTokens = parseInt(document.getElementById('chatCompletions_max_tokens').value);
         if (!isNaN(maxTokens)) payload.max_tokens = maxTokens;
-        
+
         payload.stream = document.getElementById('chatCompletions_stream').checked;
-        
+
         // Sampling Parameters
         const frequencyPenalty = parseFloat(document.getElementById('chatCompletions_frequency_penalty').value);
         if (!isNaN(frequencyPenalty)) payload.frequency_penalty = frequencyPenalty;
-        
+
         const presencePenalty = parseFloat(document.getElementById('chatCompletions_presence_penalty').value);
         if (!isNaN(presencePenalty)) payload.presence_penalty = presencePenalty;
-        
+
         const topP = parseFloat(document.getElementById('chatCompletions_top_p').value);
         if (!isNaN(topP)) payload.top_p = topP;
-        
+
         const topK = parseInt(document.getElementById('chatCompletions_top_k').value);
         if (!isNaN(topK)) payload.topk = topK;
-        
+
         const minP = parseFloat(document.getElementById('chatCompletions_min_p').value);
         if (!isNaN(minP)) payload.minp = minP;
-        
+
         const seed = parseInt(document.getElementById('chatCompletions_seed').value);
         if (!isNaN(seed)) payload.seed = seed;
-        
+
         const n = parseInt(document.getElementById('chatCompletions_n').value);
         if (!isNaN(n)) payload.n = n;
-        
+
         // Response Control
         const responseFormat = document.querySelector('input[name="chatCompletions_response_format"]:checked').value;
         if (responseFormat === 'json_object') {
             payload.response_format = { type: 'json_object' };
         }
-        
+
         const stopSequences = document.getElementById('chatCompletions_stop').value;
         if (stopSequences) {
             payload.stop = stopSequences.split(',').map(s => s.trim()).filter(s => s);
         }
-        
+
         const user = document.getElementById('chatCompletions_user').value;
         if (user) payload.user = user;
-        
+
         const logprobs = document.getElementById('chatCompletions_logprobs').checked;
         if (logprobs) {
             payload.logprobs = true;
             const topLogprobs = parseInt(document.getElementById('chatCompletions_top_logprobs').value);
             if (!isNaN(topLogprobs)) payload.top_logprobs = topLogprobs;
         }
-        
+
         const logitBiasText = document.getElementById('chatCompletions_logit_bias').value;
         if (logitBiasText && logitBiasText !== '{}') {
             try {
@@ -2531,11 +2531,11 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid logit bias JSON:', e);
             }
         }
-        
+
         // Context & Templates
         const promptTemplate = document.getElementById('chatCompletions_prompt_template').value;
         if (promptTemplate) payload.prompt_template_name = promptTemplate;
-        
+
         const characterIdStr = document.getElementById('chatCompletions_character_id').value;
         if (characterIdStr) {
             const characterId = parseInt(characterIdStr);
@@ -2545,7 +2545,7 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid character ID:', characterIdStr);
             }
         }
-        
+
         const conversationId = document.getElementById('chatCompletions_conversation_id').value;
         if (conversationId) {
             // Basic validation for conversation ID
@@ -2555,7 +2555,7 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid conversation ID format:', conversationId);
             }
         }
-        
+
         // Function Calling
         const toolsText = document.getElementById('chatCompletions_tools').value;
         if (toolsText && toolsText !== '[]') {
@@ -2568,7 +2568,7 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid tools JSON:', e);
             }
         }
-        
+
         const toolChoice = document.getElementById('chatCompletions_tool_choice').value;
         if (toolChoice === 'specific') {
             const toolChoiceJSON = document.getElementById('chatCompletions_tool_choice_json').value;
@@ -2585,11 +2585,11 @@ async function makeChatCompletionsRequest() {
         } else if (toolChoice !== 'auto') {
             payload.tool_choice = toolChoice;
         }
-        
+
         // Display the request payload for debugging
         console.log('Request payload:', payload);
         responseEl.textContent = 'Sending request with parameters:\n' + JSON.stringify(payload, null, 2) + '\n\n';
-        
+
         if (payload.stream) {
             // Handle streaming response
             responseEl.textContent += 'Streaming response:\n';
@@ -2765,7 +2765,7 @@ function highlightCode(src, lang) {
             // strings
             .replace(/(['"`])([^\\\n]|\\.|\n)*?\1/g, '<span class="tok-string">$&</span>')
             // numbers (no lookbehind)
-            .replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`) 
+            .replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`)
             // keywords
             .replace(kw, '$1<span class="tok-kw">$2</span>$3')
             // function names (simple heuristic)
@@ -2779,7 +2779,7 @@ function highlightCode(src, lang) {
         out = out
             .replace(/(#.*?$)/gm, '<span class="tok-comment">$1</span>')
             .replace(/(['"]).*?\1/g, '<span class="tok-string">$&</span>')
-            .replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`) 
+            .replace(/(^|[^\w\-])(-?\d+(?:\.\d+)?)(?![\w\-])/g, (m, pre, num) => `${pre}<span class="tok-number">${num}</span>`)
             .replace(kw, '$1<span class="tok-kw">$2</span>$3');
         return out;
     }
@@ -2796,14 +2796,14 @@ function updateSystemPrompt() {
         if (newSystemPrompt) {
             // Update the first message in chatMessages (system message)
             chatMessages[0] = {role: 'system', content: newSystemPrompt};
-            
+
             // Update the display in the chat messages
             const messagesDiv = document.getElementById('chat-messages');
             const systemMessageDiv = messagesDiv.querySelector('.chat-message.system');
             if (systemMessageDiv) {
                 systemMessageDiv.textContent = 'System: ' + newSystemPrompt;
             }
-            
+
             console.log('System prompt updated:', newSystemPrompt);
         }
     }
@@ -2821,12 +2821,12 @@ async function sendChatMessage() {
     const tempEl = document.getElementById('chat-temp');
     const topPEl = document.getElementById('chat-top-p');
     const maxTokEl = document.getElementById('chat-max-tokens');
-    
+
     if (!input.value.trim()) return;
-    
+
     const userMessage = input.value;
     input.value = '';
-    
+
     // Add user message to display
     const userDiv = document.createElement('div');
     userDiv.className = 'chat-message user';
@@ -2839,14 +2839,14 @@ async function sendChatMessage() {
     userDiv.appendChild(document.createTextNode(' '));
     userDiv.appendChild(userContent);
     messagesDiv.appendChild(userDiv);
-    
+
     // Add to messages array with history limit
     chatMessages.push({role: 'user', content: userMessage});
     if (chatMessages.length > MAX_CHAT_MESSAGES) {
         const systemMsg = chatMessages[0];
         chatMessages = [systemMsg, ...chatMessages.slice(-(MAX_CHAT_MESSAGES - 1))];
     }
-    
+
     // Create assistant message placeholder
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'chat-message assistant';
@@ -2863,17 +2863,17 @@ async function sendChatMessage() {
     assistantDiv.appendChild(answerContainer);
     assistantDiv.appendChild(toolsContainer);
     messagesDiv.appendChild(assistantDiv);
-    
+
     // Smooth scrolling
     requestAnimationFrame(() => {
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     });
-    
+
     try {
         // Get the provider if selected
         const providerSelect = document.getElementById('chat-provider');
         const provider = providerSelect ? providerSelect.value : '';
-        
+
         // Build request payload
         const requestPayload = {
             model: model,
@@ -2882,7 +2882,7 @@ async function sendChatMessage() {
             top_p: topPEl && topPEl.value ? parseFloat(topPEl.value) : 1,
             max_tokens: maxTokEl && maxTokEl.value ? parseInt(maxTokEl.value) : 1000
         };
-        
+
         // Add provider if selected
         if (provider) {
             requestPayload.api_provider = provider;
@@ -2996,17 +2996,17 @@ async function sendChatMessage() {
         }
 
         const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
-        
+
         if (response.choices && response.choices[0] && response.choices[0].message) {
             const assistantMessage = response.choices[0].message.content;
             chatMessages.push({role: 'assistant', content: assistantMessage});
-            
+
             // Limit chat history
             if (chatMessages.length > MAX_CHAT_MESSAGES) {
                 const systemMsg = chatMessages[0];
                 chatMessages = [systemMsg, ...chatMessages.slice(-(MAX_CHAT_MESSAGES - 1))];
             }
-            
+
             // Rebuild assistantDiv contents with markdown + tools
             assistantDiv.innerHTML = '';
             const label = document.createElement('strong');
@@ -3074,7 +3074,7 @@ async function sendChatMessage() {
         assistantDiv.appendChild(errorMsg);
         console.error('Chat error:', error);
     }
-    
+
     requestAnimationFrame(() => {
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     });
@@ -3084,7 +3084,7 @@ function clearChat() {
     // Get the current system prompt from the textarea
     const systemPromptTextarea = document.getElementById('chat-system-prompt');
     const currentSystemPrompt = systemPromptTextarea ? systemPromptTextarea.value.trim() : 'You are a helpful assistant.';
-    
+
     chatMessages = [
         {role: 'system', content: currentSystemPrompt}
     ];
@@ -3432,14 +3432,14 @@ async function exportCharacter() {
     const characterId = document.getElementById('exportCharacter_character_id').value;
     const format = document.getElementById('exportCharacter_format').value;
     const responseEl = document.getElementById('exportCharacter_response');
-    
+
     try {
         responseEl.textContent = 'Exporting...';
-        
+
         const response = await apiClient.get(`/api/v1/characters/${characterId}/export`, {
             format: format
         });
-        
+
         if (format === 'json' || format === 'markdown') {
             responseEl.textContent = typeof response === 'string' ? response : JSON.stringify(response, null, 2);
         } else {
@@ -3459,40 +3459,40 @@ async function createCharacter() {
     const responseEl = document.getElementById('charactersCreate_response');
     try {
         responseEl.textContent = 'Creating character...';
-        
+
         // Collect all form values
         const body = {};
-        
+
         // Required field
         const name = document.getElementById('charactersCreate_name').value;
         if (!name) {
             throw new Error('Character name is required');
         }
         body.name = name;
-        
+
         // Basic Information
         const description = document.getElementById('charactersCreate_description').value;
         if (description) body.description = description;
-        
+
         const personality = document.getElementById('charactersCreate_personality').value;
         if (personality) body.personality = personality;
-        
+
         const scenario = document.getElementById('charactersCreate_scenario').value;
         if (scenario) body.scenario = scenario;
-        
+
         // Conversation Settings
         const systemPrompt = document.getElementById('charactersCreate_system_prompt').value;
         if (systemPrompt) body.system_prompt = systemPrompt;
-        
+
         const postHistoryInstructions = document.getElementById('charactersCreate_post_history_instructions').value;
         if (postHistoryInstructions) body.post_history_instructions = postHistoryInstructions;
-        
+
         const firstMessage = document.getElementById('charactersCreate_first_message').value;
         if (firstMessage) body.first_message = firstMessage;
-        
+
         const messageExample = document.getElementById('charactersCreate_message_example').value;
         if (messageExample) body.message_example = messageExample;
-        
+
         // Handle alternate_greetings
         const alternateGreetingsValue = document.getElementById('charactersCreate_alternate_greetings').value;
         if (alternateGreetingsValue) {
@@ -3502,22 +3502,22 @@ async function createCharacter() {
                 body.alternate_greetings = alternateGreetingsValue.split(',').map(g => g.trim()).filter(g => g);
             }
         }
-        
+
         // Metadata
         const creator = document.getElementById('charactersCreate_creator').value;
         if (creator) body.creator = creator;
-        
+
         const creatorNotes = document.getElementById('charactersCreate_creator_notes').value;
         if (creatorNotes) body.creator_notes = creatorNotes;
-        
+
         const characterVersion = document.getElementById('charactersCreate_character_version').value;
         if (characterVersion) body.character_version = characterVersion;
-        
+
         const tags = document.getElementById('charactersCreate_tags').value;
         if (tags) {
             body.tags = tags.split(',').map(t => t.trim()).filter(t => t);
         }
-        
+
         const extensionsValue = document.getElementById('charactersCreate_extensions').value;
         if (extensionsValue && extensionsValue !== '{}') {
             try {
@@ -3526,10 +3526,10 @@ async function createCharacter() {
                 throw new Error('Extensions must be valid JSON');
             }
         }
-        
+
         const imageBase64 = document.getElementById('charactersCreate_image_base64').value;
         if (imageBase64) body.image_base64 = imageBase64;
-        
+
         const response = await apiClient.makeRequest('POST', '/api/v1/characters', { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Character created successfully');
@@ -3558,7 +3558,7 @@ async function getCharacter() {
         if (!characterId) {
             throw new Error('Character ID is required');
         }
-        
+
         responseEl.textContent = 'Loading character...';
         const response = await apiClient.makeRequest('GET', `/api/v1/characters/${characterId}`);
         responseEl.textContent = JSON.stringify(response, null, 2);
@@ -3575,10 +3575,10 @@ async function updateCharacter() {
         if (!characterId) {
             throw new Error('Character ID is required');
         }
-        
+
         const payload = document.getElementById('charactersUpdate_payload').value;
         const body = JSON.parse(payload);
-        
+
         responseEl.textContent = 'Updating character...';
         const response = await apiClient.makeRequest('PUT', `/api/v1/characters/${characterId}`, { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
@@ -3596,7 +3596,7 @@ async function deleteCharacter() {
         if (!characterId) {
             throw new Error('Character ID is required');
         }
-        
+
         responseEl.textContent = 'Deleting character...';
         const response = await apiClient.makeRequest('DELETE', `/api/v1/characters/${characterId}`);
         responseEl.textContent = response ? JSON.stringify(response, null, 2) : 'Character deleted successfully';
@@ -3612,21 +3612,21 @@ async function createConversation() {
     const responseEl = document.getElementById('conversationsCreate_response');
     try {
         responseEl.textContent = 'Creating conversation...';
-        
+
         const metadata = document.getElementById('conversationsCreate_metadata').value;
-        
+
         const body = {
             title: document.getElementById('conversationsCreate_title').value
         };
-        
+
         const characterId = document.getElementById('conversationsCreate_character_id').value;
         if (!characterId) throw new Error('Character ID is required');
         body.character_id = parseInt(characterId);
-        
+
         if (metadata && metadata.trim() !== '{}') {
             body.metadata = JSON.parse(metadata);
         }
-        
+
         const response = await apiClient.makeRequest('POST', '/api/v1/chats', { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Conversation created successfully');
@@ -3640,17 +3640,17 @@ async function listConversations() {
     const responseEl = document.getElementById('conversationsList_response');
     try {
         responseEl.textContent = 'Loading conversations...';
-        
+
         const params = new URLSearchParams();
         const characterId = document.getElementById('conversationsList_character_id').value;
         if (characterId) params.append('character_id', characterId);
-        
+
         const limit = document.getElementById('conversationsList_limit').value;
         if (limit) params.append('limit', limit);
-        
+
         const queryString = params.toString();
         const url = queryString ? `/api/v1/chats?${queryString}` : '/api/v1/chats';
-        
+
         const response = await apiClient.makeRequest('GET', url);
         responseEl.textContent = JSON.stringify(response, null, 2);
     } catch (error) {
@@ -3666,12 +3666,12 @@ async function getConversationDetails() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         responseEl.textContent = 'Loading conversation...';
-        
+
         const includeMessages = document.getElementById('conversationsGet_include_messages').checked;
         const params = includeMessages ? '?include_messages=true' : '';
-        
+
         const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = JSON.stringify(response, null, 2);
     } catch (error) {
@@ -3687,30 +3687,30 @@ async function sendConversationMessage() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         const message = document.getElementById('conversationsChat_message').value;
         if (!message) {
             throw new Error('Message is required');
         }
-        
+
         responseEl.textContent = 'Sending message...';
-        
+
         const body = { message };
-        
+
         const model = document.getElementById('conversationsChat_model').value;
         if (model) body.model = model;
-        
+
         const temperature = document.getElementById('conversationsChat_temperature').value;
         if (temperature) body.temperature = parseFloat(temperature);
-        
+
         const stream = document.getElementById('conversationsChat_stream').checked;
         body.stream = stream;
-        
+
         // Always use messages endpoint (no streaming)
         const payload = { role: 'user', content: message };
         const response = await apiClient.makeRequest('POST', `/api/v1/chats/${conversationId}/messages`, { body: payload });
         responseEl.textContent = JSON.stringify(response, null, 2);
-        
+
         Toast.success('Message sent successfully');
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
@@ -3725,10 +3725,10 @@ async function updateConversation() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         const payload = document.getElementById('conversationsUpdate_payload').value;
         const body = JSON.parse(payload);
-        
+
         responseEl.textContent = 'Updating conversation...';
         const filtered = {};
         if (body.title) filtered.title = body.title;
@@ -3749,7 +3749,7 @@ async function deleteConversation() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         responseEl.textContent = 'Deleting conversation...';
         const response = await apiClient.makeRequest('DELETE', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = response ? JSON.stringify(response, null, 2) : 'Conversation deleted successfully';
@@ -3767,18 +3767,18 @@ async function exportConversation() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         const format = document.getElementById('conversationsExport_format').value;
-        
+
         responseEl.textContent = 'Exporting conversation...';
         const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}/export?format=${format}`);
-        
+
         if (format === 'json') {
             responseEl.textContent = JSON.stringify(response, null, 2);
         } else {
             responseEl.textContent = response;
         }
-        
+
         Toast.success('Conversation exported successfully');
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
@@ -3859,10 +3859,10 @@ async function populateModelDropdowns() {
     try {
         // Get available providers from API
         const providersInfo = await apiClient.getAvailableProviders();
-        
+
         // Store globally for filtering
         globalProvidersInfo = providersInfo;
-        
+
         if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
             console.warn('No LLM providers configured');
             document.querySelectorAll('.llm-model-select').forEach(select => {
@@ -3870,63 +3870,63 @@ async function populateModelDropdowns() {
             });
             return;
         }
-        
+
         // Build options HTML
         let optionsHtml = '';
         const defaultProvider = providersInfo.default_provider;
         let defaultModel = null;
-        
+
         const sortedProviders = providersInfo.providers.sort((a, b) => {
             if (a.type === 'commercial' && b.type === 'local') return -1;
             if (a.type === 'local' && b.type === 'commercial') return 1;
             return a.display_name.localeCompare(b.display_name);
         });
-        
+
         sortedProviders.forEach(provider => {
             if (provider.models && provider.models.length > 0) {
                 optionsHtml += `<optgroup label="${provider.display_name}">`;
-                
+
                 provider.models.forEach(model => {
                     const value = `${provider.name}/${model}`;
                     const displayName = model;
                     const isDefault = provider.name === defaultProvider && provider.default_model === model;
-                    
+
                     if (isDefault) {
                         defaultModel = value;
                     }
-                    
+
                     optionsHtml += `<option value="${value}"${isDefault ? ' data-default="true"' : ''}>${displayName}${isDefault ? ' (default)' : ''}</option>`;
                 });
-                
+
                 optionsHtml += '</optgroup>';
             }
         });
-        
+
         // Update all model select dropdowns
         document.querySelectorAll('.llm-model-select').forEach(select => {
             const currentValue = select.value;
             const hasUseDefault = select.querySelector('option[value=""]');
-            
+
             let html = '';
             if (hasUseDefault && hasUseDefault.textContent.includes('Use default')) {
                 html = '<option value="">Use default</option>';
             }
             html += optionsHtml;
-            
+
             select.innerHTML = html;
-            
+
             if (currentValue) {
                 select.value = currentValue;
             } else if (defaultModel && !hasUseDefault) {
                 select.value = defaultModel;
             }
         });
-        
+
         console.log(`Populated model dropdowns with ${providersInfo.total_configured} providers`);
-        
+
         // Set up provider change event listeners
         setupProviderChangeListeners();
-        
+
     } catch (error) {
         console.error('Failed to populate model dropdowns:', error);
         document.querySelectorAll('.llm-model-select').forEach(select => {
@@ -3939,16 +3939,16 @@ async function populateModelDropdowns() {
 function filterModelsByProvider(providerSelectId, modelSelectId) {
     const providerSelect = document.getElementById(providerSelectId);
     const modelSelect = document.getElementById(modelSelectId);
-    
+
     if (!providerSelect || !modelSelect || !globalProvidersInfo) {
         return;
     }
-    
+
     const selectedProvider = providerSelect.value;
-    
+
     // Clear current options
     modelSelect.innerHTML = '';
-    
+
     if (!selectedProvider || selectedProvider === '') {
         // If "Default" or no provider selected, show all models grouped by provider
         const sortedProviders = globalProvidersInfo.providers.sort((a, b) => {
@@ -3956,12 +3956,12 @@ function filterModelsByProvider(providerSelectId, modelSelectId) {
             if (a.type === 'local' && b.type === 'commercial') return 1;
             return a.display_name.localeCompare(b.display_name);
         });
-        
+
         sortedProviders.forEach(provider => {
             if (provider.models && provider.models.length > 0) {
                 const optgroup = document.createElement('optgroup');
                 optgroup.label = provider.display_name;
-                
+
                 provider.models.forEach(model => {
                     const option = document.createElement('option');
                     option.value = `${provider.name}/${model}`;
@@ -3972,11 +3972,11 @@ function filterModelsByProvider(providerSelectId, modelSelectId) {
                     }
                     optgroup.appendChild(option);
                 });
-                
+
                 modelSelect.appendChild(optgroup);
             }
         });
-        
+
         // Select default model if available
         const defaultOption = modelSelect.querySelector('[data-default="true"]');
         if (defaultOption) {
@@ -3993,7 +3993,7 @@ function filterModelsByProvider(providerSelectId, modelSelectId) {
                 option.textContent = model;
                 modelSelect.appendChild(option);
             });
-            
+
             // Select first model by default
             if (provider.models.length > 0) {
                 modelSelect.value = `${provider.name}/${provider.models[0]}`;
@@ -4016,19 +4016,19 @@ function setupProviderChangeListeners() {
         // Remove any existing listeners first
         const newProvider = chatCompletionsProvider.cloneNode(true);
         chatCompletionsProvider.parentNode.replaceChild(newProvider, chatCompletionsProvider);
-        
+
         newProvider.addEventListener('change', () => {
             filterModelsByProvider('chatCompletions_provider', 'chatCompletions_model');
         });
     }
-    
+
     // Add event listener for interactive chat provider dropdown
     const chatProvider = document.getElementById('chat-provider');
     if (chatProvider) {
         // Remove any existing listeners first
         const newProvider = chatProvider.cloneNode(true);
         chatProvider.parentNode.replaceChild(newProvider, chatProvider);
-        
+
         newProvider.addEventListener('change', () => {
             filterModelsByProvider('chat-provider', 'chat-model');
         });
@@ -4042,48 +4042,48 @@ function setupProviderChangeListeners() {
 async function createPrompt() {
     const responseEl = document.getElementById('promptsCreate_response');
     const curlEl = document.getElementById('promptsCreate_curl');
-    
+
     try {
         // Collect form data
         const name = document.getElementById('promptsCreate_name').value.trim();
         if (!name) {
             throw new Error('Name is required');
         }
-        
+
         const payload = {
             name: name
         };
-        
+
         // Add optional fields if they have values
         const systemPrompt = document.getElementById('promptsCreate_system_prompt').value.trim();
         if (systemPrompt) {
             payload.system_prompt = systemPrompt;
         }
-        
+
         const userPrompt = document.getElementById('promptsCreate_user_prompt').value.trim();
         if (userPrompt) {
             payload.user_prompt = userPrompt;
         }
-        
+
         const details = document.getElementById('promptsCreate_details').value.trim();
         if (details) {
             payload.details = details;
         }
-        
+
         const author = document.getElementById('promptsCreate_author').value.trim();
         if (author) {
             payload.author = author;
         }
-        
+
         const keywordsStr = document.getElementById('promptsCreate_keywords').value.trim();
         if (keywordsStr) {
             // Convert comma-separated string to array
             payload.keywords = keywordsStr.split(',').map(k => k.trim()).filter(k => k);
         }
-        
+
         // Make the API request
         responseEl.textContent = 'Creating prompt...';
-        
+
         // Generate cURL command
         const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
             ? apiClient.generateCurlV2('POST', '/api/v1/prompts', { body: payload })
@@ -4091,15 +4091,15 @@ async function createPrompt() {
         if (curlEl) {
             curlEl.textContent = curlCommand;
         }
-        
+
         const response = await apiClient.makeRequest('POST', '/api/v1/prompts', { body: payload });
         responseEl.textContent = JSON.stringify(response, null, 2);
-        
+
         // Show success message
         if (typeof Toast !== 'undefined' && Toast.success) {
             Toast.success('Prompt created successfully');
         }
-        
+
         // Optionally clear the form
         document.getElementById('promptsCreate_name').value = '';
         document.getElementById('promptsCreate_system_prompt').value = '';
@@ -4107,7 +4107,7 @@ async function createPrompt() {
         document.getElementById('promptsCreate_details').value = '';
         document.getElementById('promptsCreate_author').value = '';
         document.getElementById('promptsCreate_keywords').value = '';
-        
+
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
         if (typeof Toast !== 'undefined' && Toast.error) {
@@ -5135,8 +5135,8 @@ async function watchlistsGetRun() {
             const hist = (r?.stats && r.stats.history) ? r.stats.history : null;
             const pages = document.getElementById('watchlistsRun_histPages');
             const stop = document.getElementById('watchlistsRun_histStopOnSeen');
-            if (pages) pages.textContent = hist && typeof hist.pages_fetched !== 'undefined' ? String(hist.pages_fetched) : '—';
-            if (stop) stop.textContent = hist && typeof hist.stop_on_seen_triggered !== 'undefined' ? String(!!hist.stop_on_seen_triggered) : '—';
+            if (pages) pages.textContent = hist && typeof hist.pages_fetched !== 'undefined' ? String(hist.pages_fetched) : '-';
+            if (stop) stop.textContent = hist && typeof hist.stop_on_seen_triggered !== 'undefined' ? String(!!hist.stop_on_seen_triggered) : '-';
         } catch (_) {}
         watchlistsSetResponse('watchlistsRun_response', r);
     } catch (err) {

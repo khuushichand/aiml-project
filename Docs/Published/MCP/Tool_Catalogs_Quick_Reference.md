@@ -1,12 +1,12 @@
-# MCP Tool Catalogs — Quick Reference
+# MCP Tool Catalogs - Quick Reference
 
-Group tools into named catalogs so clients can discover a focused subset instead of thousands at once. Catalogs can be global, organization‑scoped, or team‑scoped.
+Group tools into named catalogs so clients can discover a focused subset instead of thousands at once. Catalogs can be global, organization-scoped, or team-scoped.
 
 ## Discovery Filters
 - HTTP: `GET /api/v1/mcp/tools?catalog=<name>` or `?catalog_id=<id>` (auth required)
-- JSON‑RPC: `tools/list` with `{ "catalog": "name" }` or `{ "catalog_id": 42 }`
+- JSON-RPC: `tools/list` with `{ "catalog": "name" }` or `{ "catalog_id": 42 }`
 - Name resolution precedence: team > org > global. When both provided, `catalog_id` takes precedence.
-- Discovery responses include `canExecute` per tool. Catalog membership does not grant execute permissions — RBAC still applies.
+- Discovery responses include `canExecute` per tool. Catalog membership does not grant execute permissions - RBAC still applies.
 
 ### Examples
 ```bash
@@ -20,7 +20,7 @@ curl -H "Authorization: Bearer <token>" \
 ```
 
 ```json
-// JSON‑RPC
+// JSON-RPC
 {
   "jsonrpc": "2.0",
   "method": "tools/list",

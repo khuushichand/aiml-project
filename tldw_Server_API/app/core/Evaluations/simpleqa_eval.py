@@ -25,12 +25,12 @@ logger = logger
 
 class SimpleQAEvaluation(BaseEvaluation):
     """Evaluation for SimpleQA factuality benchmark."""
-    
-    def __init__(self, name: str = "simpleqa", 
+
+    def __init__(self, name: str = "simpleqa",
                  grading_model: str = "openai",
                  strict_grading: bool = True):
         """Initialize SimpleQA evaluation.
-        
+
         Args:
             name: Evaluation name
             grading_model: Model to use for grading (openai, anthropic, etc.)
@@ -39,13 +39,13 @@ class SimpleQAEvaluation(BaseEvaluation):
         super().__init__(name, "SimpleQA factuality evaluation")
         self.grading_model = grading_model
         self.strict_grading = strict_grading
-    
+
     def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Format SimpleQA question for evaluation.
-        
+
         Args:
             input_data: Contains 'question', 'answer', and optional 'topic'
-            
+
         Returns:
             Formatted evaluation data
         """
@@ -53,12 +53,12 @@ class SimpleQAEvaluation(BaseEvaluation):
         expected_answer = input_data.get("answer", "")
         topic = input_data.get("topic", "general")
         metadata = input_data.get("metadata", {})
-        
+
         # SimpleQA uses a specific prompt format for evaluation
         evaluation_prompt = self._create_grading_prompt(
             question, expected_answer, "{model_response}"
         )
-        
+
         return {
             "name": f"{self.name}_factuality",
             "description": f"{self.description} - {topic}",
@@ -82,11 +82,11 @@ class SimpleQAEvaluation(BaseEvaluation):
                 "strict_grading": self.strict_grading
             }
         }
-    
-    def _create_grading_prompt(self, question: str, expected_answer: str, 
+
+    def _create_grading_prompt(self, question: str, expected_answer: str,
                               model_response: str) -> str:
         """Create the grading prompt for SimpleQA.
-        
+
         SimpleQA uses a specific grading approach with three categories:
         - correct: The answer is factually correct
         - incorrect: The answer contains factual errors
@@ -139,15 +139,15 @@ Grade as:
 
 GRADE: [correct/incorrect/not_attempted]
 EXPLANATION: [brief explanation]"""
-        
+
         return prompt
-    
+
     def parse_response(self, response: str) -> str:
         """Parse model response for SimpleQA.
-        
+
         Args:
             response: Raw model response
-            
+
         Returns:
             Cleaned response text
         """
@@ -155,7 +155,7 @@ EXPLANATION: [brief explanation]"""
         # Remove any markdown formatting
         response = re.sub(r'```[^`]*```', '', response)
         response = re.sub(r'`([^`]*)`', r'\1', response)
-        
+
         # Remove common prefixes
         prefixes_to_remove = [
             "The answer is:",
@@ -164,24 +164,24 @@ EXPLANATION: [brief explanation]"""
             "Based on the question,",
             "According to my knowledge,",
         ]
-        
+
         response_lower = response.lower()
         for prefix in prefixes_to_remove:
             if response_lower.startswith(prefix.lower()):
                 response = response[len(prefix):].strip()
                 break
-        
+
         return response.strip()
-    
+
     def score(self, predicted: str, expected: str) -> Tuple[float, str]:
         """Score a SimpleQA answer.
-        
+
         This is a simplified scoring for when not using LLM grading.
-        
+
         Args:
             predicted: Model's answer
             expected: Expected answer
-            
+
         Returns:
             Tuple of (score, grade) where grade is 'correct', 'incorrect', or 'not_attempted'
         """
@@ -198,37 +198,37 @@ EXPLANATION: [brief explanation]"""
             "no information",
             "insufficient information"
         ]
-        
+
         predicted_lower = predicted.lower().strip()
-        
+
         for phrase in non_attempt_phrases:
             if phrase in predicted_lower:
                 return 0.0, "not_attempted"
-        
+
         # If response is too short, consider it not attempted
         if len(predicted_lower.split()) < 2:
             return 0.0, "not_attempted"
-        
+
         # Normalize for comparison
         expected_lower = expected.lower().strip()
-        
+
         # Check for exact match (after normalization)
         if predicted_lower == expected_lower:
             return 1.0, "correct"
-        
+
         # Check if expected answer is contained in prediction
         if expected_lower in predicted_lower:
             return 1.0, "correct"
-        
+
         # Check for common variations
         # Numbers
         if self._normalize_numbers(predicted_lower) == self._normalize_numbers(expected_lower):
             return 1.0, "correct"
-        
+
         # For more complex cases, we'd need LLM grading
         # Default to incorrect if we can't determine
         return 0.0, "incorrect"
-    
+
     def _normalize_numbers(self, text: str) -> str:
         """Normalize number representations in text."""
         # Convert written numbers to digits
@@ -237,21 +237,21 @@ EXPLANATION: [brief explanation]"""
             'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9',
             'ten': '10', 'eleven': '11', 'twelve': '12'
         }
-        
+
         for word, digit in number_map.items():
             text = text.replace(word, digit)
-        
+
         # Remove commas from numbers
         text = re.sub(r'(\d),(\d)', r'\1\2', text)
-        
+
         return text
-    
+
     def parse_grading_response(self, grading_response: str) -> Dict[str, Any]:
         """Parse the grading response from LLM.
-        
+
         Args:
             grading_response: Response from grading LLM
-            
+
         Returns:
             Dict with grade and explanation
         """
@@ -260,18 +260,18 @@ EXPLANATION: [brief explanation]"""
             "explanation": "",
             "score": 0.0
         }
-        
+
         # Look for grade
         grade_match = re.search(
-            r'GRADE:\s*(correct|incorrect|not_attempted)', 
-            grading_response, 
+            r'GRADE:\s*(correct|incorrect|not_attempted)',
+            grading_response,
             re.IGNORECASE
         )
-        
+
         if grade_match:
             grade = grade_match.group(1).lower()
             result["grade"] = grade
-            
+
             # Assign score based on grade
             if grade == "correct":
                 result["score"] = 1.0
@@ -279,39 +279,39 @@ EXPLANATION: [brief explanation]"""
                 result["score"] = 0.0  # Could be different if we want to penalize less
             else:  # incorrect
                 result["score"] = 0.0
-        
+
         # Look for explanation
         explanation_match = re.search(
-            r'EXPLANATION:\s*(.+?)(?:\n|$)', 
-            grading_response, 
+            r'EXPLANATION:\s*(.+?)(?:\n|$)',
+            grading_response,
             re.IGNORECASE | re.DOTALL
         )
-        
+
         if explanation_match:
             result["explanation"] = explanation_match.group(1).strip()
-        
+
         return result
 
 
 class SimpleQADataset:
     """Helper class for loading and managing SimpleQA dataset."""
-    
+
     @staticmethod
     def load_from_file(filepath: str) -> List[Dict[str, Any]]:
         """Load SimpleQA dataset from file.
-        
+
         Args:
             filepath: Path to dataset file (JSON or JSONL)
-            
+
         Returns:
             List of question-answer pairs
         """
         questions = []
         path = Path(filepath)
-        
+
         if not path.exists():
             raise FileNotFoundError(f"Dataset file not found: {filepath}")
-        
+
         # Determine format
         if path.suffix == '.jsonl':
             with open(path, 'r', encoding='utf-8') as f:
@@ -321,7 +321,7 @@ class SimpleQADataset:
         else:  # Assume JSON
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                
+
                 # Handle different JSON structures
                 if isinstance(data, list):
                     questions = data
@@ -336,18 +336,18 @@ class SimpleQADataset:
                     else:
                         # Assume single question
                         questions = [data]
-        
+
         return questions
-    
+
     @staticmethod
     def load_from_huggingface(dataset_id: str = "openai/simple-qa",
                             split: str = "test") -> List[Dict[str, Any]]:
         """Load SimpleQA from HuggingFace.
-        
+
         Args:
             dataset_id: HuggingFace dataset ID
             split: Dataset split to load
-            
+
         Returns:
             List of question-answer pairs
         """
@@ -356,10 +356,10 @@ class SimpleQADataset:
         except ImportError:
             logger.error("HuggingFace datasets not installed. Install with: pip install datasets")
             return []
-        
+
         try:
             dataset = load_dataset(dataset_id, split=split)
-            
+
             questions = []
             for item in dataset:
                 # Map to standard format
@@ -372,24 +372,24 @@ class SimpleQADataset:
                         "dataset_id": dataset_id
                     }
                 }
-                
+
                 # Include any additional fields
                 for key in item:
                     if key not in ["question", "answer", "topic", "prompt", "target", "category"]:
                         question["metadata"][key] = item[key]
-                
+
                 questions.append(question)
-            
+
             return questions
-            
+
         except Exception as e:
             logger.error(f"Failed to load SimpleQA from HuggingFace: {e}")
             return []
-    
+
     @staticmethod
     def create_sample_dataset() -> List[Dict[str, Any]]:
         """Create a sample SimpleQA dataset for testing.
-        
+
         Returns:
             List of sample questions
         """
@@ -449,33 +449,33 @@ class SimpleQADataset:
 
 class SimpleQAAnalyzer:
     """Analyzer for SimpleQA results."""
-    
+
     @staticmethod
     def analyze_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze SimpleQA evaluation results.
-        
+
         Args:
             results: List of evaluation results
-            
+
         Returns:
             Analysis dict with metrics
         """
         if not results:
             return {}
-        
+
         # Count grades
         grade_counts = {
             "correct": 0,
             "incorrect": 0,
             "not_attempted": 0
         }
-        
+
         topic_performance = {}
-        
+
         for result in results:
             grade = result.get("grade", "incorrect")
             grade_counts[grade] += 1
-            
+
             # Track by topic
             topic = result.get("topic", "unknown")
             if topic not in topic_performance:
@@ -485,22 +485,22 @@ class SimpleQAAnalyzer:
                     "not_attempted": 0,
                     "total": 0
                 }
-            
+
             topic_performance[topic][grade] += 1
             topic_performance[topic]["total"] += 1
-        
+
         total = len(results)
-        
+
         # Calculate metrics
         accuracy = grade_counts["correct"] / total if total > 0 else 0
         attempt_rate = 1 - (grade_counts["not_attempted"] / total) if total > 0 else 0
-        
+
         # Calculate topic accuracies
         topic_accuracies = {}
         for topic, stats in topic_performance.items():
             if stats["total"] > 0:
                 topic_accuracies[topic] = stats["correct"] / stats["total"]
-        
+
         return {
             "total_questions": total,
             "grade_distribution": grade_counts,
@@ -515,24 +515,24 @@ class SimpleQAAnalyzer:
             "best_topic": max(topic_accuracies.items(), key=lambda x: x[1])[0] if topic_accuracies else None,
             "worst_topic": min(topic_accuracies.items(), key=lambda x: x[1])[0] if topic_accuracies else None
         }
-    
+
     @staticmethod
-    def generate_report(results: List[Dict[str, Any]], 
+    def generate_report(results: List[Dict[str, Any]],
                        benchmark_name: str = "SimpleQA") -> str:
         """Generate a formatted report of SimpleQA results.
-        
+
         Args:
             results: List of evaluation results
             benchmark_name: Name for the report
-            
+
         Returns:
             Formatted report string
         """
         analysis = SimpleQAAnalyzer.analyze_results(results)
-        
+
         if not analysis:
             return f"{benchmark_name}: No results to analyze"
-        
+
         report = [
             f"{'=' * 60}",
             f"{benchmark_name} Evaluation Report",
@@ -549,28 +549,28 @@ class SimpleQAAnalyzer:
             f"  Not Attempted: {analysis['grade_distribution']['not_attempted']} ({analysis['grade_distribution']['not_attempted']/analysis['total_questions']:.1%})",
             ""
         ]
-        
+
         if analysis.get('topic_accuracies'):
             report.extend([
                 "Performance by Topic:",
                 "-" * 30
             ])
-            
-            for topic, accuracy in sorted(analysis['topic_accuracies'].items(), 
+
+            for topic, accuracy in sorted(analysis['topic_accuracies'].items(),
                                          key=lambda x: x[1], reverse=True):
                 stats = analysis['topic_performance'][topic]
                 report.append(
                     f"  {topic}: {accuracy:.1%} "
                     f"({stats['correct']}/{stats['total']} correct)"
                 )
-            
+
             report.extend([
                 "",
                 f"Best Topic: {analysis['best_topic']} ({analysis['topic_accuracies'][analysis['best_topic']]:.1%})",
                 f"Worst Topic: {analysis['worst_topic']} ({analysis['topic_accuracies'][analysis['worst_topic']]:.1%})"
             ])
-        
+
         report.append("")
         report.append("=" * 60)
-        
+
         return "\n".join(report)

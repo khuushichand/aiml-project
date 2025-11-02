@@ -58,4 +58,3 @@ def test_workflows_db_crud(tmp_path):
     assert [e["event_type"] for e in events] == ["run_started", "step_completed"]
     events_since = db.get_events(run_id, since=1)
     assert len(events_since) == 1 and events_since[0]["event_seq"] == 2
-

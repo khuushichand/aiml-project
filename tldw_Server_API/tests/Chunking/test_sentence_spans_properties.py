@@ -21,4 +21,3 @@ def test_split_sentences_with_spans_round_trip_like():
             prev_end = end
             # Sentences produced should match source slices modulo leading/trailing whitespace
             assert sent.strip() == text[start:end].strip()
-

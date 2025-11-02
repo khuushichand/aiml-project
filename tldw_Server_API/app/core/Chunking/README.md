@@ -1,4 +1,4 @@
-# Chunking Module – Developer README
+# Chunking Module - Developer README
 
 This module provides robust, extensible text chunking for ingestion, RAG, embeddings, analytics, and downstream tasks. It includes a strategy registry, hierarchical chunking, and a template system that now supports learning rules from a “seed” document.
 
@@ -10,12 +10,12 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
 - Where used: API endpoints (`api/v1/endpoints/chunking.py`, `api/v1/endpoints/chunking_templates.py`), media and scraping services (`app/services/document_processing_service.py`, `app/services/enhanced_web_scraping_service.py`, `app/services/xml_processing_service.py`), and RAG pipelines.
 
 ## Layout
-- `base.py` — core types and interfaces (`ChunkingMethod`, `ChunkResult`, `ChunkerConfig`, `BaseChunkingStrategy`)
-- `chunker.py` — orchestrator, strategy registry, hierarchical helpers
-- `strategies/` — implementation of strategies (words, sentences, tokens, structure-aware, semantic, etc.)
-- `templates.py` — `TemplateProcessor`, `TemplateManager`, `TemplateClassifier`, `TemplateLearner`
-- `template_initialization.py` — seeds built-in templates to DB
-- `template_library/` — built-in template JSONs (auto-loaded/seeded)
+- `base.py` - core types and interfaces (`ChunkingMethod`, `ChunkResult`, `ChunkerConfig`, `BaseChunkingStrategy`)
+- `chunker.py` - orchestrator, strategy registry, hierarchical helpers
+- `strategies/` - implementation of strategies (words, sentences, tokens, structure-aware, semantic, etc.)
+- `templates.py` - `TemplateProcessor`, `TemplateManager`, `TemplateClassifier`, `TemplateLearner`
+- `template_initialization.py` - seeds built-in templates to DB
+- `template_library/` - built-in template JSONs (auto-loaded/seeded)
 
 ## Public API (Chunker)
 - `process_text(text, options=None, *, tokenizer_name_or_path=None, llm_call_func=None, llm_config=None) -> List[Dict]`
@@ -170,7 +170,7 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Offsets: When returning `ChunkResult`, prefer exact `start_char`/`end_char` spans taken from the source text; avoid naïve `.find()` when feasible.
   - Paragraphs strategy uses paragraph separators to compute per-paragraph spans directly from the source; chunk windows union these spans to produce precise `start_char`/`end_char` values.
   - In hierarchical mode, the `tokens` method uses strategy metadata to map local spans to global offsets; if metadata is unavailable, a bounded fallback is used.
-  - Grapheme safety: All strategies clamp `end_char` to a grapheme boundary. In non‑strict mode, only non‑visible trailing marks/selectors are absorbed. In strict mode (`strict_grapheme_end_expansion = true`), ZWJ sequences and emoji modifiers are also absorbed to preserve visual stability at chunk boundaries.
+  - Grapheme safety: All strategies clamp `end_char` to a grapheme boundary. In non-strict mode, only non-visible trailing marks/selectors are absorbed. In strict mode (`strict_grapheme_end_expansion = true`), ZWJ sequences and emoji modifiers are also absorbed to preserve visual stability at chunk boundaries.
 
 ## Tokens Strategy Notes
 - `TokenChunkingStrategy.chunk_with_metadata(...)` now emits precise character offsets when possible:
@@ -193,11 +193,11 @@ Behavior by method and overlap:
   - overlap > 0: emits all but the last chunk for each buffer and carries that last chunk forward so the overlap happens at the buffer boundary (deduplicate by removing a matching prefix on boundary).
   - overlap == 0: same withholding of the final chunk per buffer as above.
 
-In both cases, the boundary join uses a method‑aware separator to avoid token fragmentation (a space for `words`, newlines for structure‑heavy kinds). If you need exact source fidelity, prefer `chunk_text_with_metadata` or `process_text`, which normalize returned text to original spans by `start_offset`/`end_offset`.
+In both cases, the boundary join uses a method-aware separator to avoid token fragmentation (a space for `words`, newlines for structure-heavy kinds). If you need exact source fidelity, prefer `chunk_text_with_metadata` or `process_text`, which normalize returned text to original spans by `start_offset`/`end_offset`.
 
 ## Language Autodetection
 
-`process_text(..., options={"language": "auto"})` triggers lightweight script‑based detection when the language is not supplied (also the default). Detected codes include:
+`process_text(..., options={"language": "auto"})` triggers lightweight script-based detection when the language is not supplied (also the default). Detected codes include:
 - zh (CJK), ja (Hiragana/Katakana), th (Thai), hi (Devanagari/Hindi), ru (Cyrillic/Russian), ko (Hangul/Korean), ar (Arabic).
 
 These hints choose sensible tokenizers/splitters for strategies. You can always set `language` explicitly per call.
@@ -271,7 +271,7 @@ for ch in chunks:
 ```
 
 Notes:
-- Mapping is best‑effort: if a chunk overlaps a segment, the mapped times cover the overlapped portion proportionally.
+- Mapping is best-effort: if a chunk overlaps a segment, the mapped times cover the overlapped portion proportionally.
 - If multiple segments overlap a chunk, the first overlap is used.
 
 ## Config Settings (Regex Safety)
@@ -283,7 +283,7 @@ Configure regex safety for `ebook_chapters` via `Config_Files/config.txt` under 
 
 - `regex_disable_multiprocessing`
   - When `true`, disables process-based isolation fallback and uses thread-guarded execution only.
-  - Default: `true` (safer cross‑platform default).
+  - Default: `true` (safer cross-platform default).
 
 - `regex_simple_only`
   - When `true`, restricts custom chapter regex to a safe subset.
@@ -325,6 +325,6 @@ Example:
 - Performance:
   - Avoid expensive regex or O(n^2) scans inside hot paths; prefer precomputed spans and streaming.
   - Keep cache-friendly behavior (stable options, deterministic output).
-  
+
 ## Backwards Compatibility
 - `Chunking.improved_chunking_process(...)` shims to `Chunker.process_text(...)`. Prefer direct `Chunker` usage and migrate call sites over time.

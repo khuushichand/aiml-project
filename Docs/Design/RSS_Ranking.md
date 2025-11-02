@@ -63,13 +63,3 @@ https://github.com/mozilla-ai/byota
 https://levelup.gitconnected.com/recommendation-systems-an-architects-playbook-part-1-821809dfe8f9
 https://minifeed.net/welcome
 https://github.com/btrettel/specialized-bibs
-
-
-
-
-
-
-
-
-
-

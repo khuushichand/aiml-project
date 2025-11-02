@@ -547,7 +547,7 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
                 if 0 <= _jp <= 100:
                     priority = _jp if _jp > 10 else int(round((10 - max(1, _jp)) * (100.0 / 9.0)))
                 else:
-                    # Unknown scale — clamp into 0..100
+                    # Unknown scale - clamp into 0..100
                     priority = max(0, min(100, _jp))
 
                 # Make chunks

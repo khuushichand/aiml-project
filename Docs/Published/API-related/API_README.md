@@ -22,7 +22,7 @@ See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for th
 #### Chat
 
 - Chat API (OpenAI-compatible): `POST /api/v1/chat/completions`
-  - Streaming (SSE), persistence toggle, multi‑provider support
+  - Streaming (SSE), persistence toggle, multi-provider support
   - See: [Chat API Documentation](Chat_API_Documentation.md)
 
 - Character Chat API: sessions and messages under `/api/v1/chats` and `/api/v1/messages`
@@ -41,7 +41,7 @@ The RAG module provides advanced search and question-answering capabilities acro
   - Search across multiple databases (media, notes, characters, chat history)
   - Support for keyword filtering
   - Configurable search types (hybrid, semantic, fulltext)
-  
+
 - **`POST /api/v1/rag/search/advanced`** - Advanced search with full configuration control
   - Multiple search strategies (vanilla, query_fusion, HyDE)
   - Fine-tuned hybrid weights and similarity thresholds
@@ -54,7 +54,7 @@ The RAG module provides advanced search and question-answering capabilities acro
   - Conversational interface with memory
   - Automatic search across specified databases
   - Returns response with source citations
-  
+
 - **`POST /api/v1/rag/agent/advanced`** - Research agent with advanced capabilities
   - Multiple modes (RAG, research)
   - Tool support (web_search, reasoning, calculator, code_execution)

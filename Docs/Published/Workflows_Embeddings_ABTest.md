@@ -1,4 +1,4 @@
-# Workflow: Vector Search — Embeddings Model Comparison (A/B Test)
+# Workflow: Vector Search - Embeddings Model Comparison (A/B Test)
 
 Goal: compare multiple embedding models/providers against the same imported corpus and the same inline QA pairs, using vector-only retrieval metrics to select the best embedding model for your data.
 
@@ -59,14 +59,14 @@ curl -sS "http://127.0.0.1:8000/api/v1/evaluations/embeddings/abtest/<TEST_ID>/s
 - Scope by `media_ids` or, if omitted, test across your default per-user collection.
 - Export results to CSV/JSON for further analysis using the export endpoint.
 
-## Workflows: Ad‑hoc + Schedule (Inline QA + Keyword Collections)
+## Workflows: Ad-hoc + Schedule (Inline QA + Keyword Collections)
 
 Use the sample workflow at `Samples/Workflows/embeddings_abtest_inline.workflow.json`. It:
 - Searches media by your `keyword_filter` collection and plucks `media_ids`
 - Creates an Embeddings A/B test with inline QA pairs (`inputs.qa_samples`) and your arms list (`inputs.arms`)
 - Starts the test
 
-Run ad‑hoc once:
+Run ad-hoc once:
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:8000/api/v1/workflows/run?mode=async" \
@@ -107,22 +107,22 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/scheduler/workflows \
       }'
 ```
 
-### Auth Tips (Ad‑hoc and Scheduled)
+### Auth Tips (Ad-hoc and Scheduled)
 
-- Ad‑hoc (multi-user): pass a short‑lived JWT via `secrets.jwt` in the run request. Steps use:
+- Ad-hoc (multi-user): pass a short-lived JWT via `secrets.jwt` in the run request. Steps use:
   - `Authorization: {{ secrets.jwt and ('Bearer ' ~ secrets.jwt) or '' }}`
-  - `X-API-KEY: {{ secrets.api_key or inputs.api_key or '' }}` (for single‑user)
+  - `X-API-KEY: {{ secrets.api_key or inputs.api_key or '' }}` (for single-user)
 
 - Scheduled runs: set environment fallbacks on the server:
-  - `WORKFLOWS_DEFAULT_BEARER_TOKEN` for multi‑user
-  - `WORKFLOWS_DEFAULT_API_KEY` for single‑user
+  - `WORKFLOWS_DEFAULT_BEARER_TOKEN` for multi-user
+  - `WORKFLOWS_DEFAULT_API_KEY` for single-user
   - Optional sanity validation before first outbound call (per run):
     - `WORKFLOWS_VALIDATE_DEFAULT_AUTH=true`
     - Optional base override: `WORKFLOWS_INTERNAL_BASE_URL=http://127.0.0.1:8000`
     - The engine uses `GET /api/v1/workflows/auth/check` to verify the token once.
 
-- Virtual keys for schedules: mint a short‑lived JWT (scope=workflows) and set it as `WORKFLOWS_DEFAULT_BEARER_TOKEN`.
-  - `POST /api/v1/workflows/auth/virtual-key` (admin; multi‑user)
+- Virtual keys for schedules: mint a short-lived JWT (scope=workflows) and set it as `WORKFLOWS_DEFAULT_BEARER_TOKEN`.
+  - `POST /api/v1/workflows/auth/virtual-key` (admin; multi-user)
     - body: `{ "ttl_minutes": 60, "scope": "workflows", "schedule_id": "..." }`
     - returns `{ token, expires_at, scope, schedule_id }`
   - For stricter isolation, consider enforcing `scope == 'workflows'` and matching `schedule_id` in downstream endpoints.

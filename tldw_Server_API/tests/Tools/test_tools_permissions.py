@@ -46,4 +46,3 @@ def test_tools_execute_forbidden_without_permission_multi_user():
     finally:
         # Clean up override for isolation across tests
         app.dependency_overrides.pop(get_request_user, None)
-

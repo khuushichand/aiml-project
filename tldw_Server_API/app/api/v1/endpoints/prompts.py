@@ -361,9 +361,9 @@ async def export_keywords_api(
         with open(file_path, "rb") as f:
             file_bytes = f.read()
         file_b64 = base64.b64encode(file_bytes).decode('utf-8')
-        try: 
+        try:
             os.remove(file_path)
-        except OSError as e: 
+        except OSError as e:
             logger.debug(f"Failed to remove temporary export file {file_path}: {e}")
         return schemas.ExportResponse(message=status_msg, file_content_b64=file_b64)
     except Exception as e:

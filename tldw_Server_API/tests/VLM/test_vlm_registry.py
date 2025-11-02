@@ -12,4 +12,3 @@ def test_vlm_list_backends_importable():
 
     # get_backend('nonexistent') should return None
     assert get_backend("__nope__") is None
-

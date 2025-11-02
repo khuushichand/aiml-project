@@ -993,7 +993,7 @@ async def delete_by_filter(
                         if v is None:
                             continue
                         if isinstance(v, dict):
-                            # Operators like $in/$gte etc — consider non-empty as concrete
+                            # Operators like $in/$gte etc - consider non-empty as concrete
                             if any(True for _ in v.items()):
                                 return True
                         else:

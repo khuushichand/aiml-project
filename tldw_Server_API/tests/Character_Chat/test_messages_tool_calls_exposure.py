@@ -71,4 +71,3 @@ async def test_get_single_message_includes_tool_calls_field_when_requested():
             assert "tool_calls" in msg
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-

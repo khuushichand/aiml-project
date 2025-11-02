@@ -60,4 +60,3 @@ def test_highlights_crud(client_with_user):
     # Update non-existent -> 404
     r = client.patch(f"/api/v1/reading/highlights/{hid}", json={"note": "oops"})
     assert r.status_code == 404
-

@@ -19,4 +19,3 @@ prompts.search: read
 # Example of custom tool names (if your modules define them):
 # mock_ingest: ingestion
 # mock_read: read
-

@@ -1,4 +1,4 @@
-# PGVector Hybrid Retrieval – Product Requirements Document
+# PGVector Hybrid Retrieval - Product Requirements Document
 
 ## 1. Background
 - The current `PGVectorAdapter` (`tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py`) implements the `VectorStoreAdapter` interface and is wired in through the factory (`vector_stores/factory.py`) whenever Postgres is selected in the RAG configuration (`Docs/RAG` guidance, `VectorStoreConfig.store_type = PGVECTOR`).
@@ -95,25 +95,25 @@
 - Emit structured log per query including `mode`, `vector_rows`, `fts_rows`, `combined_rows`, and final `top_k`.
 
 ## 7. Milestones & Deliverables
-1. **M0 – Design Finalization (Week 0)**
+1. **M0 - Design Finalization (Week 0)**
    - Approve PRD.
    - Define sample collection for regression tests (mix of keyword/semantic docs).
 
-2. **M1 – Schema & Upsert (Week 1)**
+2. **M1 - Schema & Upsert (Week 1)**
    - Implement ALTER/CREATE logic for `tsvector` and indexes.
    - Update upsert path; add unit tests covering generated columns and metadata inclusion.
 
-3. **M2 – Hybrid Query Engine (Week 2)**
+3. **M2 - Hybrid Query Engine (Week 2)**
    - Implement hybrid SQL execution.
    - Add configuration toggles and validation.
    - Extend Prometheus metrics.
 
-4. **M3 – Integration & QA (Week 3)**
+4. **M3 - Integration & QA (Week 3)**
    - Write integration tests using ephemeral Postgres (pytest + docker fixture or Local cluster).
    - Benchmark sample workloads; document tuning recommendations.
    - Update RAG docs and config examples.
 
-5. **M4 – Release Prep (Week 4)**
+5. **M4 - Release Prep (Week 4)**
    - Feature flag default off; run internal soak.
    - Prepare migration guide for existing deployments.
    - Merge behind config guard; communicate in changelog.

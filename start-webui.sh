@@ -3,7 +3,7 @@
 # TLDW Server - WebUI Launcher
 # Run from project root directory
 
-echo "===========================================" 
+echo "==========================================="
 echo "      TLDW Server - WebUI Launcher"
 echo "==========================================="
 echo ""

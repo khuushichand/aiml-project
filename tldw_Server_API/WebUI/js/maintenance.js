@@ -1,4 +1,4 @@
-// maintenance.js — migrate inline handlers to module
+// maintenance.js - migrate inline handlers to module
 
 function parseMediaIds(text) {
   if (!text) return [];

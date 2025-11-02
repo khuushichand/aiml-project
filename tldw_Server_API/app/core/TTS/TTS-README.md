@@ -31,7 +31,7 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **Dia** | Local PyTorch | EN | ✅ (dialogue prompts) | Multi-speaker dialogue specialist |
 | **VibeVoice** | Local PyTorch | 12 | ✅ (Any) | Long-form (90min), spontaneous music |
 | **IndexTTS2** | Local PyTorch | EN/zh | ✅ (reference) | Zero-shot cloning, emotion prompts, low-latency streaming |
-| **NeuTTS** | Local (Hybrid) | EN | ✅ (3–15s) | Instant voice cloning, optional GGUF streaming |
+| **NeuTTS** | Local (Hybrid) | EN | ✅ (3-15s) | Instant voice cloning, optional GGUF streaming |
 
 \* Current adapter configuration targets English (`tts-1` / `tts-1-hd`). Additional languages depend on OpenAI model availability.
 
@@ -155,12 +155,12 @@ elevenlabs_api_key = xi-...
 provider_priority:
   - openai      # Primary provider
   - kokoro      # Fallback to local
-  
+
 providers:
   openai:
     enabled: true
     model: tts-1-hd
-  
+
   kokoro:
     enabled: true
     model_path: ./models/kokoro-v0_19.onnx
@@ -232,7 +232,7 @@ async with httpx.AsyncClient() as client:
         },
         timeout=30.0
     )
-    
+
     with open("stream.mp3", "wb") as f:
         async for chunk in response.aiter_bytes():
             f.write(chunk)
@@ -293,7 +293,7 @@ with open("audio.mp3", "rb") as f:
             "response_format": "json"
         }
     )
-    
+
 print(response.json()["text"])
 ```
 
@@ -315,23 +315,23 @@ providers:
     api_key: ${OPENAI_API_KEY}  # From environment
     model: tts-1-hd
     timeout: 30
-    
+
   kokoro:
     enabled: true
     model_path: ./models/kokoro-v0_19.onnx
     device: cpu  # or cuda
-    
+
   higgs:
     enabled: true
     model_path: bosonai/higgs-audio-v2-generation-3B-base
     device: cuda
     use_fp16: true
-    
+
   chatterbox:
     enabled: true
     model_path: resemble-ai/chatterbox
     enable_watermark: true
-    
+
   vibevoice:
     enabled: true
     variant: 1.5B  # or 7B
@@ -495,10 +495,10 @@ logging:
 class MyProviderAdapter(TTSAdapter):
     async def initialize(self) -> bool:
         # Load models/setup API
-        
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         # Generate audio
-        
+
     async def get_capabilities(self) -> TTSCapabilities:
         # Return provider capabilities
 ```

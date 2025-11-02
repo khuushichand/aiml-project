@@ -6,14 +6,14 @@
             <span class="endpoint-path">/api/v1/evaluations - Create Evaluation</span>
         </h2>
         <p>Create a new evaluation (OpenAI format).</p>
-        
+
         <div class="form-group">
             <label for="evalsCreate_model">Model:</label>
             <select id="evalsCreate_model" class="llm-model-select">
                 <option value="">Loading models...</option>
             </select>
         </div>
-        
+
         <div class="form-group">
             <label for="evalsCreate_payload">Evaluation Configuration (JSON):</label>
             <textarea id="evalsCreate_payload" class="code-input" rows="15">{
@@ -29,14 +29,14 @@
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" data-req-section="evalsCreate" data-req-method="POST" data-req-path="/api/v1/evaluations" data-req-body-type="json">
             Create Evaluation
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="evalsCreate_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="evalsCreate_response">---</pre>
     </div>
@@ -47,12 +47,12 @@
             <span class="endpoint-path">/api/v1/evaluations/{eval_id}/runs - Start Evaluation Run</span>
         </h2>
         <p>Start a new evaluation run.</p>
-        
+
         <div class="form-group">
             <label for="evalsRun_id">Evaluation ID <span class="required">*</span>:</label>
             <input type="text" id="evalsRun_id" placeholder="eval_123">
         </div>
-        
+
         <div class="form-group">
             <label for="evalsRun_config">Run Configuration (JSON):</label>
             <textarea id="evalsRun_config" class="code-input" rows="8">{
@@ -62,14 +62,14 @@
   "retry_failed": true
 }</textarea>
         </div>
-        
+
         <button class="api-button" data-req-section="evalsRun" data-req-method="POST" data-req-path="/api/v1/evaluations/{id}/runs" data-req-body-type="json">
             Start Run
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="evalsRun_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="evalsRun_response">---</pre>
     </div>
@@ -83,14 +83,14 @@
             <span class="endpoint-path">/api/v1/evaluations/geval - G-Eval Evaluation</span>
         </h2>
         <p>Perform G-Eval evaluation on generated text.</p>
-        
+
         <div class="form-group">
             <label for="geval_model">Model:</label>
             <select id="geval_model" class="llm-model-select">
                 <option value="">Loading models...</option>
             </select>
         </div>
-        
+
         <div class="form-group">
             <label for="geval_payload">G-Eval Request (JSON):</label>
             <textarea id="geval_payload" class="code-input" rows="15">{
@@ -101,14 +101,14 @@
   "temperature": 0.3
 }</textarea>
         </div>
-        
+
         <button class="api-button" data-req-section="geval" data-req-method="POST" data-req-path="/api/v1/evaluations/geval" data-req-body-type="json">
             Run G-Eval
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="geval_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="geval_response">---</pre>
     </div>
@@ -125,7 +125,7 @@
             <span class="endpoint-path">/api/v1/evaluations/rag - RAG Evaluation</span>
         </h2>
         <p>Evaluate RAG system performance.</p>
-        
+
         <div class="form-group">
             <label for="ragEval_payload">RAG Evaluation Request (JSON):</label>
             <textarea id="ragEval_payload" class="code-input" rows="18">{
@@ -199,14 +199,14 @@
                 }
             }
         </script>
-        
+
         <button class="api-button" data-req-section="ragEval" data-req-method="POST" data-req-path="/api/v1/evaluations/rag" data-req-body-type="json">
             Run RAG Evaluation
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="ragEval_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="ragEval_response">---</pre>
     </div>
@@ -430,7 +430,7 @@
             <span class="endpoint-path">/api/v1/evaluations/datasets - Create Dataset</span>
         </h2>
         <p>Create a new evaluation dataset.</p>
-        
+
         <div class="form-group">
             <label for="datasetsCreate_payload">Dataset Configuration (JSON):</label>
             <textarea id="datasetsCreate_payload" class="code-input" rows="12">{
@@ -446,14 +446,14 @@
   ]
 }</textarea>
         </div>
-        
+
         <button class="api-button" data-req-section="datasetsCreate" data-req-method="POST" data-req-path="/api/v1/evaluations/datasets" data-req-body-type="json">
             Create Dataset
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="datasetsCreate_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="datasetsCreate_response">---</pre>
     </div>
@@ -464,14 +464,14 @@
             <span class="endpoint-path">/api/v1/evaluations/datasets - List Datasets</span>
         </h2>
         <p>List all evaluation datasets.</p>
-        
+
         <button class="api-button" data-req-section="datasetsList" data-req-method="GET" data-req-path="/api/v1/evaluations/datasets" data-req-body-type="none">
             List Datasets
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="datasetsList_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="datasetsList_response">---</pre>
     </div>
@@ -485,7 +485,7 @@
             <span class="endpoint-path">/api/v1/evaluations/response-quality - Response Quality Evaluation</span>
         </h2>
         <p>Evaluate the quality of model responses.</p>
-        
+
         <div class="form-group">
             <label for="responseQuality_payload">Response Quality Request (JSON):</label>
             <textarea id="responseQuality_payload" class="code-input" rows="15">{
@@ -501,12 +501,12 @@
   "model": "gpt-4o-mini"
 }</textarea>
         </div>
-        
+
         <button class="api-button" data-req-section="responseQualityEval" data-req-method="POST" data-req-path="/api/v1/evaluations/response-quality" data-req-body-type="json">Evaluate Response Quality</button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="responseQualityEval_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="responseQualityEval_response">---</pre>
     </div>
@@ -601,7 +601,7 @@
             <span class="endpoint-path">/api/v1/evaluations - List Evaluations</span>
         </h2>
         <p>List all evaluations with optional filtering.</p>
-        
+
         <div class="form-group">
             <label for="evalsList_status">Status:</label>
             <select id="evalsList_status">
@@ -612,16 +612,16 @@
                 <option value="failed">Failed</option>
             </select>
         </div>
-        
+
         <div class="form-group">
             <label for="evalsList_limit">Limit:</label>
             <input type="number" id="evalsList_limit" placeholder="10" value="10">
         </div>
-        
+
         <button class="api-button" data-req-section="evalsList" data-req-method="GET" data-req-path="/api/v1/evaluations" data-req-body-type="query">
             List Evaluations
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="evalsList_response">---</pre>
     </div>
@@ -632,16 +632,16 @@
             <span class="endpoint-path">/api/v1/evaluations/{eval_id} - Get Evaluation</span>
         </h2>
         <p>Get details of a specific evaluation.</p>
-        
+
         <div class="form-group">
             <label for="evalsGet_id">Evaluation ID <span class="required">*</span>:</label>
             <input type="text" id="evalsGet_id" placeholder="eval_123">
         </div>
-        
+
         <button class="api-button" data-req-section="evalsGet" data-req-method="GET" data-req-path="/api/v1/evaluations/{id}" data-req-body-type="none">
             Get Evaluation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="evalsGet_response">---</pre>
     </div>
@@ -652,12 +652,12 @@
             <span class="endpoint-path">/api/v1/evaluations/{eval_id} - Update Evaluation</span>
         </h2>
         <p>Update an existing evaluation.</p>
-        
+
         <div class="form-group">
             <label for="evalsUpdate_id">Evaluation ID <span class="required">*</span>:</label>
             <input type="text" id="evalsUpdate_id" placeholder="eval_123">
         </div>
-        
+
         <div class="form-group">
             <label for="evalsUpdate_payload">Update Data (JSON):</label>
             <textarea id="evalsUpdate_payload" class="code-input" rows="8">{
@@ -668,11 +668,11 @@
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" data-req-section="evalsUpdate" data-req-method="PATCH" data-req-path="/api/v1/evaluations/{id}" data-req-body-type="json">
             Update Evaluation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="evalsUpdate_response">---</pre>
     </div>
@@ -683,16 +683,16 @@
             <span class="endpoint-path">/api/v1/evaluations/{eval_id} - Delete Evaluation</span>
         </h2>
         <p>Delete an evaluation and all its runs.</p>
-        
+
         <div class="form-group">
             <label for="evalsDelete_id">Evaluation ID <span class="required">*</span>:</label>
             <input type="text" id="evalsDelete_id" placeholder="eval_123">
         </div>
-        
+
         <button class="api-button btn-danger" data-req-section="evalsDelete" data-req-method="DELETE" data-req-path="/api/v1/evaluations/{id}" data-req-body-type="none" data-confirm="Are you sure you want to delete this evaluation?">
             Delete Evaluation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="evalsDelete_response">---</pre>
     </div>
@@ -703,11 +703,11 @@
             <span class="endpoint-path">/api/v1/evaluations/rate-limits - Rate Limit Status</span>
         </h2>
         <p>Check current rate limit status for evaluations.</p>
-        
+
         <button class="api-button" data-req-section="rateLimits" data-req-method="GET" data-req-path="/api/v1/evaluations/rate-limits" data-req-body-type="none">
             Check Rate Limits
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="rateLimits_response">---</pre>
     </div>
@@ -718,9 +718,9 @@
 function updateEvalsCreateJSON() {
     const modelSelect = document.getElementById('evalsCreate_model');
     const payloadTextarea = document.getElementById('evalsCreate_payload');
-    
+
     if (!modelSelect || !payloadTextarea) return;
-    
+
     try {
         const payload = JSON.parse(payloadTextarea.value);
         if (modelSelect.value) {
@@ -737,9 +737,9 @@ function updateEvalsCreateJSON() {
 function updateGEvalJSON() {
     const modelSelect = document.getElementById('geval_model');
     const payloadTextarea = document.getElementById('geval_payload');
-    
+
     if (!modelSelect || !payloadTextarea) return;
-    
+
     try {
         const payload = JSON.parse(payloadTextarea.value);
         if (modelSelect.value) {

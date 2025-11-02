@@ -11,7 +11,7 @@ Use of pydub for audio merging.
 ```
 https://github.com/Enemyx-net/VibeVoice-ComfyUI
 https://www.reddit.com/r/LocalLLaMA/comments/1n8flne/how_can_i_reduce_the_first_chunk_size_in/
- To reduce it, you’ll need to look at the inference/streaming loop (usually where the decoder pushes tokens into the vocoder). Try adjusting the buffer size or flushing frequency so that the model yields audio frames every few hundred tokens instead of waiting for a long sequence. Look for parameters like chunk_size, frame_stride, or flush_interval in the streaming code. Setting those lower should let you get ~1 second of audio out first, then continue smoothly. 
+ To reduce it, you’ll need to look at the inference/streaming loop (usually where the decoder pushes tokens into the vocoder). Try adjusting the buffer size or flushing frequency so that the model yields audio frames every few hundred tokens instead of waiting for a long sequence. Look for parameters like chunk_size, frame_stride, or flush_interval in the streaming code. Setting those lower should let you get ~1 second of audio out first, then continue smoothly.
 ```
 
 
@@ -153,8 +153,8 @@ VibeVoice
 ### Services
 - Google Cloud Text-to-Speech
     - https://cloud.google.com/text-to-speech/docs/ssml
-  
-  
+
+
 ### Benchmarks
 https://huggingface.co/blog/big-bench-audio-release
     https://huggingface.co/datasets/ArtificialAnalysis/big_bench_audio
@@ -348,7 +348,7 @@ Tortoise TTS
 VallE-X
 VITA
     https://github.com/VITA-MLLM/VITA
-VoiceCraft - 
+VoiceCraft -
 xtts
 xtts2
 Yapper
@@ -417,7 +417,7 @@ https://www.bilibili.com/video/BV11iiNegEGP/
 https://github.com/RVC-Boss/GPT-SoVITS/wiki/GPT%E2%80%90SoVITS%E2%80%90v2%E2%80%90features-(%E6%96%B0%E7%89%B9%E6%80%A7)
 https://rentry.org/GPT-SoVITS-guide
 https://rentry.org/GPT-SoVITS-guide
-It's just the 3 buttons (speech-to-text, ssl, semantics) and then training. 
+It's just the 3 buttons (speech-to-text, ssl, semantics) and then training.
 
 The default training settings on the gradio UI are fine but I save epoch 12-16-24 on SoVITS for testing as that's the sweet spot range.
 
@@ -656,7 +656,7 @@ https://huggingface.co/hexgrad/Kokoro-82M
 
     https://www.reddit.com/r/LocalLLaMA/comments/1hyf1pf/comment/m6m86zm/?context=3
 
-    
+
 Eventually migrate to using: https://github.com/thewh1teagle/kokoro-onnx
 - **101**
     - https://kokorotts.org/

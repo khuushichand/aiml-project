@@ -9,8 +9,8 @@ This guide gets you evaluating AI content in just 5 minutes using tldw_server's 
 
 ## 📋 Prerequisites
 
-✅ tldw_server is running (default: `http://localhost:8000`)  
-✅ You have content to evaluate (we'll provide examples)  
+✅ tldw_server is running (default: `http://localhost:8000`)
+✅ You have content to evaluate (we'll provide examples)
 ✅ (Optional) OpenAI API key for advanced evaluations
 
 ## 🚀 3 Quick Examples
@@ -24,14 +24,14 @@ import requests
 
 # Your content
 original_article = """
-Climate change is one of the most pressing issues of our time. 
-Rising global temperatures are causing melting ice caps, rising sea levels, 
-and more frequent extreme weather events. Scientists agree that human 
+Climate change is one of the most pressing issues of our time.
+Rising global temperatures are causing melting ice caps, rising sea levels,
+and more frequent extreme weather events. Scientists agree that human
 activities, particularly the burning of fossil fuels, are the primary cause.
 """
 
 ai_summary = """
-Climate change, driven by human activities like fossil fuel use, 
+Climate change, driven by human activities like fossil fuel use,
 is causing rising temperatures and extreme weather events.
 """
 
@@ -65,12 +65,12 @@ Assessment: High-quality summary with good factual consistency
 question = "How do I reset my password?"
 
 # What the chatbot found in documentation
-context = ["To reset your password: 1) Click 'Forgot Password' on login page, 
-           2) Enter your email, 3) Check email for reset link, 
+context = ["To reset your password: 1) Click 'Forgot Password' on login page,
+           2) Enter your email, 3) Check email for reset link,
            4) Create new password"]
 
 # What the chatbot answered
-bot_answer = "To reset your password, click the 'Forgot Password' link on 
+bot_answer = "To reset your password, click the 'Forgot Password' link on
              the login page and follow the email instructions."
 
 # Evaluate the response
@@ -208,21 +208,21 @@ import json
 
 def evaluate_summary():
     """Evaluate a news summary"""
-    
+
     # Real example content
     original = """
-    Apple announced its latest iPhone 15 series today, featuring a new 
-    titanium design, improved camera system with 48MP main sensor, and 
-    the new A17 Pro chip. The phones start at $799 for the base model 
-    and go up to $1,199 for the Pro Max. The company also introduced 
+    Apple announced its latest iPhone 15 series today, featuring a new
+    titanium design, improved camera system with 48MP main sensor, and
+    the new A17 Pro chip. The phones start at $799 for the base model
+    and go up to $1,199 for the Pro Max. The company also introduced
     USB-C charging, replacing the Lightning port after 11 years.
     """
-    
+
     summary = """
-    Apple unveiled the iPhone 15 with titanium build, 48MP camera, 
+    Apple unveiled the iPhone 15 with titanium build, 48MP camera,
     A17 Pro chip, and USB-C charging. Prices range from $799-$1,199.
     """
-    
+
     # Send for evaluation
     response = requests.post(
         "http://localhost:8000/api/v1/evaluations/geval",
@@ -232,20 +232,20 @@ def evaluate_summary():
             "api_name": "openai"
         }
     )
-    
+
     if response.status_code == 200:
         result = response.json()
-        
+
         print("📊 EVALUATION RESULTS")
         print("="*40)
         print(f"Overall Score: {result['average_score']*100:.0f}%")
         print(f"\nDetailed Scores:")
-        
+
         for metric_name, metric_data in result['metrics'].items():
             score = metric_data['score']
             stars = "⭐" * int(score * 5)
             print(f"  {metric_name.capitalize()}: {score:.2f} {stars}")
-        
+
         print(f"\nAssessment: {result['summary_assessment']}")
         print(f"Time taken: {result['evaluation_time']:.2f} seconds")
     else:

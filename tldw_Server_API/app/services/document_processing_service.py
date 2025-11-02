@@ -175,7 +175,7 @@ async def process_documents(
             return pypandoc.convert_file(file_path, "plain", format="rtf")
 
         elif ext == ".pdf":
-            # Minimal placeholder for PDF — prefer the dedicated PDF pipeline elsewhere
+            # Minimal placeholder for PDF - prefer the dedicated PDF pipeline elsewhere
             try:
                 return pypandoc.convert_file(file_path, 'plain', format='pdf')
             except Exception:

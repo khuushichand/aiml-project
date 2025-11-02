@@ -75,7 +75,7 @@ __all__ = [
     "initialize_telemetry",
     "shutdown_telemetry",
     "OTEL_AVAILABLE",
-    
+
     # Metrics
     "MetricType",
     "MetricDefinition",
@@ -87,7 +87,7 @@ __all__ = [
     "set_gauge",
     "observe_histogram",
     "time_operation",
-    
+
     # Tracing
     "TraceContext",
     "TracingManager",
@@ -101,7 +101,7 @@ __all__ = [
     "set_span_attributes",
     "record_span_exception",
     "set_span_status",
-    
+
     # Decorators
     "track_metrics",
     "measure_latency",
@@ -110,7 +110,7 @@ __all__ = [
     "monitor_resource",
     "track_llm_usage",
     "cache_metrics",
-    
+
     # Legacy
     "log_counter",
     "log_histogram",

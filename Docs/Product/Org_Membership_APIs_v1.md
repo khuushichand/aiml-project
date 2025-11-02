@@ -1,7 +1,7 @@
 # Organization Membership APIs (v1)
 
-Status: Deployed  
-Owner: AuthNZ Maintainers  
+Status: Deployed
+Owner: AuthNZ Maintainers
 Audience: Core backend contributors, admin tooling owners
 
 ## 1. Summary

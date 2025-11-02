@@ -47,13 +47,13 @@ from tldw_Server_API.app.core.Evaluations.metrics_advanced import (
 
 class TestDatabaseMigration:
     """Test database migration to unified schema."""
-    
+
     @pytest.fixture
     def temp_db(self):
         """Create a temporary database for testing."""
         temp_dir = tempfile.mkdtemp()
         db_path = Path(temp_dir) / "test_evaluations.db"
-        
+
         # Create old schema tables
         with sqlite3.connect(db_path) as conn:
             # Create old evaluations table
@@ -72,7 +72,7 @@ class TestDatabaseMigration:
                     deleted_at TIMESTAMP NULL
                 )
             """)
-            
+
             # Create old internal_evaluations table
             conn.execute("""
                 CREATE TABLE internal_evaluations (
@@ -91,89 +91,89 @@ class TestDatabaseMigration:
                     embedding_model TEXT
                 )
             """)
-            
+
             # Insert test data
             conn.execute("""
                 INSERT INTO evaluations (id, name, eval_type, eval_spec)
                 VALUES ('eval_001', 'Test Eval 1', 'geval', '{}')
             """)
-            
+
             conn.execute("""
                 INSERT INTO internal_evaluations (
-                    evaluation_id, evaluation_type, created_at, 
+                    evaluation_id, evaluation_type, created_at,
                     input_data, results, user_id
                 ) VALUES (
                     'internal_001', 'rag', CURRENT_TIMESTAMP,
                     '{"query": "test"}', '{"score": 0.85}', 'user_123'
                 )
             """)
-            
+
             conn.commit()
-        
+
         yield str(db_path)
-        
+
         # Cleanup
         shutil.rmtree(temp_dir)
-    
+
     def test_migration_success(self, temp_db):
         """Test successful migration to unified schema."""
         # Run migration
         result = migrate_to_unified_evaluations(temp_db)
         assert result is True
-        
+
         # Verify new table exists
         with sqlite3.connect(temp_db) as conn:
             cursor = conn.cursor()
-            
+
             # Check unified table exists
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='table' AND name='evaluations_unified'
             """)
             assert cursor.fetchone() is not None
-            
+
             # Check data was migrated
             cursor.execute("SELECT COUNT(*) FROM evaluations_unified")
             count = cursor.fetchone()[0]
             assert count == 2  # Both records migrated
-            
+
             # Check webhook tables exist
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='table' AND name='webhook_registrations'
             """)
             assert cursor.fetchone() is not None
-            
+
             # Check rate limit table exists
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='table' AND name='user_rate_limits'
             """)
             assert cursor.fetchone() is not None
-    
+
     def test_migration_idempotent(self, temp_db):
         """Test migration can be run multiple times safely."""
         # Run migration twice
         result1 = migrate_to_unified_evaluations(temp_db)
         result2 = migrate_to_unified_evaluations(temp_db)
-        
+
         assert result1 is True
         assert result2 is True  # Should skip and return True
-    
+
     def test_rollback(self, temp_db):
         """Test migration rollback."""
         # Run migration
         migrate_to_unified_evaluations(temp_db)
-        
+
         # Run rollback
         result = rollback_unified_evaluations(temp_db)
         assert result is True
-        
+
         # Verify unified table is gone
         with sqlite3.connect(temp_db) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT name FROM sqlite_master 
+                SELECT name FROM sqlite_master
                 WHERE type='table' AND name='evaluations_unified'
             """)
             assert cursor.fetchone() is None
@@ -181,20 +181,20 @@ class TestDatabaseMigration:
 
 class TestUserRateLimiter:
     """Test per-user rate limiting."""
-    
+
     import pytest_asyncio
     @pytest_asyncio.fixture
     async def rate_limiter(self):
         """Create rate limiter with temp database."""
         temp_dir = tempfile.mkdtemp()
         db_path = Path(temp_dir) / "test_rate_limits.db"
-        
+
         limiter = UserRateLimiter(str(db_path))
         yield limiter
-        
+
         # Cleanup
         shutil.rmtree(temp_dir)
-    
+
     @pytest.mark.asyncio
     async def test_default_tier_assignment(self, rate_limiter):
         """Test new users get default (free) tier."""
@@ -203,7 +203,7 @@ class TestUserRateLimiter:
             # Force reload of config
             from tldw_Server_API.app.core.Evaluations.config_manager import config_manager
             config_manager._config = None
-            
+
             config = await rate_limiter._get_user_config("new_user")
             assert config.tier == UserTier.FREE
             # In development environment, free tier has 100 per minute due to config override
@@ -211,27 +211,27 @@ class TestUserRateLimiter:
             # Check for either value depending on environment
             assert config.evaluations_per_minute in [10, 100]
             assert config.evaluations_per_day in [100, 1000]
-    
+
     @pytest.mark.asyncio
     async def test_rate_limit_enforcement(self, rate_limiter):
         """Test rate limits are enforced."""
         user_id = "test_user"
         endpoint = "/api/v1/evaluations"
-        
+
         # Set user to free tier with low limits for testing
         await rate_limiter.upgrade_user_tier(
-            user_id, 
+            user_id,
             UserTier.CUSTOM,
             custom_limits={"evaluations_per_minute": 2}
         )
-        
+
         # First two requests should succeed
         for i in range(2):
             allowed, metadata = await rate_limiter.check_rate_limit(
                 user_id, endpoint
             )
             assert allowed is True
-        
+
         # Third request should be denied
         allowed, metadata = await rate_limiter.check_rate_limit(
             user_id, endpoint
@@ -240,33 +240,33 @@ class TestUserRateLimiter:
         # Check for rate limit message in metadata (may be in 'error' or 'message' field)
         error_msg = metadata.get("error", "") or metadata.get("message", "") or str(metadata)
         assert "rate limit" in error_msg.lower() or "exceeded" in error_msg.lower()
-    
+
     @pytest.mark.asyncio
     async def test_tier_upgrade(self, rate_limiter):
         """Test user tier upgrade."""
         user_id = "upgrade_user"
-        
+
         # Start with free tier
         config = await rate_limiter._get_user_config(user_id)
         assert config.tier == UserTier.FREE
-        
+
         # Upgrade to premium
         success = await rate_limiter.upgrade_user_tier(
             user_id, UserTier.PREMIUM
         )
         assert success is True
-        
+
         # Verify upgrade
         config = await rate_limiter._get_user_config(user_id)
         assert config.tier == UserTier.PREMIUM
         assert config.evaluations_per_minute == 100
         assert config.evaluations_per_day == 10000
-    
+
     @pytest.mark.asyncio
     async def test_usage_tracking(self, rate_limiter):
         """Test usage tracking and summary."""
         user_id = "tracking_user"
-        
+
         # Make some requests
         for _ in range(3):
             await rate_limiter.check_rate_limit(
@@ -274,20 +274,20 @@ class TestUserRateLimiter:
                 tokens_requested=100,
                 estimated_cost=0.01
             )
-        
+
         # Get usage summary
         summary = await rate_limiter.get_usage_summary(user_id)
-        
+
         assert summary["user_id"] == user_id
         assert summary["usage"]["today"]["evaluations"] == 3
         assert summary["usage"]["today"]["tokens"] == 300
         assert summary["usage"]["today"]["cost"] == pytest.approx(0.03)
-    
+
     @pytest.mark.asyncio
     async def test_burst_allowance(self, rate_limiter):
         """Test burst traffic handling."""
         user_id = "burst_user"
-        
+
         # Configure with burst allowance
         await rate_limiter.upgrade_user_tier(
             user_id,
@@ -297,14 +297,14 @@ class TestUserRateLimiter:
                 "burst_size": 3
             }
         )
-        
+
         # Burst requests within 10 seconds
         for i in range(3):
             allowed, _ = await rate_limiter.check_rate_limit(
                 user_id, "/api/v1/evaluations"
             )
             assert allowed is True  # All 3 should succeed due to burst
-        
+
         # Fourth should fail
         allowed, _ = await rate_limiter.check_rate_limit(
             user_id, "/api/v1/evaluations"
@@ -321,49 +321,49 @@ async def webhook_manager(temp_db_path):
 
 class TestWebhookManager:
     """Test webhook management and delivery."""
-    
+
     @pytest.mark.asyncio
     async def test_webhook_registration(self, webhook_manager):
         """Test webhook registration."""
         user_id = "webhook_user"
         url = "https://example.com/webhook"
         events = [WebhookEvent.EVALUATION_COMPLETED, WebhookEvent.EVALUATION_FAILED]
-        
+
         result = await webhook_manager.register_webhook(
             user_id, url, events
         )
-        
+
         assert result["url"] == url
         assert result["active"] is True
         assert len(result["events"]) == 2
         assert "secret" in result
-    
+
     @pytest.mark.asyncio
     async def test_webhook_unregistration(self, webhook_manager):
         """Test webhook unregistration."""
         user_id = "webhook_user"
         url = "https://example.com/webhook"
-        
+
         # Register first
         registration = await webhook_manager.register_webhook(
             user_id, url, [WebhookEvent.EVALUATION_COMPLETED]
         )
         webhook_id = registration.get("webhook_id") or registration.get("id")
-        
+
         # Use the database adapter for unregister operation
         affected_rows = webhook_manager.db_adapter.update(
             "UPDATE webhook_registrations SET active = 0 WHERE id = ?",
             (webhook_id,)
         )
         result = {"success": affected_rows > 0}
-        
+
         assert result["success"] is True
-        
+
         # Verify it's inactive
         status = await webhook_manager.get_webhook_status(user_id, url)
         if status:  # May be soft-deleted
             assert status[0]["active"] is False or status[0]["active"] == 0
-    
+
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_webhook_delivery(self, webhook_manager, webhook_receiver_server):
@@ -473,7 +473,7 @@ class TestWebhookManager:
         assert body is not None
         assert body.get("event") == "evaluation.completed"
         assert body.get("evaluation_id") == "eval_123"
-    
+
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_webhook_retry_on_failure(self, webhook_manager, flaky_webhook_receiver_server):
@@ -579,34 +579,34 @@ class TestWebhookManager:
         # Ensure attempts were recorded with correct sequencing
         attempts = [r.get("attempt") for r in received]
         assert attempts[:3] == [1, 2, 3]
-    
+
     @pytest.mark.asyncio
     async def test_webhook_signature_generation(self, webhook_manager):
         """Test HMAC signature generation."""
         secret = "test_secret_key"
         payload = '{"event": "test", "data": {}}'
-        
+
         signature = webhook_manager._generate_signature(payload, secret)
-        
+
         assert signature.startswith("sha256=")
         assert len(signature) == 71  # "sha256=" + 64 hex chars
 
 
 class TestAdvancedMetrics:
     """Test advanced metrics collection."""
-    
+
     @pytest.fixture
     def metrics(self):
         """Create metrics instance."""
         from prometheus_client import CollectorRegistry
         registry = CollectorRegistry()
         return AdvancedEvaluationMetrics(registry)
-    
+
     def test_business_metrics_tracking(self, metrics):
         """Test business metrics collection."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
-        
+
         # Track evaluation cost
         metrics.track_evaluation_cost(
             user_tier="premium",
@@ -615,14 +615,14 @@ class TestAdvancedMetrics:
             evaluation_type="geval",
             cost=0.05
         )
-        
+
         # Track user spend
         metrics.track_user_spend(
             user_id="user_123",
             daily_spend=1.50,
             monthly_spend=45.00
         )
-        
+
         # Track evaluation quality
         metrics.track_evaluation_quality(
             evaluation_type="rag",
@@ -630,68 +630,68 @@ class TestAdvancedMetrics:
             accuracy=0.92,
             confidence=0.88
         )
-        
+
         # Get metrics output
         output = metrics.get_metrics()
         assert "evaluation_cost_total_dollars" in output
         assert "user_spend_dollars" in output
         assert "evaluation_accuracy_score" in output
-    
+
     def test_slo_tracking(self, metrics):
         """Test SLI/SLO tracking."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
-        
+
         # Track requests with SLI
         endpoint = "/api/v1/evaluations"
-        
+
         # Successful requests
         for _ in range(99):
             with metrics.track_sli_request(endpoint):
                 pass  # Simulate successful request
-        
+
         # Failed request
         try:
             with metrics.track_sli_request(endpoint):
                 raise Exception("Simulated error")
         except:
             pass
-        
+
         # Force SLO calculation
         metrics._calculate_slos()
-        
+
         # Check metrics
         output = metrics.get_metrics()
         assert "evaluation_slo_compliance" in output
         assert "evaluation_error_budget_remaining_percentage" in output
-    
+
     def test_rate_limit_metrics(self, metrics):
         """Test rate limit metrics."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
-        
+
         # Track rate limit hit
         metrics.track_rate_limit_hit(
             user_tier="free",
             limit_type="minute"
         )
-        
+
         # Track utilization
         metrics.track_rate_limit_utilization(
             user_id="user_456",
             limit_type="daily",
             utilization=0.75
         )
-        
+
         output = metrics.get_metrics()
         assert "rate_limit_hits_total" in output
         assert "rate_limit_utilization_percentage" in output
-    
+
     def test_webhook_metrics(self, metrics):
         """Test webhook metrics."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
-        
+
         # Track webhook delivery
         metrics.track_webhook_delivery(
             event_type="evaluation.completed",
@@ -699,7 +699,7 @@ class TestAdvancedMetrics:
             latency=1.5,
             retry_count=0
         )
-        
+
         # Track failed delivery with retries
         metrics.track_webhook_delivery(
             event_type="evaluation.failed",
@@ -707,17 +707,17 @@ class TestAdvancedMetrics:
             latency=30.0,
             retry_count=3
         )
-        
+
         output = metrics.get_metrics()
         assert "webhook_deliveries_total" in output
         assert "webhook_delivery_latency_seconds" in output
         assert "webhook_retries_total" in output
-    
+
     def test_model_performance_metrics(self, metrics):
         """Test model performance tracking."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
-        
+
         # Track model performance
         metrics.track_model_performance(
             model="gpt-4",
@@ -729,7 +729,7 @@ class TestAdvancedMetrics:
                 "relevance": 0.90
             }
         )
-        
+
         # Compare models
         metrics.compare_models(
             model_a="gpt-4",
@@ -737,7 +737,7 @@ class TestAdvancedMetrics:
             metric="accuracy",
             delta=0.15
         )
-        
+
         output = metrics.get_metrics()
         assert "model_evaluation_performance" in output
         assert "model_comparison_delta" in output
@@ -745,23 +745,23 @@ class TestAdvancedMetrics:
 
 class TestIntegration:
     """Integration tests combining all features."""
-    
+
     @pytest.mark.asyncio
     async def test_full_evaluation_flow_with_features(self):
         """Test complete evaluation flow with all new features."""
         # Setup temporary environment
         temp_dir = tempfile.mkdtemp()
         db_path = Path(temp_dir) / "integration_test.db"
-        
+
         try:
             # Initialize components
             rate_limiter = UserRateLimiter(str(db_path))
             webhook_manager = WebhookManager(str(db_path))
             from tldw_Server_API.app.core.Evaluations.metrics_advanced import get_advanced_metrics
             metrics = get_advanced_metrics(use_separate_registry=True)
-            
+
             user_id = "integration_user"
-            
+
             # 1. Check rate limit
             allowed, rate_metadata = await rate_limiter.check_rate_limit(
                 user_id,
@@ -770,7 +770,7 @@ class TestIntegration:
                 estimated_cost=0.10
             )
             assert allowed is True
-            
+
             # 2. Register webhook
             webhook_result = await webhook_manager.register_webhook(
                 user_id,
@@ -778,7 +778,7 @@ class TestIntegration:
                 [WebhookEvent.EVALUATION_COMPLETED]
             )
             assert webhook_result["active"] is True
-            
+
             # 3. Track metrics
             if metrics.enabled:
                 with metrics.track_sli_request("/api/v1/evaluations"):
@@ -790,23 +790,23 @@ class TestIntegration:
                         evaluation_type="geval",
                         cost=0.10
                     )
-            
+
             # 4. Send webhook notification (mocked)
             with aioresponses() as m:
                 m.post("https://example.com/webhook", status=200)
-                
+
                 await webhook_manager.send_webhook(
                     user_id,
                     WebhookEvent.EVALUATION_COMPLETED,
                     "eval_integration_001",
                     {"score": 0.85}
                 )
-            
+
             # 5. Check usage
             usage = await rate_limiter.get_usage_summary(user_id)
             assert usage["usage"]["today"]["evaluations"] == 1
             assert usage["usage"]["today"]["cost"] == pytest.approx(0.10)
-            
+
         finally:
             # Cleanup
             shutil.rmtree(temp_dir)

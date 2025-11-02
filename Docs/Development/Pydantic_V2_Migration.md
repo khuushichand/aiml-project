@@ -78,4 +78,3 @@ Testing
 Tips
 - Use `rg -n "root_validator\(|class\s+Config\s*:\s*"` to find candidates.
 - Prefer `mode='after'` for validators that need post-coercion instances; use `mode='before'` only when you must preprocess raw input.
-

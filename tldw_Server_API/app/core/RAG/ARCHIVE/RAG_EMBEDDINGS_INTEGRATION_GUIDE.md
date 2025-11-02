@@ -40,19 +40,19 @@ graph TD
         D1[Query] --> B1
         B1 --> E1[Search Results]
     end
-    
+
     subgraph "Our Integration Flow"
         A2[Document] --> B2[ProductionEmbeddingFunction]
         B2 --> C2[Embeddings_Create Module]
         C2 --> D2[Actual Provider API]
         D2 --> E2[Real Embeddings]
         E2 --> F2[Vector Store]
-        
+
         G2[Query] --> B2
         B2 --> H2[Query Embeddings]
         H2 --> I2[Search Results]
     end
-    
+
     style B2 fill:#90EE90
     style C2 fill:#90EE90
     style D2 fill:#87CEEB
@@ -88,7 +88,7 @@ classDiagram
         +api_key: Optional[str]
         +__call__(documents) : embeddings
     }
-    
+
     class EnhancedVectorRetriever {
         +source: DataSource
         +collection: Collection
@@ -96,7 +96,7 @@ classDiagram
         +retrieve(query, filters, top_k)
         +embed_and_store(documents)
     }
-    
+
     class RAGEmbeddingsIntegration {
         +embedding_provider: str
         +embedding_model: str
@@ -105,20 +105,20 @@ classDiagram
         +embed_query(query)
         +embed_documents(documents)
     }
-    
+
     class EmbeddingsCreate {
         <<External Module>>
         +create_embeddings_batch()
         +create_embeddings_batch_async()
         +create_embedding()
     }
-    
+
     class ChromaDB {
         <<External Library>>
         +add(documents, embeddings)
         +query(query_texts, n_results)
     }
-    
+
     RAGEmbeddingsIntegration --> EnhancedVectorRetriever
     EnhancedVectorRetriever --> ProductionEmbeddingFunction
     ProductionEmbeddingFunction --> EmbeddingsCreate
@@ -137,7 +137,7 @@ sequenceDiagram
     participant EmbedFunc
     participant EmbedService
     participant Provider
-    
+
     User->>RAG: Search Query
     RAG->>Integration: retrieve(query)
     Integration->>ChromaDB: query(query_text)
@@ -186,7 +186,7 @@ class EnhancedVectorRetriever:
     def __init__(self, ...):
         # Create embedding function with production service
         self.embedding_function = ProductionEmbeddingFunction(...)
-        
+
         # Initialize ChromaDB with our embedding function
         self.collection = chroma_client.create_collection(
             name=collection_name,
@@ -209,7 +209,7 @@ class RAGEmbeddingsIntegration:
     def __init__(self, ...):
         # Initialize embeddings service wrapper
         self.embeddings_service = EmbeddingsServiceWrapper(...)
-    
+
     def create_vector_retriever(self, ...):
         # Creates retriever with production embeddings
         return EnhancedVectorRetriever(...)
@@ -373,10 +373,10 @@ def test_embedding_function():
         provider="huggingface",
         model_id="sentence-transformers/all-MiniLM-L6-v2"
     )
-    
+
     # Generate embeddings
     embeddings = func(["test document"])
-    
+
     # Verify real embeddings (not mocked)
     assert len(embeddings) == 1
     assert len(embeddings[0]) == 384  # MiniLM dimension
@@ -392,15 +392,15 @@ async def test_end_to_end_flow():
         provider="huggingface",
         model="sentence-transformers/all-MiniLM-L6-v2"
     )
-    
+
     retriever = integration.create_vector_retriever(...)
-    
+
     # Index documents
     await retriever.embed_and_store(documents)
-    
+
     # Search
     results = await retriever.retrieve("query")
-    
+
     # Verify results use real embeddings
     assert results.metadata["embedding_provider"] == "huggingface"
 ```

@@ -23,4 +23,3 @@ def test_tools_endpoint_module_compiles():
     assert tools_path.exists(), f"Missing tools endpoint at: {tools_path}"
     # Raises an exception (e.g., IndentationError) on syntax problems
     py_compile.compile(str(tools_path), doraise=True)
-

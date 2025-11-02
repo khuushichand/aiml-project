@@ -19,4 +19,3 @@ It has now been rewritten as a FastAPI Python server to support larger deploymen
 - AuthNZ module with single-user (API key) and multi-user (JWT) modes
 - Hybrid RAG (FTS5 + vector + re-ranking) and a unified RAG API
 - Multi-provider LLM integration (commercial + local)
-

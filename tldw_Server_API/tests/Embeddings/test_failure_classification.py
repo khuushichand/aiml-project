@@ -110,4 +110,3 @@ def test_transient_failure_schedules_retry():
     delayed_key = f"{w.config.queue_name}:delayed"
     assert delayed_key in w.redis_client.zsets
     assert len(w.redis_client.zsets[delayed_key]) == 1
-

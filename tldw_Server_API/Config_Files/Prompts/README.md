@@ -11,13 +11,13 @@ Conventions
 - Files are plaintext Markdown for easy reading and editing.
 
 Modules and Files
-- embeddings.prompts.md: Contextualization and embedding‑related prompts (situate context, outline, etc.)
+- embeddings.prompts.md: Contextualization and embedding-related prompts (situate context, outline, etc.)
 - rag.prompts.md: Retrieval and reranking prompts.
-- chunking.prompts.md: Structure‑aware headers, summarization during chunking, proposition extraction templates.
+- chunking.prompts.md: Structure-aware headers, summarization during chunking, proposition extraction templates.
 - audio.prompts.md: Transcription/analysis helper prompts.
 - chat.prompts.md: Chat assistant system prompts and tools.
 - evals.prompts.md: Evaluation tasks and rubric prompts.
-- ingestion.prompts.md: Ingestion‑time analysis prompts (e.g., claims).
+- ingestion.prompts.md: Ingestion-time analysis prompts (e.g., claims).
 - mcp.prompts.md: MCP tools/system prompts.
 
 Example Loader (future)
@@ -26,5 +26,4 @@ Example Loader (future)
 
 Editing Tips
 - Keep a changelog at the bottom of each file.
-- If you need environment‑specific variants, create files like embeddings.prompts.local.md and reference them in config.
-
+- If you need environment-specific variants, create files like embeddings.prompts.local.md and reference them in config.

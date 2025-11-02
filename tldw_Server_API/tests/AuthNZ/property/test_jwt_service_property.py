@@ -167,4 +167,3 @@ class TestJWTServiceProperty:
         assert abs((refresh_exp - expected_refresh_exp).total_seconds()) <= 30, (
             f"Refresh token expiry mismatch: {refresh_exp} vs {expected_refresh_exp}"
         )
-

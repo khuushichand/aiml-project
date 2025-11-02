@@ -240,9 +240,9 @@ def test_db_path() -> Generator[Path, None, None]:
     """Create a temporary database file that gets cleaned up."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
         db_path = Path(tmp_file.name)
-    
+
     yield db_path
-    
+
     # Cleanup
     try:
         if db_path.exists():
@@ -444,7 +444,7 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
 def populated_prompts_db(prompts_db) -> PromptsDB:
     """Create a PromptsDB with test data."""
     db = prompts_db
-    
+
     # Create test prompts
     prompt1_id = db.create_prompt(
         name="Test Prompt 1",
@@ -452,28 +452,28 @@ def populated_prompts_db(prompts_db) -> PromptsDB:
         author="test_user",
         keywords=["test", "assistant"]
     )
-    
+
     prompt2_id = db.create_prompt(
         name="Summarization Prompt",
         content="Summarize the following text: {{text}}",
         author="test_user",
         keywords=["summarization", "text"]
     )
-    
+
     prompt3_id = db.create_prompt(
         name="Code Review Prompt",
         content="Review this code for bugs: {{code}}",
         author="dev_user",
         keywords=["code", "review", "debugging"]
     )
-    
+
     # Create versions for first prompt
     db.update_prompt(
         prompt_id=prompt1_id,
         content="You are a helpful AI assistant. {{user_input}}",
         version_comment="Improved clarity"
     )
-    
+
     return db
 
 @pytest.fixture(scope="session")
@@ -484,7 +484,7 @@ def prompts_service(tmp_path_factory) -> Generator[PromptsInteropService, None, 
         db_directory=str(temp_dir),
         client_id="test_client"
     )
-    
+
     # Create a test database
     test_db_file = temp_dir / "prompts.db"
     test_db = PromptsDB(db_path=str(test_db_file), client_id="test_client")
@@ -501,7 +501,7 @@ def prompts_service(tmp_path_factory) -> Generator[PromptsInteropService, None, 
 def mock_prompts_db():
     """Create a mock PromptsDB for unit tests."""
     db = MagicMock(spec=PromptsDB)
-    
+
     # Mock prompt methods
     db.create_prompt = Mock(return_value=1)
     db.get_prompt = Mock(return_value={
@@ -526,11 +526,11 @@ def mock_prompts_db():
         'description': 'A collection',
         'prompt_ids': [1]
     })
-    
+
     # Mock version methods
     db.get_prompt_versions = Mock(return_value=[])
     db.restore_version = Mock(return_value={'success': True})
-    
+
     return db
 
 @pytest.fixture(scope="function")
@@ -554,9 +554,9 @@ def job_system(test_db_path) -> Generator[JobSystem, None, None]:
     """Create a JobSystem instance for testing."""
     job_sys = JobSystem(db_path=str(test_db_path))
     job_sys.initialize_db()
-    
+
     yield job_sys
-    
+
     # Cleanup
     try:
         job_sys.close()
@@ -567,7 +567,7 @@ def job_system(test_db_path) -> Generator[JobSystem, None, None]:
 def mock_job_system():
     """Create a mock JobSystem for unit tests."""
     job_sys = MagicMock(spec=JobSystem)
-    
+
     job_sys.create_job = Mock(return_value="job-123")
     job_sys.get_job = Mock(return_value={
         'id': 'job-123',
@@ -577,7 +577,7 @@ def mock_job_system():
     })
     job_sys.update_job_status = Mock(return_value={'success': True})
     job_sys.list_jobs = Mock(return_value=[])
-    
+
     return job_sys
 
 # =====================================================================
@@ -626,19 +626,19 @@ def complex_prompt():
         'name': 'Complex Analysis Prompt',
         'content': """# System Instructions
         You are an expert {{expertise_area}} analyst.
-        
+
         ## Context
         {{context}}
-        
+
         ## Task
         Analyze the following {{data_type}}:
         {{data}}
-        
+
         ## Requirements
         - {{requirement_1}}
         - {{requirement_2}}
         - {{requirement_3}}
-        
+
         ## Output Format
         {{output_format}}
         """,
@@ -867,12 +867,12 @@ def create_test_prompt(db, **kwargs):
 def create_prompt_with_versions(db, num_versions=3):
     """Helper to create a prompt with multiple versions."""
     prompt_id = create_test_prompt(db)
-    
+
     for i in range(1, num_versions):
         db.update_prompt(
             prompt_id=prompt_id,
             content=f'Version {i+1} content',
             version_comment=f'Update {i}'
         )
-    
+
     return prompt_id

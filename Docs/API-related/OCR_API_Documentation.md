@@ -1,4 +1,4 @@
-# OCR API Documentation (v0.1) — Placeholder
+# OCR API Documentation (v0.1) - Placeholder
 
 Status: Initial placeholder for OCR endpoints and integration. This page will expand with full request/response schemas and examples.
 
@@ -27,12 +27,12 @@ The OCR module integrates with media ingestion to extract text from scanned PDFs
 
 OCR is typically enabled via the media ingestion request options. Key fields (see code for authoritative definitions):
 
-- `enable_ocr` (bool) — enable OCR for scanned/low-text PDFs
-- `ocr_backend` (str | null) — backend name (e.g., `tesseract`, `auto`, or module-specific)
-- `ocr_lang` (str) — language (e.g., `eng`)
-- `ocr_dpi` (int) — DPI for page rendering prior to OCR
-- `ocr_mode` (enum) — `always` or `fallback`
-- `ocr_min_page_text_chars` (int) — threshold to treat a page as “no text” for fallback OCR
+- `enable_ocr` (bool) - enable OCR for scanned/low-text PDFs
+- `ocr_backend` (str | null) - backend name (e.g., `tesseract`, `auto`, or module-specific)
+- `ocr_lang` (str) - language (e.g., `eng`)
+- `ocr_dpi` (int) - DPI for page rendering prior to OCR
+- `ocr_mode` (enum) - `always` or `fallback`
+- `ocr_min_page_text_chars` (int) - threshold to treat a page as “no text” for fallback OCR
 
 Reference (code): `tldw_Server_API/app/api/v1/schemas/media_request_models.py`.
 

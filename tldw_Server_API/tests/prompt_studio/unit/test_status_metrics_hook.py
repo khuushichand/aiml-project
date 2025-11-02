@@ -24,4 +24,3 @@ def test_status_endpoint_sets_prometheus_gauges(prompt_studio_dual_backend_clien
         assert isinstance(stats, dict)
         # stats can be empty if nothing recorded, but after endpoint call we expect 'latest'
         assert "latest" in stats
-

@@ -100,4 +100,3 @@ async def test_rag_pipeline_runner_basic(monkeypatch):
     assert "leaderboard" in results
     assert len(results["leaderboard"]) >= 2  # two retriever alphas * two rerankers
     assert results["best_config"] is not None
-

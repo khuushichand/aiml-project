@@ -122,8 +122,15 @@ def _drop_temp_postgres_database(temp: TempPostgresConfig) -> None:
 
 
 @pytest.mark.integration
-def test_chacha_transaction_context_commits_if_available(tmp_path):
-    base_config = _base_postgres_config()
+def test_chacha_transaction_context_commits_if_available(tmp_path, pg_eval_params):
+    base_config = DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=pg_eval_params["host"],
+        pg_port=int(pg_eval_params["port"]),
+        pg_database=pg_eval_params["database"],
+        pg_user=pg_eval_params["user"],
+        pg_password=pg_eval_params.get("password"),
+    )
 
     try:
         temp_conf = _create_temp_postgres_database(base_config)

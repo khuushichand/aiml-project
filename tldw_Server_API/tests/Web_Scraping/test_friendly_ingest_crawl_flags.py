@@ -116,4 +116,3 @@ def test_friendly_ingest_url_level_flags_forwarding(client_with_token, monkeypat
     assert captured.get("crawl_strategy") == "best_first"
     assert captured.get("include_external") is False
     assert captured.get("score_threshold") == 0.0
-

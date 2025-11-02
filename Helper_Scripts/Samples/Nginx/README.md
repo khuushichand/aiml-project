@@ -33,4 +33,3 @@ docker run -d --name tldw-nginx \
 ```
 
 Ensure the app is reachable on the docker network at `app:8000` (adjust upstream in the config if needed).
-

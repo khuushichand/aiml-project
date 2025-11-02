@@ -321,17 +321,17 @@ async def get_current_user(
 ) -> Dict[str, Any]:
     """
     Get current authenticated user from JWT token
-    
+
     Args:
         request: FastAPI request object
         credentials: Bearer token from Authorization header
         jwt_service: JWT service instance
         session_manager: Session manager instance
         db_pool: Database pool instance
-        
+
     Returns:
         User dictionary with all user information
-        
+
     Raises:
         HTTPException: If authentication fails
     """
@@ -566,11 +566,11 @@ async def get_current_user(
             detail="Authentication required",
             headers=extra_headers
         )
-    
+
     try:
         # Extract token
         token = credentials.credentials
-        
+
         # Single-user mode should not attempt JWT initialization
         try:
             if is_single_user_mode():
@@ -593,19 +593,19 @@ async def get_current_user(
         jti = payload.get("jti")
         if await session_manager.is_token_blacklisted(token, jti):
             raise InvalidTokenError("Token has been revoked")
-        
+
         # Get user from database
         # JWT standard uses 'sub' for subject (user ID)
         user_id = payload.get("sub") or payload.get("user_id")
         if not user_id:
             raise InvalidTokenError("Invalid token payload")
-        
+
         # Convert to int if it's a string
         try:
             user_id = int(user_id)
         except (ValueError, TypeError):
             raise InvalidTokenError("Invalid user ID in token")
-        
+
         # Fetch user from database
         if db_pool.pool:  # PostgreSQL
             user = await db_pool.fetchone(
@@ -617,12 +617,12 @@ async def get_current_user(
                 "SELECT * FROM users WHERE id = ? AND is_active = ?",
                 user_id, 1
             )
-        
+
         if not user:
             raise UserNotFoundError(f"User {user_id}")
-        
+
         # Session activity is already updated during token validation in session_manager
-        
+
         # Convert to dict if needed
         if hasattr(user, 'dict'):
             user = dict(user)
@@ -655,7 +655,7 @@ async def get_current_user(
         )
 
         return user
-        
+
     except TokenExpiredError:
         logger.warning("get_current_user: token expired")
         raise HTTPException(
@@ -690,13 +690,13 @@ async def get_current_active_user(
 ) -> Dict[str, Any]:
     """
     Get current active user (verified and not locked)
-    
+
     Args:
         current_user: Current authenticated user
-        
+
     Returns:
         User dictionary if active and verified
-        
+
     Raises:
         HTTPException: If user is inactive or unverified
     """
@@ -705,13 +705,13 @@ async def get_current_active_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
         )
-    
+
     if not current_user.get("is_verified"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Email verification required"
         )
-    
+
     return current_user
 
 
@@ -720,13 +720,13 @@ async def require_admin(
 ) -> Dict[str, Any]:
     """
     Require admin role for access
-    
+
     Args:
         current_user: Current active user
-        
+
     Returns:
         User dictionary if admin
-        
+
     Raises:
         HTTPException: If user is not admin
     """
@@ -741,17 +741,17 @@ async def require_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
         )
-    
+
     return current_user
 
 
 def require_role(role: str):
     """
     Create a dependency that requires a specific role
-    
+
     Args:
         role: Required role name
-        
+
     Returns:
         Dependency function that checks for the role
     """
@@ -759,20 +759,20 @@ def require_role(role: str):
         current_user: Dict[str, Any] = Depends(get_current_active_user)
     ) -> Dict[str, Any]:
         user_role = current_user.get("role", "user")
-        
+
         # Admin can access everything
         if user_role == "admin":
             return current_user
-        
+
         # Check specific role
         if user_role != role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Requires {role} role"
             )
-        
+
         return current_user
-    
+
     return role_checker
 
 
@@ -785,23 +785,23 @@ async def get_optional_current_user(
 ) -> Optional[Dict[str, Any]]:
     """
     Get current user if authenticated, None otherwise
-    
+
     This is useful for endpoints that have different behavior
     for authenticated vs unauthenticated users
-    
+
     Args:
         request: FastAPI request object
         credentials: Optional bearer token
         jwt_service: JWT service instance
         session_manager: Session manager instance
         db_pool: Database pool instance
-        
+
     Returns:
         User dictionary if authenticated, None otherwise
     """
     if not credentials:
         return None
-    
+
     try:
         return await get_current_user(
             request, credentials, jwt_service, session_manager, db_pool
@@ -820,11 +820,11 @@ async def check_rate_limit(
 ):
     """
     Check rate limit for the current request
-    
+
     Args:
         request: FastAPI request object
         rate_limiter: Rate limiter instance
-        
+
     Raises:
         HTTPException: If rate limit exceeded
     """
@@ -837,13 +837,13 @@ async def check_rate_limit(
 
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
-    
+
     # Get endpoint key
     endpoint = f"{request.method}:{request.url.path}"
-    
+
     # Check rate limit
     allowed, metadata = await rate_limiter.check_rate_limit(client_ip, endpoint)
-    
+
     if not allowed:
         retry_after = 60
         try:
@@ -865,11 +865,11 @@ async def check_auth_rate_limit(
 ):
     """
     Check stricter rate limit for authentication endpoints
-    
+
     Args:
         request: FastAPI request object
         rate_limiter: Rate limiter instance
-        
+
     Raises:
         HTTPException: If rate limit exceeded
     """
@@ -882,16 +882,16 @@ async def check_auth_rate_limit(
 
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
-    
+
     # Use stricter limits for auth endpoints
     allowed, metadata = await rate_limiter.check_rate_limit(
-        client_ip, 
-        "auth", 
+        client_ip,
+        "auth",
         limit=5,  # Stricter limit (5 requests per minute)
         window_minutes=1
     )
     retry_after = metadata.get("retry_after", 60)
-    
+
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

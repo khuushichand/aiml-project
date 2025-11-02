@@ -41,7 +41,7 @@ class TemplateConfig(BaseModel):
         default=None,
         description="Optional classifier for auto-apply (media_types, filename_regex, title_regex, url_regex, min_score, priority)"
     )
-    
+
     @field_validator('chunking')
     @classmethod
     def validate_chunking(cls, v):
@@ -101,14 +101,9 @@ class ChunkingTemplateResponse(ChunkingTemplateBase):
     updated_at: datetime = Field(..., description="Last update timestamp")
     version: int = Field(1, description="Template version number")
     user_id: Optional[str] = Field(None, description="User ID of template owner")
-    
-    model_config = ConfigDict(
-        from_attributes=True,
-        json_encoders={
-            datetime: lambda v: v.isoformat()
-        }
-    )
-    
+
+    model_config = ConfigDict(from_attributes=True)
+
     @field_validator('template_json')
     @classmethod
     def ensure_json_string(cls, v):
@@ -125,7 +120,7 @@ class ChunkingTemplateListResponse(BaseModel):
         description="List of chunking templates"
     )
     total: int = Field(..., description="Total number of templates")
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -161,8 +156,8 @@ class TemplateValidationError(BaseModel):
     """Schema for template validation errors."""
     field: str = Field(..., description="Field with validation error")
     message: str = Field(..., description="Error message")
-    
-    
+
+
 class TemplateValidationResponse(BaseModel):
     """Response schema for template validation."""
     valid: bool = Field(..., description="Whether the template is valid")

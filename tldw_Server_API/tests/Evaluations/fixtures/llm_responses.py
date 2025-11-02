@@ -12,7 +12,7 @@ import hashlib
 
 class LLMResponseCache:
     """Cache for LLM responses to enable deterministic testing."""
-    
+
     # Pre-defined responses for common evaluation scenarios
     CACHED_RESPONSES = {
         "geval_coherence": {
@@ -27,7 +27,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "geval_consistency": {
             "role": "assistant",
             "content": json.dumps({
@@ -40,7 +40,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "geval_fluency": {
             "role": "assistant",
             "content": json.dumps({
@@ -53,7 +53,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "geval_relevance": {
             "role": "assistant",
             "content": json.dumps({
@@ -66,7 +66,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "rag_context_relevance": {
             "role": "assistant",
             "content": json.dumps({
@@ -79,7 +79,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "rag_answer_faithfulness": {
             "role": "assistant",
             "content": json.dumps({
@@ -92,7 +92,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "rag_answer_relevance": {
             "role": "assistant",
             "content": json.dumps({
@@ -105,7 +105,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "response_quality_coherence": {
             "role": "assistant",
             "content": json.dumps({
@@ -118,7 +118,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "response_quality_helpfulness": {
             "role": "assistant",
             "content": json.dumps({
@@ -131,7 +131,7 @@ class LLMResponseCache:
                 }
             })
         },
-        
+
         "custom_metric_evaluation": {
             "role": "assistant",
             "content": json.dumps({
@@ -145,20 +145,20 @@ class LLMResponseCache:
             })
         }
     }
-    
+
     @classmethod
     def get_cached_response(cls, prompt_type: str, prompt_content: str = None) -> Dict[str, Any]:
         """Get a cached response based on prompt type."""
         # If we have a direct match, return it
         if prompt_type in cls.CACHED_RESPONSES:
             return cls.CACHED_RESPONSES[prompt_type]
-        
+
         # Generate a deterministic response based on prompt content
         if prompt_content:
             # Use hash to generate consistent scores
             hash_val = int(hashlib.md5(prompt_content.encode()).hexdigest()[:8], 16)
             score = 3.0 + (hash_val % 20) / 10  # Score between 3.0 and 5.0
-            
+
             return {
                 "role": "assistant",
                 "content": json.dumps({
@@ -167,7 +167,7 @@ class LLMResponseCache:
                     "confidence": 0.75 + (hash_val % 20) / 100
                 })
             }
-        
+
         # Default response
         return {
             "role": "assistant",
@@ -177,30 +177,30 @@ class LLMResponseCache:
                 "confidence": 0.80
             })
         }
-    
+
     @classmethod
     def get_embedding_response(cls, text: str, model: str = "text-embedding-3-small") -> List[float]:
         """Get a deterministic embedding based on text."""
         # Generate deterministic embedding based on text hash
         hash_val = hashlib.md5(text.encode()).hexdigest()
-        
+
         # Create embedding vector (1536 dimensions for OpenAI embeddings)
         embedding_size = 1536 if "3" in model else 1024
         embedding = []
-        
+
         for i in range(embedding_size):
             # Use hash chunks to generate values
             chunk = hash_val[i % len(hash_val):(i % len(hash_val)) + 2]
             value = int(chunk, 16) / 255.0 - 0.5  # Normalize to [-0.5, 0.5]
             embedding.append(value)
-        
+
         return embedding
-    
+
     @classmethod
     def get_batch_responses(cls, prompts: List[str], response_type: str = "evaluation") -> List[Dict[str, Any]]:
         """Get batch responses for multiple prompts."""
         responses = []
-        
+
         for i, prompt in enumerate(prompts):
             if response_type == "evaluation":
                 # Vary scores slightly for each prompt
@@ -216,30 +216,30 @@ class LLMResponseCache:
                 })
             else:
                 responses.append(cls.get_cached_response("custom_metric_evaluation", prompt))
-        
+
         return responses
-    
+
     @classmethod
     def get_streaming_response(cls, prompt_type: str, chunk_size: int = 20) -> List[str]:
         """Get a streaming response as chunks."""
         full_response = cls.get_cached_response(prompt_type)
         content = full_response["content"]
-        
+
         # Split into chunks
         chunks = []
         for i in range(0, len(content), chunk_size):
             chunks.append(content[i:i + chunk_size])
-        
+
         return chunks
 
 
 class MockLLMClient:
     """Mock LLM client for testing without real API calls."""
-    
+
     def __init__(self, model: str = "gpt-4", fail_after: Optional[int] = None):
         """
         Initialize mock LLM client.
-        
+
         Args:
             model: Model name to simulate
             fail_after: Fail after this many calls (for testing error handling)
@@ -248,7 +248,7 @@ class MockLLMClient:
         self.fail_after = fail_after
         self.call_count = 0
         self.cache = LLMResponseCache()
-    
+
     async def create_completion(
         self,
         prompt: str,
@@ -258,14 +258,14 @@ class MockLLMClient:
     ) -> Dict[str, Any]:
         """Mock completion creation."""
         self.call_count += 1
-        
+
         # Simulate failure if configured
         if self.fail_after and self.call_count > self.fail_after:
             raise Exception("Mock LLM API error")
-        
+
         # Determine response type from prompt
         prompt_lower = prompt.lower()
-        
+
         if "coherence" in prompt_lower:
             response_type = "geval_coherence"
         elif "consistency" in prompt_lower:
@@ -280,9 +280,9 @@ class MockLLMClient:
             response_type = "response_quality_coherence"
         else:
             response_type = "custom_metric_evaluation"
-        
+
         response = self.cache.get_cached_response(response_type, prompt)
-        
+
         return {
             "id": f"mock-{self.call_count}",
             "model": self.model,
@@ -296,14 +296,14 @@ class MockLLMClient:
                 "total_tokens": len(prompt.split()) + len(response["content"].split())
             }
         }
-    
+
     async def create_embedding(self, text: str, model: str = None) -> List[float]:
         """Mock embedding creation."""
         self.call_count += 1
-        
+
         if self.fail_after and self.call_count > self.fail_after:
             raise Exception("Mock embedding API error")
-        
+
         return self.cache.get_embedding_response(text, model or self.model)
 
 

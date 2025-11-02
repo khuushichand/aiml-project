@@ -11,8 +11,8 @@ sbom:
 	@if [ -f pyproject.toml ]; then \
 		echo "==> pyproject.toml detected; using cdxgen (no install required)"; \
 		npx -y @appthreat/cdxgen -t python -o sbom/sbom-python.cdx.json || true; \
-	elif [ -f tldw_Server_API/requirements.txt ]; then \
-		$(PY) -m pip install -q cyclonedx-bom cyclonedx-cli || true; \
+		elif [ -f tldw_Server_API/requirements.txt ]; then \
+			$(PY) -m pip install -q cyclonedx-bom || true; \
 		cyclonedx-bom -r tldw_Server_API/requirements.txt -o sbom/sbom-python.cdx.json || true; \
 	else \
 		echo "(info) No pyproject.toml or requirements.txt found; skipping Python SBOM"; \
@@ -31,7 +31,15 @@ sbom:
 		[ -f $$f ] && files="$$files $$f"; \
 	done; \
 	if [ -n "$$files" ]; then \
-		cyclonedx-cli merge --input-files $$files --output-file sbom/sbom.cdx.json || cp sbom/sbom-python.cdx.json sbom/sbom.cdx.json || true; \
+			if command -v docker >/dev/null 2>&1; then \
+				docker run --rm -v "$$PWD":/work -w /work cyclonedx/cyclonedx-cli:0.30.0 merge --input-files $$files --output-file sbom/sbom.cdx.json \
+					|| cp sbom/sbom-python.cdx.json sbom/sbom.cdx.json || true; \
+		elif command -v cyclonedx-cli >/dev/null 2>&1; then \
+			cyclonedx-cli merge --input-files $$files --output-file sbom/sbom.cdx.json || cp sbom/sbom-python.cdx.json sbom/sbom.cdx.json || true; \
+		else \
+			echo "(info) CycloneDX CLI not found; skipping merge. Install: https://github.com/CycloneDX/cyclonedx-cli"; \
+			cp sbom/sbom-python.cdx.json sbom/sbom.cdx.json 2>/dev/null || true; \
+		fi; \
 	else \
 		echo "(warn) No component SBOMs generated; nothing to merge"; \
 	fi
@@ -40,7 +48,15 @@ sbom:
 
 sbom-validate:
 	@echo "==> Validating SBOM (if present)"
-	@cyclonedx-cli validate --input-file sbom/sbom.cdx.json || true
+	@if [ -f sbom/sbom.cdx.json ]; then \
+			if command -v docker >/dev/null 2>&1; then \
+				docker run --rm -v "$$PWD":/work -w /work cyclonedx/cyclonedx-cli:0.30.0 validate --input-file sbom/sbom.cdx.json || true; \
+		elif command -v cyclonedx-cli >/dev/null 2>&1; then \
+			cyclonedx-cli validate --input-file sbom/sbom.cdx.json || true; \
+		else \
+			echo "(info) CycloneDX CLI not found; skipping validation. Install: https://github.com/CycloneDX/cyclonedx-cli"; \
+		fi; \
+	fi
 
 sbom-scan:
 	@echo "==> Vulnerability scan with grype (requires grype installed)"

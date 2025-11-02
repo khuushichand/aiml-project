@@ -1,6 +1,6 @@
 # Documentation Site Guide
 
-This document explains how the tldw_Server documentation site is organized, built, and deployed — and how to safely update it.
+This document explains how the tldw_Server documentation site is organized, built, and deployed - and how to safely update it.
 
 ## Overview
 
@@ -21,7 +21,7 @@ Only these folders are included on the public site:
 - `Docs/Evaluations`
 - `Docs/User_Guides`
 
-The curated content is synced into `Docs/Published/`. Do not manually edit files in `Docs/Published/` — they can be overwritten by the refresh script or CI.
+The curated content is synced into `Docs/Published/`. Do not manually edit files in `Docs/Published/` - they can be overwritten by the refresh script or CI.
 
 ## Refreshing Curated Docs
 

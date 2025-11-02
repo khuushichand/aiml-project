@@ -8,6 +8,7 @@ import os
 import tempfile
 import io
 from pathlib import Path as PathLib
+import sqlite3  # for DB-specific exception handling in limits endpoints
 from typing import AsyncGenerator, Optional, Dict, Any
 import numpy as np
 import soundfile as sf
@@ -18,10 +19,11 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status # For status codes
 from slowapi.util import get_remote_address
 from fastapi import Request as _FastAPIRequest  # for rate limit key typing
+from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
-    OpenAISpeechRequest, 
+    OpenAISpeechRequest,
     OpenAITranscriptionRequest,
     OpenAITranscriptionResponse,
     OpenAITranslationRequest,
@@ -46,6 +48,17 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     bytes_to_seconds,
 )
+# Quota helpers for status/limits and TTL heartbeat
+try:
+    from tldw_Server_API.app.core.Usage.audio_quota import (
+        heartbeat_stream as heartbeat_stream,
+        active_streams_count as active_streams_count,
+        get_daily_minutes_used as get_daily_minutes_used,
+        get_user_tier as get_user_tier,
+    )
+except ImportError as e:
+    # Optional helpers may be unavailable in some environments; log at debug level
+    logger.debug(f"audio_quota optional helpers not available: {e}")
 # Expose job quota helpers at module scope for tests to monkeypatch
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -54,19 +67,58 @@ try:
         increment_jobs_started as increment_jobs_started,
         get_limits_for_user as get_limits_for_user,
     )
-except Exception:
-    # In import-guarded contexts, tests may skip or endpoints not mounted
-    pass
+except ImportError as e:
+    # Optional helpers may be unavailable in some environments; log at debug level
+    logger.debug(f"audio_quota job helpers not available: {e}")
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
 
+# Optional DB/Redis drivers (for precise exception handling without hard dependencies)
+try:  # asyncpg is optional; used when PostgreSQL is configured
+    import asyncpg  # type: ignore
+except ImportError:  # pragma: no cover - absence is fine
+    asyncpg = None  # type: ignore
+try:  # aiosqlite may surface errors during SQLite operations
+    import aiosqlite  # type: ignore
+except ImportError:  # pragma: no cover
+    aiosqlite = None  # type: ignore
+try:  # redis is optional; used for active stream counters if enabled
+    from redis import exceptions as redis_exceptions  # type: ignore
+except ImportError:  # pragma: no cover
+    redis_exceptions = None  # type: ignore
+try:
+    # Project-level DB error wrapper used by get_db_pool/DB layer
+    from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError as AuthNZDatabaseError  # type: ignore
+except ImportError:  # pragma: no cover
+    AuthNZDatabaseError = None  # type: ignore
+
+# Build precise exception tuples we’ll catch in quota-limit helpers
+EXPECTED_DB_EXC = (NameError,)  # NameError if optional imports are unavailable
+if hasattr(sqlite3, "Error"):
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, sqlite3.Error)  # type: ignore[attr-defined]
+if asyncpg and hasattr(asyncpg, "PostgresError"):
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, asyncpg.PostgresError)  # type: ignore[attr-defined]
+if aiosqlite and hasattr(aiosqlite, "Error"):
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, aiosqlite.Error)  # type: ignore[attr-defined]
+if AuthNZDatabaseError is not None:
+    EXPECTED_DB_EXC = (*EXPECTED_DB_EXC, AuthNZDatabaseError)  # type: ignore
+
+EXPECTED_REDIS_EXC = (NameError,)
+if redis_exceptions and hasattr(redis_exceptions, "RedisError"):
+    EXPECTED_REDIS_EXC = (*EXPECTED_REDIS_EXC, redis_exceptions.RedisError)  # type: ignore[attr-defined]
+
 # For logging (if you use the same logger as in your PDF endpoint)
-from loguru import logger
-from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+from tldw_Server_API.app.core.Metrics.metrics_manager import (
+    increment_counter,
+    get_metrics_registry,
+    MetricDefinition,
+    MetricType,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 
 # Initialize rate limiter
 def _rate_limit_key(request: _FastAPIRequest) -> str:
@@ -95,6 +147,80 @@ router = APIRouter(
         429: {"description": "Rate limit exceeded"}
     },
 )
+
+
+# Register audio fail-open metrics (idempotent if already registered)
+try:
+    _reg = get_metrics_registry()
+    _reg.register_metric(
+        MetricDefinition(
+            name="audio_failopen_minutes_total",
+            type=MetricType.COUNTER,
+            description="Minutes allowed during fail-open when quota store unavailable",
+            unit="minutes",
+            labels=["reason"],
+        )
+    )
+    _reg.register_metric(
+        MetricDefinition(
+            name="audio_failopen_events_total",
+            type=MetricType.COUNTER,
+            description="Fail-open allowance events during streaming",
+            labels=["reason"],
+        )
+    )
+    _reg.register_metric(
+        MetricDefinition(
+            name="audio_failopen_cap_exhausted_total",
+            type=MetricType.COUNTER,
+            description="Fail-open cap exhausted; connection closed due to bounded fail-open",
+            labels=["reason"],
+        )
+    )
+except Exception as e:
+    # Metrics must never break imports; log for diagnostics
+    logger.debug(f"audio: metrics registration skipped/failed: {e}")
+
+
+def _get_failopen_cap_minutes() -> float:
+    """Return per-connection fail-open cap in minutes for streaming quotas.
+
+    Resolution order:
+      1) Env var AUDIO_FAILOPEN_CAP_MINUTES (>0)
+      2) Config [Audio-Quota] failopen_cap_minutes (>0)
+      3) Config [Audio] failopen_cap_minutes (>0)
+      4) Default 5.0
+    """
+    # Env override
+    v = os.getenv("AUDIO_FAILOPEN_CAP_MINUTES")
+    if v is not None:
+        try:
+            f = float(v)
+            if f > 0:
+                return f
+        except (ValueError, TypeError) as e:
+            logger.debug(f"AUDIO_FAILOPEN_CAP_MINUTES parse failed: {e}")
+    # Config-based override
+    try:
+        cfg = load_comprehensive_config()
+        if cfg is not None:
+            if cfg.has_section("Audio-Quota"):
+                try:
+                    f = float(cfg.get("Audio-Quota", "failopen_cap_minutes", fallback=""))
+                    if f > 0:
+                        return f
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[Audio-Quota].failopen_cap_minutes parse failed: {e}")
+            if cfg.has_section("Audio"):
+                try:
+                    f = float(cfg.get("Audio", "failopen_cap_minutes", fallback=""))
+                    if f > 0:
+                        return f
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"[Audio].failopen_cap_minutes parse failed: {e}")
+    except Exception as e:
+        logger.debug(f"Config read for failopen cap failed: {e}")
+    return 5.0
 
 
 
@@ -149,28 +275,28 @@ async def create_speech(
       -d '{"model": "tts-1", "input": "Hello world", "voice": "alloy", "response_format": "mp3", "stream": true}'
     ```
     """
-    
+
     # Authentication is enforced by dependency injection via get_request_user
     # current_user is available for audit/logging if needed
-    
+
     # Input validation using the new validation system
     try:
         # Create validator instance
         validator = TTSInputValidator()
-        
+
         # Validate and sanitize input text
         sanitized_text = validator.sanitize_text(request_data.input)
-        
+
         # Check for empty input after sanitization
         if not sanitized_text or len(sanitized_text.strip()) == 0:
             raise TTSValidationError(
                 "Input text cannot be empty after sanitization",
                 details={"original_length": len(request_data.input)}
             )
-        
+
         # Update request with sanitized text
         request_data.input = sanitized_text
-        
+
     except TTSValidationError as e:
         logger.warning(f"TTS validation error: {e}")
         raise HTTPException(
@@ -365,7 +491,7 @@ async def create_transcription(
     - parakeet: NVIDIA Parakeet model (efficient)
     - canary: NVIDIA Canary model (multilingual)
     - qwen2audio: Qwen2 Audio model
-    
+
     Rate limited to 20 requests per minute per IP address.
 
     Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
@@ -378,9 +504,9 @@ async def create_transcription(
       -F "file=@/abs/audio.wav" -F "model=whisper-1" -F "language=en" -F "response_format=json"
     ```
     """
-    
+
     # Authentication is enforced by dependency injection via get_request_user
-    
+
     # Validate file presence
     if not file:
         raise HTTPException(
@@ -407,17 +533,37 @@ async def create_transcription(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"Unsupported media type: {file.content_type}"
         )
-    
+
     # Resolve per-tier file size limit
+    rid = None
+    try:
+        if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+            rid = str(request.state.request_id)
+    except Exception:
+        rid = None
     try:
         limits = await get_limits_for_user(current_user.id)
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to get limits for user {current_user.id} during upload, using defaults: {e}; request_id={rid}"
+        )
+        limits = {
+            "daily_minutes": 30.0,
+            "concurrent_streams": 1,
+            "concurrent_jobs": 1,
+            "max_file_size_mb": 25,
+        }
+    try:
         max_file_size = int((limits.get("max_file_size_mb") or 25) * 1024 * 1024)
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            f"Could not parse max_file_size_mb for user {current_user.id}; defaulting to 25MB: {e}; request_id={rid}"
+        )
         max_file_size = 25 * 1024 * 1024
     contents = await file.read()
     if len(contents) > max_file_size:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB"
         )
 
@@ -431,8 +577,10 @@ async def create_transcription(
     try:
         await increment_jobs_started(current_user.id)
         acquired_job_slot = True
-    except Exception as e:
-        logger.warning(f"Failed to increment jobs started: user_id={current_user.id}, error={e}")
+    except EXPECTED_DB_EXC as e:
+        logger.exception(
+            f"Failed to increment jobs started: user_id={current_user.id}, error={e}; request_id={rid}"
+        )
 
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
@@ -442,7 +590,7 @@ async def create_transcription(
         with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp_file:
             tmp_file.write(contents)
             temp_audio_path = tmp_file.name
-        
+
         # Convert to canonical 16k mono WAV for consistent processing
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav as _convert_to_wav
@@ -459,7 +607,7 @@ async def create_transcription(
         except Exception as e:
             logger.debug(f"Failed to compute audio duration; defaulting to 0: error={e}")
             duration_seconds = 0.0
-        
+
         # Parse timestamp granularities (flexible: CSV or JSON array)
         granularity_tokens = set()
         try:
@@ -489,9 +637,9 @@ async def create_transcription(
             "qwen2audio": "qwen2audio",
             "qwen": "qwen2audio"
         }
-        
+
         provider = provider_map.get(model.lower(), "faster-whisper")
-        
+
         # Import transcription functions
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             transcribe_audio,
@@ -501,23 +649,27 @@ async def create_transcription(
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
-        
+
         # Prepare quotas and transcription now that we hold the slot
 
         # Enforce daily minutes cap by estimated duration
         minutes_est = duration_seconds / 60.0
         try:
             allow, remaining_after = await check_daily_minutes_allow(current_user.id, minutes_est)
-        except Exception as e:
-            logger.debug(f"check_daily_minutes_allow failed; allowing by default: user_id={current_user.id}, error={e}")
+        except EXPECTED_DB_EXC as e:
+            logger.exception(
+                f"check_daily_minutes_allow failed; allowing by default: user_id={current_user.id}, error={e}; request_id={rid}"
+            )
             allow = True
             remaining_after = None
         if not allow:
             # Release job slot before returning
             try:
                 await finish_job(current_user.id)
-            except Exception as e:
-                logger.warning(f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}")
+            except EXPECTED_DB_EXC as e:
+                logger.exception(
+                    f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}; request_id={rid}"
+                )
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Transcription quota exceeded (daily minutes)"
@@ -579,11 +731,27 @@ async def create_transcription(
             try:
                 if acquired_job_slot:
                     await finish_job(current_user.id)
-            except Exception:
-                pass
+            except EXPECTED_DB_EXC as e:
+                logger.exception(
+                    f"Failed to release job slot in finally: user_id={current_user.id}, error={e}; request_id={rid}"
+                )
+
+        # Helper: detect various error messages
+        def is_transcription_error(msg: str) -> bool:
+            lower_msg = msg.lower()
+            return (
+                lower_msg.startswith("[error")
+                or lower_msg.startswith("[transcription error")
+                or lower_msg.startswith("canary transcription error")
+                or lower_msg.startswith("parakeet transcription error")
+                or lower_msg.startswith("external provider transcription error")
+                or lower_msg.startswith("nemo transcription module not available")
+                or lower_msg.startswith("failed to import nemo")
+                or lower_msg.startswith("failed to import external provider")
+            )
 
         # Check for errors in transcription
-        if transcribed_text.startswith("[Error") or transcribed_text.startswith("[Transcription error"):
+        if is_transcription_error(transcribed_text):
             logger.error(f"Transcription failed: {transcribed_text}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -598,27 +766,47 @@ async def create_transcription(
             transcribed_text = _cv_post(transcribed_text)
         except Exception:
             pass
-        
+
         # On success, record minutes used
         try:
             await add_daily_minutes(current_user.id, minutes_est)
-        except Exception as e:
-            logger.debug(f"Failed to record daily minutes: user_id={current_user.id}, error={e}")
+        except EXPECTED_DB_EXC as e:
+            logger.exception(
+                f"Failed to record daily minutes: user_id={current_user.id}, error={e}; request_id={rid}"
+            )
 
         # Format response based on requested format
+            if is_transcription_error(transcribed_text):
+                logger.error(f"Transcription failed: {transcribed_text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model."
+                )
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
-        
+
         elif response_format == "srt":
+            if is_transcription_error(transcribed_text):
+                logger.error(f"Transcription failed: {transcribed_text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model."
+                )
             # Simple SRT format (would need proper timing for real implementation)
             srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
             return Response(content=srt_content, media_type="text/plain")
-        
+
         elif response_format == "vtt":
+            if is_transcription_error(transcribed_text):
+                logger.error(f"Transcription failed: {transcribed_text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model."
+                )
             # Simple VTT format
             vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
             return Response(content=vtt_content, media_type="text/vtt")
-        
+
         else:  # json or verbose_json
             response_data: Dict[str, Any] = {"text": transcribed_text}
 
@@ -659,7 +847,7 @@ async def create_transcription(
                         "end": duration,
                         "text": transcribed_text,
                     }]
-            
+
             # Optional: auto-run segmentation in JSON responses
             if segment:
                 try:
@@ -700,9 +888,9 @@ async def create_transcription(
             if response_format == "verbose_json":
                 response_data["task"] = "transcribe"
                 response_data["duration"] = duration
-            
+
             return JSONResponse(content=response_data)
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -716,7 +904,7 @@ async def create_transcription(
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
                 os.remove(temp_audio_path)
-            except Exception as e:
+            except OSError as e:
                 logger.warning(f"Failed to remove temp audio file: path={temp_audio_path}, error={e}")
                 try:
                     increment_counter("app_warning_events_total", labels={"component": "audio", "event": "tempfile_remove_failed"})
@@ -762,7 +950,7 @@ async def create_translation(
     # For translation, we'll use the transcription endpoint with language detection
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model
-    
+
     # Call transcription with English as target
     return await create_transcription(
         request=request,
@@ -848,7 +1036,7 @@ async def get_tts_health(
 ):
     """
     Get health status of TTS providers.
-    
+
     Returns comprehensive health information including:
     - Provider availability
     - Circuit breaker status
@@ -856,7 +1044,7 @@ async def get_tts_health(
     - Active requests
     """
     from datetime import datetime
-    
+
     try:
         # Get service status
         status_data = tts_service.get_status()
@@ -865,16 +1053,16 @@ async def get_tts_health(
             status = {}
         else:
             status = status_data
-        
+
         # Get capabilities
         capabilities = await tts_service.get_capabilities()
-        
+
         # Determine overall health
         available_providers = status.get("available", 0)
         total_providers = status.get("total_providers", 0)
-        
+
         health_status = "healthy" if available_providers > 0 else "unhealthy"
-        
+
         health = {
             "status": health_status,
             "providers": {
@@ -922,11 +1110,11 @@ async def list_tts_providers(
     List all available TTS providers and their capabilities.
     """
     from datetime import datetime
-    
+
     try:
         capabilities = await tts_service.get_capabilities()
         voices = await tts_service.list_voices()
-        
+
         return {
             "providers": capabilities,
             "voices": voices,
@@ -950,7 +1138,7 @@ async def list_tts_voices(
 
     - If `provider` is specified, returns voices only for that provider.
     - Otherwise returns a mapping of provider name to voice lists.
-    
+
     For ElevenLabs, this uses the adapter's cached user voices (plus defaults)
     loaded during adapter initialization.
     """
@@ -974,7 +1162,7 @@ async def reset_tts_metrics(
 ):
     """
     Reset TTS metrics.
-    
+
     Args:
         provider: Optional provider name to reset metrics for. If not provided, resets all metrics.
     """
@@ -1011,24 +1199,18 @@ async def websocket_transcribe(
     token: Optional[str] = Query(None)  # Get token from query parameter
 ):
     """
-    WebSocket endpoint for real-time audio transcription.
+    Handle a WebSocket connection to perform real-time streaming audio transcription.
 
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
-          `Docs/API-related/Audio_Transcription_API.md`
-
-    Protocol:
-    1. Client connects via WebSocket
-    2. Client sends configuration message:
-       {"type": "config", "sample_rate": 16000, "language": "en", "model_variant": "mlx"}
-    3. Client sends audio chunks:
-       {"type": "audio", "data": "<base64_encoded_float32_audio>"}
-    4. Server responds with transcriptions:
-       {"type": "transcription", "text": "...", "timestamp": ..., "is_final": true}
-       {"type": "partial", "text": "...", "timestamp": ..., "is_final": false}
-    5. Client can send commit to finalize:
-       {"type": "commit"}
-    6. Server sends final transcript:
-       {"type": "full_transcript", "text": "..."}
+    Accepts a WebSocket and an optional query token. Authentication is supported via:
+    - Multi-user: X-API-KEY header, Authorization: Bearer <JWT>, or an initial auth message.
+    - Single-user: API key via header, query token, or an initial auth message; an IP allowlist may be enforced.
+    Supported incoming message types: "auth" (for token-based auth), "config" (streaming configuration), "audio" (base64-encoded audio chunks), and "commit" (finalize current utterance).
+    Outgoing message types include partial updates ("partial"), interim/final transcriptions ("transcription"), the final transcript ("full_transcript"), and structured error frames ("error").
+    Per-user limits are enforced (concurrent streams and daily minute quotas); when a quota is exceeded the server sends an "error" with "error_type": "quota_exceeded" and closes the connection with code 4003.
+    A server-side default streaming configuration is used if the client does not provide one before audio arrives.
+    Parameters:
+        websocket (WebSocket): The active WebSocket connection.
+        token (Optional[str]): Optional API key token supplied via the query string for single-user authentication.
     """
     # Accept the WebSocket connection first
     await websocket.accept()
@@ -1339,7 +1521,7 @@ async def websocket_transcribe(
         await websocket.send_json({"type": "error", "message": "Authentication required"})
         await websocket.close(code=4401)
         return
-    
+
     try:
         # Default configuration - prefer server config for variant/model
         # This ensures alignment with configured STT defaults even if the
@@ -1364,9 +1546,9 @@ async def websocket_transcribe(
             partial_interval=0.5,
             language='en'  # Default language for Canary
         )
-        
+
         logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
-        
+
         # Enforce per-user streaming quotas and daily minutes during streaming
         # Resolve user id for quotas (JWT in multi-user; fixed id in single-user)
         if is_multi_user_mode() and jwt_user_id is not None:
@@ -1384,6 +1566,9 @@ async def websocket_transcribe(
 
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
+        # Bounded fail-open budget in minutes if DB is unavailable while streaming
+        FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
+        failopen_remaining = FAIL_OPEN_CAP_MINUTES
 
         def _on_audio(seconds: float, sr: int) -> None:
             nonlocal used_minutes
@@ -1398,17 +1583,95 @@ async def websocket_transcribe(
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import QuotaExceeded as _QuotaExceeded
 
             async def _on_audio_quota(seconds: float, sr: int) -> None:
-                nonlocal used_minutes
+                """
+                Handle a chunk of audio for daily-minute quota accounting and enforcement.
+
+                Parameters:
+                    seconds (float): Duration of the audio chunk in seconds.
+                    sr (int): Sample rate of the audio chunk in Hz (unused by this function but provided for callback compatibility).
+
+                Raises:
+                    _QuotaExceeded: If adding this chunk would exceed the user's daily minutes quota.
+
+                Notes:
+                    - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
+                      `used_minutes` counter and records the minutes via `add_daily_minutes`.
+                """
+                nonlocal used_minutes, failopen_remaining
                 minutes_chunk = float(seconds) / 60.0
-                allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                deducted = False
+                try:
+                    allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                except EXPECTED_DB_EXC as e:
+                    # Backing store failed; allow temporarily but deduct from bounded fail-open budget
+                    logger.warning(
+                        f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                    )
+                    allow = True
+                    failopen_remaining -= minutes_chunk
+                    try:
+                        increment_counter(
+                            "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
+                        )
+                        increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
+                    except Exception:
+                        pass
+                    deducted = True
+                    if failopen_remaining <= 0:
+                        try:
+                            increment_counter(
+                                "audio_failopen_cap_exhausted_total", labels={"reason": "db_check"}
+                            )
+                        except Exception:
+                            pass
+                        raise _QuotaExceeded("daily_minutes")
                 if not allow:
                     # Raise structured signal to outer scope
                     raise _QuotaExceeded("daily_minutes")
                 used_minutes += minutes_chunk
-                await add_daily_minutes(user_id_for_usage, minutes_chunk)
+                try:
+                    await add_daily_minutes(user_id_for_usage, minutes_chunk)
+                except EXPECTED_DB_EXC as e:
+                    # Could not record; continue streaming under bounded fail-open
+                    logger.warning(
+                        f"Failed to record streaming minutes (bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                    )
+                    if not deducted:
+                        failopen_remaining -= minutes_chunk
+                        try:
+                            increment_counter(
+                                "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_record"}
+                            )
+                            increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
+                        except Exception:
+                            pass
+                        if failopen_remaining <= 0:
+                            try:
+                                increment_counter(
+                                    "audio_failopen_cap_exhausted_total", labels={"reason": "db_record"}
+                                )
+                            except Exception:
+                                pass
+                            raise _QuotaExceeded("daily_minutes")
 
             try:
-                await handle_unified_websocket(websocket, config, on_audio_seconds=_on_audio_quota)
+                async def _on_heartbeat() -> None:
+                    """
+                    Send a heartbeat to update streaming quota/timestamp for the current user.
+
+                    Invokes the module-level `heartbeat_stream` callback with `user_id_for_usage` to record activity; any exceptions raised by the callback are suppressed.
+                    """
+                    try:
+                        await heartbeat_stream(user_id_for_usage)
+                    except EXPECTED_REDIS_EXC as _hb_e:
+                        logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
+
+                await handle_unified_websocket(
+                    websocket,
+                    config,
+                    on_audio_seconds=_on_audio_quota,
+                    on_heartbeat=_on_heartbeat,
+                )
             except _QuotaExceeded as qe:
                 # Send structured error and close with application-defined code
                 try:
@@ -1426,7 +1689,7 @@ async def websocket_transcribe(
                     logger.debug(f"WebSocket close (quota case) failed: error={e}")
         finally:
             await finish_stream(user_id_for_usage)
-        
+
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
@@ -1478,15 +1741,19 @@ async def websocket_transcribe(
 @router.get("/stream/status", summary="Check streaming transcription availability")
 async def streaming_status():
     """
-    Check if streaming transcription is available.
-    
+    Report availability and capabilities of the streaming transcription WebSocket endpoint.
+
     Returns:
-        JSON with status and available models
+        A JSON object with the following keys:
+          - `status` (str): "available" if at least one streaming model is present, "unavailable" otherwise, or "error" on failure.
+          - `available_models` (list[str]): Names of detected streaming model variants (e.g., "parakeet-mlx", "parakeet-standard", "parakeet-onnx").
+          - `websocket_endpoint` (str): URL path of the streaming transcription WebSocket.
+          - `supported_features` (dict): Feature flags indicating supported streaming capabilities (boolean values).
     """
     try:
         # Check available models
         available_models = []
-        
+
         # Check for MLX variant
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
@@ -1495,8 +1762,8 @@ async def streaming_status():
             available_models.append("parakeet-mlx")
         except ImportError:
             pass
-        
-        # Check for standard variant
+
+        # Check for standard variant (NeMo)
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
                 load_parakeet_model
@@ -1504,7 +1771,17 @@ async def streaming_status():
             available_models.append("parakeet-standard")
         except ImportError:
             pass
-        
+
+        # Check for ONNX variant
+        try:
+            import onnxruntime
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
+                load_parakeet_onnx_model
+            )
+            available_models.append("parakeet-onnx")
+        except ImportError:
+            pass
+
         return JSONResponse({
             "status": "available" if available_models else "unavailable",
             "available_models": available_models,
@@ -1520,7 +1797,7 @@ async def streaming_status():
                 "audio_persistence": True
             }
         })
-        
+
     except Exception as e:
         logger.error(f"Error checking streaming status: {e}")
         return JSONResponse(
@@ -1532,13 +1809,106 @@ async def streaming_status():
         )
 
 
+@router.get("/stream/limits", summary="Get user's streaming quota and usage")
+async def streaming_limits(
+    current_user: User = Depends(get_request_user),
+    request: Request = None,
+):
+    """
+    Return the current user's streaming quota and usage summary.
+
+    Returns:
+        JSONResponse: A JSON object with the following keys:
+            - user_id (str): The user's identifier.
+            - tier (str): The user's tier name (e.g., "free").
+            - limits (dict): The resolved limit values (e.g., daily_minutes, concurrent_streams, concurrent_jobs, max_file_size_mb).
+            - used_today_minutes (float): Minutes already used today (0.0 if unavailable).
+            - remaining_minutes (float|None): Minutes remaining today (0.0 if none left, `None` if unknown/unbounded).
+            - active_streams (int): Number of currently active streams (0 if unavailable).
+            - can_start_stream (bool): Whether the user may start another stream given current active streams and concurrent_streams limit.
+    """
+    # Correlate logs with request_id if available
+    rid = ensure_request_id(request) if request is not None else None
+    try:
+        limits = await get_limits_for_user(current_user.id)
+    except EXPECTED_DB_EXC as e:
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get limits for user %s, falling back to defaults: %s", current_user.id, e
+        )
+        # Fallback to default free limits
+        limits = {
+            "daily_minutes": 30.0,
+            "concurrent_streams": 1,
+            "concurrent_jobs": 1,
+            "max_file_size_mb": 25,
+        }
+    try:
+        used_minutes = await get_daily_minutes_used(current_user.id)
+    except EXPECTED_DB_EXC as e:
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get used minutes for user %s, falling back to 0: %s", current_user.id, e
+        )
+        used_minutes = 0.0
+    limit_minutes = limits.get("daily_minutes")
+    if limit_minutes is None:
+        remaining_minutes = None
+    else:
+        try:
+            remaining_minutes = max(0.0, float(limit_minutes) - float(used_minutes))
+        except (ValueError, TypeError) as e:
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                "Could not calculate remaining minutes for user %s: %s", current_user.id, e
+            )
+            remaining_minutes = None
+    try:
+        active_streams = await active_streams_count(current_user.id)
+    except EXPECTED_REDIS_EXC as e:
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get active streams for user %s, falling back to 0: %s", current_user.id, e
+        )
+        active_streams = 0
+    try:
+        tier = await get_user_tier(current_user.id)
+    except EXPECTED_DB_EXC as e:
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Failed to get tier for user %s, falling back to 'free': %s", current_user.id, e
+        )
+        tier = "free"
+    try:
+        max_streams = int(limits.get("concurrent_streams") or 0)
+    except (ValueError, TypeError) as e:
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+            "Could not parse concurrent_streams limit for user %s: %s", current_user.id, e
+        )
+        max_streams = 0
+    can_start = (max_streams == 0) or (active_streams < max_streams)
+    return JSONResponse({
+        "user_id": current_user.id,
+        "tier": tier,
+        "limits": limits,
+        "used_today_minutes": used_minutes,
+        "remaining_minutes": remaining_minutes,
+        "active_streams": active_streams,
+        "can_start_stream": can_start,
+    })
+
 @router.post("/stream/test", summary="Test streaming transcription setup")
 async def test_streaming():
     """
-    Test endpoint to verify streaming setup.
-    
+    Run a lightweight end-to-end check of the streaming transcription pipeline using a short generated audio sample.
+
+    Performs a minimal initialization of the Parakeet streaming transcriber, sends a short synthetic audio chunk, and returns the transcriber's immediate response or a buffering status.
+
     Returns:
-        Test results
+        JSONResponse: On success, a JSON object with keys:
+            - "status": "success"
+            - "test_passed": True
+            - "message": Human-readable success message
+            - "test_result": Transcriber response or the string "Buffer accumulating"
+        On failure, a JSONResponse with status_code 500 and a JSON object containing:
+            - "status": "error"
+            - "test_passed": False
+            - "message": Error message describing the failure
     """
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
@@ -1546,28 +1916,28 @@ async def test_streaming():
             StreamingConfig
         )
         import base64
-        
+
         # Try to initialize transcriber
         config = StreamingConfig(model_variant='mlx')
         transcriber = ParakeetStreamingTranscriber(config)
-        
+
         # Generate test audio
         sample_rate = 16000
         duration = 0.5
         t = np.linspace(0, duration, int(sample_rate * duration))
         audio = (0.5 * np.sin(440 * 2 * np.pi * t)).astype(np.float32)
         encoded = base64.b64encode(audio.tobytes()).decode('utf-8')
-        
+
         # Try processing
         result = await transcriber.process_audio_chunk(encoded)
-        
+
         return JSONResponse({
             "status": "success",
             "test_passed": True,
             "message": "Streaming transcription is working",
             "test_result": result if result else "Buffer accumulating"
         })
-        
+
     except Exception as e:
         logger.error(f"Streaming test failed: {e}")
         return JSONResponse(
@@ -1575,7 +1945,7 @@ async def test_streaming():
             content={
                 "status": "error",
                 "test_passed": False,
-                "message": str(e)
+                "message": "An internal error occurred during the streaming test. Please contact support if the problem persists."
             }
         )
 
@@ -1596,12 +1966,12 @@ async def upload_voice(
 ):
     """
     Upload a custom voice sample for use with TTS.
-    
+
     Supports voice cloning for compatible providers:
     - VibeVoice: Any duration (1-shot cloning)
     - Higgs: 3-10 seconds recommended
     - Chatterbox: 5-20 seconds recommended
-    
+
     The voice will be processed and optimized for the specified provider.
     """
     try:
@@ -1613,17 +1983,17 @@ async def upload_voice(
         )
         # Get voice manager
         voice_manager = get_voice_manager()
-        
+
         # Read file content
         file_content = await file.read()
-        
+
         # Create upload request
         upload_request = VoiceUploadRequest(
             name=name,
             description=description,
             provider=provider
         )
-        
+
         # Process upload
         result = await voice_manager.upload_voice(
             user_id=current_user.id,
@@ -1631,9 +2001,9 @@ async def upload_voice(
             filename=file.filename,
             request=upload_request
         )
-        
+
         return result.model_dump()
-        
+
     except ImportError as e:
         # Placeholder response when voice management is not available
         raise HTTPException(
@@ -1665,7 +2035,7 @@ async def list_voices(
 ):
     """
     List all custom voice samples uploaded by the user.
-    
+
     Returns voice metadata including:
     - Voice ID for use in TTS requests
     - Name and description
@@ -1676,12 +2046,12 @@ async def list_voices(
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         voices = await voice_manager.list_user_voices(current_user.id)
-        
+
         return {
             "voices": [voice.model_dump() for voice in voices],
             "count": len(voices)
         }
-        
+
     except ImportError:
         # Placeholder response when voice management is not available
         return {"voices": [], "count": 0}
@@ -1706,15 +2076,15 @@ async def get_voice_details(
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
-        
+
         if not voice:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found"
             )
-        
+
         return voice.model_dump()
-        
+
     except HTTPException:
         raise
     except ImportError:
@@ -1738,22 +2108,22 @@ async def delete_voice(
 ):
     """
     Delete a custom voice sample.
-    
+
     This will remove the voice files and prevent it from being used in future TTS requests.
     """
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
         voice_manager = get_voice_manager()
         deleted = await voice_manager.delete_voice(current_user.id, voice_id)
-        
+
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found"
             )
-        
+
         return {"message": "Voice deleted successfully", "voice_id": voice_id}
-        
+
     except HTTPException:
         raise
     except ImportError:
@@ -1780,7 +2150,7 @@ async def preview_voice(
 ):
     """
     Generate a short preview of a custom voice.
-    
+
     This endpoint generates a short audio sample using the specified voice
     to help users preview how it sounds before using it in full TTS requests.
     """
@@ -1789,17 +2159,17 @@ async def preview_voice(
         # Validate voice exists
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
-        
+
         if not voice:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found"
             )
-        
+
         # Limit preview text length
         if len(text) > 100:
             text = text[:100]
-        
+
         # Create TTS request with custom voice and stream generator directly
         preview_request = OpenAISpeechRequest(
             model=voice.provider,
@@ -1819,7 +2189,7 @@ async def preview_voice(
                 "X-Voice-Name": voice.name
             }
         )
-        
+
     except HTTPException:
         raise
     except ImportError:

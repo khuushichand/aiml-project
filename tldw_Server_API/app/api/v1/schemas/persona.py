@@ -1,7 +1,7 @@
 """
 Pydantic schemas for Persona Agent API.
 
-Scaffold only — minimal models to enable endpoint stubs.
+Scaffold only - minimal models to enable endpoint stubs.
 """
 from __future__ import annotations
 
@@ -29,4 +29,3 @@ class PersonaSessionResponse(BaseModel):
     session_id: str
     persona: PersonaInfo
     scopes: List[str] = Field(default_factory=list)
-

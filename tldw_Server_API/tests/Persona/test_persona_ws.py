@@ -51,4 +51,3 @@ def test_persona_websocket_plan_and_confirm():
             assert "step_idx" in evt_call
             evt_res = _recv_until(ws, lambda d: d.get("event") == "tool_result")
             assert "step_idx" in evt_res
-

@@ -85,16 +85,16 @@ https://github.com/xufangzhi/phi-Decoding
     https://arxiv.org/html/2503.13288v1
 https://github.com/elder-plinius/CL4R1T4S/tree/main
 COSTAR
-Context, Objective, Style, Tone, Audience, Response 
+Context, Objective, Style, Tone, Audience, Response
 https://towardsdatascience.com/how-i-won-singapores-gpt-4-prompt-engineering-competition-34c195a93d41
 ```
 Context: This is about setting the stage. You tell the AI the backstory of what you’re asking. Imagine saying, “We’re planning a birthday party,” instead of just blurting out, “How do I bake a cake?” This way, the AI gets the full picture and can give you a better answer.
 
 Objective: Here, you’re super clear about what you want the AI to do. It’s like saying, “Please list the best birthday cakes for kids.” This makes sure the AI sticks to the point and gives you exactly what you’re looking for.
 
-Style: Style is all about how you want the AI to ‘talk’. Maybe you want it to sound like a famous writer, a business guru, or just a friendly person next door. It’s like picking the perfect outfit for an occasion — you’re choosing how the AI should sound to fit what you need.
+Style: Style is all about how you want the AI to ‘talk’. Maybe you want it to sound like a famous writer, a business guru, or just a friendly person next door. It’s like picking the perfect outfit for an occasion - you’re choosing how the AI should sound to fit what you need.
 
-Tone: Tone is the vibe of the AI’s reply. Do you want it to be all serious and formal? Or maybe fun and lighthearted? Think of it like picking music for your party — it sets the mood for your chat with the AI.
+Tone: Tone is the vibe of the AI’s reply. Do you want it to be all serious and formal? Or maybe fun and lighthearted? Think of it like picking music for your party - it sets the mood for your chat with the AI.
 
 Audience: This is about who’s going to read or hear what the AI says. Is it for kids, pros, or someone just starting to learn about a topic? By knowing your audience, the AI can make sure it talks in a way that’s easy for them to understand, just like how you’d talk differently to a kid than to your boss.
 
@@ -149,7 +149,7 @@ Follow-up questions:
 ```
  "After every answer provide 3 enumerated ways to continue the conversations or possible questions I might have."
 
-I basically find myself just typing 1, 2, 3 to continue conversations in ways I might have never thought of, or often, questions that I would reasonably have. 
+I basically find myself just typing 1, 2, 3 to continue conversations in ways I might have never thought of, or often, questions that I would reasonably have.
 ```
 
 
@@ -182,10 +182,10 @@ self.prompts = {
             Text:
             """,
 
-            "Summary": """Summarize the following transcript into a concise and informative summary. 
+            "Summary": """Summarize the following transcript into a concise and informative summary.
             Identify the core message, main arguments, and key pieces of information presented in the video.
             The summary should capture the essence of the video's content in a clear and easily understandable way.
-            Aim for a summary that is shorter than the original transcript but still accurately reflects its key points.  
+            Aim for a summary that is shorter than the original transcript but still accurately reflects its key points.
             Focus on conveying the most important information and conclusions.
 All output must be generated entirely in [Language]. Do not use any other language at any point in the response. Do not include this unorganized text into your response.
 Text: """,
@@ -224,7 +224,3 @@ Text:"""
         }
         self.selected_category = "Balanced and Detailed" # Default Category
 ```
-
-
-
-

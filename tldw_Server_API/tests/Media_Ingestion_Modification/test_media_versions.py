@@ -347,7 +347,7 @@ class TestMediaVersionEndpoints:
             json={"content": 123, "prompt": "p", "analysis_content": "s"} # Invalid content type, corrected key
         )
         # Pydantic validation should fail
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_create_version_missing_fields(self):
         """Test creating version with missing required fields."""
@@ -355,7 +355,7 @@ class TestMediaVersionEndpoints:
             f"/api/v1/media/{self.media_id}/versions",
             json={"content": "Test Content Only"}  # Missing prompt/analysis_content
         )
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         detail = response.json().get("detail", [])  # Ensure detail is a list
         assert isinstance(detail, list), f"Expected detail to be a list, got: {type(detail)}"
 
@@ -694,10 +694,10 @@ class TestMediaListDetailEndpoints:
     def test_get_all_media_invalid_pagination_params(self):
         """Test invalid pagination parameters."""
         response = self.client.get("/api/v1/media?page=0&results_per_page=10") # Page must be >= 1
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
         response = self.client.get("/api/v1/media?page=1&results_per_page=0") # results must be >= 1
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_get_all_media_includes_basic_info(self):
         """Check if list items contain expected basic fields."""
@@ -813,7 +813,7 @@ class TestMediaListDetailEndpoints:
         doc_id = self.media_ids["document"]
         payload = {"title": 12345} # Invalid type for title
         response = self.client.put(f"/api/v1/media/{doc_id}", json=payload)
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 class TestSecurityAndPerformance:
@@ -837,7 +837,7 @@ class TestSecurityAndPerformance:
         # FastAPI/Pydantic usually handles type validation preventing basic injection here
         response = self.client.get("/api/v1/media?page=1;DROP TABLE Media;")
         # Expect validation error due to non-integer page
-        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     # FIXME - test doesn't get skipped?
     @pytest.mark.skipif(sys.platform.startswith("win32"), reason="Skipping on Windows due to PermissionError during teardown (DB file lock issue)")
@@ -852,7 +852,7 @@ class TestSecurityAndPerformance:
             content='{"content": "test", "prompt": "p", "analysis_content": "s"}',
             headers={"Content-Type": "text/plain"}
         )
-        assert response.status_code in [status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, status.HTTP_422_UNPROCESSABLE_ENTITY]
+        assert response.status_code in [status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, status.HTTP_422_UNPROCESSABLE_CONTENT]
 
 
     # def test_cors_headers_presence(self):

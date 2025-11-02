@@ -42,7 +42,7 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
 ### PMC Harvesting
 
 - GET `/api/v1/paper-search/pmc-oai/identify`
-  - Response: `{ info }` – OAI-PMH Identify details
+  - Response: `{ info }` - OAI-PMH Identify details
 
 - GET `/api/v1/paper-search/pmc-oai/list-sets`
   - Params: `resumptionToken`
@@ -63,7 +63,7 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
 ### PMC OA Web Service
 
 - GET `/api/v1/paper-search/pmc-oa/identify`
-  - Response: `{ info }` – OA repository info and latest update
+  - Response: `{ info }` - OA repository info and latest update
 
 - GET `/api/v1/paper-search/pmc-oa/query`
   - Params: `from`, `until`, `format` (`pdf|tgz`), `resumptionToken`, `id`, `pdf_only` (bool), `license_contains` (str)
@@ -82,7 +82,7 @@ This document outlines provider-specific paper search endpoints under `/api/v1/p
     - OCR: `enable_ocr` (bool), `ocr_backend` (e.g., `tesseract`), `ocr_lang` (e.g., `eng`), `ocr_dpi`, `ocr_mode`, `ocr_min_page_text_chars`
     - Chunking: `chunk_method` (e.g., `sentences`, `semantic`), `chunk_size`, `chunk_overlap`
     - Analysis: `perform_analysis` (bool), `summarize_recursively` (bool), `api_name`, `custom_prompt`, `system_prompt`
-    - Metadata: `enrich_metadata` (bool; defaults true) — fetches `oai_dc` from PMC OAI-PMH to enrich `title/author/ids/license`, embeds the JSON in analysis content, and stores a safe JSON payload in `DocumentVersions.safe_metadata`
+    - Metadata: `enrich_metadata` (bool; defaults true) - fetches `oai_dc` from PMC OAI-PMH to enrich `title/author/ids/license`, embeds the JSON in analysis content, and stores a safe JSON payload in `DocumentVersions.safe_metadata`
 
 ## Provider Adapters
 

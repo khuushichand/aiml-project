@@ -1,6 +1,6 @@
 # Workflows Examples
 
-Practical step templates and end‑to‑end definitions you can use as starting points. All examples are `POST /api/v1/workflows` bodies.
+Practical step templates and end-to-end definitions you can use as starting points. All examples are `POST /api/v1/workflows` bodies.
 
 ## 1) Prompt → Log
 
@@ -32,7 +32,7 @@ Run: `POST /api/v1/workflows/{id}/run` with `{ "inputs": { "name": "Alice" } }`.
 }
 ```
 
-## 3) Fan‑out / Map over a list
+## 3) Fan-out / Map over a list
 
 ```
 {
@@ -59,9 +59,9 @@ Run: `POST /api/v1/workflows/{id}/run` with `{ "inputs": { "name": "Alice" } }`.
 }
 ```
 
-## 5) Fan‑out then Fan‑in (aggregate)
+## 5) Fan-out then Fan-in (aggregate)
 
-"Map" returns a list of outputs which can be consumed by the next step for a simple fan‑in.
+"Map" returns a list of outputs which can be consumed by the next step for a simple fan-in.
 
 ```
 {

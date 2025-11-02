@@ -28,4 +28,3 @@ if __name__ == "__main__":
     ap.add_argument('--api-key', default='', help='API key or JWT token')
     args = ap.parse_args()
     stream_events(args.base, args.test_id, args.api_key)
-

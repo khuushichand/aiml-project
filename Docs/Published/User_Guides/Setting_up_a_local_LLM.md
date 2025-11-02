@@ -8,7 +8,7 @@ https://github.com/ggerganov/llama.cpp/blob/cddae4884c853b1a7ab420458236d666e2e3
   - **Llama.cpp**
     - **Linux & Mac**
       1. `git clone https://github.com/ggerganov/llama.cpp`
-      2. `make` in the `llama.cpp` folder 
+      2. `make` in the `llama.cpp` folder
       3. `./server -m ../path/to/model -c <context_size> -ngl <layers-to-offload-to-gpu>`
         * Example: `./server -m ../path/to/model -c 8192 -ngl 999` - This will run the model with a context size of 8192 tokens and offload all layers to the GPU.
     - **Windows**
@@ -42,9 +42,9 @@ https://github.com/ggerganov/llama.cpp/blob/cddae4884c853b1a7ab420458236d666e2e3
     * GGUF Quants: https://huggingface.co/lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF
 
 ### LLMs for Offline/Private Use
-- For offline LLM usage, I recommend the following models in no particular order past the first 
+- For offline LLM usage, I recommend the following models in no particular order past the first
 - All these models minus Command-R/+ can be ran on a single 12GB VRAM GPU, or 12GB of system RAM at a much slower speed.
-- Either way, I recommend using the Q4 GGUF versions of the models, as they are the most efficient and fastest to load, while still maintaining their accuracy. 
+- Either way, I recommend using the Q4 GGUF versions of the models, as they are the most efficient and fastest to load, while still maintaining their accuracy.
 - So for Mistral-Nemo-Instruct-2407, you'd want to download `Mistral-Nemo-Instruct-2407-Q4_K_M.gguf` - notice the `Q4` in the name.
     1. Samantha-Mistral-instruct-7B-Bulleted-Notes - https://huggingface.co/cognitivetech/samantha-mistral-instruct-7b_bulleted-notes_GGUF
        * Reason being is that its 'good enough', otherwise would recommend Mistral-Nemo-Instruct2407. Very likely Nemo will prove to be better. Time will tell.

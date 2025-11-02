@@ -1,0 +1,48 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/macbook-dev/Documents/GitHub/tldw_server2
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, anyio-4.11.0, hypothesis-6.142.5, Faker-37.12.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 87 items
+
+tldw_Server_API/tests/Watchlists/test_admin_runs_roles_normalization.py . [  1%]
+.                                                                        [  2%]
+tldw_Server_API/tests/Watchlists/test_admin_runs_ui_smoke.py .           [  3%]
+tldw_Server_API/tests/Watchlists/test_fetchers_scrape_rules.py ....      [  8%]
+tldw_Server_API/tests/Watchlists/test_filters_api.py .                   [  9%]
+tldw_Server_API/tests/Watchlists/test_filters_matching.py ...            [ 12%]
+tldw_Server_API/tests/Watchlists/test_include_org_default.py .           [ 13%]
+tldw_Server_API/tests/Watchlists/test_opml_api.py .                      [ 14%]
+tldw_Server_API/tests/Watchlists/test_opml_edge_cases.py .               [ 16%]
+tldw_Server_API/tests/Watchlists/test_opml_export_group.py .             [ 17%]
+tldw_Server_API/tests/Watchlists/test_opml_export_group_more.py ..       [ 19%]
+tldw_Server_API/tests/Watchlists/test_opml_export_perf.py .              [ 20%]
+tldw_Server_API/tests/Watchlists/test_opml_export_perf_more.py .         [ 21%]
+tldw_Server_API/tests/Watchlists/test_opml_nested.py .                   [ 22%]
+tldw_Server_API/tests/Watchlists/test_preview_endpoint.py ..             [ 25%]
+tldw_Server_API/tests/Watchlists/test_preview_endpoint_more.py ..        [ 27%]
+tldw_Server_API/tests/Watchlists/test_rate_limit_headers_optional.py .   [ 28%]
+tldw_Server_API/tests/Watchlists/test_rate_limit_headers_real.py .       [ 29%]
+tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py ...   [ 33%]
+tldw_Server_API/tests/Watchlists/test_rss_history_fetchers.py ..         [ 35%]
+tldw_Server_API/tests/Watchlists/test_rss_history_pipeline.py ...        [ 39%]
+tldw_Server_API/tests/Watchlists/test_run_detail_filtered_sample.py .    [ 40%]
+tldw_Server_API/tests/Watchlists/test_run_detail_filters_totals.py ...   [ 43%]
+tldw_Server_API/tests/Watchlists/test_runs_csv_export.py ....            [ 48%]
+tldw_Server_API/tests/Watchlists/test_runs_list_global.py .              [ 49%]
+tldw_Server_API/tests/Watchlists/test_site_include_only_gating.py .      [ 50%]
+tldw_Server_API/tests/Watchlists/test_watchlists_api.py ....             [ 55%]
+tldw_Server_API/tests/Watchlists/test_watchlists_backoff.py .            [ 56%]
+tldw_Server_API/tests/Watchlists/test_watchlists_conditional.py ...      [ 59%]
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py ....s.      [ 66%]
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline_filters.py ... [ 70%]
+                                                                         [ 70%]
+tldw_Server_API/tests/Watchlists/test_watchlists_scheduler_integration.py . [ 71%]
+..                                                                       [ 73%]
+tldw_Server_API/tests/Watchlists/test_watchlists_scheduler_jitter.py .   [ 74%]
+tldw_Server_API/tests/Watchlists/test_youtube_normalization_more.py .... [ 79%]
+............                                                             [ 93%]
+tldw_Server_API/tests/Watchlists/test_youtube_url_validation.py ......   [100%]
+
+=========== 86 passed, 1 skipped, 1447 warnings in 74.21s (0:01:14) ============

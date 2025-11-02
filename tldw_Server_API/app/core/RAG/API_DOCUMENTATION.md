@@ -25,36 +25,36 @@ The main RAG endpoint with complete feature access.
 {
   // ========== REQUIRED ==========
   "query": "string (1-2000 chars)",
-  
+
   // ========== DATA SOURCES ==========
   "sources": ["media_db", "notes", "characters", "chats"],  // Default: ["media_db"]
-  
+
   // ========== SEARCH CONFIGURATION ==========
   "search_mode": "hybrid",  // "fts" | "vector" | "hybrid"
   "hybrid_alpha": 0.7,      // 0=FTS only, 1=Vector only
   "enable_intent_routing": false, // analyze intent and adjust hybrid/top_k
   "top_k": 10,              // Max results (1-100)
   "min_score": 0.0,         // Minimum relevance score
-  
+
   // ========== QUERY ENHANCEMENT ==========
   "expand_query": false,
   "expansion_strategies": ["acronym", "synonym", "domain", "entity"],
   "spell_check": false,
-  
+
   // ========== FILTERING ==========
   "keyword_filter": ["term1", "term2"],  // Must contain these keywords
-  
+
   // ========== CACHING ==========
   "enable_cache": true,
   "cache_threshold": 0.85,    // Semantic similarity threshold (0.0-1.0)
-  
+
   // ========== DOCUMENT PROCESSING ==========
   "enable_reranking": true,
   "reranking_strategy": "two_tier",  // "flashrank" | "cross_encoder" | "hybrid" | "llm_scoring" | "two_tier" | "llama_cpp"
   "rerank_top_k": 20,             // Docs to rerank (defaults to top_k)
-  // Two‑Tier request-level overrides (optional)
+  // Two-Tier request-level overrides (optional)
   "rerank_min_relevance_prob": 0.50,  // minimum calibrated prob to allow generation
-  "rerank_sentinel_margin": 0.15,     // minimum (top_prob − sentinel_prob) margin
+  "rerank_sentinel_margin": 0.15,     // minimum (top_prob - sentinel_prob) margin
   // Corpus namespace (enables corpus-specific synonyms for query rewrites)
   "index_namespace": "my_corpus"
   // Advanced retrieval
@@ -67,20 +67,20 @@ The main RAG endpoint with complete feature access.
   "sibling_window": 1,
   "include_parent_document": false,
   "parent_max_tokens": 1200,
-  
+
   // ========== CITATIONS ==========
   "enable_citations": false,
   "citation_style": "apa",  // "apa" | "mla" | "chicago" | "harvard" | "ieee"
   "include_page_numbers": false,
   "enable_chunk_citations": true,
-  
+
   // ========== GENERATION GUARDRAILS ==========
   "enable_injection_filter": true,          // Down-weight risky chunks pre-generation
   "injection_filter_strength": 0.5,         // Score multiplier for risky chunks
   "require_hard_citations": false,          // Require per-sentence supporting spans (doc_id + offsets)
   "enable_numeric_fidelity": false,         // Verify numeric tokens are present in sources
   "numeric_fidelity_behavior": "continue", // "continue" | "ask" | "decline" | "retry"
-  
+
   // ========== ANSWER GENERATION ==========
   "enable_generation": false,
   "strict_extractive": false,              // Assemble answer only from retrieved spans (no free-form generation)
@@ -94,7 +94,7 @@ The main RAG endpoint with complete feature access.
   "synthesis_time_budget_sec": 5.0,
   "synthesis_draft_tokens": 300,
   "synthesis_refine_tokens": 500,
-  
+
   // ========== POST-VERIFICATION (ADAPTIVE) ==========
   "enable_post_verification": false,
   "adaptive_max_retries": 1,
@@ -110,21 +110,21 @@ The main RAG endpoint with complete feature access.
   "adaptive_rerun_bypass_cache": false,           // Force enable_cache=false for the rerun to avoid stale cache hits
   "adaptive_rerun_time_budget_sec": 5.0,          // Optional soft cap; emits rag_phase_budget_exhausted_total{phase="adaptive_rerun"} on breach
   "adaptive_rerun_doc_budget": 8,                 // Optional: cap docs fed into quick verification during adoption check
-  
+
   // ========== SECURITY & PRIVACY ==========
   "enable_security_filter": false,
   "detect_pii": false,
   "redact_pii": false,
   "sensitivity_level": "public",    // "public" | "internal" | "confidential" | "restricted"
   "content_filter": false,
-  
+
   // ========== ANALYTICS & FEEDBACK ==========
   "collect_feedback": false,
   "feedback_user_id": "string (optional)",
   "apply_feedback_boost": false,
   "user_id": "string (optional)",
   "session_id": "string (optional)",
-  
+
   // ========== PERFORMANCE ==========
   "enable_monitoring": false,
   "enable_observability": false,
@@ -132,12 +132,12 @@ The main RAG endpoint with complete feature access.
   "enable_performance_analysis": false,
   "timeout_seconds": 10.0,
   "debug_mode": false,
-  
+
   // ========== RESILIENCE ==========
   "enable_resilience": false,
   "retry_attempts": 3,
   "circuit_breaker": false,
-  
+
   // ========== OUTPUT CONFIGURATION ==========
   "highlight_results": false,
   "highlight_query_terms": false,
@@ -294,7 +294,7 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
   }'
 ```
 
-**Abstention with Clarifying Question (Two‑Tier gating)**:
+**Abstention with Clarifying Question (Two-Tier gating)**:
 ```bash
 curl -X POST "http://localhost:8000/api/v1/rag/search" \
   -H "Content-Type: application/json" \
@@ -310,7 +310,7 @@ curl -X POST "http://localhost:8000/api/v1/rag/search" \
   }'
 ```
 
-**Multi‑Turn Synthesis (draft→critique→refine)**:
+**Multi-Turn Synthesis (draft→critique→refine)**:
 ```bash
 curl -X POST "http://localhost:8000/api/v1/rag/search" \
   -H "Content-Type: application/json" \
@@ -331,7 +331,7 @@ Process multiple queries concurrently.
 
 ### GET `/vlm/backends` - VLM Backends
 
-List the available Vision‑Language (VLM) backends used for PDF table/image detection in VLM late chunking.
+List the available Vision-Language (VLM) backends used for PDF table/image detection in VLM late chunking.
 
 Request:
 ```bash
@@ -354,10 +354,10 @@ Notes:
 
 ## Operational Notes
 
-### Two‑Tier Reranking and Generation Gating
+### Two-Tier Reranking and Generation Gating
 
-- `reranking_strategy="two_tier"` performs a fast cross‑encoder shortlist (default top 50) followed by an LLM reranker (default top 10) under existing LLM time/doc budgets.
-- A sentinel “irrelevant” document is added internally to calibrate low‑evidence scenarios. The final score is a calibrated probability of relevance derived from original retrieval score, CE score, and LLM score via a logistic mapping.
+- `reranking_strategy="two_tier"` performs a fast cross-encoder shortlist (default top 50) followed by an LLM reranker (default top 10) under existing LLM time/doc budgets.
+- A sentinel “irrelevant” document is added internally to calibrate low-evidence scenarios. The final score is a calibrated probability of relevance derived from original retrieval score, CE score, and LLM score via a logistic mapping.
 - If the top calibrated probability is below `RAG_MIN_RELEVANCE_PROB` (default 0.35) or too close to the sentinel probability (margin < `RAG_SENTINEL_MARGIN`, default 0.10), answer generation is gated.
 - Calibration metadata is returned in `metadata.reranking_calibration`.
 
@@ -365,8 +365,8 @@ Notes:
 
 - Adaptive chunking with overlap tuning is enabled by default during ingestion; for media transcripts you can submit a `timecode_map` array in chunk options (server-side integration) to attach `start_time`/`end_time` to chunk metadata.
 - Each chunk receives a stable `chunk_uid` for incremental updates.
-- Ingest‑time deduplication removes near‑duplicate chunks (configurable via `INGEST_*` env). Duplicates are annotated with `metadata.duplicate_of`.
-- Per‑corpus synonyms/aliases: place JSON files under `Config_Files/Synonyms/<corpus>.json` mapping `term -> [aliases]`. When `index_namespace` is set on the request, synonyms and domain expansions will draw from that corpus list.
+- Ingest-time deduplication removes near-duplicate chunks (configurable via `INGEST_*` env). Duplicates are annotated with `metadata.duplicate_of`.
+- Per-corpus synonyms/aliases: place JSON files under `Config_Files/Synonyms/<corpus>.json` mapping `term -> [aliases]`. When `index_namespace` is set on the request, synonyms and domain expansions will draw from that corpus list.
 
 Environment variables (optional):
 - `RAG_TRANSFORMERS_RERANKER_MODEL` (default `BAAI/bge-reranker-v2-m3`)
@@ -382,8 +382,8 @@ Environment variables (optional):
   - `RAG_LLM_RERANK_MAX_DOCS` (default `20`)
 
 - Adaptive post-verification: When `enable_post_verification=true`, the service validates claims and may attempt a bounded repair pass. Environment toggles:
-  - `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) — enables HyDE + multi‑strategy rewrites and diversity during the adaptive pass; set to `false` for a simple, single‑query retrieval.
-  - `RAG_ADAPTIVE_TIME_BUDGET_SEC` — optional hard cap (seconds) for post‑verification.
+  - `RAG_ADAPTIVE_ADVANCED_REWRITES` (default `true`) - enables HyDE + multi-strategy rewrites and diversity during the adaptive pass; set to `false` for a simple, single-query retrieval.
+  - `RAG_ADAPTIVE_TIME_BUDGET_SEC` - optional hard cap (seconds) for post-verification.
 
 #### Request Schema
 
@@ -391,7 +391,7 @@ Environment variables (optional):
 {
   "queries": ["query1", "query2", "query3"],  // Required: list of queries
   "max_concurrent": 3,                        // Max concurrent processing
-  
+
   // All unified pipeline parameters supported
   "sources": ["media_db"],
   "search_mode": "hybrid",
@@ -494,7 +494,7 @@ Advanced search with commonly used features enabled.
 
 Same as simple, plus:
 - `expand`: Enable query expansion (true/false)
-- `rerank`: Enable reranking (true/false) 
+- `rerank`: Enable reranking (true/false)
 - `citations`: Enable citations (true/false)
 - `style`: Citation style (mla/apa/chicago/harvard/ieee)
 
@@ -613,7 +613,7 @@ Check health status of all RAG components.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enable_post_verification` | boolean | false | Verify generated answer and optionally repair unsupported claims |
-| `adaptive_max_retries` | integer | 1 | Max repair attempts (0–3) |
+| `adaptive_max_retries` | integer | 1 | Max repair attempts (0-3) |
 | `adaptive_unsupported_threshold` | float | 0.15 | Trigger when (refuted + NEI)/total_claims exceeds this |
 | `adaptive_max_claims` | integer | 20 | Max claims analyzed during post-check |
 | `adaptive_time_budget_sec` | number|null | null | Optional hard cap (seconds) for post-check work |
@@ -748,7 +748,7 @@ async function searchRAG(query, options = {}) {
       ...options
     })
   });
-  
+
   return response.json();
 }
 

@@ -130,4 +130,3 @@ export function useConfig() {
   if (!ctx) throw new Error('useConfig must be used within ConfigProvider');
   return ctx;
 }
-

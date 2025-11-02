@@ -14,7 +14,7 @@ Notes
 - There is no official search endpoint in the IDEAS API; only lookups/functions
   unlocked per account (e.g., getref, getrecentpapers, etc.). We implement
   getref-by-handle support. Other functions can be added later if needed.
-- The CitEc API is open and returns XML. We support the `plain` summary and 
+- The CitEc API is open and returns XML. We support the `plain` summary and
   passthrough of `amf` payload.
 """
 from __future__ import annotations

@@ -80,7 +80,7 @@ Chunk outputs commonly include:
 - `start_char` / `end_char`: offsets in the source content
 - `chunk_index` and/or `chunk_id`: stable order and identifiers
 - `language`: when available or inferred
-- `metadata`: strategy‑specific details (e.g., paragraph type, template rules applied)
+- `metadata`: strategy-specific details (e.g., paragraph type, template rules applied)
 
 Transcript segment outputs commonly include:
 - `Start`/`End` or timestamps, `Text`, diarization info (speaker), confidence scores (when model provides them)
@@ -100,8 +100,8 @@ Claims include:
 
 ## Related Documentation
 
-- Chunking Module – Developer Guide
-- Chunking Templates – Developer Guide
+- Chunking Module - Developer Guide
+- Chunking Templates - Developer Guide
 - Ingestion Pipeline docs (Audio, Video, PDF, Ebooks, Documents, MediaWiki)
 - Embeddings Module and RAG API Guides
 - Evaluations (Proposition extraction and scoring)
@@ -109,4 +109,3 @@ Claims include:
 ## Legacy Notes (Deprecated)
 
 - The former Gradio UI and `summarize.py` flow are deprecated. Some installer scripts may still reference them for convenience, but the supported interface is the FastAPI server with an integrated Web UI served by `main.py`.
-

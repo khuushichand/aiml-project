@@ -43,17 +43,17 @@ class EmbeddingWorkerConfig(WorkerConfig):
     fallback_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"  # Fallback model
     max_batch_size: int = 32
     gpu_id: Optional[int] = None
-    
+
     # Multi-model support configuration
     enable_model_selection: bool = True
     enable_caching: bool = True
     cache_ttl_seconds: int = 3600  # 1 hour default
     cache_max_size: int = 10000  # Maximum cached embeddings
-    
+
     # Model selection thresholds
     long_text_threshold: int = 512  # Use different model for long texts
     multilingual_detection: bool = True
-    
+
     # Available models by category with fallback support
     models_by_category: Dict[str, Dict[str, str]] = {
         "general": {
@@ -62,7 +62,7 @@ class EmbeddingWorkerConfig(WorkerConfig):
             "fallback": "sentence-transformers/all-MiniLM-L6-v2"
         },
         "multilingual": {
-            "provider": "huggingface", 
+            "provider": "huggingface",
             "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
             "fallback": "sentence-transformers/all-MiniLM-L6-v2"
         },
@@ -81,26 +81,26 @@ class EmbeddingWorkerConfig(WorkerConfig):
 
 class EmbeddingCache:
     """LRU cache for embeddings with TTL support"""
-    
+
     def __init__(self, max_size: int = 10000, ttl_seconds: int = 3600):
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
         self.cache: OrderedDict[str, Tuple[List[float], datetime]] = OrderedDict()
         self.hits = 0
         self.misses = 0
-        
+
     def _get_cache_key(self, text: str, model: str) -> str:
         """Generate cache key from text and model"""
         content = f"{model}:{text}"
         return hashlib.sha256(content.encode()).hexdigest()
-    
+
     def get(self, text: str, model: str) -> Optional[List[float]]:
         """Get embedding from cache if exists and not expired"""
         key = self._get_cache_key(text, model)
-        
+
         if key in self.cache:
             embedding, timestamp = self.cache[key]
-            
+
             # Check TTL
             if datetime.now() - timestamp < timedelta(seconds=self.ttl_seconds):
                 # Move to end (most recently used)
@@ -110,25 +110,25 @@ class EmbeddingCache:
             else:
                 # Expired, remove it
                 del self.cache[key]
-        
+
         self.misses += 1
         return None
-    
+
     def put(self, text: str, model: str, embedding: List[float]):
         """Store embedding in cache"""
         key = self._get_cache_key(text, model)
-        
+
         # Remove oldest if at capacity
         if len(self.cache) >= self.max_size:
             self.cache.popitem(last=False)
-        
+
         self.cache[key] = (embedding, datetime.now())
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics"""
         total = self.hits + self.misses
         hit_rate = self.hits / total if total > 0 else 0
-        
+
         return {
             "size": len(self.cache),
             "max_size": self.max_size,
@@ -137,7 +137,7 @@ class EmbeddingCache:
             "hit_rate": hit_rate,
             "ttl_seconds": self.ttl_seconds
         }
-    
+
     def clear(self):
         """Clear all cache entries"""
         self.cache.clear()
@@ -147,7 +147,7 @@ class EmbeddingCache:
 
 class EmbeddingWorker(BaseWorker):
     """Worker that generates embeddings from text chunks"""
-    
+
     def __init__(self, config: EmbeddingWorkerConfig):
         super().__init__(config)
         self.embedding_config = config
@@ -159,13 +159,13 @@ class EmbeddingWorker(BaseWorker):
                 return "stella" in m
             except Exception:
                 return False
-        
+
         # Initialize embedding cache
         self.cache = EmbeddingCache(
             max_size=config.cache_max_size,
             ttl_seconds=config.cache_ttl_seconds
         ) if config.enable_caching else None
-        
+
         # Model configuration cache
         self.model_configs = {
             "huggingface": HFModelCfg(
@@ -177,11 +177,11 @@ class EmbeddingWorker(BaseWorker):
             ),
             # Add more default configs as needed
         }
-        
+
         # Performance tracking
         self.model_usage_stats = {}
         self.model_performance = {}
-        
+
         # Set GPU if specified
         if config.gpu_id is not None:
             import os
@@ -191,12 +191,12 @@ class EmbeddingWorker(BaseWorker):
     @property
     def batch_size(self) -> int:
         return getattr(self.embedding_config, "max_batch_size", 1)
-    
+
     def _parse_message(self, data: Dict[str, Any]) -> EmbeddingMessage:
         """Parse raw message data into EmbeddingMessage"""
         norm = normalize_message("embedding", data)
         return EmbeddingMessage(**norm)
-    
+
     def _detect_language(self, text: str) -> str:
         """Detect language of text"""
         try:
@@ -204,11 +204,11 @@ class EmbeddingWorker(BaseWorker):
             # In production, use langdetect or polyglot
             non_ascii_count = sum(1 for c in text if ord(c) > 127)
             text_length = len(text)
-            
+
             # If more than 10% non-ASCII, likely non-English
             if text_length > 0 and non_ascii_count / text_length > 0.1:
                 return "multilingual"
-            
+
             # Check for common non-English patterns
             multilingual_indicators = [
                 'à', 'è', 'ì', 'ò', 'ù',  # Italian/French
@@ -219,20 +219,20 @@ class EmbeddingWorker(BaseWorker):
                 'а', 'б', 'в', 'г', 'д',  # Cyrillic
                 '中', '文', '日', '本',  # CJK
             ]
-            
+
             if any(char in text.lower() for char in multilingual_indicators):
                 return "multilingual"
-            
+
             return "english"
-            
+
         except Exception as e:
             logger.warning(f"Language detection failed: {e}")
             return "english"  # Default to English
-    
+
     def _select_model(self, text: str, metadata: Dict[str, Any]) -> Tuple[str, str]:
         """
         Select appropriate model based on text characteristics.
-        
+
         Returns:
             Tuple of (provider, model_name)
         """
@@ -241,79 +241,79 @@ class EmbeddingWorker(BaseWorker):
                 self.embedding_config.default_model_provider,
                 self.embedding_config.default_model_name
             )
-        
+
         # Check for explicit model request in metadata
         if "preferred_model" in metadata:
             model_info = metadata["preferred_model"]
             if isinstance(model_info, dict):
                 return (model_info.get("provider"), model_info.get("model"))
-        
+
         # Determine model category based on text characteristics
         text_length = len(text)
         category = "general"
-        
+
         # Check for long text
         if text_length > self.embedding_config.long_text_threshold:
             category = "long_context"
             logger.debug(f"Selected long_context model for text with {text_length} chars")
-        
+
         # Check for multilingual content
         elif self.embedding_config.multilingual_detection:
             language = self._detect_language(text)
             if language == "multilingual":
                 category = "multilingual"
                 logger.debug("Selected multilingual model for non-English text")
-        
+
         # Check for high quality request
         elif metadata.get("high_quality", False):
             category = "high_quality"
             logger.debug("Selected high quality model per request")
-        
+
         # Get model for category
         model_info = self.embedding_config.models_by_category.get(
             category,
             self.embedding_config.models_by_category["general"]
         )
-        
+
         provider = model_info.get("provider", self.embedding_config.default_model_provider)
         model = model_info.get("model", self.embedding_config.default_model_name)
-        
+
         # Track model usage
         model_key = f"{provider}:{model}"
         self.model_usage_stats[model_key] = self.model_usage_stats.get(model_key, 0) + 1
-        
+
         return (provider, model)
-    
+
     async def process_message(self, message: EmbeddingMessage) -> Optional[StorageMessage]:
         """Process embedding message and generate embeddings"""
         logger.bind(job_id=message.job_id, stage="embedding").info(
             f"Processing embedding job {message.job_id} with {len(message.chunks)} chunks"
         )
-        
+
         start_time = time.time()
         cache_hits = 0
         cache_misses = 0
-        
+
         try:
             # Update job status
             await self._update_job_status(message.job_id, JobStatus.EMBEDDING)
-            
+
             # Process chunks in batches
             embedding_data_list = []
             batch_size = message.batch_size or self.embedding_config.max_batch_size
-            
+
             # Track models used
             models_used = set()
-            
+
             for i in range(0, len(message.chunks), batch_size):
                 batch_chunks = message.chunks[i:i + batch_size]
-                
+
                 # Process each chunk individually for cache lookup and model selection
                 for chunk in batch_chunks:
                     embedding = None
                     model_provider = None
                     model_name = None
-                    
+
                     # Select appropriate model for this chunk
                     if self.embedding_config.enable_model_selection:
                         model_provider, model_name = self._select_model(
@@ -329,7 +329,7 @@ class EmbeddingWorker(BaseWorker):
                             model_config = self._get_model_config(message)
                             model_provider = message.model_provider or self.embedding_config.default_model_provider
                             model_name = model_config.model_name_or_path
-                    
+
                     models_used.add(f"{model_provider}:{model_name}")
 
                     chunk_metadata_src = dict(chunk.metadata or {})
@@ -364,7 +364,7 @@ class EmbeddingWorker(BaseWorker):
                     except Exception:
                         pass
 
-                    # Then check in‑process LRU cache
+                    # Then check in-process LRU cache
                     if embedding is None and self.cache and self.embedding_config.enable_caching:
                         cached_embedding = self.cache.get(chunk.content, model_name)
                         if cached_embedding:
@@ -374,7 +374,7 @@ class EmbeddingWorker(BaseWorker):
                             logger.debug(f"LRU cache hit for chunk {chunk.chunk_id}")
                         else:
                             cache_misses += 1
-                    
+
                     # Generate embedding if not cached
                     if embedding is None:
                         # Get appropriate model config
@@ -393,7 +393,7 @@ class EmbeddingWorker(BaseWorker):
                             )
                         else:
                             model_config = self._get_model_config(message)
-                        
+
                         # Generate embedding
                         embeddings = await self._generate_embeddings(
                             [chunk.content],
@@ -401,7 +401,7 @@ class EmbeddingWorker(BaseWorker):
                             model_provider
                         )
                         embedding = embeddings[0]
-                        
+
                         # Cache the embedding
                         if self.cache and self.embedding_config.enable_caching:
                             embedding_list = embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
@@ -423,7 +423,7 @@ class EmbeddingWorker(BaseWorker):
                                     }), ex=ttl)
                         except Exception:
                             pass
-                    
+
                     # Create embedding data object
                     # Tag embedder and content hash in metadata
                     embedder_name = model_provider
@@ -540,7 +540,7 @@ class EmbeddingWorker(BaseWorker):
                             },
                         )
                         logger.debug(f"HYDE generation skipped/failed for chunk {chunk.chunk_id}: {_hyde_err}")
-                
+
                 # Update progress
                 progress = 25 + (50 * (i + len(batch_chunks)) / len(message.chunks))
                 await self._update_job_progress(
@@ -548,9 +548,9 @@ class EmbeddingWorker(BaseWorker):
                     progress,
                     chunks_processed=i + len(batch_chunks)
                 )
-            
+
             processing_time_ms = int((time.time() - start_time) * 1000)
-            
+
             # Log cache statistics
             if self.cache:
                 cache_stats = self.cache.get_stats()
@@ -559,7 +559,7 @@ class EmbeddingWorker(BaseWorker):
                     f"Hits: {cache_hits}, Misses: {cache_misses}, "
                     f"Total hit rate: {cache_stats['hit_rate']:.2%}"
                 )
-            
+
             # Create storage message
             storage_message = StorageMessage(
                 job_id=message.job_id,
@@ -583,17 +583,17 @@ class EmbeddingWorker(BaseWorker):
                     "model_selection_enabled": self.embedding_config.enable_model_selection
                 }
             )
-            
+
             logger.bind(job_id=message.job_id, stage="embedding").info(
                 f"Generated {len(embedding_data_list)} embeddings for job {message.job_id} "
                 f"in {processing_time_ms}ms using models: {', '.join(models_used)}"
             )
             return storage_message
-            
+
         except Exception as e:
             logger.error(f"Error generating embeddings for job {message.job_id}: {e}")
             raise
-    
+
     async def _send_to_next_stage(self, result: StorageMessage):
         """Send embeddings to storage queue"""
         target_queue = self.storage_queue
@@ -626,7 +626,7 @@ class EmbeddingWorker(BaseWorker):
             fields = {k: str(v) for k, v in payload.items()}
         await self.redis_client.xadd(target_queue, fields)
         logger.debug(f"Sent job {result.job_id} to storage queue")
-    
+
     def _get_model_config(self, message: EmbeddingMessage) -> Union[HFModelCfg, ONNXModelCfg, OpenAIModelCfg, LocalAPICfg]:
         """Get or create model configuration"""
         if message.embedding_model_config:
@@ -640,13 +640,13 @@ class EmbeddingWorker(BaseWorker):
                 return OpenAIModelCfg(**message.embedding_model_config)
             elif provider == "local_api":
                 return LocalAPICfg(**message.embedding_model_config)
-        
+
         # Use default config based on user tier
         if message.user_tier == "enterprise":
             return self.model_configs.get("openai", self.model_configs["huggingface"])
         else:
             return self.model_configs["huggingface"]
-    
+
     async def _generate_embeddings(
         self,
         texts: List[str],
@@ -828,7 +828,7 @@ class EmbeddingWorker(BaseWorker):
                         raise
 
         return results
-    
+
     async def _update_job_progress(self, job_id: str, percentage: float, chunks_processed: int):
         """Update job progress information"""
         job_key = f"job:{job_id}"
@@ -842,24 +842,24 @@ class EmbeddingWorker(BaseWorker):
                 "chunks_processed": chunks_processed,
             },
         )
-    
+
     async def _calculate_load(self) -> float:
         """Calculate current worker load based on GPU utilization"""
         try:
             import pynvml
             pynvml.nvmlInit()
-            
+
             if self.embedding_config.gpu_id is not None:
                 handle = pynvml.nvmlDeviceGetHandleByIndex(self.embedding_config.gpu_id)
                 util = pynvml.nvmlDeviceGetUtilizationRates(handle)
                 return util.gpu / 100.0
-            
+
         except Exception:
             # Fallback to base implementation if GPU monitoring fails
             pass
-        
+
         return await super()._calculate_load()
-    
+
     def get_model_stats(self) -> Dict[str, Any]:
         """Get model usage and performance statistics"""
         stats = {
@@ -870,7 +870,7 @@ class EmbeddingWorker(BaseWorker):
             "model_selection_enabled": self.embedding_config.enable_model_selection,
             "caching_enabled": self.embedding_config.enable_caching
         }
-        
+
         # Calculate most used model
         if self.model_usage_stats:
             most_used = max(self.model_usage_stats.items(), key=lambda x: x[1])
@@ -878,9 +878,9 @@ class EmbeddingWorker(BaseWorker):
                 "model": most_used[0],
                 "count": most_used[1]
             }
-        
+
         return stats
-    
+
     async def clear_cache(self):
         """Clear the embedding cache"""
         if self.cache:
@@ -889,15 +889,15 @@ class EmbeddingWorker(BaseWorker):
             return {"status": "success", "message": "Cache cleared"}
         else:
             return {"status": "info", "message": "Caching is disabled"}
-    
+
     async def warm_cache(self, texts: List[str], model: Optional[str] = None):
         """Pre-generate embeddings for frequently used texts"""
         if not self.cache:
             return {"status": "error", "message": "Caching is disabled"}
-        
+
         model_to_use = model or self.embedding_config.default_model_name
         warmed_count = 0
-        
+
         for text in texts:
             # Check if already cached
             if not self.cache.get(text, model_to_use):
@@ -909,21 +909,21 @@ class EmbeddingWorker(BaseWorker):
                         config,
                         self.embedding_config.default_model_provider
                     )
-                    
+
                     # Cache it
                     embedding_list = embeddings[0].tolist() if isinstance(embeddings[0], np.ndarray) else embeddings[0]
                     self.cache.put(text, model_to_use, embedding_list)
                     warmed_count += 1
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to warm cache for text: {e}")
-        
+
         return {
             "status": "success",
             "warmed_count": warmed_count,
             "total_requested": len(texts)
         }
-    
+
     def _get_model_config_for_name(self, model_name: str):
         """Get model configuration for a specific model name"""
         def _requires_remote_code(model_name: str) -> bool:
@@ -940,6 +940,6 @@ class EmbeddingWorker(BaseWorker):
                     return HFModelCfg(model_name_or_path=model_name, trust_remote_code=_requires_remote_code(model_name))
                 elif provider == "openai":
                     return OpenAIModelCfg(model_name_or_path=model_name)
-        
+
         # Default to HuggingFace
         return HFModelCfg(model_name_or_path=model_name, trust_remote_code=_requires_remote_code(model_name))

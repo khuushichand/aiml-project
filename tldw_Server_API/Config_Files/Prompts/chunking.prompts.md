@@ -15,4 +15,3 @@ context. Focus on main points; avoid duplication. Output 3-5 sentences.
 
 Changelog:
 - v1.0: Added guidance for contextual headers and rolling summaries.
-

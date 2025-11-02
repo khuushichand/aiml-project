@@ -30,16 +30,16 @@ pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not 
 
 
 @pytest.fixture()
-def postgres_config() -> DatabaseConfig:
-    """Provide a DatabaseConfig pointing at the Postgres test service."""
+def postgres_config(pg_eval_params) -> DatabaseConfig:
+    """Provide a DatabaseConfig pointing at the Postgres test service, using shared params."""
 
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
-        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+        pg_host=pg_eval_params["host"],
+        pg_port=int(pg_eval_params["port"]),
+        pg_database=pg_eval_params["database"],
+        pg_user=pg_eval_params["user"],
+        pg_password=pg_eval_params.get("password"),
     )
 
 

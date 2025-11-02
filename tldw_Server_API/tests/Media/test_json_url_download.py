@@ -94,4 +94,3 @@ async def test_download_url_json_content_disposition(tmp_path):
     # Should respect Content-Disposition filename
     assert out_path.name.endswith("file.json"), out_path
     assert out_path.exists() and out_path.read_text() == '{"v":2}'
-

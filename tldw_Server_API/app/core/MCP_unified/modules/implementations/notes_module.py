@@ -2,7 +2,7 @@
 Notes Module for Unified MCP
 
 FTS-only search and retrieval for user Notes stored in ChaChaNotes DB.
-Returns normalized result schema with 0–1 scores and 300-char snippets by default.
+Returns normalized result schema with 0-1 scores and 300-char snippets by default.
 """
 
 import asyncio

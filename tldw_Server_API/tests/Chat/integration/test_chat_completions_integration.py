@@ -54,16 +54,16 @@ def mock_user():
 def setup_auth_override(mock_user):
     """Automatically override authentication for all tests based on AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    
+
     settings = get_settings()
-    
+
     # Only override authentication in multi-user mode
     if settings.AUTH_MODE == "multi_user":
         # In multi-user mode, we need to mock the entire authentication flow
         # The simplest approach is to override get_request_user to return mock user directly
         async def mock_get_request_user(api_key=None, token=None):
             return mock_user
-        
+
         app.dependency_overrides[get_request_user] = mock_get_request_user
         yield
         # Clean up after test
@@ -77,17 +77,17 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
     """Helper to make requests with CSRF token included"""
     if headers is None:
         headers = {}
-    
+
     # Get CSRF token from cookies if not already set
     if not hasattr(client, 'csrf_token'):
         # Make a GET request to get CSRF token
         response = client.get("/api/v1/health")
         csrf_token = response.cookies.get("csrf_token", "")
         client.csrf_token = csrf_token
-    
+
     # Add CSRF token to headers
     headers["X-CSRF-Token"] = getattr(client, 'csrf_token', '')
-    
+
     # Make the request
     method_func = getattr(client, method.lower())
     return method_func(url, headers=headers, **kwargs)
@@ -99,14 +99,14 @@ def client():
         # Get a CSRF token by making a GET request first
         response = c.get("/api/v1/health")
         csrf_token = response.cookies.get("csrf_token", "")
-        
+
         # Store the token in the client for use in tests
         c.csrf_token = csrf_token
         c.cookies = {"csrf_token": csrf_token}
-        
+
         # Add helper method to client
         c.post_with_csrf = lambda url, **kwargs: make_request_with_csrf(c, "POST", url, **kwargs)
-        
+
         yield c
 
 
@@ -114,18 +114,18 @@ def client():
 def valid_auth_token() -> str:
     """Generate appropriate auth token based on current AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    
+
     settings = get_settings()
-    
+
     if settings.AUTH_MODE == "multi_user":
         # In multi-user mode, we need a proper JWT token
         # For testing, we'll create a mock JWT token using the actual JWT secret
         import jwt
         import datetime
-        
+
         # Use the actual JWT secret from settings
         secret_key = settings.JWT_SECRET_KEY or os.getenv("JWT_SECRET_KEY", "test-secret-key")
-        
+
         payload = {
             "sub": "1",  # User ID as string
             "username": "test_user",
@@ -364,53 +364,53 @@ def test_commercial_provider_streaming_no_template(
     if provider_name == "anthropic": request_body["max_tokens"] = 300
 
     print(f"\nTesting STREAMING (no template) with {provider_name} using model {request_body['model']}")
-    
+
     # Make streaming request with TestClient
     # Note: TestClient doesn't support stream=True the same way as requests library
     # We need to handle the response directly
     response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
-    
+
     assert response.status_code == status.HTTP_200_OK, f"Provider {provider_name} streaming pre-check failed: {response.text}"
     assert 'text/event-stream' in response.headers.get('content-type', '').lower()
 
     full_content = ""
     received_done = False
     raw_stream_text_for_debug = ""
-    
+
     try:
         # The response.text should contain the full streamed content for TestClient
         # Split it into lines to process SSE events
         response_text = response.text
-        
+
         # Debug: Print first 500 chars of response
         print(f"DEBUG: First 500 chars of streaming response: {response_text[:500]}")
-        
+
         lines = response_text.split('\n')
-        
+
         for line in lines:
             line = line.strip()  # Remove any whitespace
             if not line:
                 continue
-                
+
             raw_stream_text_for_debug += line + "\n"
-            
+
             # Check for [DONE] marker
             if line == "data: [DONE]":
                 received_done = True
                 print(f"DEBUG: Found [DONE] marker for {provider_name}")
                 break
-                
+
             if line.startswith("data:"):
                 chunk_data_str = line[len("data:"):].strip()
-                if not chunk_data_str: 
+                if not chunk_data_str:
                     continue
-                    
+
                 # Skip [DONE] if it's not JSON
                 if chunk_data_str == "[DONE]":
                     received_done = True
                     print(f"DEBUG: Found [DONE] in data for {provider_name}")
                     break
-                    
+
                 try:
                     chunk_json = json.loads(chunk_data_str)
 
@@ -424,11 +424,11 @@ def test_commercial_provider_streaming_no_template(
                     # Extract content
                     if choices:
                         delta_content = choices[0].get("delta", {}).get("content")
-                        if delta_content: 
+                        if delta_content:
                             full_content += delta_content
                 except json.JSONDecodeError as e:
                     print(f"WARN: ({provider_name}) JSON decode error for line: '{line}' - {e}")
-                    
+
     except Exception as e:
         print(f"Raw stream for {provider_name} before error:\n{raw_stream_text_for_debug}")
         pytest.fail(f"Error consuming stream for {provider_name}: {e}")
@@ -622,7 +622,7 @@ def test_chat_integration_bad_request_missing_messages_standalone(
     }
     response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
     # This is a Pydantic validation error from FastAPI itself before hitting your logic.
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     errors = response.json().get("detail")
     assert isinstance(errors, list)
     assert any("messages" in e.get("loc", []) and "field required" in e.get("msg", "").lower() for e in errors)

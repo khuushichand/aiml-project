@@ -31,4 +31,3 @@ async def real_audit_service(tmp_path):
             await _shutdown_all()
         except Exception:
             pass
-

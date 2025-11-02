@@ -1,4 +1,4 @@
-# Prompt Studio — Ablation Scripts
+# Prompt Studio - Ablation Scripts
 
 Compare optimization strategies (iterative vs mcts vs genetic) on a shared test set.
 
@@ -58,4 +58,3 @@ MCTS (canary): see `Docs/Guides/Prompt_Studio_MCTS_Guide.md`.
 - Use the same `test_case_ids` for comparability.
 - Keep iterations small in dev; increase for final runs.
 - Use `ws_throttle_every` to avoid flooding WS.
-

@@ -306,7 +306,7 @@ def _items_to_markdown_lines(items: List[ScrapedItem]) -> List[str]:
         else:
             line = f"{idx}. {entry_title}"
         if itm.summary:
-            line += f" — {itm.summary}"
+            line += f" - {itm.summary}"
         lines.append(line)
     return lines
 
@@ -322,7 +322,7 @@ def _items_to_html_entries(items: List[ScrapedItem]) -> List[str]:
         else:
             entry = f"<li>{title_text}"
         if summary_text:
-            entry += f" — {summary_text}"
+            entry += f" - {summary_text}"
         entry += "</li>"
         entries.append(entry)
     return entries
@@ -492,7 +492,9 @@ def _is_youtube_feed_url(url: str) -> bool:
         path_ok = u.path.lower().startswith("/feeds/videos.xml")
         if not path_ok:
             return False
-        qs = parse_qs(u.query or "")
+        raw_qs = parse_qs(u.query or "")
+        # Treat query keys case-insensitively (CHANNEL_ID, LIST, USER, etc.)
+        qs = {str(k).lower(): v for k, v in raw_qs.items()}
         return any(k in qs for k in ("channel_id", "playlist_id", "user"))
     except Exception:
         return False
@@ -840,26 +842,26 @@ async def delete_source(
 
 
 @router.post(
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     "/sources/bulk",
     response_model=SourcesBulkCreateResponse,
     summary="Bulk create sources with per-entry status",
@@ -1722,6 +1724,83 @@ async def list_runs_global(
     return RunsListResponse(items=items, total=total, has_more=has_more)
 
 
+@router.get("/runs/export.csv", response_class=PlainTextResponse, summary="Export runs as CSV (global or by job)")
+async def export_runs_csv(
+    scope: str = Query("global", pattern="^(global|job)$"),
+    job_id: Optional[int] = Query(None, ge=1),
+    q: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(200, ge=1, le=1000),
+    include_tallies: bool = Query(False, description="When true, include a filter_tallies_json column per row"),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    """Return a CSV export of runs with basic counters.
+
+    Columns: id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag
+    """
+    limit = size
+    offset = (page - 1) * limit
+    if scope == "job":
+        if not job_id:
+            raise HTTPException(status_code=400, detail="job_id_required")
+        rows, total = db.list_runs_for_job(job_id, limit=limit, offset=offset)
+    else:
+        rows, total = db.list_runs(q=q, limit=limit, offset=offset)
+    headers = [
+        "id",
+        "job_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "items_found",
+        "items_ingested",
+        "filters_include",
+        "filters_exclude",
+        "filters_flag",
+    ]
+    if include_tallies:
+        headers.append("filter_tallies_json")
+    out_lines = [",".join(headers)]
+    for r in rows:
+        try:
+            stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
+        except Exception:
+            stats = {}
+        vals = [
+            str(r.id),
+            str(r.job_id),
+            json.dumps(r.status or ""),
+            json.dumps(r.started_at or ""),
+            json.dumps(r.finished_at or ""),
+            str(int((stats or {}).get("items_found", 0) or 0)),
+            str(int((stats or {}).get("items_ingested", 0) or 0)),
+            str(int(((stats.get("filters_actions") or {}).get("include", 0)) if isinstance(stats, dict) else 0)),
+            str(int(((stats.get("filters_actions") or {}).get("exclude", 0)) if isinstance(stats, dict) else 0)),
+            str(int(((stats.get("filters_actions") or {}).get("flag", 0)) if isinstance(stats, dict) else 0)),
+        ]
+        if include_tallies:
+            try:
+                tallies = stats.get("filter_tallies") if isinstance(stats, dict) else None
+                vals.append(json.dumps(tallies or {}))
+            except Exception:
+                vals.append("{}")
+        out_lines.append(",".join(vals))
+    filename = f"watchlists_runs_{scope}_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
+    # Include lightweight pagination metadata parity via header
+    try:
+        has_more = (offset + len(rows)) < int(total or 0)
+    except Exception:
+        has_more = False
+    return PlainTextResponse(
+        "\n".join(out_lines),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "X-Has-More": "true" if has_more else "false",
+        },
+    )
+
 @router.get("/runs/{run_id}", response_model=Run, summary="Get a run")
 async def get_run(
     run_id: int = Path(..., ge=1),
@@ -1850,70 +1929,7 @@ async def get_run_details(
 # --------------------
 # CSV Exports (Admin convenience)
 # --------------------
-@router.get("/runs/export.csv", response_class=PlainTextResponse, summary="Export runs as CSV (global or by job)")
-async def export_runs_csv(
-    scope: str = Query("global", pattern="^(global|job)$"),
-    job_id: Optional[int] = Query(None, ge=1),
-    q: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    size: int = Query(200, ge=1, le=1000),
-    include_tallies: bool = Query(False, description="When true, include a filter_tallies_json column per row"),
-    current_user: User = Depends(get_request_user),
-    db = Depends(get_watchlists_db_for_user),
-):
-    """Return a CSV export of runs with basic counters.
 
-    Columns: id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag
-    """
-    limit = size
-    offset = (page - 1) * limit
-    if scope == "job":
-        if not job_id:
-            raise HTTPException(status_code=400, detail="job_id_required")
-        rows, _ = db.list_runs_for_job(job_id, limit=limit, offset=offset)
-    else:
-        rows, _ = db.list_runs(q=q, limit=limit, offset=offset)
-    headers = [
-        "id",
-        "job_id",
-        "status",
-        "started_at",
-        "finished_at",
-        "items_found",
-        "items_ingested",
-        "filters_include",
-        "filters_exclude",
-        "filters_flag",
-    ]
-    if include_tallies:
-        headers.append("filter_tallies_json")
-    out_lines = [",".join(headers)]
-    for r in rows:
-        try:
-            stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
-        except Exception:
-            stats = {}
-        vals = [
-            str(r.id),
-            str(r.job_id),
-            json.dumps(r.status or ""),
-            json.dumps(r.started_at or ""),
-            json.dumps(r.finished_at or ""),
-            str(int((stats or {}).get("items_found", 0) or 0)),
-            str(int((stats or {}).get("items_ingested", 0) or 0)),
-            str(int(((stats.get("filters_actions") or {}).get("include", 0)) if isinstance(stats, dict) else 0)),
-            str(int(((stats.get("filters_actions") or {}).get("exclude", 0)) if isinstance(stats, dict) else 0)),
-            str(int(((stats.get("filters_actions") or {}).get("flag", 0)) if isinstance(stats, dict) else 0)),
-        ]
-        if include_tallies:
-            try:
-                tallies = stats.get("filter_tallies") if isinstance(stats, dict) else None
-                vals.append(json.dumps(tallies or {}))
-            except Exception:
-                vals.append("{}")
-        out_lines.append(",".join(vals))
-    filename = f"watchlists_runs_{scope}_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"
-    return PlainTextResponse("\n".join(out_lines), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 @router.get("/runs/{run_id}/tallies.csv", response_class=PlainTextResponse, summary="Export filter tallies for a run as CSV")

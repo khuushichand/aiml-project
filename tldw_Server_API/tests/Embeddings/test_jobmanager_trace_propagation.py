@@ -83,4 +83,3 @@ async def test_jobmanager_enqueues_with_trace_id(monkeypatch):
     assert "trace_id" in fields
     assert isinstance(fields["trace_id"], str)
     assert len(fields["trace_id"]) > 0
-

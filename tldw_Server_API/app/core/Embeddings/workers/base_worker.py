@@ -52,7 +52,7 @@ class WorkerConfig(BaseModel):
 
 class BaseWorker(ABC):
     """Abstract base class for all pipeline workers"""
-    
+
     def __init__(self, config: WorkerConfig):
         self.config = config
         self.redis_client: Optional[redis.Redis] = None
@@ -68,7 +68,7 @@ class BaseWorker(ABC):
         self._priority_weights = self._parse_priority_weights(os.getenv("EMBEDDINGS_PRIORITY_WEIGHTS", "high:5,normal:3,low:1"))
         self._priority_schedule = self._build_priority_schedule(self._priority_weights)
         self._priority_index = 0
-        
+
         # Setup signal handlers only on main thread to avoid test runner issues
         try:
             import threading as _threading
@@ -78,7 +78,7 @@ class BaseWorker(ABC):
         except Exception:
             # Best-effort; lack of signal installation should not break tests
             pass
-        
+
         logger.info(f"Initialized {self.config.worker_type} worker: {self.config.worker_id}")
 
     # Prometheus histograms (module-level singletons)
@@ -102,7 +102,7 @@ class BaseWorker(ABC):
             _H_STAGE_PAYLOAD_BYTES.labels(stage=_st)
     except Exception:
         pass
-    
+
     def _log_signal_notice(self, signum: int):
         """Log signal notice outside of signal handler context."""
         try:
@@ -132,7 +132,7 @@ class BaseWorker(ABC):
                 self._loop.call_soon_threadsafe(self._log_signal_notice, signum)
         except Exception:
             pass
-    
+
     @asynccontextmanager
     async def _redis_connection(self):
         """Context manager for Redis connection"""
@@ -146,7 +146,7 @@ class BaseWorker(ABC):
         finally:
             await ensure_async_client_closed(self.redis_client)
             self.redis_client = None
-    
+
     async def start(self):
         """Start the worker"""
         async with self._redis_connection():
@@ -156,23 +156,23 @@ class BaseWorker(ABC):
                 self._loop = asyncio.get_running_loop()
             except Exception:
                 self._loop = None
-            
+
             # Start background tasks
             self._tasks = [
                 asyncio.create_task(self._process_messages()),
                 asyncio.create_task(self._heartbeat_loop()),
                 asyncio.create_task(self._metrics_loop()),
             ]
-            
+
             logger.info(f"Worker {self.config.worker_id} started")
-            
+
             try:
                 await asyncio.gather(*self._tasks)
             except asyncio.CancelledError:
                 logger.info("Worker tasks cancelled")
             finally:
                 await self._cleanup()
-    
+
     async def _process_messages(self):
         """Main message processing loop"""
         while self.running:
@@ -202,7 +202,7 @@ class BaseWorker(ABC):
                     count=self.config.batch_size,
                     block=self.config.poll_interval_ms
                 )
-                
+
                 if messages:
                     for stream_name, stream_messages in messages:
                         # Record batch size per stage
@@ -214,16 +214,16 @@ class BaseWorker(ABC):
                         self._active_stream_for_batch = stream_name
                         await self._process_batch(stream_messages)
                         self._active_stream_for_batch = None
-                        
+
             except Exception as e:
                 logger.error(f"Error in message processing loop: {e}")
                 await asyncio.sleep(1)
-    
+
     async def _process_batch(self, messages: List[tuple]):
         """Process a batch of messages"""
         for message_id, data in messages:
             start_time = time.time()
-            
+
             try:
                 # Trace one span per message process
                 tm = get_tracing_manager()
@@ -296,7 +296,7 @@ class BaseWorker(ABC):
                 except Exception:
                     # Non-fatal; proceed without dedupe
                     pass
-                
+
                 # Update job status according to stage
                 try:
                     _stage = self._stage_name()
@@ -309,54 +309,54 @@ class BaseWorker(ABC):
                 except Exception:
                     _status = JobStatus.PROCESSING
                 await self._update_job_status(message.job_id, _status)
-                
+
                 # Process the message within a tracing span
                 async with tm.async_span(
                     f"embeddings.{self._stage_name()}.process",
                     attributes=span_attrs,
                 ):
                     result = await self.process_message(message)
-                
+
                 # Send to next stage
                 if result:
                     await self._send_to_next_stage(result)
-                
+
                 # Acknowledge message
                 await self.redis_client.xack(
                     self._active_stream_for_batch or self.config.queue_name,
                     self.config.consumer_group,
                     message_id
                 )
-                
+
                 # Update metrics
                 self.jobs_processed += 1
                 self.processing_times.append(time.time() - start_time)
-                
+
             except Exception as e:
                 logger.error(f"Error processing message {message_id}: {e}")
                 await self._handle_failed_message(message_id, data, e)
                 self.jobs_failed += 1
-    
+
     @abstractmethod
     async def process_message(self, message: T) -> Optional[BaseModel]:
         """Process a single message. Must be implemented by subclasses."""
         pass
-    
+
     @abstractmethod
     def _parse_message(self, data: Dict[str, Any]) -> T:
         """Parse raw message data into typed message. Must be implemented by subclasses."""
         pass
-    
+
     @abstractmethod
     async def _send_to_next_stage(self, result: BaseModel):
         """Send processed result to next stage. Must be implemented by subclasses."""
         pass
-    
+
     async def _handle_failed_message(self, message_id: str, data: Dict[str, Any], error: Exception):
         """Handle failed message processing"""
         try:
             message = self._parse_message(data)
-            
+
             failure_type, error_code = classify_failure(error)
 
             should_retry = failure_type == "transient" and (message.retry_count < message.max_retries)
@@ -412,7 +412,7 @@ class BaseWorker(ABC):
                 logger.error(
                     f"Message {message.job_id} sent to DLQ (retries={message.retry_count}/{message.max_retries}, type={failure_type}, code={error_code})"
                 )
-                
+
             # Always acknowledge to prevent reprocessing (guarded)
             try:
                 await self.redis_client.xack(
@@ -422,7 +422,7 @@ class BaseWorker(ABC):
                 )
             except Exception:
                 pass
-            
+
         except Exception as e:
             logger.error(f"Error handling failed message: {e}")
             # Fallback: attempt minimal retry scheduling or DLQ without strict schema parsing
@@ -507,7 +507,7 @@ class BaseWorker(ABC):
             return str(val).lower() in ("1", "true", "yes")
         except Exception:
             return False
-    
+
     async def _update_job_status(self, job_id: str, status: JobStatus, error_message: Optional[str] = None):
         """Update job status in Redis"""
         job_key = f"job:{job_id}"
@@ -520,13 +520,13 @@ class BaseWorker(ABC):
             "updated_at": datetime.utcnow().isoformat(),
             "current_stage": self.config.worker_type
         }
-        
+
         if error_message:
             updates["error_message"] = error_message
-        
+
         if status == JobStatus.COMPLETED:
             updates["completed_at"] = datetime.utcnow().isoformat()
-        
+
         try:
             res = self.redis_client.hset(job_key, mapping=updates)
             if inspect.isawaitable(res):
@@ -534,7 +534,7 @@ class BaseWorker(ABC):
         except TypeError:
             # Sync stub provided; ignore
             pass
-        
+
         # Set TTL for completed/failed jobs
         if status in [JobStatus.COMPLETED, JobStatus.FAILED]:
             try:
@@ -547,7 +547,7 @@ class BaseWorker(ABC):
             except Exception:
                 # Some in-memory fakes used by tests may not implement expire
                 pass
-    
+
     async def _heartbeat_loop(self):
         """Send periodic heartbeats"""
         while self.running:
@@ -556,7 +556,7 @@ class BaseWorker(ABC):
                 await asyncio.sleep(self.config.heartbeat_interval)
             except Exception as e:
                 logger.error(f"Error sending heartbeat: {e}")
-    
+
     async def _send_heartbeat(self):
         """Send worker heartbeat to Redis"""
         if not self.redis_client:
@@ -572,7 +572,7 @@ class BaseWorker(ABC):
                 await res
         except TypeError:
             pass
-    
+
     async def _metrics_loop(self):
         """Report metrics periodically"""
         while self.running:
@@ -581,7 +581,7 @@ class BaseWorker(ABC):
                 await asyncio.sleep(self.config.metrics_interval)
             except Exception as e:
                 logger.error(f"Error reporting metrics: {e}")
-    
+
     async def _report_metrics(self):
         """Report worker metrics"""
         avg_processing_time = (
@@ -589,7 +589,7 @@ class BaseWorker(ABC):
             if self.processing_times else 0
         )
         last_proc = self.processing_times[-1] if self.processing_times else 0.0
-        
+
         metrics = WorkerMetrics(
             worker_id=self.config.worker_id,
             worker_type=self.config.worker_type,
@@ -599,7 +599,7 @@ class BaseWorker(ABC):
             current_load=await self._calculate_load(),
             last_heartbeat=datetime.utcnow()
         )
-        
+
         metrics_key = f"worker:metrics:{self.config.worker_id}"
         payload = json.loads(metrics.json())
         payload["last_processing_time_ms"] = last_proc * 1000.0
@@ -613,11 +613,11 @@ class BaseWorker(ABC):
                 await res
         except TypeError:
             pass
-        
+
         # Reset processing times to prevent unbounded growth
         if len(self.processing_times) > 1000:
             self.processing_times = self.processing_times[-100:]
-    
+
     async def _calculate_load(self) -> float:
         """Calculate current worker load (0-1)"""
         # Account for priority subqueues when enabled to better reflect backlog
@@ -631,7 +631,7 @@ class BaseWorker(ABC):
                     try:
                         total += int(await self.redis_client.xlen(q))
                     except Exception:
-                        # Missing subqueue or backend issue — ignore
+                        # Missing subqueue or backend issue - ignore
                         pass
                 # Also include base queue in case some writers use it directly
                 try:
@@ -645,19 +645,19 @@ class BaseWorker(ABC):
             # Fall back to zero load on errors
             queue_length = 0
         return min(1.0, queue_length / 100)  # Normalize to 0-1
-    
+
     async def _cleanup(self):
         """Cleanup resources before shutdown"""
         logger.info(f"Cleaning up worker {self.config.worker_id}")
-        
+
         # Cancel all tasks
         for task in self._tasks:
             if not task.done():
                 task.cancel()
-        
+
         # Wait for tasks to complete
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        
+
         logger.info(f"Worker {self.config.worker_id} shutdown complete")
 
     async def stop(self) -> None:

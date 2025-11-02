@@ -16,7 +16,7 @@ from .base import (
 
 __all__ = [
     'TTSAdapter',
-    'TTSCapabilities', 
+    'TTSCapabilities',
     'TTSRequest',
     'TTSResponse',
     'AudioFormat',

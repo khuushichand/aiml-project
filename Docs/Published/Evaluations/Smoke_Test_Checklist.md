@@ -1,4 +1,4 @@
-# Unified Evaluations API – Smoke Test Checklist
+# Unified Evaluations API - Smoke Test Checklist
 
 Use this checklist to manually verify core Evaluations functionality after changes.
 
@@ -14,7 +14,7 @@ Health & Metrics
 - GET `/api/v1/evaluations/health` returns status `healthy` or `degraded` (not always-healthy).
 - GET `/api/v1/evaluations/metrics` returns JSON; `Accept: text/plain` returns Prometheus text.
 
-OpenAI‑Compatible CRUD
+OpenAI-Compatible CRUD
 - POST `/api/v1/evaluations` creates evaluation (201). Response contains `id`, `name`, `eval_type`, and timestamps.
 - GET `/api/v1/evaluations` lists evaluations with pagination fields (`has_more`, `first_id`, `last_id`).
 - GET `/api/v1/evaluations/{eval_id}` returns evaluation or 404 structured error.
@@ -33,11 +33,11 @@ Runs
 - GET `/api/v1/evaluations/runs/{run_id}` shows progress/results once finished.
 - POST `/api/v1/evaluations/runs/{run_id}/cancel` returns cancelled or structured error if not found.
 
-tldw‑Specific Evaluations
+tldw-Specific Evaluations
 - POST `/api/v1/evaluations/geval` returns metrics, average score; errors are sanitized.
 - POST `/api/v1/evaluations/rag` returns metrics and overall/retrieval/generation scores.
 - POST `/api/v1/evaluations/response-quality` returns metrics, `overall_quality`, `format_compliance`.
-- POST `/api/v1/evaluations/batch` executes multiple items; returns counts and per‑item results.
+- POST `/api/v1/evaluations/batch` executes multiple items; returns counts and per-item results.
 
 Webhooks
 - POST `/api/v1/evaluations/webhooks` registers webhook (validate events) and returns ID.
@@ -48,10 +48,9 @@ Webhooks
 
 Rate Limits
 - GET `/api/v1/evaluations/rate-limits` returns tier/limits/usage/remaining.
-- Hitting global limiter (IP‑based) returns 429 with `Retry-After`. Per‑user limiter is TODO.
+- Hitting global limiter (IP-based) returns 429 with `Retry-After`. Per-user limiter is TODO.
 
 Error Shape
 - Malformed body → 400 with structured `error` object.
 - Not found → 404 with structured `error` object and `param`.
 - Server failures → 500 with sanitized messages.
-

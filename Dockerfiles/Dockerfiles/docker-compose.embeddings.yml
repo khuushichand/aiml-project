@@ -207,7 +207,7 @@ networks:
     driver: bridge
 
 # Usage:
-# 
+#
 # Start basic infrastructure (Redis + Workers):
 #   docker-compose -f docker-compose.embeddings.yml up -d
 #

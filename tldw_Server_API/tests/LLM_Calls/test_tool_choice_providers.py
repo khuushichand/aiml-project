@@ -101,4 +101,3 @@ def test_groq_tool_choice_gating(monkeypatch):
     chat_with_groq(messages, tools=tools, tool_choice=tc)
     payload = captured["json"]
     assert payload.get("tool_choice") == tc
-

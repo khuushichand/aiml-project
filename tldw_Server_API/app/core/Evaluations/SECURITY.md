@@ -114,7 +114,7 @@ y`
    ```python
    # Good - Parameterized query
    conn.execute("SELECT * FROM table WHERE id = ?", (user_id,))
-   
+
    # Bad - String concatenation
    conn.execute(f"SELECT * FROM table WHERE id = '{user_id}'")
    ```
@@ -125,7 +125,7 @@ y`
    path = Path(user_input).resolve()
    if not path.is_relative_to(safe_directory):
        raise ValueError("Invalid path")
-   
+
    # Bad - Direct usage
    path = Path(user_input)
    ```
@@ -135,7 +135,7 @@ y`
    # Good - Validate type and range
    if isinstance(score, (int, float)) and 0 <= score <= 10:
        validated_score = float(score)
-   
+
    # Bad - Trust user input
    score = float(user_input)
    ```

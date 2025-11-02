@@ -35,28 +35,28 @@ class RequestBatcher:
     Batches embedding requests for improved throughput.
     Collects requests and processes them in batches.
     """
-    
+
     def __init__(self, config: Optional[Any] = None):
         """
         Initialize request batcher.
-        
+
         Args:
             config: Optional configuration override
         """
         self.config = config or get_config()
         self.metrics = get_metrics()
         self.rate_limiter = get_async_rate_limiter()
-        
+
         # Batching settings
         self.enabled = self.config.batching.enabled
         self.max_batch_size = self.config.batching.max_batch_size
         self.batch_timeout_ms = self.config.batching.batch_timeout_ms
         self.adaptive_batching = self.config.batching.adaptive_batching
-        
+
         # Request queues per model
         self.queues: Dict[Tuple[str, str, str], deque] = {}
         self.processing_tasks: Dict[Tuple[str, str, str], asyncio.Task] = {}
-        
+
         # Statistics
         self.stats = {
             'total_batches': 0,
@@ -64,21 +64,21 @@ class RequestBatcher:
             'average_batch_size': 0,
             'average_wait_time': 0
         }
-        
+
         # Adaptive batching parameters
         self.adaptive_params = {
             'current_batch_size': self.max_batch_size,
             'current_timeout': self.batch_timeout_ms,
             'throughput_history': deque(maxlen=10)
         }
-        
+
         logger.info(
             f"Request batcher initialized: "
             f"enabled={self.enabled}, "
             f"max_batch_size={self.max_batch_size}, "
             f"timeout={self.batch_timeout_ms}ms"
         )
-    
+
     async def submit_request(
         self,
         text: str,
@@ -89,13 +89,13 @@ class RequestBatcher:
     ) -> Any:
         """
         Submit a request for batching.
-        
+
         Args:
             text: Input text
             model: Model name
             provider: Provider name
             metadata: Optional metadata
-            
+
         Returns:
             Embedding result when ready
         """
@@ -130,7 +130,7 @@ class RequestBatcher:
                 metadata,
                 config_override=config_override,
             )
-        
+
         # Create request
         loop = asyncio.get_running_loop()
         request = BatchRequest(
@@ -143,7 +143,7 @@ class RequestBatcher:
             future=loop.create_future(),
             timestamp=time.time()
         )
-        
+
         # Get or create queue for this model/config
         queue_key = self._queue_key(provider, model, config_override)
         if queue_key not in self.queues:
@@ -166,36 +166,36 @@ class RequestBatcher:
                     self.processing_tasks.pop(key, None)
 
             new_task.add_done_callback(_remove_task)
-        
+
         # Add to queue
         self.queues[queue_key].append(request)
-        
+
         # Wait for result
         return await request.future
-    
+
     async def _process_queue(self, queue_key: str):
         """
         Process requests from a queue.
-        
+
         Args:
             queue_key: Queue identifier (provider:model)
         """
         queue = self.queues[queue_key]
         provider, model, _ = queue_key
-        
+
         while True:
             try:
                 # Collect batch
                 batch = await self._collect_batch(queue)
-                
+
                 if not batch:
                     # No requests, wait a bit
                     await asyncio.sleep(0.01)
                     continue
-                
+
                 # Process batch
                 await self._process_batch(batch, provider, model)
-                
+
             except asyncio.CancelledError:
                 logger.debug(f"Processing task for queue {queue_key} cancelled; shutting down.")
                 raise
@@ -203,20 +203,20 @@ class RequestBatcher:
                 logger.error(f"Error processing batch queue {queue_key}: {e}")
                 # Don't crash the processing task
                 await asyncio.sleep(0.1)
-    
+
     async def _collect_batch(self, queue: deque) -> List[BatchRequest]:
         """
         Collect requests into a batch.
-        
+
         Args:
             queue: Request queue
-            
+
         Returns:
             List of requests to process
         """
         batch = []
         start_time = time.time()
-        
+
         # Determine batch parameters
         if self.adaptive_batching:
             max_size = self.adaptive_params['current_batch_size']
@@ -224,9 +224,9 @@ class RequestBatcher:
         else:
             max_size = self.max_batch_size
             timeout_ms = self.batch_timeout_ms
-        
+
         timeout_seconds = timeout_ms / 1000.0
-        
+
         # Collect requests until batch is full or timeout
         while len(batch) < max_size:
             if queue:
@@ -234,14 +234,14 @@ class RequestBatcher:
             else:
                 # Queue empty, wait for more or timeout
                 elapsed = time.time() - start_time
-                
+
                 if batch and elapsed >= timeout_seconds:
                     # Timeout reached with partial batch
                     break
                 elif not batch:
                     # No requests yet, wait longer
                     await asyncio.sleep(0.001)
-                    
+
                     # Check timeout even for first request
                     if time.time() - start_time > timeout_seconds * 10:
                         break
@@ -252,9 +252,9 @@ class RequestBatcher:
                         await asyncio.sleep(min(0.001, remaining))
                     else:
                         break
-        
+
         return batch
-    
+
     async def _process_batch(
         self,
         batch: List[BatchRequest],
@@ -263,7 +263,7 @@ class RequestBatcher:
     ):
         """
         Process a batch of requests.
-        
+
         Args:
             batch: List of requests
             provider: Provider name
@@ -271,9 +271,9 @@ class RequestBatcher:
         """
         if not batch:
             return
-        
+
         batch_start = time.time()
-        
+
         try:
             # Extract texts
             texts = [req.text for req in batch]
@@ -281,26 +281,26 @@ class RequestBatcher:
                 (req.config_override for req in batch if req.config_override is not None),
                 None,
             )
-            
+
             # Log batch metrics
             self.metrics.log_batch_size(provider, len(texts))
-            
+
             # Process batch
             # Import here to avoid circular dependency
             from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
                 create_embeddings_batch_async as embeddings_create_embeddings_batch_async,
             )
-            
+
             # Create config for batch
             batch_config = override_config or self._build_user_app_config(provider, model)
-            
+
             # Get embeddings
             embeddings = await embeddings_create_embeddings_batch_async(
                 texts,
                 batch_config,
                 model_id_override=f"{provider}:{model}"
             )
-            
+
             # Distribute results
             for i, req in enumerate(batch):
                 if i < len(embeddings):
@@ -309,12 +309,12 @@ class RequestBatcher:
                     req.future.set_exception(
                         ValueError(f"No embedding returned for request {i}")
                     )
-            
+
             # Update statistics
             batch_time = time.time() - batch_start
             wait_times = [batch_start - req.timestamp for req in batch]
             avg_wait = sum(wait_times) / len(wait_times) if wait_times else 0
-            
+
             self.stats['total_batches'] += 1
             self.stats['total_requests'] += len(batch)
             self.stats['average_batch_size'] = (
@@ -323,25 +323,25 @@ class RequestBatcher:
             self.stats['average_wait_time'] = (
                 self.stats['average_wait_time'] * 0.9 + avg_wait * 0.1
             )
-            
+
             # Update adaptive parameters
             if self.adaptive_batching:
                 self._update_adaptive_params(len(batch), batch_time)
-            
+
             logger.debug(
                 f"Processed batch: size={len(batch)}, "
                 f"time={batch_time:.3f}s, "
                 f"avg_wait={avg_wait:.3f}s"
             )
-            
+
         except Exception as e:
             logger.error(f"Error processing batch: {e}")
-            
+
             # Set error for all requests
             for req in batch:
                 if not req.future.done():
                     req.future.set_exception(e)
-    
+
     async def _process_single(
         self,
         text: str,
@@ -352,13 +352,13 @@ class RequestBatcher:
     ) -> Any:
         """
         Process a single request without batching.
-        
+
         Args:
             text: Input text
             model: Model name
             provider: Provider name
             metadata: Optional metadata
-            
+
         Returns:
             Embedding result
         """
@@ -434,7 +434,7 @@ class RequestBatcher:
             )
 
         return await loop.run_in_executor(None, _invoke_sync_default)
-    
+
     def _build_user_app_config(self, provider: str, model: str) -> Dict[str, Any]:
         """Construct full user app config for embeddings executor."""
         provider_config = None
@@ -452,11 +452,11 @@ class RequestBatcher:
                 break
         if provider_config is None:
             raise ValueError(f"Provider '{provider}' is not configured for embeddings batching.")
-        
+
         model_id = f"{provider}:{model}"
-        
+
         normalized_provider = self._normalize_provider_name(provider)
-        
+
         model_entry: Dict[str, Any] = {
             "provider": normalized_provider,
             "model_name_or_path": model
@@ -465,7 +465,7 @@ class RequestBatcher:
             model_entry["api_key"] = provider_config.api_key
         if provider_config.api_url:
             model_entry["api_url"] = provider_config.api_url
-        
+
         user_app_config: Dict[str, Any] = {
             "embedding_config": {
                 "default_model_id": model_id,
@@ -474,13 +474,13 @@ class RequestBatcher:
                 }
             }
         }
-        
+
         provider_section = self._build_provider_section(provider_config)
         if provider_section:
             user_app_config.update(provider_section)
-        
+
         return user_app_config
-    
+
     @staticmethod
     def _normalize_provider_name(provider: str) -> str:
         """Normalize provider identifiers for embedding config compatibility."""
@@ -488,7 +488,7 @@ class RequestBatcher:
             "local": "local_api"
         }
         return mapping.get(provider.lower(), provider)
-    
+
     @staticmethod
     def _alias_provider_name(provider: str) -> Optional[str]:
         """Return alternate configuration key for provider names."""
@@ -536,13 +536,13 @@ class RequestBatcher:
     ) -> Tuple[str, str, str]:
         """Build queue key incorporating provider, model, and config override."""
         return (provider, model, self._fingerprint_config(config_override))
-    
+
     @staticmethod
     def _queue_label(queue_key: Tuple[str, str, str]) -> str:
         """Readable label for queue keys (for logging/tests)."""
         provider, model, fingerprint = queue_key
         return f"{provider}:{model}:{fingerprint}"
-    
+
     @staticmethod
     def _build_provider_section(provider_config: ProviderConfig) -> Optional[Dict[str, Any]]:
         """Build provider-specific top-level config payload (e.g., API keys)."""
@@ -552,23 +552,23 @@ class RequestBatcher:
             "local_api": "local_api",
             "local": "local_api"
         }
-        
+
         section_key = section_key_map.get(provider_config.name.lower())
         if not section_key:
             return None
-        
+
         section_payload: Dict[str, Any] = {}
         if provider_config.api_key:
             section_payload["api_key"] = provider_config.api_key
         if provider_config.api_url:
             section_payload["api_url"] = provider_config.api_url
-        
+
         return {section_key: section_payload} if section_payload else None
-    
+
     def _update_adaptive_params(self, batch_size: int, processing_time: float):
         """
         Update adaptive batching parameters based on performance.
-        
+
         Args:
             batch_size: Size of processed batch
             processing_time: Time taken to process
@@ -576,12 +576,12 @@ class RequestBatcher:
         # Calculate throughput
         throughput = batch_size / processing_time if processing_time > 0 else 0
         self.adaptive_params['throughput_history'].append(throughput)
-        
+
         # Adjust parameters based on throughput trend
         if len(self.adaptive_params['throughput_history']) >= 3:
             recent = list(self.adaptive_params['throughput_history'])[-3:]
             avg_throughput = sum(recent) / len(recent)
-            
+
             # If throughput is decreasing, reduce batch size
             if recent[-1] < avg_throughput * 0.9:
                 self.adaptive_params['current_batch_size'] = max(
@@ -591,7 +591,7 @@ class RequestBatcher:
                 logger.debug(
                     f"Reduced batch size to {self.adaptive_params['current_batch_size']}"
                 )
-            
+
             # If throughput is increasing, increase batch size
             elif recent[-1] > avg_throughput * 1.1:
                 self.adaptive_params['current_batch_size'] = min(
@@ -601,7 +601,7 @@ class RequestBatcher:
                 logger.debug(
                     f"Increased batch size to {self.adaptive_params['current_batch_size']}"
                 )
-            
+
             # Adjust timeout based on batch filling rate
             if batch_size < self.adaptive_params['current_batch_size'] * 0.5:
                 # Batches not filling, reduce timeout
@@ -615,13 +615,13 @@ class RequestBatcher:
                     1000,
                     int(self.adaptive_params['current_timeout'] * 1.1)
                 )
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get batching statistics"""
         queue_sizes = {
             self._queue_label(key): len(queue) for key, queue in self.queues.items()
         }
-        
+
         return {
             'enabled': self.enabled,
             'total_batches': self.stats['total_batches'],
@@ -631,7 +631,7 @@ class RequestBatcher:
             'queue_sizes': queue_sizes,
             'adaptive_params': self.adaptive_params if self.adaptive_batching else None
         }
-    
+
     async def flush_all_queues(self):
         """Force process all pending requests in queues"""
         for queue_key, queue in self.queues.items():
@@ -640,12 +640,12 @@ class RequestBatcher:
                 batch = list(queue)
                 queue.clear()
                 await self._process_batch(batch, provider, model)
-    
+
     async def shutdown(self):
         """Gracefully shutdown the batcher"""
         # Process remaining requests
         await self.flush_all_queues()
-        
+
         # Cancel processing tasks
         current_loop = asyncio.get_running_loop()
         tasks_to_await: List[asyncio.Task] = []
@@ -661,12 +661,12 @@ class RequestBatcher:
                 except Exception:
                     # Loop may already be closed; best effort cancellation
                     pass
-        
+
         # Wait for tasks to complete
         if tasks_to_await:
             await asyncio.gather(*tasks_to_await, return_exceptions=True)
         self.processing_tasks.clear()
-        
+
         logger.info("Request batcher shutdown complete")
 
 
@@ -691,17 +691,17 @@ async def create_embeddings_batch_async(
 ) -> List[List[float]]:
     """
     Create embeddings with automatic batching.
-    
+
     Args:
         texts: List of input texts
         config: Configuration dictionary
         model_id_override: Optional model override
-        
+
     Returns:
         List of embeddings
     """
     batcher = get_batcher()
-    
+
     # Parse model info
     if model_id_override and ":" in model_id_override:
         provider, model = model_id_override.split(":", 1)
@@ -709,7 +709,7 @@ async def create_embeddings_batch_async(
         # Use defaults from config
         provider = config.get("embedding_config", {}).get("default_provider", "openai")
         model = config.get("embedding_config", {}).get("default_model", "text-embedding-3-small")
-    
+
     # Submit requests
     tasks = []
     for text in texts:
@@ -721,8 +721,8 @@ async def create_embeddings_batch_async(
             config_override=config,
         )
         tasks.append(task)
-    
+
     # Wait for all results
     results = await asyncio.gather(*tasks)
-    
+
     return results

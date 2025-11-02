@@ -32,32 +32,32 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 def create_admin_user(user_db: UserDatabase, password_service: PasswordService) -> Dict[str, Any]:
     """
     Create the initial admin user for multi-user mode.
-    
+
     Args:
         user_db: UserDatabase instance
         password_service: PasswordService instance
-        
+
     Returns:
         Dict containing admin user info
     """
     print("\n" + "="*60)
     print("ADMIN USER CREATION")
     print("="*60)
-    
+
     # Get admin username
     while True:
         username = input("\nEnter admin username (default: admin): ").strip() or "admin"
         if len(username) >= 3:
             break
         print("❌ Username must be at least 3 characters long")
-    
+
     # Get admin email
     while True:
         email = input("Enter admin email: ").strip()
         if "@" in email and "." in email.split("@")[1]:
             break
         print("❌ Please enter a valid email address")
-    
+
     # Get admin password
     while True:
         password = getpass.getpass("Enter admin password (min 10 chars): ")
@@ -69,10 +69,10 @@ def create_admin_user(user_db: UserDatabase, password_service: PasswordService) 
                 print("❌ Passwords do not match")
         else:
             print("❌ Password must be at least 10 characters long")
-    
+
     # Hash password
     password_hash = password_service.hash_password(password)
-    
+
     # Create admin user
     try:
         user_id = user_db.create_user(
@@ -83,16 +83,16 @@ def create_admin_user(user_db: UserDatabase, password_service: PasswordService) 
             is_verified=True,
             created_by_migration=True
         )
-        
+
         print(f"\n✅ Admin user '{username}' created successfully (ID: {user_id})")
-        
+
         return {
             'id': user_id,
             'username': username,
             'email': email,
             'role': 'admin'
         }
-        
+
     except Exception as e:
         print(f"\n❌ Failed to create admin user: {e}")
         sys.exit(1)
@@ -100,24 +100,24 @@ def create_admin_user(user_db: UserDatabase, password_service: PasswordService) 
 def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int = 5) -> list:
     """
     Generate initial registration codes.
-    
+
     Args:
         user_db: UserDatabase instance
         admin_id: Admin user ID who creates the codes
         count: Number of codes to generate
-        
+
     Returns:
         List of registration codes
     """
     print("\n" + "="*60)
     print("REGISTRATION CODE GENERATION")
     print("="*60)
-    
+
     codes = []
-    
+
     # Ask if user wants to generate codes
     response = input(f"\nGenerate {count} registration codes? (y/n): ").strip().lower()
-    
+
     if response == 'y':
         for i in range(count):
             code = user_db.create_registration_code(
@@ -128,9 +128,9 @@ def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int
             )
             codes.append(code)
             print(f"  Code {i+1}: {code}")
-        
+
         print(f"\n✅ Generated {count} registration codes (valid for 30 days)")
-        
+
         # Save codes to file
         codes_file = Path("registration_codes.txt")
         with open(codes_file, "w") as f:
@@ -141,22 +141,22 @@ def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int
             f.write("\n" + "="*60 + "\n")
             f.write("Each code is valid for 30 days and can be used once.\n")
             f.write("Share these codes with users who need to register.\n")
-        
+
         print(f"📄 Codes saved to: {codes_file.absolute()}")
-    
+
     return codes
 
 def migrate_existing_data(user_db: UserDatabase) -> None:
     """
     Migrate existing single-user data to multi-user structure.
-    
+
     Args:
         user_db: UserDatabase instance
     """
     print("\n" + "="*60)
     print("DATA MIGRATION")
     print("="*60)
-    
+
     # Check for existing Media database (per-user default)
     try:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -168,19 +168,19 @@ def migrate_existing_data(user_db: UserDatabase) -> None:
             media_db_path = Path(get_project_root()) / "Databases" / "Media_DB_v2.db"
         except Exception:
             media_db_path = Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db"
-    
+
     if media_db_path.exists():
         print(f"\n📁 Found existing Media database at: {media_db_path}")
-        
+
         # In single-user mode, all content belongs to admin
         # No actual migration needed, but we could add user_id columns in future
         print("✅ Existing media content will be accessible to all authorized users")
     else:
         print("ℹ️  No existing Media database found")
-    
+
     # Check for existing configuration
     config_path = Path("tldw_Server_API/Config_Files/config.txt")
-    
+
     if config_path.exists():
         print(f"\n📋 Found existing configuration at: {config_path}")
         print("⚠️  Remember to update AUTH_MODE to 'multi_user' in config")
@@ -192,7 +192,7 @@ def update_configuration() -> None:
     print("\n" + "="*60)
     print("CONFIGURATION UPDATE")
     print("="*60)
-    
+
     print("\nTo complete the migration, update your configuration:")
     print("\n1. Edit 'tldw_Server_API/Config_Files/config.txt'")
     print("2. Set or verify these settings:")
@@ -201,10 +201,10 @@ def update_configuration() -> None:
     print("   - REQUIRE_REGISTRATION_CODE = true  (recommended)")
     print("   - JWT_SECRET_KEY = <generate a secure random key>")
     print("\n3. Restart the server after configuration changes")
-    
+
     # Offer to generate JWT secret
     response = input("\nGenerate a JWT secret key? (y/n): ").strip().lower()
-    
+
     if response == 'y':
         jwt_secret = secrets.token_urlsafe(32)
         print(f"\n🔑 JWT Secret Key (add to config or environment):")
@@ -214,41 +214,41 @@ def update_configuration() -> None:
 def verify_migration(user_db: UserDatabase) -> None:
     """
     Verify the migration was successful.
-    
+
     Args:
         user_db: UserDatabase instance
     """
     print("\n" + "="*60)
     print("MIGRATION VERIFICATION")
     print("="*60)
-    
+
     conn = user_db.get_connection()
-    
+
     # Check users
     cursor = conn.execute("SELECT COUNT(*) as count FROM users")
     user_count = cursor.fetchone()['count']
     print(f"\n✅ Users in database: {user_count}")
-    
+
     # Check roles
     cursor = conn.execute("SELECT COUNT(*) as count FROM roles")
     role_count = cursor.fetchone()['count']
     print(f"✅ Roles configured: {role_count}")
-    
+
     # Check permissions
     cursor = conn.execute("SELECT COUNT(*) as count FROM permissions")
     perm_count = cursor.fetchone()['count']
     print(f"✅ Permissions defined: {perm_count}")
-    
+
     # Check admin user
     cursor = conn.execute("""
-        SELECT u.username 
+        SELECT u.username
         FROM users u
         JOIN user_roles ur ON u.id = ur.user_id
         JOIN roles r ON ur.role_id = r.id
         WHERE r.name = 'admin'
     """)
     admins = cursor.fetchall()
-    
+
     if admins:
         print(f"✅ Admin users: {', '.join([a['username'] for a in admins])}")
     else:
@@ -280,9 +280,9 @@ def main():
         default="../Databases/Users.db",
         help="Path to users database (default: ../Databases/Users.db)"
     )
-    
+
     args = parser.parse_args()
-    
+
     print("\n" + "="*60)
     print("TLDW_SERVER MULTI-USER MIGRATION")
     print("="*60)
@@ -292,16 +292,16 @@ def main():
     print("  2. Create an admin user")
     print("  3. Generate registration codes (optional)")
     print("  4. Provide configuration guidance")
-    
+
     response = input("\nContinue with migration? (y/n): ").strip().lower()
-    
+
     if response != 'y':
         print("\n❌ Migration cancelled")
         sys.exit(0)
-    
+
     # Initialize database
     print(f"\n📂 Initializing user database at: {args.db_path}")
-    
+
     try:
         user_db = UserDatabase(args.db_path, client_id="migration_script")
         password_service = PasswordService()
@@ -309,7 +309,7 @@ def main():
     except Exception as e:
         print(f"❌ Failed to initialize database: {e}")
         sys.exit(1)
-    
+
     # Create admin user
     admin_info = None
     if not args.skip_admin:
@@ -318,7 +318,7 @@ def main():
         # Get existing admin
         conn = user_db.get_connection()
         cursor = conn.execute("""
-            SELECT u.id, u.username 
+            SELECT u.id, u.username
             FROM users u
             JOIN user_roles ur ON u.id = ur.user_id
             JOIN roles r ON ur.role_id = r.id
@@ -332,20 +332,20 @@ def main():
         else:
             print("\n⚠️  No admin user found, creating one...")
             admin_info = create_admin_user(user_db, password_service)
-    
+
     # Generate registration codes
     if not args.no_codes and admin_info:
         generate_registration_codes(user_db, admin_info['id'])
-    
+
     # Migrate existing data
     migrate_existing_data(user_db)
-    
+
     # Update configuration
     update_configuration()
-    
+
     # Verify migration
     verify_migration(user_db)
-    
+
     # Final summary
     print("\n" + "="*60)
     print("MIGRATION COMPLETE!")

@@ -100,4 +100,3 @@ async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service
             assert cnt >= 1, f"Expected >=1 audit events for action {action}"
     finally:
         con.close()
-

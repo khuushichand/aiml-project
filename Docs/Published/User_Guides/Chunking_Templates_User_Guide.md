@@ -99,7 +99,7 @@ def chunk_with_template(text, template_name):
             "text": text
         }
     )
-    
+
     if response.status_code == 200:
         result = response.json()
         return result["chunks"]

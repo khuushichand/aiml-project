@@ -16,4 +16,3 @@ domains:
     url_patterns:
       - ".*\\?output=1$"
     respect_robots: true
-

@@ -27,17 +27,17 @@ def test_db():
     import sqlite3
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
-    
+
     # Initialize database
     db = CharactersRAGDB(db_path, "test_client")
-    
+
     # Enable WAL mode for better concurrency handling in tests
     conn = db.get_connection()
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for locks
     conn.execute("PRAGMA synchronous=NORMAL")  # Faster writes for tests
     conn.commit()
-    
+
     # Add default character (required by the chat endpoint)
     db.add_character_card({
         "name": DEFAULT_CHARACTER_NAME,
@@ -48,7 +48,7 @@ def test_db():
         "first_message": "Hello! I'm here to help test.",
         "creator_notes": "Created for testing"
     })
-    
+
     # Also add a test character for specific tests
     db.add_character_card({
         "name": "TestCharacter",
@@ -59,9 +59,9 @@ def test_db():
         "first_message": "Hello! I'm TestCharacter.",
         "creator_notes": "Created for testing"
     })
-    
+
     yield db
-    
+
     # Cleanup
     try:
         os.unlink(db_path)
@@ -106,7 +106,7 @@ def test_client(test_db):
         )
     except Exception:
         pass
-    
+
     # Create a test user for authentication
     test_user = User(
         id=1,
@@ -114,7 +114,7 @@ def test_client(test_db):
         email="test@example.com",
         is_active=True
     )
-    
+
     try:
         # Mock API keys to prevent 503 errors
         with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "sk-mock-key-12345"}):
@@ -135,12 +135,12 @@ def test_client(test_db):
                     "total_tokens": 15
                 }
             }
-            
+
             with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=mock_response):
                 # Override authentication to use test user
                 async def mock_get_request_user(api_key=None, token=None):
                     return test_user
-                
+
                 # Override the database and auth dependencies
                 app.dependency_overrides[get_chacha_db_for_user] = lambda: test_db
                 app.dependency_overrides[get_request_user] = mock_get_request_user
@@ -200,12 +200,12 @@ def auth_headers(test_client):
 
 class TestChatEndpointIntegration:
     """Integration tests for the chat endpoint using actual components."""
-    
+
     def test_chat_completion_basic(self, test_client, test_db, auth_headers, caplog):
         """Test basic chat completion through the actual endpoint."""
         import logging
         caplog.set_level(logging.DEBUG)
-        
+
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -217,7 +217,7 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         # With real LLM, accept either success or service unavailable (if LLM not configured)
         if response.status_code == 503:
             print(f"LLM service not configured: {response.json()}")
@@ -225,16 +225,16 @@ class TestChatEndpointIntegration:
         elif response.status_code != 200:
             print(f"Response status: {response.status_code}")
             print(f"Response body: {response.json()}")
-        
+
         assert response.status_code in [200, 503], f"Unexpected status: {response.status_code}"
-        
+
         if response.status_code == 200:
             data = response.json()
             assert isinstance(data, dict)
             assert "choices" in data
             assert len(data["choices"]) > 0
             # Don't check content - it's from real LLM
-    
+
     def test_chat_with_character(self, test_client, test_db, auth_headers):
         """Test chat with character context."""
         response = test_client.post(
@@ -249,20 +249,20 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         # Accept success or service unavailable
         if response.status_code == 503:
             pytest.skip("LLM service not configured")
         assert response.status_code in [200, 503]
-        
+
         # Verify character was loaded by checking database
         characters = test_db.list_character_cards()
         assert any(c["name"] == "TestCharacter" for c in characters)
-        
+
         # With real LLM, verify response has expected structure
         data = response.json()
         assert "choices" in data or "error" in data
-    
+
     def test_conversation_persistence(self, test_client, test_db, auth_headers):
         """Test that conversations are persisted in the database."""
         # First message
@@ -278,16 +278,16 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         if response1.status_code == 503:
             pytest.skip("LLM service not configured")
         assert response1.status_code in [200, 503]
         data1 = response1.json()
-        
+
         # Extract conversation ID from response
         conv_id = data1.get("tldw_conversation_id")
         assert conv_id, "No conversation ID returned in response"
-        
+
         # Second message in same conversation
         response2 = test_client.post(
             "/api/v1/chat/completions",
@@ -302,16 +302,16 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         assert response2.status_code in [200, 503]
-        
+
         # Verify messages are in database
         messages = test_db.get_messages_for_conversation(conv_id)
         assert len(messages) >= 4  # Two user messages and two assistant messages
         # Check that the conversation contains our messages
         message_contents = [msg["content"] for msg in messages]
         assert any("Alice" in content for content in message_contents)
-    
+
     @pytest.mark.skip(reason="TestClient doesn't properly handle streaming responses")
     def test_streaming_response(self, test_client, test_db, auth_headers):
         """Test streaming chat completion request is accepted."""
@@ -329,14 +329,14 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         # For streaming, the endpoint returns a StreamingResponse
         # TestClient converts this to a regular response
         # Just verify it doesn't error
         if response.status_code == 503:
             pytest.skip("LLM service not configured")
         assert response.status_code in [200, 503]
-    
+
     def test_message_validation(self, test_client, test_db, auth_headers):
         """Test message validation and error handling."""
         # Test empty messages
@@ -349,13 +349,13 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         # FastAPI returns 422 for validation errors
         assert response.status_code == 422
         # Check error message mentions the validation issue
         error_detail = str(response.json()).lower()
         assert "message" in error_detail or "validation" in error_detail
-            
+
         # Test invalid temperature
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -367,17 +367,17 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         # FastAPI returns 422 for validation errors
         assert response.status_code == 422
         error_detail = str(response.json()).lower()
         assert "temperature" in error_detail
-    
+
     def test_image_handling(self, test_client, test_db, auth_headers):
         """Test handling of image inputs."""
         # Small valid PNG image (1x1 pixel red dot)
         image_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
-        
+
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -395,11 +395,11 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         if response.status_code == 503:
             pytest.skip("LLM service not configured")
         assert response.status_code in [200, 503]
-        
+
         # Verify image was stored in database
         # Get conversations for the test character
         characters = test_db.list_character_cards()
@@ -408,7 +408,7 @@ class TestChatEndpointIntegration:
         if conversations:
             messages = test_db.get_messages_for_conversation(conversations[0]["conversation_id"])
             assert any(msg.get("image_data") or msg.get("has_image") for msg in messages)
-    
+
     def test_tool_usage(self, test_client, test_db, auth_headers):
         """Test chat with tool definitions - currently tools validation is strict."""
         response = test_client.post(
@@ -437,11 +437,11 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         # Tools validation is currently strict and may reject this format
         # Just verify the endpoint handles tools parameter without crashing
         assert response.status_code in [200, 400]  # Accept either success or validation error
-    
+
     def test_transaction_handling(self, test_client, test_db, auth_headers):
         """Test database transaction handling - messages are persisted correctly."""
         # Test that messages are properly saved to the database
@@ -458,28 +458,28 @@ class TestChatEndpointIntegration:
             },
             headers=auth_headers
         )
-        
+
         if response.status_code == 503:
             pytest.skip("LLM service not configured")
         assert response.status_code in [200, 503]
         data = response.json()
-        
+
         # Get conversation ID from response
         conv_id = data.get("tldw_conversation_id")
         assert conv_id, "No conversation ID returned"
-        
+
         # Verify messages were created in the database
         messages = test_db.get_messages_for_conversation(conv_id)
         assert len(messages) >= 2  # User and assistant messages
-    
+
     def test_concurrent_requests(self, test_client, test_db, auth_headers):
         """Test handling of concurrent requests."""
         import threading
         import time
-        
+
         results = []
         errors = []
-        
+
         def make_request(index):
             try:
                 response = test_client.post(
@@ -496,23 +496,23 @@ class TestChatEndpointIntegration:
                 results.append(response.status_code)
             except Exception as e:
                 errors.append(str(e))
-        
+
         # Create threads for concurrent requests
         threads = []
         for i in range(5):
             thread = threading.Thread(target=make_request, args=(i,))
             threads.append(thread)
             thread.start()
-        
+
         # Wait for all threads to complete
         for thread in threads:
             thread.join(timeout=10)
-        
+
         # All requests should either succeed or get service unavailable
         assert len(results) == 5
         assert all(status in [200, 503] for status in results)
         assert len(errors) == 0
-    
+
     def test_rate_limiting(self, test_client, test_db, auth_headers):
         """Test rate limiting functionality."""
         # Make multiple rapid requests
@@ -530,14 +530,14 @@ class TestChatEndpointIntegration:
                 headers=auth_headers
             )
             responses.append(response.status_code)
-        
+
         # Should handle all requests (rate limiting may return 429, or 503 if not configured)
         assert all(status in [200, 429, 503] for status in responses)
 
 
 class TestChatEndpointSecurity:
     """Security-focused integration tests."""
-    
+
     def test_sql_injection_prevention(self, test_client, test_db, auth_headers):
         """Test SQL injection prevention."""
         response = test_client.post(
@@ -552,14 +552,14 @@ class TestChatEndpointSecurity:
             },
             headers=auth_headers
         )
-        
+
         # Should handle safely without SQL execution
         assert response.status_code in [200, 400, 404, 503]  # 503 if LLM not configured
-        
+
         # Verify tables still exist
         # Verify tables still exist by checking characters
         assert test_db.list_character_cards() is not None
-    
+
     def test_xss_prevention(self, test_client, test_db, auth_headers):
         """Test XSS prevention."""
         response = test_client.post(
@@ -573,11 +573,11 @@ class TestChatEndpointSecurity:
             },
             headers=auth_headers
         )
-        
+
         if response.status_code == 503:
             pytest.skip("LLM service not configured")
         assert response.status_code in [200, 503]
-        
+
         # Verify content is stored safely
         # Get conversations for the test character
         characters = test_db.list_character_cards()
@@ -587,12 +587,12 @@ class TestChatEndpointSecurity:
             messages = test_db.get_messages_for_conversation(conversations[0]["conversation_id"])
             # Script tags should be stored as text, not executed
             assert any("<script>" in msg["content"] for msg in messages)
-    
+
     def test_large_request_dos_prevention(self, test_client, test_db, auth_headers):
         """Test DoS prevention for large requests."""
         # Create a very large message
         large_content = "x" * 500000  # 500KB of text
-        
+
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -604,7 +604,7 @@ class TestChatEndpointSecurity:
             },
             headers=auth_headers
         )
-        
+
         # Should reject overly large requests
         # 413 is the correct status code for "Payload Too Large"
         assert response.status_code in [400, 413]
@@ -614,12 +614,12 @@ class TestChatEndpointSecurity:
         else:
             # If 400, check for appropriate error message
             assert "too long" in response.json()["detail"].lower() or "too large" in response.json()["detail"].lower()
-    
+
     def test_authentication_required(self, test_client, test_db):
         """Test authentication behavior based on auth mode."""
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
         settings = get_settings()
-        
+
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -631,7 +631,7 @@ class TestChatEndpointSecurity:
             }
             # No auth headers
         )
-        
+
         if settings.AUTH_MODE == "single_user":
             # In single-user mode, authentication is not required
             # The request should succeed (200) or fail due to other reasons like missing API keys (503)

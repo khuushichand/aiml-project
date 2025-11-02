@@ -20,7 +20,7 @@ class UserUpdateRequest(BaseModel):
     is_verified: Optional[bool] = None
     is_locked: Optional[bool] = None
     storage_quota_mb: Optional[int] = Field(None, ge=100)
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -37,7 +37,7 @@ class UserSummary(BaseModel):
     last_login: Optional[datetime] = None
     storage_quota_mb: int
     storage_used_mb: float
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -48,14 +48,14 @@ class UserListResponse(BaseModel):
     page: int
     limit: int
     pages: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
 class UserQuotaUpdateRequest(BaseModel):
     """Request to update user storage quota"""
     storage_quota_mb: int = Field(..., ge=100, le=1000000)  # 100MB to 1TB
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -69,7 +69,7 @@ class RegistrationCodeRequest(BaseModel):
     expiry_days: int = Field(7, ge=1, le=365)
     role_to_grant: str = Field("user", pattern="^(user|admin|service)$")
     metadata: Optional[Dict[str, Any]] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -83,15 +83,15 @@ class RegistrationCodeResponse(BaseModel):
     created_at: datetime
     role_to_grant: str
     is_valid: Optional[bool] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
-    
+
     def __init__(self, **data):
         super().__init__(**data)
         # Calculate is_valid if not provided
         if self.is_valid is None:
             self.is_valid = (
-                self.times_used < self.max_uses and 
+                self.times_used < self.max_uses and
                 self.expires_at > datetime.utcnow()
             )
 
@@ -99,7 +99,7 @@ class RegistrationCodeResponse(BaseModel):
 class RegistrationCodeListResponse(BaseModel):
     """Response for registration code list"""
     codes: List[RegistrationCodeResponse]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -114,7 +114,7 @@ class UserStats(BaseModel):
     verified: int
     admins: int
     new_last_30d: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -124,7 +124,7 @@ class StorageStats(BaseModel):
     total_quota_mb: float
     average_used_mb: float
     max_used_mb: float
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -132,7 +132,7 @@ class SessionStats(BaseModel):
     """Session statistics"""
     active: int
     unique_users: int
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -141,7 +141,7 @@ class SystemStatsResponse(BaseModel):
     users: UserStats
     storage: StorageStats
     sessions: SessionStats
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -188,14 +188,14 @@ class AuditLogEntry(BaseModel):
     details: Optional[Any] = None
     ip_address: Optional[str] = None
     created_at: datetime
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
 class AuditLogResponse(BaseModel):
     """Response for audit log endpoint"""
     entries: List[AuditLogEntry]
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -207,7 +207,7 @@ class BatchUserOperation(BaseModel):
     """Batch operation on multiple users"""
     user_ids: List[int]
     operation: str = Field(..., pattern="^(activate|deactivate|verify|lock|unlock|delete)$")
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -217,7 +217,7 @@ class BatchOperationResponse(BaseModel):
     failed_count: int
     failed_ids: List[int] = []
     message: str
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -776,7 +776,7 @@ def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
     form_data = create_add_media_form_data(media_type="picture", urls=["http://a.com"])
     # Use the RENAMED client variable
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     details = response.json().get('detail', [])
     assert isinstance(details, list)
     # Assert specific pydantic error message
@@ -787,7 +787,7 @@ def test_add_media_invalid_field_type(test_api_client, dummy_headers):
     """Test sending a non-boolean string for a boolean field."""
     form_data = create_add_media_form_data(media_type="video", urls=["http://a.com"], diarize="maybe")
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     details = response.json().get('detail', [])
     # Check for the boolean parsing error specifically for the 'diarize' field
     found_diarize_error = False
@@ -815,7 +815,7 @@ def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
     form_data = create_add_media_form_data(media_type="video", urls=["http://a.com"])
     del form_data["media_type"]
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     details = response.json().get('detail', [])
     assert isinstance(details, list)
     assert any(err.get('type') == 'missing' and 'media_type' in err.get('loc', []) for err in details)

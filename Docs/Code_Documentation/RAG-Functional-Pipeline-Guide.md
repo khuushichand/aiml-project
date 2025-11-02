@@ -280,27 +280,27 @@ async def analyze_performance(
 config = {
     # Pipeline selection
     "pipeline": "standard",  # minimal, standard, quality, enhanced, custom
-    
+
     # Data sources
     "sources": ["media_db", "notes"],
     "databases": {
         "media_db_path": "/path/to/media.db",
         "notes_db_path": "/path/to/notes.db"
     },
-    
+
     # Retrieval
     "top_k": 10,
     "min_score": 0.0,
     "use_fts": True,
     "use_vector": False,
-    
+
     # Query expansion
     "expansion_strategies": ["acronym", "synonym"],
-    
+
     # Caching
     "enable_cache": True,
     "cache_threshold": 0.85,
-    
+
     # Reranking
     "reranking_strategy": "hybrid"
 }
@@ -312,7 +312,7 @@ config = {
 config = {
     "pipeline": "quality",
     "enable_resilience": True,  # Enable fault tolerance
-    
+
     "resilience": {
         "retry": {
             "enabled": True,
@@ -326,11 +326,11 @@ config = {
             "timeout": 60
         }
     },
-    
+
     # Performance monitoring
     "enable_monitoring": True,
     "log_performance": True,
-    
+
     # Advanced features
     "enable_chromadb": True,
     "process_tables": True,
@@ -355,10 +355,10 @@ async def my_custom_function(
 ) -> RAGPipelineContext:
     """
     Custom processing function.
-    
+
     Args:
         context: Pipeline context
-        
+
     Returns:
         Modified context
     """
@@ -414,30 +414,30 @@ async def conditional_pipeline(query: str, config: dict):
         original_query=query,
         config=config
     )
-    
+
     # Always expand query
     context = await expand_query(context)
-    
+
     # Conditionally use cache
     if config.get("enable_cache", True):
         context = await check_cache(context)
         if context.documents:  # Cache hit
             return context
-    
+
     # Retrieve documents
     context = await retrieve_documents(context)
-    
+
     # Conditionally process tables
     if config.get("process_tables", False):
         context = await process_tables(context)
-    
+
     # Always rerank
     context = await rerank_documents(context)
-    
+
     # Store in cache if enabled
     if config.get("enable_cache", True):
         context = await store_in_cache(context)
-    
+
     return context
 ```
 
@@ -452,10 +452,10 @@ async def parallel_retrieval_pipeline(query: str, config: dict):
         original_query=query,
         config=config
     )
-    
+
     # Expand query first
     context = await expand_query(context)
-    
+
     # Parallel retrieval from multiple sources
     async def retrieve_from_source(source: str):
         source_context = RAGPipelineContext(
@@ -464,21 +464,21 @@ async def parallel_retrieval_pipeline(query: str, config: dict):
             config={**config, "sources": [source]}
         )
         return await retrieve_documents(source_context)
-    
+
     # Execute retrievals in parallel
     results = await asyncio.gather(
         retrieve_from_source("media_db"),
         retrieve_from_source("notes"),
         retrieve_from_source("prompts")
     )
-    
+
     # Merge results
     all_documents = []
     for result in results:
         all_documents.extend(result.documents)
-    
+
     context.documents = all_documents
-    
+
     # Continue with pipeline
     context = await rerank_documents(context)
     return context
@@ -522,11 +522,11 @@ async def batch_search(queries: List[str], config: dict):
     """Process multiple queries efficiently."""
     # Process in parallel with concurrency limit
     semaphore = asyncio.Semaphore(5)
-    
+
     async def search_with_limit(query):
         async with semaphore:
             return await standard_pipeline(query, config)
-    
+
     results = await asyncio.gather(
         *[search_with_limit(q) for q in queries]
     )
@@ -579,7 +579,7 @@ async def test_custom_pipeline():
         custom_processing,
         rerank_documents
     )
-    
+
     # Create test context
     context = RAGPipelineContext(
         query="test query",
@@ -589,10 +589,10 @@ async def test_custom_pipeline():
             "top_k": 5
         }
     )
-    
+
     # Execute pipeline
     result = await pipeline(context)
-    
+
     # Assertions
     assert len(result.documents) <= 5
     assert result.expanded_queries
@@ -635,17 +635,17 @@ async def custom_function(context: RAGPipelineContext) -> RAGPipelineContext:
 async def my_pipeline(query: str, config: dict):
     """
     Custom pipeline for domain-specific search.
-    
+
     Pipeline flow:
     1. Expand query with domain terms
     2. Retrieve from specialized database
     3. Apply custom scoring
     4. Rerank by relevance
-    
+
     Args:
         query: User search query
         config: Pipeline configuration
-        
+
     Returns:
         RAGPipelineContext with results
     """

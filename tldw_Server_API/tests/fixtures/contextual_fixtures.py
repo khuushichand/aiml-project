@@ -17,26 +17,26 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 # Sample document content for testing
 SAMPLE_DOCUMENTS = {
     "machine_learning": """
-    Machine learning is a subset of artificial intelligence (AI) that provides systems 
-    the ability to automatically learn and improve from experience without being explicitly 
-    programmed. Machine learning focuses on the development of computer programs that can 
+    Machine learning is a subset of artificial intelligence (AI) that provides systems
+    the ability to automatically learn and improve from experience without being explicitly
+    programmed. Machine learning focuses on the development of computer programs that can
     access data and use it to learn for themselves.
     """,
-    
+
     "neural_networks": """
-    Neural networks are a series of algorithms that endeavor to recognize underlying 
-    relationships in a set of data through a process that mimics the way the human brain 
-    operates. Neural networks can adapt to changing input so the network generates the 
+    Neural networks are a series of algorithms that endeavor to recognize underlying
+    relationships in a set of data through a process that mimics the way the human brain
+    operates. Neural networks can adapt to changing input so the network generates the
     best possible result without needing to redesign the output criteria.
     """,
-    
+
     "deep_learning": """
-    Deep learning is a subset of machine learning that uses multi-layered neural networks, 
-    called deep neural networks, to simulate the complex decision-making power of the human 
-    brain. Some form of deep learning powers most of the artificial intelligence (AI) 
+    Deep learning is a subset of machine learning that uses multi-layered neural networks,
+    called deep neural networks, to simulate the complex decision-making power of the human
+    brain. Some form of deep learning powers most of the artificial intelligence (AI)
     applications in our lives today.
     """,
-    
+
     "code_sample": """
     def train_model(data, labels, epochs=10):
         model = NeuralNetwork()
@@ -46,7 +46,7 @@ SAMPLE_DOCUMENTS = {
             model.backward(loss)
         return model
     """,
-    
+
     "table_data": """
     | Model | Accuracy | Speed |
     |-------|----------|-------|
@@ -106,7 +106,7 @@ def sample_config():
 def mock_documents():
     """Create a set of mock documents with parent-child relationships."""
     documents = []
-    
+
     # Create documents from ML content
     for i, (key, content) in enumerate(SAMPLE_DOCUMENTS.items()):
         # Split content into chunks
@@ -128,7 +128,7 @@ def mock_documents():
                     score=0.9 - (j * 0.05)  # Decreasing scores for later chunks
                 )
                 documents.append(doc)
-    
+
     return documents
 
 
@@ -156,12 +156,12 @@ def mock_chromadb_manager(sample_config):
     manager.user_id = "test_user"
     manager.embedding_config = sample_config["embedding_config"]
     manager.user_embedding_config = sample_config
-    
+
     # Mock methods
     manager.get_or_create_collection = MagicMock(return_value=Mock())
     manager.situate_context = MagicMock(return_value="Contextual summary of the chunk")
     manager.process_and_store_content = AsyncMock()
-    
+
     return manager
 
 
@@ -179,23 +179,23 @@ def temp_config_file(sample_config):
         f.write("\n[RAG]\n")
         f.write(f"enable_parent_expansion = {str(sample_config['rag_config']['enable_parent_expansion']).lower()}\n")
         f.write(f"parent_expansion_size = {sample_config['rag_config']['parent_expansion_size']}\n")
-        
+
         temp_path = f.name
-    
+
     yield temp_path
-    
+
     # Cleanup
     Path(temp_path).unlink(missing_ok=True)
 
 
 class MockLLMAnalyzer:
     """Mock LLM analyzer for testing contextualization."""
-    
+
     def __init__(self, response_template: str = "This chunk discusses {topic}"):
         self.response_template = response_template
         self.call_count = 0
         self.last_inputs = []
-    
+
     def __call__(self, api_name: str, input_data: str, prompt: str, context: str, **kwargs):
         """Mock the analyze function."""
         self.call_count += 1
@@ -205,7 +205,7 @@ class MockLLMAnalyzer:
             "prompt": prompt,
             "context": context
         })
-        
+
         # Generate a mock contextual response
         if "machine learning" in input_data.lower():
             topic = "machine learning concepts"
@@ -215,7 +215,7 @@ class MockLLMAnalyzer:
             topic = "deep learning techniques"
         else:
             topic = "general AI concepts"
-        
+
         return self.response_template.format(topic=topic)
 
 
@@ -232,23 +232,23 @@ def create_test_documents(
 ) -> List[Document]:
     """
     Helper function to create test documents.
-    
+
     Args:
         count: Number of documents to create
         with_parents: Whether to include parent_id metadata
         chunk_types: List of chunk types to use (cycles through them)
-    
+
     Returns:
         List of test documents
     """
     if chunk_types is None:
         chunk_types = ["text", "code", "table", "header", "list"]
-    
+
     documents = []
     for i in range(count):
         parent_id = f"parent_{i // 3}" if with_parents else None
         chunk_type = chunk_types[i % len(chunk_types)]
-        
+
         doc = Document(
             id=f"doc_{i}",
             content=f"Test content {i}. " * 10,  # Some reasonable content
@@ -263,14 +263,14 @@ def create_test_documents(
             score=1.0 - (i * 0.05)  # Decreasing scores
         )
         documents.append(doc)
-    
+
     return documents
 
 
 def assert_documents_equal(doc1: Document, doc2: Document, ignore_score: bool = False):
     """
     Helper to assert two documents are equal.
-    
+
     Args:
         doc1: First document
         doc2: Second document
@@ -291,12 +291,12 @@ def create_mock_api_response(
 ) -> Dict[str, Any]:
     """
     Create a mock API response for testing.
-    
+
     Args:
         success: Whether the operation succeeded
         media_id: The media ID to include
         error: Error message if not successful
-    
+
     Returns:
         Mock API response dictionary
     """
@@ -318,45 +318,45 @@ def create_mock_api_response(
 
 class ConfigContextManager:
     """Context manager for temporarily modifying config values."""
-    
+
     def __init__(self, config_dict: Dict[str, Any], updates: Dict[str, Any]):
         self.config_dict = config_dict
         self.updates = updates
         self.original_values = {}
-    
+
     def __enter__(self):
         """Apply temporary config updates."""
         for key_path, value in self.updates.items():
             keys = key_path.split(".")
             current = self.config_dict
-            
+
             # Navigate to the parent of the target key
             for key in keys[:-1]:
                 if key not in current:
                     current[key] = {}
                 current = current[key]
-            
+
             # Store original value
             if keys[-1] in current:
                 self.original_values[key_path] = current[keys[-1]]
             else:
                 self.original_values[key_path] = None
-            
+
             # Set new value
             current[keys[-1]] = value
-        
+
         return self.config_dict
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Restore original config values."""
         for key_path, original_value in self.original_values.items():
             keys = key_path.split(".")
             current = self.config_dict
-            
+
             # Navigate to the parent of the target key
             for key in keys[:-1]:
                 current = current[key]
-            
+
             # Restore original value
             if original_value is None and keys[-1] in current:
                 del current[keys[-1]]

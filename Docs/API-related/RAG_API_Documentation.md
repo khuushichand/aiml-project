@@ -1,7 +1,7 @@
 # RAG API Documentation
 
-**Version**: Unified Pipeline 1.0.0  
-**Last Updated**: 2025-10-26  
+**Version**: Unified Pipeline 1.0.0
+**Last Updated**: 2025-10-26
 **Status**: Production Ready
 
 ## Table of Contents
@@ -94,9 +94,9 @@ Streams NDJSON events (media type `application/x-ndjson`). Requires `enable_gene
 
 Emitted events
 
-- `{"type":"delta","text":"..."}` — incremental tokens/chunks
-- `{"type":"claims_overlay", ...}` — rolling claim verification overlay when claims are enabled
-- `{"type":"final_claims", ...}` — final claim verification summary
+- `{"type":"delta","text":"..."}` - incremental tokens/chunks
+- `{"type":"claims_overlay", ...}` - rolling claim verification overlay when claims are enabled
+- `{"type":"final_claims", ...}` - final claim verification summary
 - May also emit early context/rationale events when available:
   - `{"type":"contexts", "contexts":[{id,title,score,url,source},...], "why":{...}}`
   - `{"type":"plan", "plan": {...}}` and `{"type":"reasoning", "plan":["..."]}`
@@ -157,22 +157,22 @@ Records user interaction signals from the WebUI for learning-to-rank and persona
 
 ### Health & Ops
 
-- GET `/api/v1/rag/health` — comprehensive health (circuit breakers, cache, metrics, batch processor)
-- GET `/api/v1/rag/health/live` — liveness
-- GET `/api/v1/rag/health/ready` — readiness
-- GET `/api/v1/rag/health/simple` — quick pipeline check
-- GET `/api/v1/rag/cache/stats` — cache statistics and recommendations
-- POST `/api/v1/rag/cache/clear` — clear caches
-- GET `/api/v1/rag/cache/warm` — cache warmer status
-- GET `/api/v1/rag/metrics/summary` — recent metrics summary
-- GET `/api/v1/rag/costs/summary` — LLM API cost summary (when available)
-- GET `/api/v1/rag/batch/jobs` — batch job states
+- GET `/api/v1/rag/health` - comprehensive health (circuit breakers, cache, metrics, batch processor)
+- GET `/api/v1/rag/health/live` - liveness
+- GET `/api/v1/rag/health/ready` - readiness
+- GET `/api/v1/rag/health/simple` - quick pipeline check
+- GET `/api/v1/rag/cache/stats` - cache statistics and recommendations
+- POST `/api/v1/rag/cache/clear` - clear caches
+- GET `/api/v1/rag/cache/warm` - cache warmer status
+- GET `/api/v1/rag/metrics/summary` - recent metrics summary
+- GET `/api/v1/rag/costs/summary` - LLM API cost summary (when available)
+- GET `/api/v1/rag/batch/jobs` - batch job states
 
 ## Data Models
 
 Key requests and responses (summarized):
 
-- UnifiedRAGRequest — main POST body
+- UnifiedRAGRequest - main POST body
   - Required: `query`
   - Sources: `sources` one or more of `media_db`, `notes`, `characters`, `chats` (aliases: `media` → `media_db`, `character_cards` → `characters`)
   - Search config: `search_mode` (`fts`|`vector`|`hybrid`), `fts_level` (`media`|`chunk`), `hybrid_alpha`, `top_k`, `min_score`, `enable_intent_routing`
@@ -187,15 +187,15 @@ Key requests and responses (summarized):
   - Citations: `enable_citations`, `citation_style`, `include_page_numbers`, `enable_chunk_citations`
   - Generation: `enable_generation`, `strict_extractive`, `generation_model`, `generation_prompt`, `max_generation_tokens`, `enable_abstention`, `abstention_behavior`, `enable_multi_turn_synthesis`, `synthesis_*`
   - Claims & NLI: `enable_claims`, `claim_extractor`, `claim_verifier`, `claims_top_k`, `claims_conf_threshold`, `claims_max`, `claims_concurrency`, `nli_model`
-  - Post‑verification: `enable_post_verification`, `adaptive_*`, `low_confidence_behavior`
+  - Post-verification: `enable_post_verification`, `adaptive_*`, `low_confidence_behavior`
   - Feedback/monitoring/perf: `collect_feedback`, `feedback_user_id`, `apply_feedback_boost`, `enable_monitoring`, `enable_observability`, `trace_id`, `enable_performance_analysis`, `timeout_seconds`
   - Convenience: `highlight_results`, `highlight_query_terms`, `track_cost`, `debug_mode`
   - Resilience: `enable_resilience`, `retry_attempts`, `circuit_breaker`
   - User context: `user_id`, `session_id`, `corpus`, `index_namespace`
 
-- UnifiedRAGResponse — includes `documents`, `query`, `expanded_queries`, `metadata`, `timings`; may also include `citations`, `academic_citations`, `chunk_citations`, `generated_answer`, `feedback_id`, `cache_hit`, `errors`, `security_report`, `total_time`, `claims`, `factuality`.
+- UnifiedRAGResponse - includes `documents`, `query`, `expanded_queries`, `metadata`, `timings`; may also include `citations`, `academic_citations`, `chunk_citations`, `generated_answer`, `feedback_id`, `cache_hit`, `errors`, `security_report`, `total_time`, `claims`, `factuality`.
 
-- UnifiedBatchRequest / UnifiedBatchResponse — for `/batch`.
+- UnifiedBatchRequest / UnifiedBatchResponse - for `/batch`.
 
 ## Streaming Events
 
@@ -301,8 +301,7 @@ async function search(request: SearchRequest): Promise<any> {
 From legacy RAG docs to the unified pipeline
 
 - Endpoints: use `POST /api/v1/rag/search` (primary), `POST /api/v1/rag/search/stream` (NDJSON), `GET /simple`, `GET /advanced`, `POST /batch`.
-- Strategy selection: `strategy` is `standard` (default) or `agentic` (query‑time synthetic chunking and explain traces).
+- Strategy selection: `strategy` is `standard` (default) or `agentic` (query-time synthetic chunking and explain traces).
 - Search types: replace legacy `search_type` with `search_mode` (`fts`|`vector`|`hybrid`) and optional `fts_level` (`media`|`chunk`).
 - Reranking: use `reranking_strategy` among `flashrank`, `cross_encoder`, `hybrid`, `llama_cpp`, `llm_scoring`, `two_tier`, or `none`.
 - Sources: valid values are `media_db`, `notes`, `characters`, `chats` (aliases handled as noted above).
-

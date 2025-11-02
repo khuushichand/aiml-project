@@ -6,7 +6,7 @@ End-to-end templates and CLI snippets. See the full guide at `../Guides/Workflow
 
 - Prompt → Log
 - Branch on condition
-- Fan‑out/Map with aggregate
+- Fan-out/Map with aggregate
 - Policy gate (branch)
 - Prompt + RAG + answer synthesis
 - Completion webhook

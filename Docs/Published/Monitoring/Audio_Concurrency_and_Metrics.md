@@ -44,7 +44,7 @@ docker run --rm -e JOBS_DB_URL="sqlite:///./Databases/jobs.db" tldw-audio-gpu-wo
 
 ## Metrics (What to Watch)
 
-- Active streams (WS) and active jobs (HTTP/jobs) — per owner.
+- Active streams (WS) and active jobs (HTTP/jobs) - per owner.
 - Quota hits (daily minutes, concurrent streams/jobs).
 - Jobs by status and by owner (queued/processing/completed/failed).
 
@@ -69,4 +69,3 @@ Recommended Redis settings:
 - If WS sessions close with code `4003` and `{ error_type: "quota_exceeded" }`, the daily minutes budget was exhausted mid-stream.
 - If jobs appear starved for a specific owner, enable `AUDIO_JOBS_OWNER_STRICT=true` and inspect `/summary-by-owner`.
 - If counters look inconsistent across replicas, verify `REDIS_URL` reachability and that `AUDIO_QUOTA_USE_REDIS=true` is set.
-

@@ -1,4 +1,4 @@
-"""Minimal NeuTTS round‑trip test against a running server.
+"""Minimal NeuTTS round-trip test against a running server.
 
 Usage:
   python Helper_Scripts/test_neutts_roundtrip.py \
@@ -33,7 +33,7 @@ def main():
     ap.add_argument("--text", required=True)
     ap.add_argument("--ref", required=True, help="Path to reference audio (wav/mp3)")
     ap.add_argument("--ref-text", required=True, help="Reference text matching the audio")
-    ap.add_argument("--format", default="wav", choices=["wav","mp3","opus","flac","pcm"]) 
+    ap.add_argument("--format", default="wav", choices=["wav","mp3","opus","flac","pcm"])
     ap.add_argument("--stream", action="store_true")
     ap.add_argument("--out", default="speech.wav")
     args = ap.parse_args()
@@ -79,4 +79,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

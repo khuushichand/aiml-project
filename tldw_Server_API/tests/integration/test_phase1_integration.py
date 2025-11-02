@@ -69,7 +69,7 @@ def sample_conversation_data():
 
 class TestDictionaryAndWorldBookIntegration:
     """Test Chat Dictionary and World Book working together."""
-    
+
     def test_combined_text_processing(self, chat_dict_service, world_book_service, test_db):
         """Test processing text through both dictionary and world book systems."""
         # Setup dictionary
@@ -87,7 +87,7 @@ class TestDictionaryAndWorldBookIntegration:
             key="forest",
             content="enchanted woods"
         )
-        
+
         # Setup world book
         wb_id = world_book_service.create_world_book(
             name="Fantasy World",
@@ -106,12 +106,12 @@ class TestDictionaryAndWorldBookIntegration:
             content="Magic users draw power from ley lines that cross the realm.",
             priority=90
         )
-        
+
         # Process text through dictionary
         text = "The hero left the village and entered the forest to find the wizard"
         dict_result = chat_dict_service.process_text(text, token_budget=1000)
         processed_text = dict_result["processed_text"]
-        
+
         # Process through world book
         # The processed text should still contain "wizard" for matching
         wb_result = world_book_service.process_context(
@@ -121,7 +121,7 @@ class TestDictionaryAndWorldBookIntegration:
         )
         injected_content = wb_result["processed_context"]
         wb_stats = wb_result
-        
+
         # Verify combined processing
         assert "hamlet" in processed_text
         assert "enchanted woods" in processed_text
@@ -129,7 +129,7 @@ class TestDictionaryAndWorldBookIntegration:
         if "wizard" in processed_text.lower():
             assert wb_stats["entries_matched"] > 0
             assert len(injected_content) > 0
-    
+
     def test_character_specific_processing(self, world_book_service, test_db):
         """Test character-specific world book attachments."""
         # Create world books
@@ -141,7 +141,7 @@ class TestDictionaryAndWorldBookIntegration:
             name="Character Background",
             description="Character-specific lore"
         )
-        
+
         # Add entries
         world_book_service.add_entry(
             world_book_id=main_wb,
@@ -155,12 +155,12 @@ class TestDictionaryAndWorldBookIntegration:
             content="Your family sword is legendary.",
             priority=100
         )
-        
+
         # Attach to character
         character_id = 1
         world_book_service.attach_to_character(main_wb, character_id, enabled=True)
         world_book_service.attach_to_character(char_wb, character_id, enabled=True, priority=1)
-        
+
         # Process with character context
         wb_result = world_book_service.process_context(
             text="Tell me about my sword",
@@ -169,7 +169,7 @@ class TestDictionaryAndWorldBookIntegration:
         )
         injected_content = wb_result["processed_context"]
         stats = wb_result
-        
+
         # Should prioritize character-specific entry
         assert "legendary" in injected_content.lower()
         assert stats["entries_matched"] >= 1
@@ -177,7 +177,7 @@ class TestDictionaryAndWorldBookIntegration:
 
 class TestDocumentGenerationIntegration:
     """Test Document Generator with real conversation data."""
-    
+
     def test_generate_multiple_document_types(self, doc_gen_service, test_db, sample_conversation_data):
         """Test generating different document types from same conversation."""
         # Mock conversation retrieval
@@ -190,7 +190,7 @@ class TestDocumentGenerationIntegration:
                         "Study Guide:\n1. Dragons - Ancient magical creatures\n2. Wizards - Magic practitioners\n3. Quests - Hero's journey pattern",
                         "Executive Briefing:\nKey Topics: Fantasy worldbuilding elements\nMain Points: Dragons, magic system, quest structure"
                     ]
-                    
+
                     # Generate different document types
                     timeline = doc_gen_service.generate_document(
                         conversation_id="test_conv_1",
@@ -213,23 +213,23 @@ class TestDocumentGenerationIntegration:
                         model="gpt-3.5-turbo",
                         api_key="test_key"
                     )
-        
+
         # Verify all succeeded (returns strings, not dicts)
         assert isinstance(timeline, str)
         assert isinstance(study_guide, str)
         assert isinstance(briefing, str)
-        
+
         # Verify appropriate content
         assert "Timeline" in timeline
         assert "Study Guide" in study_guide
         assert "Executive Briefing" in briefing
-    
+
     def test_document_generation_with_processed_text(self, doc_gen_service, chat_dict_service, test_db, sample_conversation_data):
         """Test generating documents after dictionary processing."""
         # Setup dictionary
         dict_id = chat_dict_service.create_dictionary("Terms", "Replacements")
         chat_dict_service.add_entry(dict_id, "dragon", "wyrm", False)
-        
+
         # Process conversation messages through dictionary
         processed_messages = []
         for msg in sample_conversation_data["messages"]:
@@ -237,16 +237,16 @@ class TestDocumentGenerationIntegration:
             processed_msg = msg.copy()
             processed_msg["content"] = result["processed_text"]
             processed_messages.append(processed_msg)
-        
+
         # Mock processed conversation
         processed_conv = sample_conversation_data.copy()
         processed_conv["messages"] = processed_messages
-        
+
         with patch.object(test_db, 'get_conversation_by_id', return_value=processed_conv):
             with patch.object(test_db, 'get_messages_for_conversation', return_value=processed_messages):
                 with patch.object(doc_gen_service, '_call_llm') as mock_llm:
                     mock_llm.return_value = "Summary with wyrm instead of dragon"
-                    
+
                     result = doc_gen_service.generate_document(
                         conversation_id="test_conv_1",
                         document_type=DocumentType.SUMMARY,
@@ -254,7 +254,7 @@ class TestDocumentGenerationIntegration:
                         model="gpt-3.5-turbo",
                         api_key="test_key"
                     )
-        
+
         # Result is a string, not a dict
         assert isinstance(result, str)
         # Verify dictionary replacements were included
@@ -267,7 +267,7 @@ class TestDocumentGenerationIntegration:
 
 class TestCompleteWorkflow:
     """Test complete workflow from conversation to processed documents."""
-    
+
     def test_full_pipeline(self, chat_dict_service, world_book_service, doc_gen_service, test_db):
         """Test full pipeline: Dictionary -> World Book -> Document Generation."""
         # Setup dictionary with fantasy replacements
@@ -277,7 +277,7 @@ class TestCompleteWorkflow:
         )
         chat_dict_service.add_entry(dict_id, "car", "carriage", False)
         chat_dict_service.add_entry(dict_id, "phone", "sending stone", False)
-        
+
         # Setup world book with lore
         wb_id = world_book_service.create_world_book(
             name="Campaign Setting",
@@ -289,7 +289,7 @@ class TestCompleteWorkflow:
             content="Magical carriages are powered by bound elementals.",
             priority=100
         )
-        
+
         # Create test conversation
         conversation = {
             "id": "workflow_test",
@@ -298,30 +298,30 @@ class TestCompleteWorkflow:
                 {"sender": "assistant", "content": "You can hire a car at the station", "timestamp": "2024-01-01T10:01:00"}
             ]
         }
-        
+
         # Process through dictionary
         processed_msgs = []
         for msg in conversation["messages"]:
             dict_result = chat_dict_service.process_text(msg["content"], 1000)
-            
+
             # Process through world book
             wb_result = world_book_service.process_context(
                 text=dict_result["processed_text"],
                 character_id=None,
                 token_budget=500
             )
-            
+
             processed_msgs.append({
                 **msg,
                 "content": wb_result["processed_context"]
             })
-        
+
         # Generate document from processed conversation
         with patch.object(test_db, 'get_conversation_by_id', return_value=conversation):
             with patch.object(test_db, 'get_messages_for_conversation', return_value=processed_msgs):
                 with patch.object(doc_gen_service, '_call_llm') as mock_llm:
                     mock_llm.return_value = "Travel in this world uses magical carriages powered by elementals"
-                    
+
                     result = doc_gen_service.generate_document(
                         conversation_id="workflow_test",
                         document_type=DocumentType.SUMMARY,
@@ -329,7 +329,7 @@ class TestCompleteWorkflow:
                         model="gpt-3.5-turbo",
                         api_key="test_key"
                     )
-        
+
         # Result can be a string or error dict
         if isinstance(result, dict):
             # Handle error case
@@ -339,28 +339,28 @@ class TestCompleteWorkflow:
             assert isinstance(result, str)
             assert "carriage" in str(processed_msgs).lower()
             assert "elemental" in result.lower()
-    
+
     def test_multi_user_isolation(self, test_db):
         """Test that different users have isolated data."""
         # Create services for different users
         user1_db = CharactersRAGDB(":memory:", "user1")
         user2_db = CharactersRAGDB(":memory:", "user2")
-        
+
         service1 = ChatDictionaryService(user1_db)
         service2 = ChatDictionaryService(user2_db)
-        
+
         # User 1 creates dictionary
         dict1 = service1.create_dictionary("User1 Dict", "Private dictionary")
         service1.add_entry(dict1, "test", "user1_replacement", 100)  # probability=100
-        
+
         # User 2 creates different dictionary
         dict2 = service2.create_dictionary("User2 Dict", "Different dictionary")
         service2.add_entry(dict2, "test", "user2_replacement", 100)  # probability=100
-        
+
         # Process same text for both users
         result1 = service1.process_text("This is a test", token_budget=100)
         result2 = service2.process_text("This is a test", token_budget=100)
-        
+
         # Verify isolation
         assert "user1_replacement" in result1["processed_text"]
         assert "user2_replacement" in result2["processed_text"]
@@ -369,12 +369,12 @@ class TestCompleteWorkflow:
 
 class TestErrorHandlingIntegration:
     """Test error handling across integrated components."""
-    
+
     def test_cascade_error_handling(self, chat_dict_service, world_book_service):
         """Test error handling when one component fails."""
         # Create invalid regex pattern
         dict_id = chat_dict_service.create_dictionary("Test", "Test")
-        
+
         # This should raise a regex compilation error
         try:
             chat_dict_service.add_entry(
@@ -385,11 +385,11 @@ class TestErrorHandlingIntegration:
             assert False, "Should have raised re.error"
         except re.error:
             pass
-        
+
         # World book should still work independently
         wb_id = world_book_service.create_world_book("Test WB", "Still works")
         assert wb_id is not None
-    
+
     def test_document_generation_with_missing_conversation(self, doc_gen_service, test_db):
         """Test document generation when conversation doesn't exist."""
         with patch.object(test_db, 'get_conversation_by_id', return_value=None):
@@ -400,7 +400,7 @@ class TestErrorHandlingIntegration:
                 model="gpt-3.5-turbo",
                 api_key="test_key"
             )
-        
+
         # Should return an error dict or None
         if isinstance(result, dict):
             assert result.get("success") == False or "error" in str(result).lower()
@@ -410,11 +410,11 @@ class TestErrorHandlingIntegration:
 
 class TestPerformanceIntegration:
     """Test performance with larger datasets."""
-    
+
     def test_bulk_dictionary_processing(self, chat_dict_service):
         """Test processing with many dictionary entries."""
         dict_id = chat_dict_service.create_dictionary("Large Dict", "Many entries")
-        
+
         # Add 100 entries
         entries = []
         for i in range(100):
@@ -423,19 +423,19 @@ class TestPerformanceIntegration:
                 "content": f"replacement{i}",
                 "probability": 100
             })
-        
+
         # Bulk add
         count = chat_dict_service.bulk_add_entries(dict_id, entries)
         assert count == 100
-        
+
         # Process text with many matches
         text = " ".join([f"word{i}" for i in range(50)])
         result = chat_dict_service.process_text(text, token_budget=10000)
-        
+
         # Should handle all replacements efficiently
         assert result["replacements"] > 0
         assert "replacement0" in result["processed_text"]
-    
+
     def test_world_book_with_many_entries(self, world_book_service):
         """Test world book with many entries and keyword matching."""
         wb_id = world_book_service.create_world_book(
@@ -443,7 +443,7 @@ class TestPerformanceIntegration:
             description="Many lore entries",
             token_budget=2000
         )
-        
+
         # Add many entries
         for i in range(50):
             world_book_service.add_entry(
@@ -452,7 +452,7 @@ class TestPerformanceIntegration:
                 content=f"Lore entry {i} with detailed information.",
                 priority=100 - i
             )
-        
+
         # Process text with multiple keywords
         text = "Tell me about keyword5 and term10 and keyword15"
         result = world_book_service.process_context(
@@ -461,7 +461,7 @@ class TestPerformanceIntegration:
             character_id=None,
             token_budget=1000
         )
-        
+
         # Should find and apply relevant entries
         assert result["entries_matched"] >= 3
         assert "Lore entry" in result["processed_context"]

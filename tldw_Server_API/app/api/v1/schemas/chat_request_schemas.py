@@ -45,7 +45,7 @@ def _get_setting(env_var, section, key, default=""):
     env_value = os.getenv(env_var)
     if env_value is not None:
         return env_value
-    
+
     # Check for API key in the config dict
     if section == "api_keys":
         # Look for provider-specific API config like 'openai_api'
@@ -56,14 +56,14 @@ def _get_setting(env_var, section, key, default=""):
                 api_key = api_config.get("api_key")
                 if api_key:
                     return api_key
-    
+
     # Fallback to checking section directly
     config_section = _config.get(section)
     if config_section:
         config_value = config_section.get(key) if isinstance(config_section, dict) else None
         if config_value is not None:
             return config_value
-    
+
     return default
 ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
     "bedrock",
@@ -96,13 +96,13 @@ def get_api_keys() -> Dict[str, Optional[str]]:
     """
     # Reload config to get latest values
     current_config = load_and_log_configs() or {}
-    
+
     def _get_dynamic_setting(env_var, section, key, default=""):
         # First check environment variable
         env_value = os.getenv(env_var)
         if env_value is not None:
             return env_value
-        
+
         # Check for API key in the config dict
         if section == "api_keys":
             # Look for provider-specific API config like 'openai_api'
@@ -113,16 +113,16 @@ def get_api_keys() -> Dict[str, Optional[str]]:
                     api_key = api_config.get("api_key")
                     if api_key:
                         return api_key
-        
+
         # Fallback to checking section directly
         config_section = current_config.get(section)
         if config_section:
             config_value = config_section.get(key) if isinstance(config_section, dict) else None
             if config_value is not None:
                 return config_value
-        
+
         return default
-    
+
     return {
         name: _get_dynamic_setting(
             f"{name.upper().replace('.', '_')}_API_KEY",
@@ -355,23 +355,23 @@ class ChatCompletionRequest(BaseModel):
             }
         }
     )
-    
+
     @field_validator('prompt_template_name')
     @classmethod
     def validate_template_name(cls, v: Optional[str]) -> Optional[str]:
         """Validate prompt template name to prevent path traversal attacks."""
         if v is None:
             return v
-        
+
         import re
         # Only allow alphanumeric, underscore, and hyphen
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
             raise ValueError(f"Invalid template name format. Only alphanumeric characters, underscores, and hyphens are allowed.")
-        
+
         # Additional security check for path traversal patterns
         if '/' in v or '\\' in v or '..' in v:
             raise ValueError(f"Invalid template name. Path traversal patterns are not allowed.")
-        
+
         return v
 
     @model_validator(mode='before')

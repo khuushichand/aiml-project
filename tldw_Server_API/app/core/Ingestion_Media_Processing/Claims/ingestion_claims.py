@@ -97,7 +97,7 @@ def extract_claims_for_chunks(
                         sents.append(t)
                     if len(sents) >= max_per_chunk:
                         break
-        
+
         # LLM-based extractor via unified chat API (LLM_Calls)
         else:
             sents = []

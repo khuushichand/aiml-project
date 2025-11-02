@@ -19,4 +19,3 @@ def test_webui_loads_and_shows_connected(page, server_url):
     # Auto-config indicator present in label
     label_html = page.locator("label[for='apiKeyInput']").inner_html()
     assert "Auto-configured" in label_html
-

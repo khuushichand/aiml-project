@@ -1,18 +1,18 @@
-# Media → Embeddings → RAG → Evals: End‑to‑End Workflow
+# Media → Embeddings → RAG → Evals: End-to-End Workflow
 
-This practical guide walks you through a complete post‑ingestion loop:
+This practical guide walks you through a complete post-ingestion loop:
 
 1) Ingest media into the Media DB
-2) Generate per‑user embeddings collections
+2) Generate per-user embeddings collections
 3) Run RAG searches with useful toggles (hybrid, rerankers, agentic)
-4) Wrap searches in an evaluation that grid‑searches settings to find the best configuration for your dataset
+4) Wrap searches in an evaluation that grid-searches settings to find the best configuration for your dataset
 
-The examples use the single‑user API key header. For multi‑user JWTs, replace `X-API-KEY` with `Authorization: Bearer <token>`.
+The examples use the single-user API key header. For multi-user JWTs, replace `X-API-KEY` with `Authorization: Bearer <token>`.
 
 ## Prerequisites
 
 - Server running: `uvicorn tldw_Server_API.app.main:app --reload`
-- Auth: single‑user API key printed at startup, or JWT login for multi‑user
+- Auth: single-user API key printed at startup, or JWT login for multi-user
 - FFmpeg installed (for A/V), and provider API keys in `.env`/`Config_Files/config.txt` if needed
 
 ## 1) Ingest Media into the Database
@@ -33,13 +33,13 @@ curl -X POST http://127.0.0.1:8000/api/v1/media/add \
 
 Notes and tips:
 - `media_type`: `audio|video|pdf|document|ebook|email|code`
-- Hierarchical chunking: set `hierarchical_chunking=true` to prefer structure‑aware splitting for long docs.
+- Hierarchical chunking: set `hierarchical_chunking=true` to prefer structure-aware splitting for long docs.
 - You may also ingest by URL(s) via `urls=[...]` form fields.
 - The response includes DB identifiers; you’ll need the `media_id` for embeddings.
 
-## 2) Generate Embeddings (Per‑User Collections)
+## 2) Generate Embeddings (Per-User Collections)
 
-Generate vector embeddings for a media record. The API writes to a per‑user collection, e.g., `user_1_media_embeddings`.
+Generate vector embeddings for a media record. The API writes to a per-user collection, e.g., `user_1_media_embeddings`.
 
 Endpoint: `POST /api/v1/media/{media_id}/embeddings`
 
@@ -105,7 +105,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/rag/search \
       }'
 ```
 
-Agentic retrieval (query‑time synthetic chunking) with citations:
+Agentic retrieval (query-time synthetic chunking) with citations:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/rag/search \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -132,7 +132,7 @@ Two ways to evaluate:
 - Simple scoring for a single example: `POST /api/v1/evaluations/rag`
 - Grid/random search over RAG pipeline settings on a dataset: create a `model_graded` evaluation with `sub_type: rag_pipeline`, then run it.
 
-### 4A. One‑off RAG Scoring
+### 4A. One-off RAG Scoring
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/evaluations/rag \
@@ -244,11 +244,11 @@ curl -X POST http://127.0.0.1:8000/api/v1/evaluations/rag/pipeline/cleanup \
 
 ## Practical Presets and Tips
 
-- Speed first: vector‑only (`search_mode=vector`) without reranking; add `flashrank` later.
-- Quality first: hybrid with `hybrid_alpha≈0.6–0.75`, rerank to `rerank_top_k≈10–20`.
+- Speed first: vector-only (`search_mode=vector`) without reranking; add `flashrank` later.
+- Quality first: hybrid with `hybrid_alpha≈0.6-0.75`, rerank to `rerank_top_k≈10-20`.
 - Long PDFs: try `fts_level=chunk`, `include_parent_expansion=true`, `include_sibling_chunks=true`.
 - Tables: set `enable_vlm_late_chunking=true` and consider agentic mode with VLM options.
-- Agentic quick‑win: `strategy=agentic`, `agentic_enable_tools=true`, `agentic_max_tool_calls=4–6`.
+- Agentic quick-win: `strategy=agentic`, `agentic_enable_tools=true`, `agentic_max_tool_calls=4-6`.
 - Reproducibility: store chosen configs with Presets; include `index_namespace` in evals to isolate corpus.
 
 ## Python Snippet (RAG Search)
@@ -281,4 +281,3 @@ See also:
 - RAG API Guide: `Docs/Published/API-related/RAG-API-Guide.md`
 - Evaluations API (Unified): `Docs/Published/API-related/Evaluations_API_Unified_Reference.md`
 - RAG Deployment/Production guides under User Guides
-

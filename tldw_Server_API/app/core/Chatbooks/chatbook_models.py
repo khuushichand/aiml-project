@@ -27,18 +27,18 @@ from typing import Dict, Any
 class ChatbookVersion(Enum):
     """
     Chatbook format versions.
-    
-    The chatbook format uses semantic versioning (MAJOR.MINOR.PATCH) to track 
+
+    The chatbook format uses semantic versioning (MAJOR.MINOR.PATCH) to track
     compatibility and feature sets:
-    
+
     - V1 (1.0.0): Initial stable format with basic content types and metadata
     - V2 (2.0.0): Future version with enhanced features and extended metadata
-    
+
     Note: Both "1.0" and "1.0.0" are accepted for V1 compatibility, but "1.0.0"
     is the canonical format following semantic versioning conventions.
     """
     V1 = "1.0.0"  # Primary V1 format using semantic versioning
-    V1_LEGACY = "1.0"  # Legacy format for backward compatibility  
+    V1_LEGACY = "1.0"  # Legacy format for backward compatibility
     V2 = "2.0.0"  # Future version with enhanced features
 
 
@@ -94,7 +94,7 @@ class ImportStatusData:
     skipped_items: int = 0
     conflicts: List[Dict[str, Any]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -120,7 +120,7 @@ class ContentItem:
     metadata: Dict[str, Any] = field(default_factory=dict)
     file_path: Optional[str] = None  # Relative path within chatbook
     checksum: Optional[str] = None  # For integrity verification
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -135,7 +135,7 @@ class ContentItem:
             "file_path": self.file_path,
             "checksum": self.checksum
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'ContentItem':
         """Create ContentItem from dictionary."""
@@ -160,7 +160,7 @@ class Relationship:
     target_id: str
     relationship_type: str  # e.g., "references", "parent_of", "requires", "uses_character"
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -169,7 +169,7 @@ class Relationship:
             "relationship_type": self.relationship_type,
             "metadata": self.metadata
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'Relationship':
         """Create Relationship from dictionary."""
@@ -193,20 +193,20 @@ class ChatbookManifest:
     export_id: Optional[str] = None  # Unique export identifier
     exported_at: Optional[str] = None  # For compatibility with tests
     user_id: Optional[str] = None  # User who created the export
-    
+
     # Content summary
     content_items: List[ContentItem] = field(default_factory=list)
     relationships: List[Relationship] = field(default_factory=list)
     content_summary: Optional[Dict[str, int]] = field(default_factory=dict)  # For compatibility
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)  # For compatibility
-    
+
     # Configuration
     include_media: bool = False
     include_embeddings: bool = False
     include_generated_content: bool = True
     media_quality: str = "compressed"  # thumbnail, compressed, original
     max_file_size_mb: int = 100  # Maximum chatbook size
-    
+
     # Statistics
     total_conversations: int = 0
     total_notes: int = 0
@@ -219,13 +219,13 @@ class ChatbookManifest:
     total_dictionaries: int = 0
     total_documents: int = 0
     total_size_bytes: int = 0
-    
+
     # Metadata
     tags: List[str] = field(default_factory=list)
     categories: List[str] = field(default_factory=list)
     language: str = "en"
     license: Optional[str] = None
-    
+
     def to_dict(self) -> dict:
         """Convert manifest to dictionary for JSON serialization."""
         return {
@@ -268,7 +268,7 @@ class ChatbookManifest:
                 "user_id": self.user_id
             }
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'ChatbookManifest':
         """Create ChatbookManifest from dictionary."""
@@ -276,7 +276,7 @@ class ChatbookManifest:
         stats = data.get("statistics", {})
         meta = data.get("metadata", {})
         user = data.get("user_info", {})
-        
+
         return cls(
             version=ChatbookVersion(data["version"]),
             name=data["name"],
@@ -324,7 +324,7 @@ class ChatbookContent:
     world_books: Dict[str, Any] = field(default_factory=dict)
     dictionaries: Dict[str, Any] = field(default_factory=dict)
     generated_documents: Dict[str, Any] = field(default_factory=dict)
-    
+
     def get_all_ids(self) -> Set[str]:
         """Get all content IDs."""
         all_ids = set()
@@ -357,7 +357,7 @@ class ExportJob:
     download_url: Optional[str] = None
     expires_at: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = field(default_factory=dict)  # For storing additional data
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
@@ -410,7 +410,7 @@ class ImportJob:
     skipped_items: int = 0
     conflicts: List[Dict[str, Any]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
@@ -455,7 +455,7 @@ class ImportConflict:
     suggested_resolution: ConflictResolution
     user_resolution: Optional[ConflictResolution] = None
     new_title: Optional[str] = None  # For rename resolution
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {

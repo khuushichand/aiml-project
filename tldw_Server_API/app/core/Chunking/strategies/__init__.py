@@ -30,13 +30,13 @@ STRATEGY_REGISTRY: Dict[str, Type[ChunkingStrategy]] = {
 def get_strategy(name: str) -> Type[ChunkingStrategy]:
     """
     Get a chunking strategy by name.
-    
+
     Args:
         name: Strategy name
-        
+
     Returns:
         Strategy class
-        
+
     Raises:
         ValueError: If strategy not found
     """

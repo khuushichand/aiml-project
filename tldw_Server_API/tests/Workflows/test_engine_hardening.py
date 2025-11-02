@@ -129,7 +129,7 @@ def test_completion_webhook_disable_and_enable(monkeypatch, client_with_wf: Test
     }
     wid = client.post("/api/v1/workflows", json=definition).json()["id"]
 
-    # Case 1: Globally disabled – no call should be recorded
+    # Case 1: Globally disabled - no call should be recorded
     monkeypatch.setenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "true")
     # Patch the stored definition to include the webhook in snapshot
     # (alternatively, run ad-hoc, but this path ensures engine snapshot contains config)
@@ -154,7 +154,7 @@ def test_completion_webhook_disable_and_enable(monkeypatch, client_with_wf: Test
     # Because global disable is on, no webhook should be attempted
     before = calls["count"]
 
-    # Case 2: Enabled – attach webhook and expect one call
+    # Case 2: Enabled - attach webhook and expect one call
     monkeypatch.setenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")
     definition_enabled = {
         "name": "webhook-test-enabled",

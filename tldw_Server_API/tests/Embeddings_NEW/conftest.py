@@ -82,7 +82,7 @@ def test_env_vars():
     os.environ["CHROMADB_FORCE_STUB"] = "true"
     os.environ.setdefault("CHROMADB_DEFAULT_TENANT", "default_tenant")
     os.environ["TESTING"] = "true"
-    
+
     # Isolate user DB base dir to a temporary location to avoid migrating/using repo DBs
     tmp_user_base = tempfile.mkdtemp(prefix="emb_user_db_base_")
     os.environ["USER_DB_BASE_DIR"] = tmp_user_base
@@ -471,14 +471,14 @@ def chroma_collection(chroma_client):
 def populated_chroma_collection(chroma_collection, sample_embeddings_batch, text_chunks, document_metadata):
     """Create a ChromaDB collection with test data."""
     ids = [f"doc_{i}" for i in range(len(text_chunks))]
-    
+
     chroma_collection.add(
         embeddings=sample_embeddings_batch,
         documents=text_chunks,
         metadatas=document_metadata,
         ids=ids
     )
-    
+
     return chroma_collection
 
 @pytest.fixture
@@ -652,7 +652,7 @@ def populated_media_database(media_database) -> MediaDatabase:
             author=f"Author {i}",
             ingestion_date=datetime.utcnow().isoformat()
         )
-    
+
     return media_database
 
 # =====================================================================
@@ -749,13 +749,13 @@ def large_text_corpus() -> List[str]:
         "Reinforcement learning trains agents through trial and error.",
         "Transfer learning leverages knowledge from pre-trained models."
     ]
-    
+
     # Replicate and vary to create larger corpus
     corpus = []
     for i in range(100):
         for base in base_texts:
             corpus.append(f"{base} Variation {i}: {base.replace('.', f' in iteration {i}.')}")
-    
+
     return corpus
 
 @pytest.fixture

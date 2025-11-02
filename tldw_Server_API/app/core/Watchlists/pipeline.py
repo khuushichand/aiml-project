@@ -966,7 +966,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     except Exception:
                         pass
                 else:
-                    # Unknown type — skip
+                    # Unknown type - skip
                     continue
             except Exception as e:
                 logger.debug(f"Source processing failed (id={getattr(src, 'id', '?')}): {e}")

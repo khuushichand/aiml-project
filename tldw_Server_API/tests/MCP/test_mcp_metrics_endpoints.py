@@ -47,4 +47,3 @@ def test_mcp_metrics_prometheus_gated_then_public(monkeypatch):
 
 _RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")
 pytestmark = pytest.mark.skipif(not _RUN_MCP, reason="MCP tests disabled by default; set RUN_MCP_TESTS=1 to enable")
-

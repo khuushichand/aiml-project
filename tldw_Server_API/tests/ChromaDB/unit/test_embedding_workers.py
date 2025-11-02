@@ -157,4 +157,3 @@ class TestStorageWorker:
         assert isinstance(parsed, StorageMessage)
         assert parsed.collection_name == "col"
         assert parsed.embeddings[0].chunk_id == "c1"
-

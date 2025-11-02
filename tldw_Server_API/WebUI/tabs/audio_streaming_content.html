@@ -6,20 +6,20 @@
             <span class="endpoint-path">/api/v1/audio/stream/transcribe - Real-time Streaming Transcription</span>
         </h2>
         <p>Stream audio from your microphone for real-time transcription using Nemo STT models.</p>
-        
+
         <!-- Connection Status -->
         <div class="status-bar" id="streamingStatus">
             <div class="status-indicator disconnected" id="streamingStatusIndicator"></div>
             <span id="streamingStatusText">Disconnected</span>
         </div>
-        
+
         <!-- Configuration Section -->
         <div class="config-section">
             <h3>Configuration</h3>
-            
+
             <!-- API Key Section (hidden for admin tool) -->
             <input type="hidden" id="streamingApiKey" />
-            
+
             <div class="columns">
                 <div class="column">
                     <div class="form-group">
@@ -30,7 +30,7 @@
                             <option value="whisper">Whisper (Accurate)</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="variantGroup">
                         <label for="streamingVariant">Variant:</label>
                         <select id="streamingVariant">
@@ -39,7 +39,7 @@
                             <option value="mlx" selected>MLX (Apple Silicon)</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="whisperModelGroup" style="display: none;">
                         <label for="whisperModelSize">Whisper Model:</label>
                         <select id="whisperModelSize">
@@ -51,7 +51,7 @@
                             <option value="distil-large-v3" selected>Distil-Large v3 (756M, best)</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="whisperTaskGroup" style="display: none;">
                         <label for="whisperTask">Task:</label>
                         <select id="whisperTask">
@@ -59,7 +59,7 @@
                             <option value="translate">Translate to English</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group" id="languageGroup" style="display: none;">
                         <label for="streamingLanguage">Language:</label>
                         <select id="streamingLanguage">
@@ -77,7 +77,7 @@
                         </select>
                     </div>
                 </div>
-                
+
                 <div class="column">
                     <div class="form-group">
                         <label for="streamingSampleRate">Sample Rate:</label>
@@ -88,26 +88,26 @@
                             <option value="48000">48000 Hz</option>
                         </select>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="streamingChunkDuration">Chunk Duration (seconds):</label>
                         <input type="number" id="streamingChunkDuration" value="2.0" min="0.5" max="5.0" step="0.5">
                     </div>
-                    
+
                     <div class="form-group">
                         <label>
                             <input type="checkbox" id="streamingEnablePartial" checked>
                             Enable Partial Results
                         </label>
                     </div>
-                    
+
                     <div class="form-group">
                         <label>
                             <input type="checkbox" id="streamingEnableVAD">
                             Enable Voice Activity Detection
                         </label>
                     </div>
-                    
+
                     <div class="form-group" id="vadThresholdGroup" style="display: none;">
                         <label for="streamingVADThreshold">VAD Threshold:</label>
                         <input type="number" id="streamingVADThreshold" value="0.5" min="0.1" max="1.0" step="0.1">
@@ -116,7 +116,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Control Buttons -->
         <div class="button-group">
             <button id="connectStreamingBtn" class="api-button" onclick="toggleStreamingConnection()">
@@ -132,7 +132,7 @@
                 Clear Transcript
             </button>
         </div>
-        
+
         <!-- Audio Visualizer -->
         <div class="visualizer-section">
             <h3>Audio Input</h3>
@@ -144,28 +144,28 @@
                 <span>Responses: <span id="streamingResponses">0</span></span>
             </div>
         </div>
-        
+
         <!-- Transcript Display -->
         <div class="transcript-section">
             <h3>Transcript</h3>
             <div id="streamingTranscript" class="transcript-box">
                 <div class="transcript-placeholder">Connect and start recording to see transcript...</div>
             </div>
-            
+
             <!-- Partial Result Display -->
             <div id="streamingPartial" class="partial-box" style="display: none;">
                 <span class="partial-indicator">Partial:</span>
                 <span id="streamingPartialText"></span>
             </div>
         </div>
-        
+
         <!-- Debug Information -->
         <details class="debug-section">
             <summary>Debug Information</summary>
             <div class="debug-content">
                 <h4>WebSocket Messages</h4>
                 <pre id="streamingDebug">No messages yet...</pre>
-                
+
                 <h4>Connection Details</h4>
                 <pre id="streamingConnectionInfo">Not connected</pre>
             </div>
@@ -335,7 +335,7 @@ button:disabled, .api-button:disabled {
 document.addEventListener('DOMContentLoaded', () => {
     const vadCheckbox = document.getElementById('streamingEnableVAD');
     const vadThresholdGroup = document.getElementById('vadThresholdGroup');
-    
+
     if (vadCheckbox && vadThresholdGroup) {
         vadCheckbox.addEventListener('change', () => {
             vadThresholdGroup.style.display = vadCheckbox.checked ? 'block' : 'none';

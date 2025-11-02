@@ -89,4 +89,3 @@ async def test_server_ws_auth_debug_log_redacts_tokens(monkeypatch):
     assert "Bearer ****" in text
     assert "token=****" in text and "refresh_token=****" in text
     assert "supersecrettoken" not in text and "mytok" not in text and "abc" not in text
-

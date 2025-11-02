@@ -464,7 +464,7 @@ export default function SearchPage() {
     }
     return changes;
   }, [extrasObj, jsonBody]);
-  
+
   // Clipboard hotkeys
   useEffect(() => {
     const key = (e: KeyboardEvent) => {

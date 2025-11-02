@@ -46,14 +46,14 @@ from tldw_Server_API.cli.commands.export import export_group
 # Global CLI context
 class CLIContext:
     """Global CLI context for sharing configuration and state."""
-    
+
     def __init__(self):
         self.config_path: Optional[str] = None
         self.db_path: Optional[str] = None
         self.log_level: str = "INFO"
         self.quiet: bool = False
         self.config: Optional[dict] = None
-    
+
     def load_config(self):
         """Load configuration with error handling."""
         try:
@@ -74,7 +74,7 @@ cli_context = CLIContext()
 
 @click.group(context_settings={'help_option_names': ['-h', '--help']})
 @click.option(
-    '--config', 
+    '--config',
     type=click.Path(exists=True, readable=True, path_type=Path),
     help='Path to configuration file (defaults to evaluations_config.yaml)'
 )
@@ -99,11 +99,11 @@ cli_context = CLIContext()
 def main(ctx, config, db_path, log_level, quiet):
     """
     tldw Evaluations CLI - Comprehensive evaluation management tool.
-    
+
     This CLI provides standalone access to all tldw Evaluations functionality
     including health monitoring, evaluation execution, database management,
     and configuration management.
-    
+
     Examples:
         tldw-evals health                    # Check system health
         tldw-evals eval geval "text" "summary"    # Run G-Eval
@@ -112,7 +112,7 @@ def main(ctx, config, db_path, log_level, quiet):
     """
     # Configure logging
     logger.remove()  # Remove default handler
-    
+
     if not quiet:
         log_format = (
             "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
@@ -124,13 +124,13 @@ def main(ctx, config, db_path, log_level, quiet):
     else:
         # In quiet mode, only show errors
         logger.add(sys.stderr, level="ERROR", format="{message}")
-    
+
     # Store global options in context
     cli_context.config_path = str(config) if config else None
     cli_context.db_path = str(db_path) if db_path else None
     cli_context.log_level = log_level.upper()
     cli_context.quiet = quiet
-    
+
     # Make context available to subcommands
     ctx.ensure_object(dict)
     ctx.obj['cli_context'] = cli_context
@@ -152,11 +152,11 @@ main.add_command(export_group, name='export')
 def interactive(ctx):
     """
     Launch interactive mode for guided operations.
-    
+
     Provides a menu-driven interface for common tasks.
     """
     from tldw_Server_API.cli.utils.interactive import run_interactive_mode
-    
+
     try:
         cli_context.load_config()
         run_interactive_mode(cli_context)
@@ -181,19 +181,19 @@ def interactive(ctx):
 def completion(shell):
     """
     Generate shell completion script.
-    
+
     Examples:
         # Bash
         eval "$(tldw-evals completion --shell bash)"
-        
+
         # Zsh (add to ~/.zshrc)
         eval "$(tldw-evals completion --shell zsh)"
-        
+
         # Fish (add to ~/.config/fish/config.fish)
         tldw-evals completion --shell fish | source
     """
     from click_completion import get_completion_script
-    
+
     try:
         completion_script = get_completion_script(prog_name='tldw-evals', shell=shell)
         click.echo(completion_script)

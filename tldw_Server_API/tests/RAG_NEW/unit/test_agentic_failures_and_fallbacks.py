@@ -101,5 +101,3 @@ async def test_tool_loop_exhaustion_respects_max_calls(monkeypatch):
     trace = md.get("tool_trace") or []
     assert isinstance(trace, list)
     assert len([t for t in trace if t.get("tool") == "expand_window"]) <= 1
-
-

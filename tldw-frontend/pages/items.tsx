@@ -223,7 +223,7 @@ export default function ItemsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
-                    {item.published_at ? new Date(item.published_at).toLocaleString() : '—'}
+                    {item.published_at ? new Date(item.published_at).toLocaleString() : '-'}
                   </td>
                 </tr>
               ))}

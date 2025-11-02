@@ -22,7 +22,7 @@ class ToastManager {
     show(message, type = 'info', duration = 5000, title = null) {
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
-        
+
         const icons = {
             success: '✓',
             error: '✕',
@@ -34,28 +34,28 @@ class ToastManager {
         const iconSpan = document.createElement('span');
         iconSpan.className = 'toast-icon';
         iconSpan.textContent = icons[type] || icons.info;
-        
+
         const contentDiv = document.createElement('div');
         contentDiv.className = 'toast-content';
-        
+
         if (title) {
             const titleDiv = document.createElement('div');
             titleDiv.className = 'toast-title';
             titleDiv.textContent = title;
             contentDiv.appendChild(titleDiv);
         }
-        
+
         const messageDiv = document.createElement('div');
         messageDiv.className = 'toast-message';
         messageDiv.textContent = message;  // Safe text content
         contentDiv.appendChild(messageDiv);
-        
+
         const closeBtn = document.createElement('button');
         closeBtn.className = 'toast-close';
         closeBtn.setAttribute('aria-label', 'Close');
         closeBtn.textContent = '×';
         closeBtn.onclick = () => this.remove(toast);
-        
+
         toast.appendChild(iconSpan);
         toast.appendChild(contentDiv);
         toast.appendChild(closeBtn);
@@ -111,14 +111,14 @@ class LoadingIndicator {
         // Create loading elements safely
         const contentDiv = document.createElement('div');
         contentDiv.className = 'loading-content';
-        
+
         const spinnerDiv = document.createElement('div');
         spinnerDiv.className = 'loading-spinner';
-        
+
         const messageDiv = document.createElement('div');
         messageDiv.className = 'loading-message';
         messageDiv.textContent = message;  // Safe text content
-        
+
         contentDiv.appendChild(spinnerDiv);
         contentDiv.appendChild(messageDiv);
         overlay.appendChild(contentDiv);
@@ -247,7 +247,7 @@ class Modal {
         }
         document.body.appendChild(this.modal);
         document.body.style.overflow = 'hidden';
-        
+
         // Focus management
         const focusable = this.modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
         if (focusable.length) {
@@ -263,7 +263,7 @@ class Modal {
             this.modal.parentNode.removeChild(this.modal);
         }
         document.body.style.overflow = '';
-        
+
         if (this.options.keyboard) {
             document.removeEventListener('keydown', this.handleKeydown.bind(this));
         }
@@ -299,7 +299,7 @@ class JSONViewer {
         this.container.innerHTML = '';
         const wrapper = document.createElement('div');
         wrapper.className = `json-viewer json-viewer-${this.options.theme}`;
-        
+
         if (this.options.enableCopy) {
             const toolbar = document.createElement('div');
             toolbar.className = 'json-viewer-toolbar';
@@ -358,7 +358,7 @@ class JSONViewer {
         let html = `<span class="json-toggle ${expanded ? 'expanded' : 'collapsed'}" data-type="array">▼</span>`;
         html += '<span class="json-bracket">[</span>';
         html += `<div class="json-content" ${expanded ? '' : 'style="display:none"'}>`;
-        
+
         arr.forEach((item, index) => {
             html += '<div class="json-item">';
             html += this.renderValue(item, depth + 1);
@@ -367,7 +367,7 @@ class JSONViewer {
             }
             html += '</div>';
         });
-        
+
         html += '</div>';
         html += '<span class="json-bracket">]</span>';
         return html;
@@ -383,7 +383,7 @@ class JSONViewer {
         let html = `<span class="json-toggle ${expanded ? 'expanded' : 'collapsed'}" data-type="object">▼</span>`;
         html += '<span class="json-bracket">{</span>';
         html += `<div class="json-content" ${expanded ? '' : 'style="display:none"'}>`;
-        
+
         keys.forEach((key, index) => {
             html += '<div class="json-item">';
             html += `<span class="json-key">"${Utils.escapeHtml(key)}"</span>`;
@@ -437,7 +437,7 @@ class JSONViewer {
                 html += `</div>`;
             }
         } catch (e) { /* noop */ }
-        
+
         html += '</div>';
         html += '<span class="json-bracket">}</span>';
         return html;

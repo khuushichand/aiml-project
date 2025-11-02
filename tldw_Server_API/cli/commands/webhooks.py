@@ -27,12 +27,12 @@ def webhook_group():
 def register_webhook(ctx, url, events, user):
     """Register a webhook for evaluation events."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
-        
+
         # Parse events
         if events:
             event_list = [WebhookEvent(e.strip()) for e in events.split(',')]
@@ -43,13 +43,13 @@ def register_webhook(ctx, url, events, user):
                 WebhookEvent.EVALUATION_FAILED,
                 WebhookEvent.BATCH_COMPLETED
             ]
-        
+
         result = webhook_manager.register_webhook(user, url, event_list)
-        
+
         print_success(f"Webhook registered successfully")
         print_info(f"Webhook ID: {result.get('webhook_id')}")
         print_info(f"Events: {', '.join([e.value for e in event_list])}")
-        
+
     except Exception as e:
         logger.exception("Webhook registration failed")
         print_error(f"Webhook registration failed: {e}")
@@ -63,14 +63,14 @@ def register_webhook(ctx, url, events, user):
 def list_webhooks(ctx, user, output_format):
     """List registered webhooks."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-        
+
         webhooks = webhook_manager.get_webhook_status(user or 'cli_user')
-        
+
         if output_format == 'json':
             print_json(webhooks, "Registered Webhooks")
         else:
@@ -89,7 +89,7 @@ def list_webhooks(ctx, user, output_format):
                 print_table(table_data, "Registered Webhooks")
             else:
                 print_info("No webhooks registered")
-        
+
     except Exception as e:
         logger.exception("Webhook listing failed")
         print_error(f"Webhook listing failed: {e}")
@@ -103,14 +103,14 @@ def list_webhooks(ctx, user, output_format):
 def test_webhook(ctx, url, user):
     """Test webhook delivery."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-        
+
         result = webhook_manager.test_webhook(user, url)
-        
+
         if result['success']:
             print_success(f"Webhook test successful")
             print_info(f"Status Code: {result['status_code']}")
@@ -118,7 +118,7 @@ def test_webhook(ctx, url, user):
         else:
             print_error(f"Webhook test failed: {result.get('error', 'Unknown error')}")
             sys.exit(1)
-        
+
     except Exception as e:
         logger.exception("Webhook test failed")
         print_error(f"Webhook test failed: {e}")
@@ -132,20 +132,20 @@ def test_webhook(ctx, url, user):
 def unregister_webhook(ctx, url, user):
     """Unregister a webhook."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-        
+
         result = webhook_manager.unregister_webhook(user, url)
-        
+
         if result['success']:
             print_success("Webhook unregistered successfully")
         else:
             print_error(f"Webhook unregistration failed: {result.get('error')}")
             sys.exit(1)
-        
+
     except Exception as e:
         logger.exception("Webhook unregistration failed")
         print_error(f"Webhook unregistration failed: {e}")
@@ -160,14 +160,14 @@ def unregister_webhook(ctx, url, user):
 def webhook_status(ctx, url, user, output_format):
     """Show webhook status and statistics."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
-        
+
         webhooks = webhook_manager.get_webhook_status(user, url)
-        
+
         if output_format == 'json':
             print_json(webhooks, "Webhook Status")
         else:
@@ -177,7 +177,7 @@ def webhook_status(ctx, url, user, output_format):
                     print_info(f"URL: {webhook['url']}")
                     print_info(f"Active: {webhook['active']}")
                     print_info(f"Events: {', '.join(webhook['events'])}")
-                    
+
                     stats = webhook['statistics']
                     stats_data = [
                         {'Metric': 'Total Deliveries', 'Value': stats['total_deliveries']},
@@ -188,7 +188,7 @@ def webhook_status(ctx, url, user, output_format):
                     print_table(stats_data, "Delivery Statistics")
             else:
                 print_info("No webhook found")
-        
+
     except Exception as e:
         logger.exception("Webhook status check failed")
         print_error(f"Webhook status check failed: {e}")

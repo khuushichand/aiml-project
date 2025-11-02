@@ -32,7 +32,7 @@ from tldw_Server_API.app.core.RAG.rag_service.semantic_cache import SemanticCach
 @pytest.mark.integration
 class TestRAGPipelineIntegration:
     """Integration tests for RAG pipeline with real components."""
-    
+
     @pytest.mark.asyncio
     async def test_minimal_pipeline_e2e(self, populated_media_db):
         """Test minimal unified pipeline end-to-end with real database."""
@@ -44,7 +44,7 @@ class TestRAGPipelineIntegration:
             search_mode="fts",
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         assert result.query.lower().find("rag") != -1
         assert isinstance(result.documents, list)
@@ -52,7 +52,7 @@ class TestRAGPipelineIntegration:
         for doc in result.documents:
             content = doc.get("content") if isinstance(doc, dict) else getattr(doc, "content", None)
             assert content is not None
-    
+
     @pytest.mark.asyncio
     async def test_standard_pipeline_with_cache(self, populated_media_db, temp_db_path):
         """Test unified pipeline with caching enabled (sanity)."""
@@ -67,7 +67,7 @@ class TestRAGPipelineIntegration:
         )
         assert isinstance(result1, UnifiedRAGResponse)
         assert len(result1.documents) > 0
-        
+
         result2 = await unified_rag_pipeline(
             query="vector",
             expand_query=True,
@@ -78,7 +78,7 @@ class TestRAGPipelineIntegration:
             media_db_path=str(populated_media_db.db_path)
         )
         assert isinstance(result2, UnifiedRAGResponse)
-    
+
     @pytest.mark.asyncio
     async def test_quality_pipeline_with_all_features(self, populated_media_db):
         """Test unified pipeline with a feature mix enabled."""
@@ -94,10 +94,10 @@ class TestRAGPipelineIntegration:
             enable_performance_analysis=True,
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         assert len(result.documents) <= 10
-    
+
     @pytest.mark.asyncio
     async def test_pipeline_with_empty_database(self):
         """Test pipeline behavior with empty database."""
@@ -106,7 +106,7 @@ class TestRAGPipelineIntegration:
             db_path = Path(temp_dir) / "empty.db"
             empty_db = MediaDatabase(str(db_path), "test_client")
             empty_db.initialize_db()
-            
+
             result = await unified_rag_pipeline(
                 query="test query",
                 top_k=5,
@@ -114,11 +114,11 @@ class TestRAGPipelineIntegration:
                 search_mode="fts",
                 media_db_path=str(empty_db.db_path)
             )
-            
+
             assert isinstance(result, UnifiedRAGResponse)
             assert len(result.documents) == 0
             # Should handle gracefully without errors
-    
+
     @pytest.mark.asyncio
     async def test_pipeline_with_large_dataset(self, media_database):
         """Test pipeline performance with larger dataset."""
@@ -131,7 +131,7 @@ class TestRAGPipelineIntegration:
                 author=f"Author {i % 5}",
                 ingestion_date=datetime.now().isoformat()
             )
-        
+
         start_time = time.time()
         result = await unified_rag_pipeline(
             query="AI and ML",
@@ -141,7 +141,7 @@ class TestRAGPipelineIntegration:
             media_db_path=str(media_database.db_path)
         )
         elapsed = time.time() - start_time
-        
+
         assert len(result.documents) >= 0
         assert len(result.documents) <= 20
         # Performance check - prefer fast execution but only warn on minor regressions
@@ -152,7 +152,7 @@ class TestRAGPipelineIntegration:
                 stacklevel=2,
             )
         assert elapsed < 30.0  # Hard guardrail to catch severe regressions without flakiness
-    
+
     @pytest.mark.asyncio
     async def test_concurrent_pipeline_requests(self, populated_media_db):
         """Test handling concurrent pipeline requests."""
@@ -163,7 +163,7 @@ class TestRAGPipelineIntegration:
             "AI systems",
             "Information retrieval"
         ]
-        
+
         # Run queries concurrently with unified pipeline
         tasks = [
             unified_rag_pipeline(
@@ -175,9 +175,9 @@ class TestRAGPipelineIntegration:
             )
             for q in queries
         ]
-        
+
         results = await asyncio.gather(*tasks)
-        
+
         assert len(results) == len(queries)
         for result in results:
             assert isinstance(result, UnifiedRAGResponse)
@@ -187,7 +187,7 @@ class TestRAGPipelineIntegration:
 @pytest.mark.integration
 class TestUnifiedPipelineIntegration:
     """Integration tests for unified pipeline."""
-    
+
     @pytest.mark.asyncio
     async def test_unified_pipeline_basic(self, populated_media_db):
         """Test basic unified pipeline with real database."""
@@ -196,12 +196,12 @@ class TestUnifiedPipelineIntegration:
             top_k=5,
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         assert result.query is not None
         assert isinstance(result.documents, list)
         assert len(result.documents) > 0
-        
+
         # Should find the vector database document
         def _content(d):
             return d.get("content") if isinstance(d, dict) else getattr(d, "content", "")
@@ -210,7 +210,7 @@ class TestUnifiedPipelineIntegration:
             for doc in result.documents
         )
         assert found_vector_doc
-    
+
     @pytest.mark.asyncio
     async def test_unified_pipeline_with_expansion(self, populated_media_db):
         """Test unified pipeline with query expansion."""
@@ -221,7 +221,7 @@ class TestUnifiedPipelineIntegration:
             top_k=5,
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         # Expanded query should find machine learning documents
         def _content(d):
@@ -231,7 +231,7 @@ class TestUnifiedPipelineIntegration:
             for doc in result.documents
         )
         assert found_ml_doc
-    
+
     @pytest.mark.asyncio
     async def test_unified_pipeline_with_filters(self, populated_media_db):
         """Test unified pipeline with filtering."""
@@ -243,15 +243,15 @@ class TestUnifiedPipelineIntegration:
             filter_media_types=["article", "document"],
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
-        
+
         # All documents should match filter criteria where present
         for doc in result.documents:
             md = doc.get("metadata") or {}
             if "media_type" in md:
                 assert md["media_type"] in ["article", "document", "video"]
-    
+
     @pytest.mark.asyncio
     @pytest.mark.slow
     async def test_unified_pipeline_performance(self, populated_media_db):
@@ -263,7 +263,7 @@ class TestUnifiedPipelineIntegration:
             top_k=10,
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result, UnifiedRAGResponse)
         # Timings available in result.timings
         if result.timings:
@@ -273,12 +273,12 @@ class TestUnifiedPipelineIntegration:
 @pytest.mark.integration
 class TestMultiDatabaseIntegration:
     """Integration tests for multi-database retrieval."""
-    
+
     @pytest.mark.asyncio
     async def test_multi_source_retrieval(self, populated_media_db):
         """Test retrieval from multiple data sources."""
         retriever = MultiDatabaseRetriever({"media_db": str(populated_media_db.db_path)}, user_id="test")
-        
+
         config = RetrievalConfig(
             max_results=10,
             min_score=0.0,
@@ -286,18 +286,18 @@ class TestMultiDatabaseIntegration:
             use_vector=False,
             include_metadata=True
         )
-        
+
         results = await retriever.retrieve("RAG", sources=[DataSource.MEDIA_DB], config=config)
-        
+
         assert len(results) > 0
         assert all(isinstance(r, Document) for r in results)
         assert all(r.source == DataSource.MEDIA_DB for r in results)
-    
+
     @pytest.mark.asyncio
     async def test_retrieval_with_scoring(self, populated_media_db):
         """Test retrieval with score-based filtering."""
         retriever = MultiDatabaseRetriever({"media_db": str(populated_media_db.db_path)}, user_id="test")
-        
+
         config = RetrievalConfig(
             max_results=10,
             min_score=0.0,  # Accept all scores for testing
@@ -305,14 +305,14 @@ class TestMultiDatabaseIntegration:
             use_vector=False,
             include_metadata=True
         )
-        
+
         results = await retriever.retrieve("RAG", sources=[DataSource.MEDIA_DB], config=config)
-        
+
         assert len(results) > 0
         # Results should be sorted by score
         scores = [r.score for r in results]
         assert scores == sorted(scores, reverse=True)
-    
+
     @pytest.mark.asyncio
     async def test_retrieval_pagination(self, media_database):
         """Test paginated retrieval for large result sets."""
@@ -325,21 +325,21 @@ class TestMultiDatabaseIntegration:
                 author="AI Author",
                 ingestion_date=datetime.now().isoformat()
             )
-        
+
         retriever = MultiDatabaseRetriever({"media_db": str(media_database.db_path)}, user_id="test")
-        
+
         # First page
         config1 = RetrievalConfig(max_results=10, use_fts=True, use_vector=False, include_metadata=True)
         results1 = await retriever.retrieve("AI", sources=[DataSource.MEDIA_DB], config=config1)
-        
+
         # Second page
         config2 = RetrievalConfig(max_results=10, use_fts=True, use_vector=False, include_metadata=True)
         results2 = await retriever.retrieve("AI", sources=[DataSource.MEDIA_DB], config=config2)
-        
+
         # Should have some results
         ids1 = {r.id for r in results1}
         ids2 = {r.id for r in results2}
-        
+
         # Some overlap is okay, but not complete overlap
         assert len(ids1) > 0 and len(ids2) > 0
 
@@ -347,45 +347,45 @@ class TestMultiDatabaseIntegration:
 @pytest.mark.integration
 class TestCacheIntegration:
     """Integration tests for semantic caching."""
-    
+
     @pytest.mark.asyncio
     async def test_semantic_cache_operations(self, temp_db_path, sample_documents):
         """Test semantic cache with real implementation."""
         cache_dir = temp_db_path.parent / "semantic_cache"
         cache_dir.mkdir(exist_ok=True)
-        
+
         cache = SemanticCache(
             similarity_threshold=0.85,
             ttl=3600,
             persist_path=str(cache_dir / "cache.pkl")
         )
-        
+
         # Store documents
         await cache.set("test query", sample_documents, ttl=3600)
-        
+
         # Exact match retrieval
         cached = await cache.get("test query")
         assert cached is not None
         assert len(cached) == len(sample_documents)
-        
+
         # Similar query retrieval
         similar_cached = await cache.get("test question")
         # Depends on similarity threshold and implementation
-        
+
         # Cache expiry
         await cache.set("expiring query", sample_documents, ttl=1)
         await asyncio.sleep(1.1)
         expired = await cache.get("expiring query")
         # Should be None or empty after TTL
-        
+
         # No explicit close in this implementation
-    
+
     @pytest.mark.asyncio
     async def test_cache_with_pipeline(self, populated_media_db, temp_db_path):
         """Test cache integration with pipeline."""
         cache_dir = temp_db_path.parent / "pipeline_cache"
         cache_dir.mkdir(exist_ok=True)
-        
+
         # Run unified pipeline twice to exercise caching internally
         query1 = "What is machine learning?"
         result1 = await unified_rag_pipeline(
@@ -395,7 +395,7 @@ class TestCacheIntegration:
             cache_ttl=3600,
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         result2 = await unified_rag_pipeline(
             query=query1,
             top_k=5,
@@ -403,7 +403,7 @@ class TestCacheIntegration:
             cache_ttl=3600,
             media_db_path=str(populated_media_db.db_path)
         )
-        
+
         assert isinstance(result1, UnifiedRAGResponse)
         assert isinstance(result2, UnifiedRAGResponse)
 
@@ -411,12 +411,12 @@ class TestCacheIntegration:
 @pytest.mark.integration
 class TestErrorRecoveryIntegration:
     """Integration tests for error recovery mechanisms."""
-    
+
     @pytest.mark.asyncio
     async def test_pipeline_database_error_recovery(self, populated_media_db):
         """Unified pipeline should surface errors gracefully when retrieval fails."""
         from unittest.mock import patch
-        
+
         class FailingRetriever:
             def __init__(self, *args, **kwargs):
                 pass
@@ -437,7 +437,7 @@ class TestErrorRecoveryIntegration:
             from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
             assert isinstance(result, UnifiedRAGResponse)
             assert isinstance(result.errors, list) and any('Simulated DB failure' in e for e in result.errors)
-    
+
     @pytest.mark.asyncio
     async def test_partial_retrieval_failure(self, populated_media_db):
         """If one source fails, results from other sources are still returned."""
@@ -470,7 +470,7 @@ class TestErrorRecoveryIntegration:
 
             assert len(results) > 0
             assert all(r.source == DataSource.MEDIA_DB for r in results)
-    
+
     @pytest.mark.asyncio
     async def test_retry_mechanism(self, populated_media_db):
         """Simulate transient failures and ensure subsequent call succeeds."""
@@ -532,13 +532,13 @@ class TestErrorRecoveryIntegration:
 @pytest.mark.slow
 class TestPerformanceIntegration:
     """Integration tests for performance characteristics."""
-    
+
     @pytest.mark.asyncio
     async def test_large_document_processing(self, media_database):
         """Test processing very large documents."""
         # Add a very large document
         large_content = " ".join([f"Sentence {i} about various AI and ML topics." for i in range(1000)])
-        
+
         media_database.add_media_with_keywords(
             title="Large Document",
             content=large_content,
@@ -546,7 +546,7 @@ class TestPerformanceIntegration:
             author="Test",
             ingestion_date=datetime.now().isoformat()
         )
-        
+
         start_time = time.time()
         result = await unified_rag_pipeline(
             query="AI",
@@ -555,20 +555,20 @@ class TestPerformanceIntegration:
             media_db_path=str(media_database.db_path)
         )
         elapsed = time.time() - start_time
-        
+
         assert len(result.documents) > 0
         # Should complete in reasonable time even with large document
         assert elapsed < 10.0
-    
+
     @pytest.mark.asyncio
     async def test_concurrent_load(self, populated_media_db):
         """Test system under concurrent load."""
         # Simulate concurrent users
         num_concurrent = 20
         queries = [f"Query {i % 5}" for i in range(num_concurrent)]
-        
+
         start_time = time.time()
-        
+
         tasks = [
             unified_rag_pipeline(
                 query=query,
@@ -578,30 +578,30 @@ class TestPerformanceIntegration:
             )
             for query in queries
         ]
-        
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         elapsed = time.time() - start_time
-        
+
         # Check results
         successful = [r for r in results if not isinstance(r, Exception)]
         failed = [r for r in results if isinstance(r, Exception)]
-        
+
         assert len(successful) > num_concurrent * 0.8  # At least 80% success
         assert elapsed < 30.0  # Should complete within 30 seconds
-        
+
         if failed:
             print(f"Failed requests: {len(failed)}/{num_concurrent}")
-    
+
     @pytest.mark.asyncio
     async def test_memory_usage(self, populated_media_db):
         """Test memory usage doesn't grow unbounded."""
         import psutil
         import gc
-        
+
         process = psutil.Process()
         initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-        
+
         # Run many queries
         for i in range(50):
             _ = await unified_rag_pipeline(
@@ -612,10 +612,10 @@ class TestPerformanceIntegration:
             )
             if i % 10 == 0:
                 gc.collect()
-        
+
         final_memory = process.memory_info().rss / 1024 / 1024  # MB
         memory_growth = final_memory - initial_memory
-        
+
         # Memory growth should be reasonable
         assert memory_growth < 100  # Less than 100MB growth
 

@@ -51,4 +51,3 @@ def test_pgvector_delete_by_filter_removes_matching_rows(pgvector_dsn, pgvector_
         assert remaining_ids == {"c"}
 
     asyncio.run(_run())
-

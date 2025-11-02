@@ -94,7 +94,7 @@ tldw_Server_API/app/core/Security/
 - Keep the security middleware enabled in production. Disable only for specific
   debug scenarios.
 - When deploying behind a reverse proxy/ingress controller, ensure HSTS is
-  emitted exactly once—either by the proxy or by the application. The middleware
+  emitted exactly once-either by the proxy or by the application. The middleware
   respects `X-Forwarded-Proto` to avoid false positives.
 - Review egress allowlists whenever adding outbound integrations. The default
   behaviour is intentionally conservative.

@@ -1157,13 +1157,13 @@ def process_single_video(
 
     try:
         logger.info(f"Processing single video input: {video_input}") # Log original
-        
+
         # Check if it's a URL - handle cases without protocol
         parsed_url = urlparse(video_input)
         is_remote = parsed_url.scheme in ('http', 'https')
-        
+
         # If no scheme but looks like a URL (starts with www. or contains common video domains)
-        if not is_remote and (video_input.startswith('www.') or 
+        if not is_remote and (video_input.startswith('www.') or
                               any(domain in video_input.lower() for domain in ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com'])):
             video_input = f"https://{video_input}"
             parsed_url = urlparse(video_input)
@@ -1172,7 +1172,7 @@ def process_single_video(
             # Update the processing result with the corrected URL
             processing_result["input_ref"] = video_input
             processing_result["processing_source"] = video_input
-        
+
         processing_temp_dir = Path(temp_dir)
 
         # 1. Get Metadata & Determine LOCAL Processing Path

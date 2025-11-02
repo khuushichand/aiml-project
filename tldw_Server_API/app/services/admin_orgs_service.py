@@ -35,4 +35,3 @@ async def list_teams_by_org(db, org_id: int, limit: int, offset: int) -> List[Di
     except Exception as e:
         logger.error(f"admin_orgs_service.list_teams_by_org failed: {e}")
         raise
-

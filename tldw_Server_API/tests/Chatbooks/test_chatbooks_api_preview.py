@@ -52,4 +52,3 @@ def test_preview_manifest_version_ok(client):
     if resp.status_code == 200:
         body = resp.json()
         assert body.get("manifest", {}).get("version") == "1.0.0"
-

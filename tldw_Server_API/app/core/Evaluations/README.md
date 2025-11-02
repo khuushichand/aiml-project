@@ -160,7 +160,7 @@ Evaluations/
 │   ├── evals_cli.py       # Main CLI entry point
 │   └── benchmark_cli.py   # Benchmark commands
 ├── configs/               # Benchmark configurations
-│   ├── mmlu_pro.yaml     
+│   ├── mmlu_pro.yaml
 │   ├── simple_bench.yaml
 │   ├── wordbench.yaml
 │   └── simple_qa_template.yaml

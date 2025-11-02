@@ -81,4 +81,3 @@ def test_upsert_idempotent_under_permutation(ids, dim):
     assert coll_a.vectors == coll_b.vectors
     # Final state must map each id to last-write embedding regardless of input order
     assert set(coll_a.vectors.keys()) == set(map(str, ids))
-

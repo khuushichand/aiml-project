@@ -32,4 +32,3 @@ def test_validate_archive_per_member_cap(tmp_path):
     assert not res, f"Expected failure due to per-member cap; issues: {res.issues}"
     # Ensure the issue indicates member size exceeded
     assert any("per-file size cap" in i.lower() for i in res.issues), res.issues
-

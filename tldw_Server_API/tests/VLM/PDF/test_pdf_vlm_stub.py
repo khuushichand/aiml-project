@@ -68,4 +68,3 @@ async def test_pdf_process_includes_vlm_chunks(monkeypatch):
     extra = res.get("extra_chunks")
     assert isinstance(extra, list)
     assert any((c.get("chunk_type") in ("table", "vlm")) for c in extra)
-

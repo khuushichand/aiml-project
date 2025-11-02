@@ -27,7 +27,7 @@ from tldw_Server_API.app.core.Evaluations.audit_adapter import (
 #
 # Local Imports
 from tldw_Server_API.app.core.Evaluations.db_adapter import (
-    DatabaseAdapter, DatabaseConfig, DatabaseType, 
+    DatabaseAdapter, DatabaseConfig, DatabaseType,
     DatabaseAdapterFactory, get_database_adapter
 )
 # Import security enhancements
@@ -65,7 +65,7 @@ class WebhookPayload:
     evaluation_id: str
     timestamp: str
     data: Dict[str, Any]
-    
+
     def to_json(self) -> str:
         """Convert to JSON string."""
         return json.dumps(asdict(self), default=str)
@@ -73,11 +73,11 @@ class WebhookPayload:
 
 class WebhookManager:
     """Manages webhook registrations and deliveries."""
-    
+
     def __init__(self, db_path: Optional[str] = None, adapter: Optional[DatabaseAdapter] = None):
         """
         Initialize webhook manager with enhanced security.
-        
+
         Args:
             db_path: Path to database (for backward compatibility)
             adapter: Database adapter to use (if None, creates default)
@@ -94,23 +94,23 @@ class WebhookManager:
         else:
             # Use global adapter
             self.db_adapter = get_database_adapter()
-        
+
         self._init_database()
-        
+
         # Load delivery configuration from external config
         delivery_config = get_config("webhooks.delivery", {})
         self.max_retries = delivery_config.get("max_retries", 3)
         self.retry_delays = delivery_config.get("retry_delays", [1, 5, 15])
         self.timeout = delivery_config.get("timeout_seconds", 30)
         self.batch_size = delivery_config.get("batch_size", 10)
-        
+
         # Security components
         # Pass adapter to permission manager if it supports it
         self.permission_manager = WebhookPermissionManager(self.db_adapter)
-        
+
         # Metrics
         self.metrics = get_metrics()
-        
+
         # Background task for retries
         self._retry_task = None
 
@@ -137,7 +137,7 @@ class WebhookManager:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, url)
             );
-            
+
             CREATE TABLE IF NOT EXISTS webhook_deliveries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 webhook_id INTEGER NOT NULL,
@@ -157,7 +157,7 @@ class WebhookManager:
                 FOREIGN KEY (webhook_id) REFERENCES webhook_registrations(id)
             );
         """
-        
+
         self.db_adapter.init_schema(schema_sql)
 
     def set_adapter(self, adapter: DatabaseAdapter) -> None:
@@ -180,7 +180,7 @@ class WebhookManager:
 
         # Rebuild helper components that depend on the adapter instance
         self.permission_manager = WebhookPermissionManager(self.db_adapter)
-    
+
     async def register_webhook(
         self,
         user_id: str,
@@ -193,22 +193,22 @@ class WebhookManager:
     ) -> Dict[str, Any]:
         """
         Register a webhook for a user with enhanced security validation.
-        
+
         Args:
             user_id: User identifier
             url: Webhook URL
             events: List of events to subscribe to
             secret: Optional secret for HMAC signature (generated if not provided)
             skip_validation: Skip URL validation (for testing)
-            
+
         Returns:
             Webhook registration details with validation results
-            
+
         Raises:
             ValueError: If validation fails or permissions are insufficient
         """
         start_time = asyncio.get_event_loop().time()
-        
+
         try:
             # Check permissions first
             has_permission, permission_error = await self.permission_manager.check_webhook_permissions(
@@ -216,11 +216,11 @@ class WebhookManager:
                 url=url,
                 action="register"
             )
-            
+
             if not has_permission:
                 log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error=permission_error)
                 raise ValueError(f"Registration denied: {permission_error}")
-            
+
             # URL security validation
             validation_result = None
             if not skip_validation:
@@ -229,19 +229,19 @@ class WebhookManager:
                     user_id=user_id,
                     check_connectivity=True
                 )
-                
+
                 if not validation_result.valid:
                     error_messages = [error.message for error in validation_result.errors]
                     log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error="; ".join(error_messages))
                     raise ValueError(f"URL validation failed: {'; '.join(error_messages)}")
-            
+
             # Generate secret if not provided
             if not secret:
                 secret = secrets.token_hex(32)
-            
+
             # Convert events to JSON
             events_json = json.dumps([e.value for e in events])
-            
+
             # Register webhook in database
             effective_retries = self.max_retries if retry_count is None else max(0, int(retry_count))
             effective_timeout = self.timeout if timeout_seconds is None else max(1, int(timeout_seconds))
@@ -253,30 +253,30 @@ class WebhookManager:
                     WHERE user_id = ? AND url = ?
                 """, (user_id, url))
                 webhook_id = None
-                
+
                 if existing:
                     webhook_id = existing['id']
                     existing_secret = existing['secret']
                     existing_events = existing['events']
-                    
+
                     # Update existing webhook
                     self.db_adapter.update("""
                         UPDATE webhook_registrations
                         SET events = ?, active = 1, retry_count = ?, timeout_seconds = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
                     """, (events_json, effective_retries, effective_timeout, webhook_id))
-                    
+
                     # Use existing secret if not provided
                     if not secret:
                         secret = existing_secret
-                    
+
                     action = "Updated"
                     logger.info(f"Updated webhook {webhook_id} for user {user_id}")
                 else:
-                    # Create new webhook  
+                    # Create new webhook
                     webhook_id = self.db_adapter.insert("""
                         INSERT INTO webhook_registrations (
-                            user_id, url, secret, events, 
+                            user_id, url, secret, events,
                             retry_count, timeout_seconds
                         ) VALUES (?, ?, ?, ?, ?, ?)
                     """, (
@@ -285,9 +285,9 @@ class WebhookManager:
                     ))
                     action = "Registered"
                     logger.info(f"Registered webhook {webhook_id} for user {user_id}")
-                
+
                 # Transaction auto-commits
-            
+
             # Record metrics
             processing_time = asyncio.get_event_loop().time() - start_time
             self.metrics.record_webhook_delivery(
@@ -295,10 +295,10 @@ class WebhookManager:
                 outcome="success",
                 response_time=processing_time
             )
-            
+
             # Audit log successful registration
             log_webhook_registration(user_id=user_id, webhook_id=str(webhook_id), url=url, events=[e.value for e in events], success=True)
-            
+
             # Prepare response
             response = {
                 "webhook_id": webhook_id,
@@ -312,7 +312,7 @@ class WebhookManager:
                 "retry_count": effective_retries,
                 "timeout_seconds": effective_timeout,
             }
-            
+
             # Include validation results if available
             if validation_result:
                 response["validation"] = {
@@ -320,9 +320,9 @@ class WebhookManager:
                     "warnings": [w.to_dict() for w in validation_result.warnings],
                     "connectivity": validation_result.metadata.get("connectivity", {})
                 }
-            
+
             return response
-            
+
         except ValueError:
             # Re-raise validation errors
             raise
@@ -334,20 +334,20 @@ class WebhookManager:
                 outcome="failure",
                 response_time=processing_time
             )
-            
+
             log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error=str(e))
-            
+
             logger.error(f"Failed to register webhook: {e}")
             raise ValueError(f"Webhook registration failed: {str(e)}")
-    
+
     async def unregister_webhook(self, user_id: str, url: str) -> bool:
         """
         Unregister a webhook with permission checks.
-        
+
         Args:
             user_id: User identifier
             url: Webhook URL
-            
+
         Returns:
             True if the webhook was unregistered (deactivated), else False
         """
@@ -358,11 +358,11 @@ class WebhookManager:
                 url=url,
                 action="delete"
             )
-            
+
             if not has_permission:
                 log_webhook_unregistration(user_id=user_id, webhook_id=None, url=url, events=[], success=False, error=permission_error)
                 return False
-            
+
             # Perform unregistration
             with self.db_adapter.transaction():
                 # Get webhook details before unregistering
@@ -372,34 +372,34 @@ class WebhookManager:
                 """, (user_id, url))
                 if not webhook_data:
                     return False
-                
+
                 webhook_id = webhook_data['id']
                 events_json = webhook_data['events']
-                
+
                 # Deactivate webhook
                 rowcount = self.db_adapter.update("""
                     UPDATE webhook_registrations
                     SET active = 0, updated_at = CURRENT_TIMESTAMP
                     WHERE user_id = ? AND url = ?
                 """, (user_id, url))
-                
+
                 if rowcount > 0:
                     # Transaction auto-commits
-                    
+
                     # Audit log successful unregistration
                     log_webhook_unregistration(user_id=user_id, webhook_id=str(webhook_id), url=url, events=json.loads(events_json) if events_json else [], success=True)
-                    
+
                     logger.info(f"Unregistered webhook {webhook_id} for user {user_id}: {url}")
                     return True
-                
+
                 return False
-                
+
         except Exception as e:
             log_webhook_unregistration(user_id=user_id, webhook_id=None, url=url, events=[], success=False, error=str(e))
-            
+
             logger.error(f"Failed to unregister webhook: {e}")
             return False
-    
+
     async def send_webhook(
         self,
         user_id: str,
@@ -409,7 +409,7 @@ class WebhookManager:
     ):
         """
         Send webhook notification to all registered endpoints.
-        
+
         Args:
             user_id: User identifier
             event: Event type
@@ -418,10 +418,10 @@ class WebhookManager:
         """
         # Get active webhooks for user
         webhooks = await self._get_webhooks(user_id, event)
-        
+
         if not webhooks:
             return
-        
+
         # Create payload
         payload = WebhookPayload(
             event=event.value,
@@ -429,7 +429,7 @@ class WebhookManager:
             timestamp=datetime.now(timezone.utc).isoformat(),
             data=data
         )
-        
+
         # Send to each webhook
         tasks = []
         for webhook in webhooks:
@@ -437,10 +437,10 @@ class WebhookManager:
                 self._deliver_webhook(webhook, payload)
             )
             tasks.append(task)
-        
+
         # Wait for all deliveries
         await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     async def _get_webhooks(
         self,
         user_id: str,
@@ -474,7 +474,7 @@ class WebhookManager:
                 WHERE user_id = ? AND active = 1
                 AND events LIKE ?
             """, (user_id, f'%"{event.value}"%'))
-            
+
             webhooks: List[Dict[str, Any]] = []
             for row in rows:
                 webhooks.append({
@@ -519,7 +519,7 @@ class WebhookManager:
                     })
 
             return webhooks
-    
+
     async def _deliver_webhook(
         self,
         webhook: Dict[str, Any],
@@ -529,7 +529,7 @@ class WebhookManager:
         webhook_id = webhook["id"]
         url = webhook["url"]
         secret = webhook["secret"]
-        
+
         # Validate URL before delivery to prevent SSRF
         from urllib.parse import urlparse
         import ipaddress
@@ -597,11 +597,11 @@ class WebhookManager:
                 logger.error(f"URL validation failed: {e}")
                 self._update_webhook_stats(webhook_id, success=False, error=f"URL validation failed: {str(e)}")
                 return
-        
+
         # Generate signature
         payload_json = payload.to_json()
         signature = self._generate_signature(payload_json, secret)
-        
+
         # Create delivery record
         delivery_id = self._create_delivery_record(
             webhook_id,
@@ -610,7 +610,7 @@ class WebhookManager:
             payload_json,
             signature
         )
-        
+
         # Attempt delivery
         success = False
         for attempt in range(webhook["retry_count"]):
@@ -720,7 +720,7 @@ class WebhookManager:
             if attempt < webhook["retry_count"] - 1 and not success:
                 delay = self.retry_delays[min(attempt, len(self.retry_delays) - 1)]
                 await asyncio.sleep(delay)
-        
+
         # Final update if failed
         if not success:
             self._update_delivery_record(
@@ -730,7 +730,7 @@ class WebhookManager:
                 error_message=error if 'error' in locals() else "Max retries exceeded"
             )
             self._update_webhook_stats(webhook_id, success=False, error=error if 'error' in locals() else None)
-    
+
     def _generate_signature(self, payload: str, secret: str) -> str:
         """Generate HMAC signature for payload."""
         signature = hmac.new(
@@ -739,7 +739,7 @@ class WebhookManager:
             hashlib.sha256
         ).hexdigest()
         return f"sha256={signature}"
-    
+
     def _create_delivery_record(
         self,
         webhook_id: int,
@@ -755,9 +755,9 @@ class WebhookManager:
                     webhook_id, evaluation_id, event_type, payload, signature
                 ) VALUES (?, ?, ?, ?, ?)
             """, (webhook_id, evaluation_id, event_type, payload, signature))
-            
+
             return delivery_id
-    
+
     def _update_delivery_record(
         self,
         delivery_id: int,
@@ -784,7 +784,7 @@ class WebhookManager:
                     delivered, delivery_id
                 )
             )
-    
+
     def _update_webhook_stats(
         self,
         webhook_id: int,
@@ -818,7 +818,7 @@ class WebhookManager:
                     (error, webhook_id)
                 )
 
-    
+
     async def get_webhook_status(
         self,
         user_id: str,
@@ -826,16 +826,16 @@ class WebhookManager:
     ) -> List[Dict[str, Any]]:
         """
         Get webhook status for user.
-        
+
         Args:
             user_id: User identifier
             url: Optional specific webhook URL
-            
+
         Returns:
             List of webhook status information
         """
         with self.db_adapter.transaction():
-            
+
             if url:
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, events, active, total_deliveries,
@@ -852,7 +852,7 @@ class WebhookManager:
                     FROM webhook_registrations
                     WHERE user_id = ?
                 """, (user_id,))
-            
+
             webhooks = []
             for row in rows:
                 # Handle both dict and tuple/list row formats
@@ -890,9 +890,9 @@ class WebhookManager:
                         "last_error": row[8],
                         "created_at": row[9]
                     })
-            
+
             return webhooks
-    
+
     async def test_webhook(
         self,
         user_id: str,
@@ -900,11 +900,11 @@ class WebhookManager:
     ) -> Dict[str, Any]:
         """
         Send a test webhook.
-        
+
         Args:
             user_id: User identifier
             url: Webhook URL to test
-            
+
         Returns:
             Test result
         """
@@ -926,7 +926,7 @@ class WebhookManager:
 
         webhook_id = row.get("id") if isinstance(row, dict) else row[0]
         secret = row.get("secret") if isinstance(row, dict) else row[1]
-        
+
         # Create test payload
         payload = WebhookPayload(
             event="test",
@@ -937,32 +937,32 @@ class WebhookManager:
                 "user_id": user_id
             }
         )
-        
+
         # Validate URL before test to prevent SSRF
         validation_result = await webhook_validator.validate_webhook_url(
             url=url,
             user_id=user_id,
             check_connectivity=False  # We'll test connectivity ourselves
         )
-        
+
         if not validation_result.valid:
             return {
                 "success": False,
                 "error": "URL validation failed",
                 "validation_errors": [error.to_dict() for error in validation_result.errors]
             }
-        
+
         # Send test webhook with DNS rebinding prevention
         try:
             # Parse URL to get hostname and port
             from urllib.parse import urlparse, urlunparse
             import socket
             import ipaddress
-            
+
             parsed_url = urlparse(url)
             hostname = parsed_url.hostname
             port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
-            
+
             # Resolve hostname to IP and validate it's not private
             safe_ip = None
             try:
@@ -981,19 +981,19 @@ class WebhookManager:
                         "success": False,
                         "error": "Failed to resolve webhook hostname"
                     }
-            
+
             if not safe_ip:
                 return {
                     "success": False,
                     "error": "Could not determine target IP address"
                 }
-            
+
             # Reconstruct URL with IP to prevent DNS rebinding
             if parsed_url.port:
                 netloc = f"[{safe_ip}]:{parsed_url.port}" if ":" in safe_ip else f"{safe_ip}:{parsed_url.port}"
             else:
                 netloc = f"[{safe_ip}]" if ":" in safe_ip else safe_ip
-            
+
             ip_url = urlunparse((
                 parsed_url.scheme,
                 netloc,
@@ -1002,20 +1002,20 @@ class WebhookManager:
                 parsed_url.query,
                 parsed_url.fragment
             ))
-            
+
             # Configure session to prevent SSRF
             connector = aiohttp.TCPConnector(
                 force_close=True,
                 enable_cleanup_closed=True
             )
-            
+
             async with aiohttp.ClientSession(
                 connector=connector,
                 trust_env=False  # Disable automatic proxy detection
             ) as session:
                 payload_json = payload.to_json()
                 signature = self._generate_signature(payload_json, secret)
-                
+
                 headers = {
                     "Content-Type": "application/json",
                     "X-Webhook-Signature": signature,
@@ -1023,9 +1023,9 @@ class WebhookManager:
                     "X-Webhook-Test": "true",
                     "Host": hostname  # Add original hostname for virtual hosting
                 }
-                
+
                 start_time = datetime.now()
-                
+
                 async with session.post(
                     ip_url,  # Use IP-based URL to prevent DNS rebinding
                     data=payload_json,
@@ -1035,14 +1035,14 @@ class WebhookManager:
                 ) as response:
                     response_time = (datetime.now() - start_time).total_seconds() * 1000
                     response_body = await response.text()
-                    
+
                     return {
                         "success": response.status < 400,
                         "status_code": response.status,
                         "response_time_ms": int(response_time),
                         "response_body": response_body[:500]
                     }
-                    
+
         except asyncio.TimeoutError:
             return {
                 "success": False,

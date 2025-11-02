@@ -52,7 +52,7 @@ class PIIMatch:
     start: int
     end: int
     confidence: float = 1.0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -76,7 +76,7 @@ class SecurityAuditEntry:
     pii_detected: List[PIIType]
     access_granted: bool
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
@@ -94,7 +94,7 @@ class SecurityAuditEntry:
 
 class PIIDetector:
     """Detects PII in text using regex patterns and heuristics."""
-    
+
     def __init__(self):
         """Initialize PII detector with patterns."""
         self.patterns: Dict[PIIType, List[Pattern]] = {
@@ -125,25 +125,25 @@ class PIIDetector:
                 re.compile(r'\b\d{8,17}\b'),  # Generic account number
             ],
         }
-        
+
         # Common name patterns (simplified - in production use NER)
         self.name_indicators = [
             "Mr.", "Mrs.", "Ms.", "Dr.", "Prof.", "Sir", "Lady",
             "Jr.", "Sr.", "III", "IV"
         ]
-    
+
     def detect_pii(self, text: str) -> List[PIIMatch]:
         """
         Detect PII in text.
-        
+
         Args:
             text: Text to scan
-            
+
         Returns:
             List of PII matches
         """
         matches = []
-        
+
         for pii_type, patterns in self.patterns.items():
             for pattern in patterns:
                 for match in pattern.finditer(text):
@@ -156,10 +156,10 @@ class PIIDetector:
                             end=match.end(),
                             confidence=self._get_confidence(pii_type, match.group())
                         ))
-        
+
         # Detect potential names (simplified)
         matches.extend(self._detect_names(text))
-        
+
         # Remove duplicates
         unique_matches = []
         seen = set()
@@ -168,9 +168,9 @@ class PIIDetector:
             if key not in seen:
                 seen.add(key)
                 unique_matches.append(match)
-        
+
         return unique_matches
-    
+
     def _validate_match(self, pii_type: PIIType, text: str) -> bool:
         """Validate if a match is likely real PII."""
         if pii_type == PIIType.SSN:
@@ -181,11 +181,11 @@ class PIIDetector:
             prefix = text[:3].replace("-", "")
             if prefix in ["000", "666"] or prefix.startswith("9"):
                 return False
-                
+
         elif pii_type == PIIType.CREDIT_CARD:
             # Luhn algorithm validation
             return self._luhn_check(text)
-            
+
         elif pii_type == PIIType.EMAIL:
             # Basic email validation
             parts = text.split("@")
@@ -193,9 +193,9 @@ class PIIDetector:
                 return False
             if not parts[0] or not parts[1]:
                 return False
-                
+
         return True
-    
+
     def _luhn_check(self, card_number: str) -> bool:
         """Validate credit card number using Luhn algorithm."""
         try:
@@ -211,7 +211,7 @@ class PIIDetector:
         except Exception as e:
             logger.debug(f"Luhn checksum validation failed: value={card_number}, error={e}")
             return False
-    
+
     def _get_confidence(self, pii_type: PIIType, text: str) -> float:
         """Get confidence score for a PII match."""
         # Simple heuristic - in production use ML models
@@ -221,11 +221,11 @@ class PIIDetector:
             return 0.85
         else:
             return 0.7
-    
+
     def _detect_names(self, text: str) -> List[PIIMatch]:
         """Detect potential person names (simplified)."""
         matches = []
-        
+
         # Look for name indicators
         for indicator in self.name_indicators:
             idx = text.find(indicator)
@@ -233,7 +233,7 @@ class PIIDetector:
                 # Extract potential name after indicator
                 end_idx = idx + len(indicator)
                 remaining = text[end_idx:].strip()
-                
+
                 # Get next 2-3 words as potential name
                 words = remaining.split()[:3]
                 if words:
@@ -247,67 +247,67 @@ class PIIDetector:
                             end=idx + len(indicator) + len(name) + 1,
                             confidence=0.6
                         ))
-        
+
         return matches
-    
+
     def mask_pii(self, text: str, matches: List[PIIMatch]) -> str:
         """
         Mask PII in text.
-        
+
         Args:
             text: Original text
             matches: PII matches to mask
-            
+
         Returns:
             Text with PII masked
         """
         if not matches:
             return text
-        
+
         # Sort matches by position (reverse for replacement)
         sorted_matches = sorted(matches, key=lambda x: x.start, reverse=True)
-        
+
         masked_text = text
         for match in sorted_matches:
             mask = self._generate_mask(match.pii_type, match.text)
             masked_text = masked_text[:match.start] + mask + masked_text[match.end:]
-        
+
         return masked_text
-    
+
     def _generate_mask(self, pii_type: PIIType, text: str) -> str:
         """Generate appropriate mask for PII type."""
         if pii_type == PIIType.EMAIL:
             parts = text.split("@")
             if len(parts) == 2:
                 return f"{parts[0][0]}***@{parts[1]}"
-            
+
         elif pii_type == PIIType.PHONE:
             # Keep area code, mask rest
             digits = "".join(c for c in text if c.isdigit())
             if len(digits) >= 10:
                 return f"{text[:5]}***-****"
-                
+
         elif pii_type == PIIType.SSN:
             return "***-**-****"
-            
+
         elif pii_type == PIIType.CREDIT_CARD:
             # Show last 4 digits
             digits = "".join(c for c in text if c.isdigit())
             if len(digits) >= 4:
                 return f"****-****-****-{digits[-4:]}"
-                
+
         elif pii_type == PIIType.PERSON_NAME:
             words = text.split()
             if words:
                 return f"{words[0]} " + " ".join("***" for _ in words[1:])
-                
+
         # Default mask
         return f"[{pii_type.value.upper()}]"
 
 
 class ContentFilter:
     """Filters content based on sensitivity and classification."""
-    
+
     def __init__(self):
         """Initialize content filter."""
         self.sensitive_keywords = {
@@ -320,49 +320,49 @@ class ContentFilter:
                 "need to know", "sensitive compartmented"
             ]
         }
-        
+
         self.content_categories = {
             "financial": ["bank", "account", "credit", "debit", "transaction", "payment"],
             "medical": ["patient", "diagnosis", "treatment", "prescription", "medical"],
             "legal": ["attorney", "lawyer", "lawsuit", "litigation", "contract"],
             "personal": ["birth", "death", "marriage", "divorce", "family"]
         }
-    
+
     def classify_content(self, text: str) -> SensitivityLevel:
         """
         Classify content sensitivity level.
-        
+
         Args:
             text: Text to classify
-            
+
         Returns:
             Sensitivity level
         """
         text_lower = text.lower()
-        
+
         # Check for restricted keywords
         for keyword in self.sensitive_keywords[SensitivityLevel.RESTRICTED]:
             if keyword in text_lower:
                 return SensitivityLevel.RESTRICTED
-        
+
         # Check for confidential keywords
         for keyword in self.sensitive_keywords[SensitivityLevel.CONFIDENTIAL]:
             if keyword in text_lower:
                 return SensitivityLevel.CONFIDENTIAL
-        
+
         # Check content categories
         category_matches = 0
         for category, keywords in self.content_categories.items():
             if any(keyword in text_lower for keyword in keywords):
                 category_matches += 1
-        
+
         if category_matches >= 2:
             return SensitivityLevel.CONFIDENTIAL
         elif category_matches == 1:
             return SensitivityLevel.INTERNAL
-        
+
         return SensitivityLevel.PUBLIC
-    
+
     def filter_by_sensitivity(
         self,
         documents: List[Dict[str, Any]],
@@ -370,11 +370,11 @@ class ContentFilter:
     ) -> List[Dict[str, Any]]:
         """
         Filter documents by sensitivity level.
-        
+
         Args:
             documents: List of documents
             max_sensitivity: Maximum allowed sensitivity
-            
+
         Returns:
             Filtered documents
         """
@@ -384,28 +384,28 @@ class ContentFilter:
             SensitivityLevel.CONFIDENTIAL: 2,
             SensitivityLevel.RESTRICTED: 3
         }
-        
+
         max_level = sensitivity_order[max_sensitivity]
         filtered = []
-        
+
         for doc in documents:
             content = doc.get("content", "")
             doc_sensitivity = self.classify_content(content)
             doc_level = sensitivity_order[doc_sensitivity]
-            
+
             if doc_level <= max_level:
                 filtered.append(doc)
             else:
                 logger.debug(
                     f"Filtered document due to sensitivity: {doc_sensitivity.value} > {max_sensitivity.value}"
                 )
-        
+
         return filtered
 
 
 class AccessController:
     """Controls access to documents based on user permissions."""
-    
+
     def __init__(self):
         """Initialize access controller."""
         self.user_permissions = {}
@@ -416,20 +416,20 @@ class AccessController:
             "employee": [SensitivityLevel.INTERNAL, SensitivityLevel.PUBLIC],
             "guest": [SensitivityLevel.PUBLIC]
         }
-    
+
     def set_user_role(self, user_id: str, role: str):
         """Set user role."""
         if role not in self.role_permissions:
             raise ValueError(f"Invalid role: {role}")
         self.user_permissions[user_id] = {"role": role}
-    
+
     def set_document_acl(self, document_id: str, allowed_users: List[str], allowed_roles: List[str]):
         """Set document access control list."""
         self.document_acls[document_id] = {
             "users": set(allowed_users),
             "roles": set(allowed_roles)
         }
-    
+
     def check_access(
         self,
         user_id: str,
@@ -438,42 +438,42 @@ class AccessController:
     ) -> bool:
         """
         Check if user has access to document.
-        
+
         Args:
             user_id: User identifier
             document_id: Document identifier
             sensitivity: Document sensitivity level
-            
+
         Returns:
             Access granted status
         """
         # Check user permissions
         user_info = self.user_permissions.get(user_id, {})
         user_role = user_info.get("role", "guest")
-        
+
         # Check role-based sensitivity access
         allowed_sensitivities = self.role_permissions.get(user_role, [SensitivityLevel.PUBLIC])
         if sensitivity not in allowed_sensitivities:
             return False
-        
+
         # Check document-specific ACL
         if document_id in self.document_acls:
             acl = self.document_acls[document_id]
-            
+
             # Check user-specific access
             if user_id in acl["users"]:
                 return True
-            
+
             # Check role-based access
             if user_role in acl["roles"]:
                 return True
-            
+
             # If ACL exists but user not in it, deny
             return False
-        
+
         # No specific ACL, allow based on sensitivity
         return True
-    
+
     def filter_by_access(
         self,
         user_id: str,
@@ -481,38 +481,38 @@ class AccessController:
     ) -> List[Dict[str, Any]]:
         """
         Filter documents by user access.
-        
+
         Args:
             user_id: User identifier
             documents: List of documents
-            
+
         Returns:
             Accessible documents
         """
         filtered = []
-        
+
         for doc in documents:
             doc_id = doc.get("id", "")
             content = doc.get("content", "")
-            
+
             # Classify sensitivity
             filter = ContentFilter()
             sensitivity = filter.classify_content(content)
-            
+
             # Check access
             if self.check_access(user_id, doc_id, sensitivity):
                 filtered.append(doc)
             else:
                 logger.debug(f"Access denied for user {user_id} to document {doc_id}")
-        
+
         return filtered
 
 
 class SecurityAuditor:
     """Audit logger for security events."""
-    
+
     def __init__(
-        self, 
+        self,
         db_path: str = "security_audit.db",
         max_size_mb: int = 100,
         max_age_days: int = 90,
@@ -520,7 +520,7 @@ class SecurityAuditor:
     ):
         """
         Initialize security auditor with rotation support.
-        
+
         Args:
             db_path: Path to audit database
             max_size_mb: Maximum database size in MB before rotation
@@ -534,7 +534,7 @@ class SecurityAuditor:
         self._last_rotation_check = time.time()
         self._init_database()
         self._check_rotation()
-    
+
     def _init_database(self):
         """Initialize audit database."""
         with sqlite3.connect(self.db_path) as conn:
@@ -552,14 +552,14 @@ class SecurityAuditor:
                     created_at REAL DEFAULT (unixepoch())
                 )
             """)
-            
+
             # Create indexes
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action)")
-            
+
             conn.commit()
-    
+
     def log_access(
         self,
         user_id: str,
@@ -582,7 +582,7 @@ class SecurityAuditor:
             access_granted=access_granted,
             metadata=metadata or {}
         )
-        
+
         with sqlite3.connect(self.db_path) as conn:
             data = entry.to_dict()
             conn.execute(
@@ -604,12 +604,12 @@ class SecurityAuditor:
                 )
             )
             conn.commit()
-    
+
     def _generate_id(self) -> str:
         """Generate unique audit ID."""
         content = f"{time.time()}:{hash(time.time())}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
-    
+
     def get_audit_trail(
         self,
         user_id: Optional[str] = None,
@@ -620,41 +620,41 @@ class SecurityAuditor:
         """Get audit trail."""
         # Check for rotation before querying
         self._check_rotation()
-        
+
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            
+
             query = "SELECT * FROM audit_log WHERE 1=1"
             params = []
-            
+
             if user_id:
                 query += " AND user_id = ?"
                 params.append(user_id)
-            
+
             if start_time:
                 query += " AND timestamp >= ?"
                 params.append(start_time.isoformat())
-            
+
             if end_time:
                 query += " AND timestamp <= ?"
                 params.append(end_time.isoformat())
-            
+
             query += " ORDER BY timestamp DESC LIMIT ?"
             params.append(limit)
-            
+
             cursor = conn.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
-    
+
     def _check_rotation(self):
         """Check if audit log needs rotation."""
         current_time = time.time()
-        
+
         # Only check rotation periodically
         if current_time - self._last_rotation_check < self.rotation_check_interval:
             return
-        
+
         self._last_rotation_check = current_time
-        
+
         try:
             # Check database size
             if Path(self.db_path).exists():
@@ -662,37 +662,37 @@ class SecurityAuditor:
                 if size_mb > self.max_size_mb:
                     logger.info(f"Audit log size ({size_mb:.2f}MB) exceeds limit ({self.max_size_mb}MB), rotating...")
                     self._rotate_by_size()
-            
+
             # Check for old records
             self._delete_old_records()
-            
+
         except Exception as e:
             logger.error(f"Error checking rotation: {e}")
-    
+
     def _rotate_by_size(self):
         """Rotate audit log when size limit exceeded."""
         try:
             # Create archive filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             archive_path = f"{self.db_path}.{timestamp}.archive"
-            
+
             # Rename current database to archive
             Path(self.db_path).rename(archive_path)
-            
+
             # Create new database
             self._init_database()
-            
+
             # Copy recent records from archive to new database
             with sqlite3.connect(archive_path) as archive_conn:
                 with sqlite3.connect(self.db_path) as new_conn:
                     # Copy last 30 days of records
                     cutoff_date = (datetime.now() - timedelta(days=30)).isoformat()
-                    
+
                     cursor = archive_conn.execute(
                         "SELECT * FROM audit_log WHERE timestamp >= ? ORDER BY timestamp",
                         (cutoff_date,)
                     )
-                    
+
                     records = cursor.fetchall()
                     if records:
                         new_conn.executemany(
@@ -704,51 +704,51 @@ class SecurityAuditor:
                             records
                         )
                         new_conn.commit()
-            
+
             logger.info(f"Audit log rotated to {archive_path}")
-            
+
             # Compress archive if possible
             try:
                 import gzip
                 import shutil
-                
+
                 with open(archive_path, 'rb') as f_in:
                     with gzip.open(f"{archive_path}.gz", 'wb') as f_out:
                         shutil.copyfileobj(f_in, f_out)
-                
+
                 # Remove uncompressed archive
                 Path(archive_path).unlink()
                 logger.info(f"Archive compressed to {archive_path}.gz")
-                
+
             except ImportError:
                 logger.debug("gzip not available, archive not compressed")
-                
+
         except Exception as e:
             logger.error(f"Error rotating audit log: {e}")
-    
+
     def _delete_old_records(self):
         """Delete records older than max_age_days."""
         try:
             cutoff_date = (datetime.now() - timedelta(days=self.max_age_days)).isoformat()
-            
+
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute(
                     "DELETE FROM audit_log WHERE timestamp < ?",
                     (cutoff_date,)
                 )
                 deleted_count = cursor.rowcount
-                
+
                 if deleted_count > 0:
                     conn.execute("VACUUM")  # Reclaim space
                     logger.info(f"Deleted {deleted_count} old audit records")
-                    
+
         except Exception as e:
             logger.error(f"Error deleting old records: {e}")
 
 
 class SecurityFilters:
     """Main security filtering system."""
-    
+
     def __init__(
         self,
         enable_pii_detection: bool = True,
@@ -759,7 +759,7 @@ class SecurityFilters:
     ):
         """
         Initialize security filters.
-        
+
         Args:
             enable_pii_detection: Enable PII detection
             enable_content_filtering: Enable content filtering
@@ -771,7 +771,7 @@ class SecurityFilters:
         self.content_filter = ContentFilter() if enable_content_filtering else None
         self.access_controller = AccessController() if enable_access_control else None
         self.auditor = SecurityAuditor(audit_db_path) if enable_audit_logging else None
-    
+
     def process_query(
         self,
         query: str,
@@ -780,12 +780,12 @@ class SecurityFilters:
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Process query through security filters.
-        
+
         Args:
             query: Query text
             user_id: User identifier
             mask_pii: Whether to mask detected PII
-            
+
         Returns:
             Tuple of (processed_query, security_metadata)
         """
@@ -795,22 +795,22 @@ class SecurityFilters:
             "pii_detected": [],
             "sensitivity": None
         }
-        
+
         processed_query = query
-        
+
         # Detect PII
         if self.pii_detector:
             pii_matches = self.pii_detector.detect_pii(query)
             metadata["pii_detected"] = [match.to_dict() for match in pii_matches]
-            
+
             if mask_pii and pii_matches:
                 processed_query = self.pii_detector.mask_pii(query, pii_matches)
-        
+
         # Classify content
         if self.content_filter:
             sensitivity = self.content_filter.classify_content(query)
             metadata["sensitivity"] = sensitivity.value
-        
+
         # Log access
         if self.auditor:
             self.auditor.log_access(
@@ -822,9 +822,9 @@ class SecurityFilters:
                 access_granted=True,
                 metadata=metadata
             )
-        
+
         return processed_query, metadata
-    
+
     def filter_documents(
         self,
         documents: List[Dict[str, Any]],
@@ -834,37 +834,37 @@ class SecurityFilters:
     ) -> List[Dict[str, Any]]:
         """
         Filter documents through security filters.
-        
+
         Args:
             documents: List of documents
             user_id: User identifier
             max_sensitivity: Maximum allowed sensitivity
             mask_pii: Whether to mask PII in results
-            
+
         Returns:
             Filtered documents
         """
         filtered = documents
-        
+
         # Filter by sensitivity
         if self.content_filter and max_sensitivity:
             filtered = self.content_filter.filter_by_sensitivity(filtered, max_sensitivity)
-        
+
         # Filter by access control
         if self.access_controller:
             filtered = self.access_controller.filter_by_access(user_id, filtered)
-        
+
         # Process PII
         if self.pii_detector and mask_pii:
             for doc in filtered:
                 content = doc.get("content", "")
                 pii_matches = self.pii_detector.detect_pii(content)
-                
+
                 if pii_matches:
                     doc["content"] = self.pii_detector.mask_pii(content, pii_matches)
                     doc["pii_masked"] = True
                     doc["pii_types"] = list(set(m.pii_type.value for m in pii_matches))
-        
+
         # Log access
         if self.auditor:
             for doc in filtered:
@@ -877,7 +877,7 @@ class SecurityFilters:
                     access_granted=True,
                     metadata={"document_id": doc.get("id")}
                 )
-        
+
         return filtered
 
 
@@ -899,35 +899,35 @@ async def apply_security_filters(context: Any, **kwargs) -> Any:
     """Apply security filters in RAG pipeline."""
     if not context.config.get("security", {}).get("enabled", False):
         return context
-    
+
     security = get_security_filters()
-    
+
     # Process query
     user_id = context.metadata.get("user_id", "anonymous")
     mask_pii = context.config.get("security", {}).get("mask_pii", True)
-    
+
     processed_query, security_metadata = security.process_query(
         query=context.query,
         user_id=user_id,
         mask_pii=mask_pii
     )
-    
+
     context.query = processed_query
     context.metadata["security"] = security_metadata
-    
+
     # Filter documents if present
     if hasattr(context, "documents") and context.documents:
         max_sensitivity = context.config.get("security", {}).get("max_sensitivity")
         if max_sensitivity:
             max_sensitivity = SensitivityLevel(max_sensitivity)
-        
+
         context.documents = security.filter_documents(
             documents=context.documents,
             user_id=user_id,
             max_sensitivity=max_sensitivity,
             mask_pii=mask_pii
         )
-        
+
         logger.debug(f"Filtered to {len(context.documents)} documents after security checks")
-    
+
     return context

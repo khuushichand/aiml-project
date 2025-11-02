@@ -8,4 +8,3 @@ to explicit entities. Avoid speculation. Output as a JSON array of strings.
 
 Changelog:
 - v1.0: Initial claim extraction guidance.
-

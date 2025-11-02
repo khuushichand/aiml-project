@@ -23,19 +23,19 @@ def get_project_root() -> Path:
 def load_config() -> Dict[str, Dict[str, str]]:
     """Load configuration from config.txt file."""
     config_path = get_project_root() / "tldw_Server_API" / "Config_Files" / "config.txt"
-    
+
     if not config_path.exists():
         print(f"Warning: Config file not found at {config_path}")
         return {}
-    
+
     config = configparser.ConfigParser()
     config.read(config_path)
-    
+
     # Convert to dictionary
     config_dict = {}
     for section in config.sections():
         config_dict[section] = dict(config.items(section))
-    
+
     return config_dict
 
 
@@ -45,11 +45,11 @@ def get_api_key_for_docs() -> str:
     Returns the actual key if in single-user mode, otherwise a placeholder.
     """
     config = load_config()
-    
+
     # Check authentication mode
     auth_config = config.get('Authentication', {})
     auth_mode = auth_config.get('auth_mode', 'single_user').lower()
-    
+
     placeholders = {
         "",
         "default-secret-key-for-single-user",
@@ -72,14 +72,14 @@ def get_base_url() -> str:
     """Get the base URL for the API."""
     config = load_config()
     server_config = config.get('Server', {})
-    
+
     host = server_config.get('host', '127.0.0.1')
     port = server_config.get('port', '8000')
-    
+
     # Use localhost for documentation
     if host == '0.0.0.0':
         host = 'localhost'
-    
+
     return f"http://{host}:{port}"
 
 
@@ -88,11 +88,11 @@ def generate_quick_start_examples() -> str:
     api_key = get_api_key_for_docs()
     base_url = get_base_url()
     config = load_config()
-    
+
     # Determine available LLM providers
     available_providers = []
     api_config = config.get('API', {})
-    
+
     provider_mapping = {
         'openai_api_key': 'openai',
         'anthropic_api_key': 'anthropic',
@@ -102,11 +102,11 @@ def generate_quick_start_examples() -> str:
         'mistral_api_key': 'mistral',
         'deepseek_api_key': 'deepseek'
     }
-    
+
     for key_name, provider in provider_mapping.items():
         if api_config.get(key_name, '').strip() and api_config[key_name] != 'your_api_key_here':
             available_providers.append(provider)
-    
+
     # Python example
     python_example = f'''```python
 import requests
@@ -185,7 +185,7 @@ async function createEvaluation() {{
             ]
         }})
     }});
-    
+
     const data = await response.json();
     console.log('Created evaluation:', data.id);
 }}
@@ -213,7 +213,7 @@ These examples use values from your current configuration:
 def generate_config_status() -> str:
     """Generate a configuration status summary."""
     config = load_config()
-    
+
     if not config:
         return """
 ## Configuration Status
@@ -222,19 +222,19 @@ def generate_config_status() -> str:
 
 Please create `tldw_Server_API/Config_Files/config.txt` with your settings.
 """
-    
+
     auth_config = config.get('Authentication', {})
     api_config = config.get('API', {})
-    
+
     auth_mode = auth_config.get('auth_mode', 'single_user')
-    
+
     # Check which APIs are configured
     configured_apis = []
     for key, value in api_config.items():
         if key.endswith('_api_key') and value and value != 'your_api_key_here':
             api_name = key.replace('_api_key', '').replace('_', ' ').title()
             configured_apis.append(api_name)
-    
+
     status = f"""
 ## Configuration Status
 
@@ -243,7 +243,7 @@ Please create `tldw_Server_API/Config_Files/config.txt` with your settings.
 - **LLM Providers Configured**: {len(configured_apis)}
   {chr(10).join(f'  - ✅ {api}' for api in configured_apis) if configured_apis else '  - ❌ No providers configured'}
 """
-    
+
     return status
 
 
@@ -252,7 +252,7 @@ def create_html_quickstart() -> str:
     api_key = get_api_key_for_docs()
     base_url = get_base_url()
     config = load_config()
-    
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -348,7 +348,7 @@ def create_html_quickstart() -> str:
 </head>
 <body>
     <h1>🚀 tldw_server Evaluation API - Quick Start</h1>
-    
+
     <div class="config-box">
         <h2>Your Current Configuration</h2>
         <div class="config-item">
@@ -370,7 +370,7 @@ def create_html_quickstart() -> str:
     <div class="config-box">
         <h2>Interactive Test</h2>
         <p>Click "Run Test" to create a simple evaluation using your current configuration:</p>
-        
+
         <div class="code-block">
             <button class="run-button" onclick="runTest()">Run Test</button>
             <pre id="test-code">
@@ -398,7 +398,7 @@ fetch('{base_url}/api/v1/evals', {{
 .catch(error => console.error('Error:', error));
             </pre>
         </div>
-        
+
         <div id="test-result" class="result-box"></div>
     </div>
 
@@ -407,24 +407,24 @@ fetch('{base_url}/api/v1/evals', {{
         window.onload = function() {{
             checkServerStatus();
         }};
-        
+
         function checkServerStatus() {{
             fetch('{base_url}/health')
                 .then(response => {{
                     if (response.ok) {{
-                        document.getElementById('server-status').innerHTML = 
+                        document.getElementById('server-status').innerHTML =
                             '<span class="status-ok">✅ Server is running</span>';
                     }} else {{
-                        document.getElementById('server-status').innerHTML = 
+                        document.getElementById('server-status').innerHTML =
                             '<span class="status-warning">⚠️ Server not responding</span>';
                     }}
                 }})
                 .catch(error => {{
-                    document.getElementById('server-status').innerHTML = 
+                    document.getElementById('server-status').innerHTML =
                         '<span class="status-warning">❌ Server offline - Start with: python -m uvicorn tldw_Server_API.app.main:app</span>';
                 }});
         }}
-        
+
         function copyToClipboard(elementId) {{
             const element = document.getElementById(elementId);
             const text = element.textContent;
@@ -437,13 +437,13 @@ fetch('{base_url}/api/v1/evals', {{
                 }}, 2000);
             }});
         }}
-        
+
         async function runTest() {{
             const resultBox = document.getElementById('test-result');
             resultBox.style.display = 'block';
             resultBox.className = 'result-box';
             resultBox.innerHTML = 'Running test...';
-            
+
             const evalData = {{
                 name: "test_eval_" + Date.now(),
                 eval_type: "exact_match",
@@ -453,7 +453,7 @@ fetch('{base_url}/api/v1/evals', {{
                     {{ input: {{ output: "London" }}, expected: {{ output: "London" }} }}
                 ]
             }};
-            
+
             try {{
                 const response = await fetch('{base_url}/api/v1/evals', {{
                     method: 'POST',
@@ -463,9 +463,9 @@ fetch('{base_url}/api/v1/evals', {{
                     }},
                     body: JSON.stringify(evalData)
                 }});
-                
+
                 const data = await response.json();
-                
+
                 if (response.ok) {{
                     resultBox.innerHTML = `
                         <strong>✅ Success!</strong><br>
@@ -498,21 +498,21 @@ fetch('{base_url}/api/v1/evals', {{
     </script>
 </body>
 </html>"""
-    
+
     return html_content
 
 
 def main():
     """Main function to generate documentation with config."""
     print("Generating documentation with auto-populated configuration...")
-    
+
     # Generate configuration status
     config_status = generate_config_status()
     print(config_status)
-    
+
     # Generate code examples
     examples = generate_quick_start_examples()
-    
+
     # Save to a markdown file
     output_path = get_project_root() / "Docs" / "Evaluations_Quick_Start_Generated.md"
     with open(output_path, 'w') as f:
@@ -520,15 +520,15 @@ def main():
         f.write("This document was auto-generated from your current configuration.\n\n")
         f.write(config_status)
         f.write(examples)
-    
+
     print(f"\n✅ Generated markdown documentation: {output_path}")
-    
+
     # Generate HTML version
     html_content = create_html_quickstart()
     html_path = get_project_root() / "Docs" / "quickstart.html"
     with open(html_path, 'w') as f:
         f.write(html_content)
-    
+
     print(f"✅ Generated HTML documentation: {html_path}")
     print(f"\nOpen {html_path} in your browser for an interactive quick start guide!")
 

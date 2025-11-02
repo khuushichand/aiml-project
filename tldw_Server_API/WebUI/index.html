@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="TLDW Server API Testing Interface - Verify API functionality and test endpoints">
     <title>TLDW API Testing Interface</title>
-    
+
     <!-- External CSS -->
     <link rel="stylesheet" href="css/styles.css">
     <script defer src="js/setup-guard.js"></script>
     <!-- Inline handler shim removed after migrating handlers to modules -->
-    
+
     <!-- Additional styles for JSON syntax highlighting -->
     <style>
         .json-key { color: #a31515; }
@@ -18,7 +18,7 @@
         .json-number { color: #098658; }
         .json-boolean { color: #0000ff; }
         .json-null { color: #808080; }
-        
+
         /* Modal styles */
         .modal-backdrop {
             position: fixed;
@@ -30,7 +30,7 @@
             z-index: 999;
             animation: fadeIn 0.2s ease;
         }
-        
+
         .modal {
             position: fixed;
             top: 50%;
@@ -44,12 +44,12 @@
             overflow-y: auto;
             animation: slideUp 0.3s ease;
         }
-        
+
         .modal-small { width: 400px; }
         .modal-medium { width: 600px; }
         .modal-large { width: 900px; }
         .modal-full { width: 95%; height: 95vh; }
-        
+
         .modal-header {
             padding: var(--spacing-lg);
             border-bottom: 1px solid var(--color-border);
@@ -57,13 +57,13 @@
             align-items: center;
             justify-content: space-between;
         }
-        
+
         .modal-title {
             font-size: 1.25rem;
             font-weight: 600;
             margin: 0;
         }
-        
+
         .modal-close {
             background: none;
             border: none;
@@ -79,16 +79,16 @@
             border-radius: var(--radius-md);
             transition: var(--transition-fast);
         }
-        
+
         .modal-close:hover {
             background: var(--color-surface-alt);
             color: var(--color-text);
         }
-        
+
         .modal-body {
             padding: var(--spacing-lg);
         }
-        
+
         .modal-footer {
             padding: var(--spacing-lg);
             border-top: 1px solid var(--color-border);
@@ -96,12 +96,12 @@
             justify-content: flex-end;
             gap: var(--spacing-md);
         }
-        
+
         @keyframes fadeIn {
             from { opacity: 0; }
             to { opacity: 1; }
         }
-        
+
         @keyframes slideUp {
             from {
                 transform: translate(-50%, -40%);
@@ -112,7 +112,7 @@
                 opacity: 1;
             }
         }
-        
+
         @keyframes slideOut {
             from {
                 transform: translateX(0);
@@ -123,7 +123,7 @@
                 opacity: 0;
             }
         }
-        
+
         /* Loading content styles */
         .loading-content {
             display: flex;
@@ -131,18 +131,18 @@
             align-items: center;
             gap: var(--spacing-md);
         }
-        
+
         .loading-message {
             color: var(--color-text-secondary);
             font-size: 0.9rem;
         }
-        
+
         /* History item styles */
         .history-list {
             max-height: 60vh;
             overflow-y: auto;
         }
-        
+
         .history-item {
             padding: var(--spacing-md);
             border: 1px solid var(--color-border);
@@ -150,44 +150,44 @@
             margin-bottom: var(--spacing-md);
             transition: var(--transition-fast);
         }
-        
+
         .history-item:hover {
             box-shadow: var(--shadow-sm);
         }
-        
+
         .history-item.success {
             border-left: 3px solid var(--color-success);
         }
-        
+
         .history-item.error {
             border-left: 3px solid var(--color-error);
         }
-        
+
         .history-item-header {
             display: flex;
             align-items: center;
             gap: var(--spacing-md);
             margin-bottom: var(--spacing-sm);
         }
-        
+
         .history-path {
             font-family: var(--font-family-mono);
             font-size: 0.9rem;
             color: var(--color-text-secondary);
             flex: 1;
         }
-        
+
         .history-status {
             font-weight: 600;
         }
-        
+
         .history-item-details {
             display: flex;
             gap: var(--spacing-lg);
             font-size: 0.85rem;
             color: var(--color-text-muted);
         }
-        
+
         .history-error {
             margin-top: var(--spacing-sm);
             padding: var(--spacing-sm);
@@ -196,14 +196,14 @@
             color: var(--color-error);
             font-size: 0.85rem;
         }
-        
+
         /* JSON Viewer styles */
         .json-viewer {
             font-family: var(--font-family-mono);
             font-size: 0.9rem;
             line-height: 1.5;
         }
-        
+
         .json-viewer-toolbar {
             display: flex;
             gap: var(--spacing-sm);
@@ -211,7 +211,7 @@
             padding-bottom: var(--spacing-md);
             border-bottom: 1px solid var(--color-border);
         }
-        
+
         .json-viewer-content {
             background: var(--color-surface-alt);
             padding: var(--spacing-md);
@@ -230,7 +230,7 @@
         }
         .badge.badge-warn { background: #fff7e6; border-color: #ffe0a3; }
         .badge.badge-crit { background: #ffe6e6; border-color: #ffb3b3; }
-        
+
         .json-toggle {
             cursor: pointer;
             user-select: none;
@@ -240,35 +240,35 @@
             color: var(--color-text-muted);
             transition: var(--transition-fast);
         }
-        
+
         .json-toggle:hover {
             color: var(--color-primary);
         }
-        
+
         .json-toggle.collapsed {
             transform: rotate(-90deg);
         }
-        
+
         .json-content {
             padding-left: var(--spacing-lg);
         }
-        
+
         .json-item {
             margin: 2px 0;
         }
-        
+
         .json-bracket,
         .json-comma,
         .json-colon {
             color: var(--color-text-secondary);
         }
-        
+
         /* Drag over styles */
         .drag-over {
             background: var(--color-primary-light) !important;
             border-color: var(--color-primary) !important;
         }
-        
+
         /* Search box */
         .search-container {
             position: fixed;
@@ -277,11 +277,11 @@
             z-index: 95;
             display: none;
         }
-        
+
         .search-container.visible {
             display: block;
         }
-        
+
         #endpoint-search {
             width: 300px;
             padding: var(--spacing-sm) var(--spacing-md);
@@ -290,7 +290,7 @@
             background: var(--color-surface);
             color: var(--color-text);
         }
-        
+
         #no-search-results {
             text-align: center;
             padding: var(--spacing-xl);
@@ -302,7 +302,7 @@
 <body>
     <!-- Skip to main content link for accessibility -->
     <a href="#main-content-area" class="skip-link">Skip to main content</a>
-    
+
     <div class="app-container">
         <header>
             <h1>TLDW API Testing Interface</h1>
@@ -321,9 +321,9 @@
         <!-- Search Container -->
         <div class="search-container">
             <div style="display:flex; gap:8px; align-items:center;">
-                <input 
-                    type="search" 
-                    id="endpoint-search" 
+                <input
+                    type="search"
+                    id="endpoint-search"
                     placeholder="Search endpoints... (Ctrl+K)"
                     aria-label="Search endpoints"
                 >
@@ -369,7 +369,7 @@
                     Embeddings
                 </button>
             </div>
-            
+
             <!-- Row 2: Processing & Analysis -->
             <div class="top-tab-buttons top-tab-row" role="tablist">
                 <button class="top-tab-button" data-toptab="webscraping" role="tab" aria-selected="false">
@@ -397,7 +397,7 @@
                     Persona
                 </button>
             </div>
-            
+
             <!-- Row 3: Administration & System -->
             <div class="top-tab-buttons top-tab-row" role="tablist">
                 <button class="top-tab-button" data-toptab="admin" role="tab" aria-selected="false">
@@ -876,15 +876,15 @@
                         <span class="endpoint-method get">CONFIG</span>
                         <span class="endpoint-path">Global API Configuration</span>
                     </h2>
-                    
+
                     <div class="columns">
                         <div class="column">
                             <div class="form-group">
                                 <label for="baseUrl">API Base URL:</label>
                                 <div class="input-with-action">
-                                    <input 
-                                        type="url" 
-                                        id="baseUrl" 
+                                    <input
+                                        type="url"
+                                        id="baseUrl"
                                         value="http://localhost:8000"
                                         placeholder="http://localhost:8000"
                                         aria-describedby="baseUrl-help"
@@ -894,14 +894,14 @@
                                 <small id="baseUrl-help">The base URL for all API requests</small>
                             </div>
                         </div>
-                        
+
                         <div class="column">
                             <div class="form-group">
                                 <label for="apiKeyInput">API Token: <span title="In single-user mode, the token is auto-configured by the server and the field will display '(Auto-configured)'. In multi-user mode, enter a Bearer token or enable 'Prefer X-API-KEY' to use API keys.">ⓘ</span></label>
                                 <div class="input-with-action">
-                                    <input 
-                                        type="password" 
-                                        id="apiKeyInput" 
+                                    <input
+                                        type="password"
+                                        id="apiKeyInput"
                                         value=""
                                         placeholder="Enter your API token"
                                         aria-describedby="apiKey-help"

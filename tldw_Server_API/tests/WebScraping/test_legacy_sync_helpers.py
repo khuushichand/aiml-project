@@ -53,4 +53,3 @@ def test_scrape_by_url_level_uses_blocking(monkeypatch):
     results = AEL.scrape_by_url_level("https://example.com", level=1)
     assert len(results) == 1
     assert calls == ["https://example.com/one"]
-

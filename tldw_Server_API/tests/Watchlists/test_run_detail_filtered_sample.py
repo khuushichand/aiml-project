@@ -106,4 +106,3 @@ def test_run_detail_filtered_sample_toggle(client_with_user: TestClient):
     row = data["filtered_sample"][0]
     assert "id" in row and "status" in row
     assert row["status"] == "filtered"
-

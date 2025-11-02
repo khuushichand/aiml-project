@@ -195,11 +195,11 @@ async def reset_singletons(request):
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
     from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import close_all_chacha_db_instances
-    
+
     # Disable CSRF protection for tests
     original_csrf_setting = settings.get('CSRF_ENABLED')
     settings['CSRF_ENABLED'] = False
-    
+
     close_all_chacha_db_instances()
 
     await reset_db_pool()
@@ -263,9 +263,9 @@ async def reset_singletons(request):
             pass
     except Exception:
         pass
-    
+
     yield
-    
+
     # Reset after test
     await reset_db_pool()
     await reset_session_manager()
@@ -287,7 +287,7 @@ async def reset_singletons(request):
         _app.dependency_overrides.clear()
     except Exception:
         pass
-    
+
     # Restore original CSRF setting
     if original_csrf_setting is not None:
         settings['CSRF_ENABLED'] = original_csrf_setting
@@ -322,14 +322,14 @@ async def real_audit_service(tmp_path):
 async def isolated_test_environment(monkeypatch):
     """Create isolated DB and app instance for each test - TRUE ONE DB PER TEST."""
     import uuid as uuid_lib
-    
+
     # Disable CSRF protection for tests
     settings['CSRF_ENABLED'] = False
-    
+
     # 1. Generate unique DB name for this test
     db_name = f"tldw_test_{uuid_lib.uuid4().hex[:8]}"
     logger.info(f"Creating isolated test database: {db_name}")
-    
+
     # 2. Create the unique database (skip gracefully if Postgres is unavailable and not required)
     require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
     # Ensure Postgres is reachable, optionally starting a local dockerized instance
@@ -346,22 +346,22 @@ async def isolated_test_environment(monkeypatch):
         password=TEST_DB_PASSWORD,
         database="postgres"
     )
-    
+
     try:
         # Drop if exists (cleanup from failed tests)
         await conn.execute(f"""
-            SELECT pg_terminate_backend(pid) 
-            FROM pg_stat_activity 
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
             WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
         """)
         await conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
-        
+
         # Create new database
         await conn.execute(f"CREATE DATABASE {db_name}")
         logger.info(f"Created test database: {db_name}")
     finally:
         await conn.close()
-    
+
     # 3. Create schema in the new database
     test_conn = await asyncpg.connect(
         host=TEST_DB_HOST,
@@ -370,7 +370,7 @@ async def isolated_test_environment(monkeypatch):
         password=TEST_DB_PASSWORD,
         database=db_name
     )
-    
+
     try:
         await test_conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         # Create all required tables
@@ -400,7 +400,7 @@ async def isolated_test_environment(monkeypatch):
                 password_changed_at TIMESTAMP
             )
         """)
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id SERIAL PRIMARY KEY,
@@ -425,7 +425,7 @@ async def isolated_test_environment(monkeypatch):
                 revoke_reason TEXT
             )
         """)
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS password_history (
                 id SERIAL PRIMARY KEY,
@@ -484,7 +484,7 @@ async def isolated_test_environment(monkeypatch):
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS registration_codes (
                 id SERIAL PRIMARY KEY,
@@ -500,7 +500,7 @@ async def isolated_test_environment(monkeypatch):
                 role_id INTEGER REFERENCES roles(id)
             )
         """)
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id SERIAL PRIMARY KEY,
@@ -515,7 +515,7 @@ async def isolated_test_environment(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # RBAC core tables (minimal for tests)
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS roles (
@@ -547,22 +547,22 @@ async def isolated_test_environment(monkeypatch):
                 UNIQUE(user_id, role_id)
             )
         """)
-        
+
         # Create indexes
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
-        
+
         # Seed minimal roles expected by tests
         await test_conn.execute("""
-            INSERT INTO roles (name, description, is_system) VALUES 
+            INSERT INTO roles (name, description, is_system) VALUES
             ('admin','Administrator', TRUE)
             ON CONFLICT (name) DO NOTHING
         """)
         await test_conn.execute("""
-            INSERT INTO roles (name, description, is_system) VALUES 
+            INSERT INTO roles (name, description, is_system) VALUES
             ('user','Standard user', TRUE)
             ON CONFLICT (name) DO NOTHING
         """)
@@ -570,7 +570,7 @@ async def isolated_test_environment(monkeypatch):
         logger.info(f"Created schema in test database: {db_name}")
     finally:
         await test_conn.close()
-    
+
     # 4. Set environment variables for this test
     db_url = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{db_name}"
     monkeypatch.setenv("AUTH_MODE", "multi_user")
@@ -589,7 +589,7 @@ async def isolated_test_environment(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.services.registration_service import reset_registration_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
-    
+
     await reset_db_pool()
     await reset_session_manager()
     reset_settings()
@@ -600,7 +600,7 @@ async def isolated_test_environment(monkeypatch):
     #     Let the FastAPI app create its own pool within its own loop when handling requests.
     # 5.2 We already created the minimal schema required for registration/login above.
     #     Avoid calling module bootstrap that could prime a global pool on the fixture loop.
-    
+
     # 7. Create TestClient (DB exists, singletons reset, env vars set)
     from tldw_Server_API.app.main import app as _app
     # Diagnostics: verify settings and DB URL are pointing to our per-test DB
@@ -613,7 +613,7 @@ async def isolated_test_environment(monkeypatch):
         logger.warning(f"AuthNZ test fixture diagnostics failed: {_diag_e}")
     with TestClient(_app) as client:
         yield client, db_name
-    
+
     # 8. Cleanup: reset singletons again
     await reset_db_pool()
     await reset_session_manager()
@@ -622,7 +622,7 @@ async def isolated_test_environment(monkeypatch):
     reset_settings()
     await reset_registration_service()
     await shutdown_audit_service()
-    
+
     # 9. Drop the unique database
     cleanup_conn = await asyncpg.connect(
         host=TEST_DB_HOST,
@@ -631,18 +631,18 @@ async def isolated_test_environment(monkeypatch):
         password=TEST_DB_PASSWORD,
         database="postgres"
     )
-    
+
     try:
         await cleanup_conn.execute(f"""
-            SELECT pg_terminate_backend(pid) 
-            FROM pg_stat_activity 
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
             WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
         """)
         await cleanup_conn.execute(f"DROP DATABASE IF EXISTS {db_name}")
         logger.info(f"Dropped test database: {db_name}")
     finally:
         await cleanup_conn.close()
-    
+
     # Re-enable CSRF protection after test
     settings.pop('CSRF_ENABLED', None)
 
@@ -678,23 +678,23 @@ async def setup_test_database(monkeypatch):
         password=TEST_DB_PASSWORD,
         database="postgres"
     )
-    
+
     try:
         # Drop test database if it exists
         await conn.execute(f"""
-            SELECT pg_terminate_backend(pid) 
-            FROM pg_stat_activity 
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
             WHERE datname = '{TEST_DB_NAME}' AND pid <> pg_backend_pid()
         """)
         await conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB_NAME}")
-        
+
         # Create test database
         await conn.execute(f"CREATE DATABASE {TEST_DB_NAME}")
         logger.info(f"Created test database: {TEST_DB_NAME}")
-        
+
     finally:
         await conn.close()
-    
+
     # Connect to test database and create base minimal schema (core tables)
     test_conn = await asyncpg.connect(
         host=TEST_DB_HOST,
@@ -703,7 +703,7 @@ async def setup_test_database(monkeypatch):
         password=TEST_DB_PASSWORD,
         database=TEST_DB_NAME
     )
-    
+
     try:
         await test_conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
         # Create tables
@@ -733,7 +733,7 @@ async def setup_test_database(monkeypatch):
                 password_changed_at TIMESTAMP
             )
         """)
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id SERIAL PRIMARY KEY,
@@ -758,7 +758,7 @@ async def setup_test_database(monkeypatch):
                 refresh_jti VARCHAR(255)
             )
         """)
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS password_history (
                 id SERIAL PRIMARY KEY,
@@ -817,7 +817,7 @@ async def setup_test_database(monkeypatch):
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS registration_codes (
                 id SERIAL PRIMARY KEY,
@@ -833,7 +833,7 @@ async def setup_test_database(monkeypatch):
                 role_id INTEGER REFERENCES roles(id)
             )
         """)
-        
+
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id SERIAL PRIMARY KEY,
@@ -848,14 +848,14 @@ async def setup_test_database(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Create indexes
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
-        
+
         logger.info("Created test database schema")
 
     finally:
@@ -874,9 +874,9 @@ async def setup_test_database(monkeypatch):
         logger.info("AuthNZ Postgres schema bootstrap completed for session test DB")
     except Exception as exc:
         logger.exception(f"AuthNZ schema bootstrap failed in setup_test_database: {exc}")
-    
+
     yield
-    
+
     # Cleanup: Drop test database after all tests
     cleanup_conn = await asyncpg.connect(
         host=TEST_DB_HOST,
@@ -885,11 +885,11 @@ async def setup_test_database(monkeypatch):
         password=TEST_DB_PASSWORD,
         database="postgres"
     )
-    
+
     try:
         await cleanup_conn.execute(f"""
-            SELECT pg_terminate_backend(pid) 
-            FROM pg_stat_activity 
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
             WHERE datname = '{TEST_DB_NAME}' AND pid <> pg_backend_pid()
         """)
         await cleanup_conn.execute(f"DROP DATABASE IF EXISTS {TEST_DB_NAME}")
@@ -908,7 +908,7 @@ async def clean_database(setup_test_database):
         password=TEST_DB_PASSWORD,
         database=TEST_DB_NAME
     )
-    
+
     try:
         # Clean all tables in correct order (respecting foreign keys)
         await conn.execute("TRUNCATE TABLE audit_log CASCADE")
@@ -916,13 +916,13 @@ async def clean_database(setup_test_database):
         await conn.execute("TRUNCATE TABLE password_history CASCADE")
         await conn.execute("TRUNCATE TABLE sessions CASCADE")
         await conn.execute("TRUNCATE TABLE users CASCADE")
-        
+
         logger.debug("Cleaned test database tables")
     finally:
         await conn.close()
-    
+
     yield
-    
+
     # Clean up after test
     cleanup_conn = await asyncpg.connect(
         host=TEST_DB_HOST,
@@ -931,7 +931,7 @@ async def clean_database(setup_test_database):
         password=TEST_DB_PASSWORD,
         database=TEST_DB_NAME
     )
-    
+
     try:
         await cleanup_conn.execute("TRUNCATE TABLE audit_log CASCADE")
         await cleanup_conn.execute("TRUNCATE TABLE registration_codes CASCADE")
@@ -946,7 +946,7 @@ async def clean_database(setup_test_database):
 async def test_db_pool(setup_test_database, clean_database):
     """Create a test database pool connected to the test PostgreSQL database."""
     test_database_url = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{TEST_DB_NAME}"
-    
+
     test_settings = Settings(
         AUTH_MODE="multi_user",
         DATABASE_URL=test_database_url,
@@ -955,10 +955,10 @@ async def test_db_pool(setup_test_database, clean_database):
         REQUIRE_REGISTRATION_CODE=False,
         RATE_LIMIT_ENABLED=False
     )
-    
+
     pool = DatabasePool(test_settings)
     await pool.initialize()
-    
+
     try:
         yield pool
     finally:
@@ -969,23 +969,23 @@ async def test_db_pool(setup_test_database, clean_database):
 async def mock_db_pool():
     """Create a mock database pool for unit testing."""
     pool = AsyncMock(spec=DatabasePool)
-    
+
     # Mock connection context manager
     mock_conn = AsyncMock()
     pool.transaction.return_value.__aenter__.return_value = mock_conn
     pool.transaction.return_value.__aexit__.return_value = None
-    
+
     # Mock fetchone for user queries
     pool.fetchone = AsyncMock()
     pool.fetchrow = AsyncMock()
     pool.fetch = AsyncMock()
     pool.fetchval = AsyncMock()
-    
+
     # Mock execute for updates
     pool.execute = AsyncMock()
     pool.acquire = AsyncMock()
     pool.release = AsyncMock()
-    
+
     return pool
 
 
@@ -1081,7 +1081,7 @@ async def test_user(test_db_pool, password_service):
     user_uuid = str(uuid.uuid4())
     password = "Test@Pass#2024!"
     password_hash = password_service.hash_password(password)
-    
+
     async with test_db_pool.acquire() as conn:
         user = await conn.fetchrow("""
             INSERT INTO users (
@@ -1093,7 +1093,7 @@ async def test_user(test_db_pool, password_service):
                       storage_quota_mb, storage_used_mb, created_at
         """, user_uuid, "testuser", "test@example.com", password_hash,
             "user", True, True, 5120, 0.0)
-    
+
     return {
         "id": user["id"],
         "uuid": str(user["uuid"]),
@@ -1116,7 +1116,7 @@ async def admin_user(test_db_pool, password_service):
     user_uuid = str(uuid.uuid4())
     password = "Admin@Pass#2024!"
     password_hash = password_service.hash_password(password)
-    
+
     async with test_db_pool.acquire() as conn:
         user = await conn.fetchrow("""
             INSERT INTO users (
@@ -1128,7 +1128,7 @@ async def admin_user(test_db_pool, password_service):
                       storage_quota_mb, storage_used_mb, created_at
         """, user_uuid, "admin", "admin@example.com", password_hash,
             "admin", True, True, 10240, 0.0)
-    
+
     return {
         "id": user["id"],
         "uuid": str(user["uuid"]),
@@ -1151,7 +1151,7 @@ async def inactive_user(test_db_pool, password_service):
     user_uuid = str(uuid.uuid4())
     password = "Inactive@Pass#2024!"
     password_hash = password_service.hash_password(password)
-    
+
     async with test_db_pool.acquire() as conn:
         user = await conn.fetchrow("""
             INSERT INTO users (
@@ -1163,7 +1163,7 @@ async def inactive_user(test_db_pool, password_service):
                       storage_quota_mb, storage_used_mb, created_at
         """, user_uuid, "inactiveuser", "inactive@example.com", password_hash,
             "user", False, True, 5120, 0.0)
-    
+
     return {
         "id": user["id"],
         "uuid": str(user["uuid"]),

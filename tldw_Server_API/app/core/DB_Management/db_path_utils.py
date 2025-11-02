@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 class DatabasePaths:
     """Centralized database path management."""
-    
+
     # Database file names
     MEDIA_DB_NAME = "Media_DB_v2.db"
     CHACHA_DB_NAME = "ChaChaNotes.db"
@@ -26,21 +26,21 @@ class DatabasePaths:
     PERSONALIZATION_DB_NAME = "Personalization.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
-    
+
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
     AUDIT_SUBDIR = "audit"
     EVALUATIONS_SUBDIR = "evaluations"
     WORKFLOWS_SUBDIR = "workflows"
-    
+
     @staticmethod
     def get_user_base_directory(user_id: int) -> Path:
         """
         Get the base directory for a specific user's databases.
-        
+
         Args:
             user_id: The user's ID
-            
+
         Returns:
             Path to the user's database directory
         """
@@ -58,7 +58,7 @@ class DatabasePaths:
                 base_path = base_path.resolve()
 
         user_dir = base_path / str(user_id)
-        
+
         # Ensure directory exists
         try:
             user_dir.mkdir(parents=True, exist_ok=True)
@@ -66,64 +66,64 @@ class DatabasePaths:
         except OSError as e:
             logger.error(f"Failed to create user directory {user_dir}: {e}")
             raise
-        
+
         return user_dir
-    
+
     @staticmethod
     def get_media_db_path(user_id: int) -> Path:
         """Get the path to the user's media database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         return user_dir / DatabasePaths.MEDIA_DB_NAME
-    
+
     @staticmethod
     def get_chacha_db_path(user_id: int) -> Path:
         """Get the path to the user's ChaChaNotes database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         return user_dir / DatabasePaths.CHACHA_DB_NAME
-    
+
     @staticmethod
     def get_prompts_db_path(user_id: int) -> Path:
         """Get the path to the user's prompts database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         prompts_dir = user_dir / DatabasePaths.PROMPTS_SUBDIR
-        
+
         # Ensure prompts subdirectory exists
         try:
             prompts_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create prompts directory {prompts_dir}: {e}")
             raise
-        
+
         return prompts_dir / DatabasePaths.PROMPTS_DB_NAME
-    
+
     @staticmethod
     def get_audit_db_path(user_id: int) -> Path:
         """Get the path to the user's audit database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         audit_dir = user_dir / DatabasePaths.AUDIT_SUBDIR
-        
+
         # Ensure audit subdirectory exists
         try:
             audit_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create audit directory {audit_dir}: {e}")
             raise
-        
+
         return audit_dir / DatabasePaths.AUDIT_DB_NAME
-    
+
     @staticmethod
     def get_evaluations_db_path(user_id: int) -> Path:
         """Get the path to the user's evaluations database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         eval_dir = user_dir / DatabasePaths.EVALUATIONS_SUBDIR
-        
+
         # Ensure evaluations subdirectory exists
         try:
             eval_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create evaluations directory {eval_dir}: {e}")
             raise
-        
+
         return eval_dir / DatabasePaths.EVALUATIONS_DB_NAME
 
     @staticmethod
@@ -132,7 +132,7 @@ class DatabasePaths:
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         # Keep at root of user dir alongside ChaChaNotes for discoverability
         return user_dir / DatabasePaths.PERSONALIZATION_DB_NAME
-    
+
     @staticmethod
     def get_workflows_db_path(user_id: int) -> Path:
         """Get the path to the user's workflows database."""
@@ -144,7 +144,7 @@ class DatabasePaths:
             logger.error(f"Failed to create workflows directory {workflows_dir}: {e}")
             raise
         return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
-    
+
     @staticmethod
     def get_workflows_scheduler_db_path(user_id: int) -> Path:
         """Get the path to the user's workflows scheduler database."""
@@ -156,12 +156,12 @@ class DatabasePaths:
             logger.error(f"Failed to create workflows scheduler directory {workflows_dir}: {e}")
             raise
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
-    
+
     @staticmethod
     def get_all_user_db_paths(user_id: int) -> Dict[str, Path]:
         """
         Get all database paths for a user.
-        
+
         Returns:
             Dictionary mapping database types to their paths
         """
@@ -175,15 +175,15 @@ class DatabasePaths:
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
         }
-    
+
     @staticmethod
     def validate_database_structure(user_id: int) -> bool:
         """
         Validate that all required directories exist for a user.
-        
+
         Args:
             user_id: The user's ID
-            
+
         Returns:
             True if all directories exist or were created successfully
         """
@@ -194,12 +194,12 @@ class DatabasePaths:
         except Exception as e:
             logger.error(f"Failed to validate database structure for user {user_id}: {e}")
             return False
-    
+
     @staticmethod
     def get_single_user_id() -> int:
         """
         Get the user ID for single-user mode.
-        
+
         Returns:
             The configured single-user ID (typically 1)
         """
@@ -225,10 +225,10 @@ def get_user_prompts_db_path(user_id: int) -> str:
 def ensure_user_database_structure(user_id: int) -> bool:
     """
     Ensure all database directories exist for a user.
-    
+
     Args:
         user_id: The user's ID
-        
+
     Returns:
         True if successful
     """

@@ -17,4 +17,3 @@ def is_persona_enabled() -> bool:
         return bool(settings.get("PERSONA_ENABLED", True))
     except Exception:
         return True
-

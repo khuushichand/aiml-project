@@ -1,14 +1,14 @@
 # RAG Module Implementation Status
-**Last Updated**: 2025-08-30  
+**Last Updated**: 2025-08-30
 **Module Version**: v4.0 (Unified Pipeline)
 
 ## Quick Reference
 
-✅ = Fully Implemented & Connected  
-⚠️ = Partially Connected  
-❌ = Implemented but Not Connected  
-🚧 = Under Development  
-📝 = Planned  
+✅ = Fully Implemented & Connected
+⚠️ = Partially Connected
+❌ = Implemented but Not Connected
+🚧 = Under Development
+📝 = Planned
 
 ## Feature Implementation Matrix
 
@@ -105,50 +105,50 @@
 # Every feature is a parameter - no presets needed
 result = await unified_rag_pipeline(
     query="your query",
-    
+
     # ✅ Data Sources
     sources=["media_db", "notes", "characters", "chats"],
-    
+
     # ✅ Search Configuration
     search_mode="hybrid",  # fts, vector, hybrid
     top_k=10,
-    
+
     # ✅ Query Enhancement
     expand_query=True,
     expansion_strategies=["acronym", "synonym", "domain", "entity"],
     spell_check=True,
-    
+
     # ✅ Caching & Performance
     enable_cache=True,
     cache_threshold=0.85,
     use_embedding_cache=True,
-    
+
     # ✅ Document Processing
     enable_reranking=True,
     reranking_strategy="hybrid",
     enable_table_processing=True,
     enable_parent_expansion=True,
-    
+
     # ✅ Citations
     enable_citations=True,
     citation_style="apa",  # mla, apa, chicago, harvard, ieee
     enable_chunk_citations=True,
-    
+
     # ✅ Answer Generation
     enable_generation=True,
     generation_model="gpt-4o",
-    
+
     # ✅ Security
     detect_pii=True,
     content_filter=True,
     sensitivity_level="internal",
-    
+
     # ✅ Analytics & Monitoring
     enable_analytics=True,
     enable_feedback_collection=True,
     enable_monitoring=True,
     enable_debug_mode=False,
-    
+
     # ✅ Resilience
     enable_resilience=True
 )

@@ -72,4 +72,3 @@ async def test_audio_ws_transcription_smoke(api_client):
     except Exception as e:
         # Treat setup/config errors as optional in smoke
         pytest.skip(f"Audio WS not available/configured: {e}")
-

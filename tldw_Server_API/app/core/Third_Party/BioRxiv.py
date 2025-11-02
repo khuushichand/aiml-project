@@ -308,7 +308,7 @@ def get_biorxiv_by_doi(
         return None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
         return None, f"Unexpected error during BioRxiv DOI lookup: {str(e)}"
-    
+
 
 
 # End of BioRxiv.py

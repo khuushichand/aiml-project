@@ -71,4 +71,3 @@ def test_templates_crud_and_preview(client_with_user):
     # Get after delete -> 404
     r = client.get(f"/api/v1/outputs/templates/{tid}")
     assert r.status_code == 404
-

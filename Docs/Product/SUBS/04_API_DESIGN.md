@@ -586,7 +586,7 @@ GET /api/v1/subscriptions/export
   </head>
   <body>
     <outline text="Tech Blogs" title="Tech Blogs">
-      <outline type="rss" text="Example Blog" title="Example Blog" 
+      <outline type="rss" text="Example Blog" title="Example Blog"
                xmlUrl="https://example.com/feed.rss" htmlUrl="https://example.com"/>
     </outline>
     <outline text="YouTube Channels" title="YouTube Channels">

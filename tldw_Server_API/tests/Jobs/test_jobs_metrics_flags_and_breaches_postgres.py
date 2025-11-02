@@ -41,4 +41,3 @@ def test_sla_breaches_metrics_postgres(monkeypatch):
     jm._record_sla_breach(1, "ps", "default", "slow", "duration", 20.0, 0.0)
     vals = list(reg.values["jobs.sla_breaches_total"])  # counters include labels
     assert len(vals) >= 2
-

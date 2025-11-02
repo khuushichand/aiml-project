@@ -42,4 +42,3 @@ def test_prune_ttl_batch_require_confirm_header(monkeypatch, tmp_path):
         # Batch reschedule without X-Confirm -> 400
         r4 = client.post("/api/v1/jobs/batch/reschedule", json={"domain": "d", "delay_seconds": 10})
         assert r4.status_code == 400
-

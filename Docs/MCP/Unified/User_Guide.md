@@ -189,8 +189,8 @@ GET /api/v1/mcp/status
 The exact tool set depends on enabled modules. Common examples include:
 
 ### Media
-- `media.search` — full‑text search over media content
-- `media.get` — retrieve media content or snippet by id
+- `media.search` - full-text search over media content
+- `media.get` - retrieve media content or snippet by id
 
 Example
 ```json
@@ -233,7 +233,7 @@ Retrieve a specific item by source + id. Supports retrieval modes:
 
 Notes:
 - When prechunked media exists, `media.search` attempts to return a precise `loc` with `chunk_index`.
-- `media.get` anchors by `chunk_index`/`chunk_uuid` when available and expands to sibling chunks under the token budget; otherwise it falls back to on‑the‑fly chunking.
+- `media.get` anchors by `chunk_index`/`chunk_uuid` when available and expands to sibling chunks under the token budget; otherwise it falls back to on-the-fly chunking.
 
 ## Authentication
 
@@ -302,7 +302,7 @@ print(resp2.json()["result"])  # { meta, content, attachments }
 
 ### Example 2: Session Defaults via Safe Config
 
-You can provide per-session defaults (e.g., snippet lengths) via a base64‑encoded JSON config.
+You can provide per-session defaults (e.g., snippet lengths) via a base64-encoded JSON config.
 
 HTTP initialize with `mcp-session-id` negotiation and safe config:
 ```bash

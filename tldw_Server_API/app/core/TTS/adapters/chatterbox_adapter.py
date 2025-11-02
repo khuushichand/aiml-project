@@ -189,7 +189,7 @@ class ChatterboxAdapter(TTSAdapter):
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             return False
-    
+
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Chatterbox TTS capabilities"""
         langs = self.MULTILINGUAL_LANGS if self.use_multilingual else {"en"}
@@ -219,7 +219,7 @@ class ChatterboxAdapter(TTSAdapter):
             sample_rate=self.sample_rate,
             default_format=AudioFormat.WAV
         )
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         """Generate speech using Chatterbox TTS"""
         if not await self.ensure_initialized():
@@ -298,7 +298,7 @@ class ChatterboxAdapter(TTSAdapter):
                     Path(voice_reference_path).unlink(missing_ok=True)
                 except Exception:
                     pass
-    
+
     async def _stream_audio_chatterbox(
         self,
         request: TTSRequest,
@@ -347,7 +347,7 @@ class ChatterboxAdapter(TTSAdapter):
 
         finally:
             pass
-    
+
     async def _generate_complete_chatterbox(
         self,
         request: TTSRequest,
@@ -362,7 +362,7 @@ class ChatterboxAdapter(TTSAdapter):
         ):
             out += chunk
         return bytes(out)
-    
+
     def _map_emotion_to_exaggeration(self, emotion: Optional[str], intensity: float) -> float:
         """Map emotion label + intensity to upstream `exaggeration` scalar [0.0, 1.0]."""
         base_map = {
@@ -385,14 +385,14 @@ class ChatterboxAdapter(TTSAdapter):
         except Exception:
             e = base
         return max(0.0, min(1.0, e))
-    
+
     async def _prepare_voice_reference(self, voice_reference: bytes) -> Optional[str]:
         """
         Prepare voice reference audio for Chatterbox.
-        
+
         Args:
             voice_reference: Voice reference audio bytes
-            
+
         Returns:
             Path to temporary voice reference file or None if processing fails
         """
@@ -400,7 +400,7 @@ class ChatterboxAdapter(TTSAdapter):
             import tempfile
             from pathlib import Path
             from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference
-            
+
             # Process voice reference for Chatterbox requirements
             processed_audio, error = process_voice_reference(
                 voice_reference,
@@ -408,11 +408,11 @@ class ChatterboxAdapter(TTSAdapter):
                 validate=True,
                 convert=True
             )
-            
+
             if error:
                 logger.error(f"Voice reference processing failed: {error}")
                 return None
-            
+
             # Save to temporary file
             with tempfile.NamedTemporaryFile(
                 suffix='.wav',
@@ -421,14 +421,14 @@ class ChatterboxAdapter(TTSAdapter):
             ) as tmp_file:
                 tmp_file.write(processed_audio)
                 tmp_path = tmp_file.name
-            
+
             logger.info(f"Voice reference prepared: {tmp_path}")
             return tmp_path
-            
+
         except Exception as e:
             logger.error(f"Failed to prepare voice reference: {e}")
             return None
-    
+
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to Chatterbox voice"""
         v = (voice_id or "").lower()
@@ -452,23 +452,23 @@ class ChatterboxAdapter(TTSAdapter):
             "wise": "sage",
             "funny": "comic_relief",
         }
-        
+
         return voice_mappings.get(v, "narrator")
-    
+
     def preprocess_text(self, text: str, **kwargs) -> str:
         """Preprocess text for Chatterbox"""
         # Basic preprocessing
         text = super().preprocess_text(text)
-        
+
         # Chatterbox-specific preprocessing
         # Remove excessive punctuation that might affect emotion
         import re
         text = re.sub(r'[!]{2,}', '!', text)  # Multiple exclamations to one
         text = re.sub(r'[?]{2,}', '?', text)  # Multiple questions to one
         text = re.sub(r'\.{4,}', '...', text)  # Normalize ellipsis
-        
+
         return text
-    
+
     async def close(self):
         """Clean up resources"""
         self.model_en = None

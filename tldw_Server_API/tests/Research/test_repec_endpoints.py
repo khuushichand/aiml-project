@@ -104,4 +104,3 @@ async def test_repec_citations_not_found(monkeypatch, paper_search_app):
             params={"handle": "RePEc:missing:handle"},
         )
         assert r.status_code == 404
-

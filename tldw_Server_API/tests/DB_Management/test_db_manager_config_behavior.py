@@ -62,4 +62,3 @@ def test_db_type_derivation(monkeypatch):
     # unknown -> warn and fall back to sqlite
     DB_Manager.reset_content_backend(config=_cfg_with("mydb"), reload=False)
     assert DB_Manager.db_type == "sqlite"
-

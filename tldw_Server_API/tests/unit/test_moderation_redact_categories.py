@@ -39,4 +39,3 @@ def test_redact_text_respects_categories_enabled():
             os.unlink(path)
         except Exception:
             pass
-

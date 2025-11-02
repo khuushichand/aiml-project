@@ -75,4 +75,3 @@ def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch):
     monkeypatch.setattr("psycopg.connect", real_connect)
     acq = jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
     assert acq and str(acq.get("status")) == "processing"
-

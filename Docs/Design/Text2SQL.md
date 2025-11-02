@@ -28,9 +28,3 @@ https://huggingface.co/papers/2503.24364
 https://engineering.salesforce.com/bridging-natural-language-and-sql-with-generative-ai/
 
 https://github.com/kruskal-labs/toolfront
-
-
-
-
-
-

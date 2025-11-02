@@ -37,4 +37,3 @@ async def run_jobs_integrity_sweeper(stop_event: Optional[asyncio.Event] = None)
         except Exception as e:
             logger.debug(f"Jobs integrity sweep error: {e}")
         await asyncio.sleep(interval)
-

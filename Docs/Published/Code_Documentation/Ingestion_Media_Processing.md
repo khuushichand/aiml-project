@@ -4,7 +4,7 @@ This document describes the Ingestion_Media_Processing module: responsibilities,
 
 ## Overview
 
-- Purpose: Ingest media from various sources (audio, video, PDF, EPUB, document/HTML/XML/RTF/DOCX, MediaWiki dumps), extract text and metadata, optionally chunk and analyze content, and return structured results. Most functions here are DB‑agnostic; persistence is handled at the API layer.
+- Purpose: Ingest media from various sources (audio, video, PDF, EPUB, document/HTML/XML/RTF/DOCX, MediaWiki dumps), extract text and metadata, optionally chunk and analyze content, and return structured results. Most functions here are DB-agnostic; persistence is handled at the API layer.
 - Output shape: Processing functions return dicts aligned with the API’s response schema: keys commonly include `status`, `input_ref`, `processing_source`, `media_type`, `metadata`, `content`, `segments/chunks`, `analysis`, `analysis_details`, `keywords`, `error`, `warnings`.
 - Security: Upload validation, MIME checks, Yara scanning, size limits, and safe archive scanning are supported.
   - MIME detection in the validator uses `puremagic.from_file(..., mime=True)`; the API layer can optionally
@@ -24,32 +24,32 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
 ├── Video/                       # Video/playlist download + transcription pipeline
 ├── Media_Update_lib.py          # Helpers for updating media records (DB-level)
 ├── Upload_Sink.py               # Secure upload validation/sanitization
-└── XML_Ingestion_Lib.py         # Legacy XML import helper (DB‑writing)
+└── XML_Ingestion_Lib.py         # Legacy XML import helper (DB-writing)
 ```
 
 ## Validation & Security: `Upload_Sink.py`
 
 - Core types:
   - `ValidationResult`: result bag with `is_valid`, `issues`, `file_path`, `detected_mime_type`, `detected_extension`.
-  - `FileValidator`: main validator with per‑type config and Yara integration.
+  - `FileValidator`: main validator with per-type config and Yara integration.
 - MIME detection: Uses `puremagic.from_file(..., mime=True)`. If `puremagic` is unavailable, MIME checks are skipped; extensions and size are still enforced. The API layer may preconfigure `python-magic` via `MAGIC_FILE_PATH` (see `api/v1/API_Deps/validations_deps.py`), but `Upload_Sink.py` uses `puremagic` by default.
 - Yara scanning: Optional; if `YARA_RULES_PATH` provided and `yara` installed, rules are compiled and used by `_scan_file_with_yara`.
-- Per‑type policy: Defaults in `DEFAULT_MEDIA_TYPE_CONFIG` (audio, video, image, document, ebook, pdf, html, xml, archive). Limits (e.g., `max_pdf_file_size_mb`) read from `loaded_config_data['media_processing']`.
+- Per-type policy: Defaults in `DEFAULT_MEDIA_TYPE_CONFIG` (audio, video, image, document, ebook, pdf, html, xml, archive). Limits (e.g., `max_pdf_file_size_mb`) read from `loaded_config_data['media_processing']`.
 - Extension → media key mapping is defined in `EXT_TO_MEDIA_TYPE_KEY`.
 - Key functions:
   - `validate_file(path, original_filename, media_type_key, ...) -> ValidationResult`: existence, size, allowed extension (by claimed filename), MIME (if available), Yara results.
-  - `validate_archive_contents(path) -> ValidationResult`: safe ZIP extraction in a temp dir with path‑traversal checks, total member count/size limits, and per‑member validation via `validate_file`.
+  - `validate_archive_contents(path) -> ValidationResult`: safe ZIP extraction in a temp dir with path-traversal checks, total member count/size limits, and per-member validation via `validate_file`.
   - `process_and_validate_file(path, validator, original_filename=None, media_type_key_override=None) -> ValidationResult`: dispatch by extension to proper media_type, archive scanning when configured.
 - Sanitization placeholders: `sanitize_html_content` and `sanitize_xml_content` currently log a warning and return content unchanged (no sanitization).
 
 Upload flow in endpoints
 - Endpoints use `file_validator_instance` (see `api/v1/API_Deps/validations_deps.py`) which optionally configures `python-magic` via `MAGIC_FILE_PATH` and enables Yara via `YARA_RULES_PATH`.
-- Uploaded files are saved to per‑request temp dirs, validated, then dispatched to the appropriate processing library.
+- Uploaded files are saved to per-request temp dirs, validated, then dispatched to the appropriate processing library.
 
 ## FastAPI Endpoints (Media)
 Base prefix: `/api/v1/media`
-- `POST /add` — Ingest URLs/files, process via the core libraries, and persist to `Media_DB_v2` (with versioning, metadata, keywords).
-- Processing‑only (no DB writes):
+- `POST /add` - Ingest URLs/files, process via the core libraries, and persist to `Media_DB_v2` (with versioning, metadata, keywords).
+- Processing-only (no DB writes):
   - `POST /process-videos`
   - `POST /process-audios`
   - `POST /process-documents`
@@ -57,16 +57,16 @@ Base prefix: `/api/v1/media`
   - `POST /process-ebooks`
   - `POST /process-emails`
 - MediaWiki (streaming):
-  - `POST /mediawiki/ingest-dump` — Process and persist; streams item events.
-  - `POST /mediawiki/process-dump` — Process only; streams item events.
+  - `POST /mediawiki/ingest-dump` - Process and persist; streams item events.
+  - `POST /mediawiki/process-dump` - Process only; streams item events.
 - Web content ingestion:
-  - `POST /ingest-web-content` — Multi‑mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
-  - `POST /process-web-scraping` — Process scraping jobs without persistence.
+  - `POST /ingest-web-content` - Multi-mode scraping (individual, sitemap, url_level, recursive) with optional analysis/chunking and persistence.
+  - `POST /process-web-scraping` - Process scraping jobs without persistence.
 
 Notes
 - API does not accept provider API keys in requests; credentials are read from server configuration.
 - Audio/Video processing requires ffmpeg in PATH.
-- Chunking uses the v2 chunker via `improved_chunking_process` (structure‑aware/hierarchical templates supported).
+- Chunking uses the v2 chunker via `improved_chunking_process` (structure-aware/hierarchical templates supported).
 
 ## Audio Ingestion: `Audio/`
 
@@ -77,19 +77,19 @@ Notes
 - Other notable modules: streaming/live transcription (`Audio_Streaming_Unified.py`, Parakeet/Nemo streaming), buffered capture.
 
 Chunking integration
-- All media processors call the unified chunker (`improved_chunking_process`). For structure‑aware/hierarchical chunking, templates live in `app/core/Chunking/templates.py`. See the Chunking Module docs for strategies and options.
+- All media processors call the unified chunker (`improved_chunking_process`). For structure-aware/hierarchical chunking, templates live in `app/core/Chunking/templates.py`. See the Chunking Module docs for strategies and options.
 
 ## Video Ingestion: `Video/Video_DL_Ingestion_Lib.py`
 
 - Orchestration functions:
-  - `process_videos(...) -> Dict[str, Any]`: handles URLs or local paths. Uses yt‑dlp for download (`download_video`), then transcribes/segments/analyzes similar to audio. DB‑agnostic.
+  - `process_videos(...) -> Dict[str, Any]`: handles URLs or local paths. Uses yt-dlp for download (`download_video`), then transcribes/segments/analyzes similar to audio. DB-agnostic.
   - `process_single_video(...) -> Dict[str, Any]`: worker for one input, used internally by `process_videos`.
-- Helpers: metadata extraction, playlist expansion, timecode URL generation, cross‑platform ffmpeg path resolution.
+- Helpers: metadata extraction, playlist expansion, timecode URL generation, cross-platform ffmpeg path resolution.
 
 ## PDF Processing: `PDF/PDF_Processing_Lib.py`
 
 - Text extraction options:
-  - `pymupdf4llm_parse_pdf(path)`: high‑level markdown conversion.
+  - `pymupdf4llm_parse_pdf(path)`: high-level markdown conversion.
   - `extract_text_and_format_from_pdf(path)`: page/block/span iteration via PyMuPDF with simple formatting heuristics.
   - `docling_parse_pdf(path)`: optional, if `docling` installed.
 - OCR: `_ocr_pdf_pages(...)` uses `OCR/registry.py` to resolve an OCR backend (Tesseract CLI supported) and renders pages with PyMuPDF.
@@ -102,7 +102,7 @@ Chunking integration
 ## EPUB and Books: `Books/Book_Processing_Lib.py`
 
 - Extraction methods:
-  - `'filtered'` (default): spine‑based read with front‑matter filtering.
+  - `'filtered'` (default): spine-based read with front-matter filtering.
   - `'markdown'`: full EPUB→Markdown (TOC + content).
   - `'basic'`: simple tag extraction fallback.
 - Main processor:
@@ -132,7 +132,7 @@ Chunking integration
 
 ## Legacy XML Helper: `XML_Ingestion_Lib.py`
 
-- `xml_to_text(xml_file)` and `import_xml_handler(...)`: legacy code path that parses XML and immediately writes to DB via `add_media_with_keywords`. Newer API endpoints prefer using the DB‑agnostic processors and then the API layer persists.
+- `xml_to_text(xml_file)` and `import_xml_handler(...)`: legacy code path that parses XML and immediately writes to DB via `add_media_with_keywords`. Newer API endpoints prefer using the DB-agnostic processors and then the API layer persists.
 
 ## How Endpoints Use This Module
 
@@ -156,7 +156,7 @@ From `app/api/v1/endpoints/media.py`:
   - Archive limits:
     - `max_archive_internal_files`: maximum number of members scanned.
     - `max_archive_uncompressed_size_mb`: aggregate uncompressed size of all members (enforced in `validate_archive_contents`).
-    - `max_archive_member_uncompressed_size_mb`: optional per‑member uncompressed size cap (enforced in `validate_archive_contents`).
+    - `max_archive_member_uncompressed_size_mb`: optional per-member uncompressed size cap (enforced in `validate_archive_contents`).
     - `max_archive_file_size_mb` (aka `archive_file_size_mb` default): compressed archive file size limit (applies to the uploaded `.zip`/`.tar*` file, enforced in `validate_file`).
   - PDF conversion: `pdf_conversion_timeout_seconds`.
 - External tooling: `ffmpeg` and `yt-dlp` required for A/V; optional `yara`, `puremagic` (MIME detection), `docling` (PDF), `pypandoc` (RTF), and system `tesseract` for OCR.
@@ -183,7 +183,7 @@ print(result["status"], len(result.get("chunks") or []))
 ```
 
 ```python
-# Audio batch (DB‑agnostic)
+# Audio batch (DB-agnostic)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
 
 out = process_audio_files(
@@ -192,7 +192,7 @@ out = process_audio_files(
     perform_analysis=True,
     api_name="openai",
 )
-print(out["processed_count"], out["errors"]) 
+print(out["processed_count"], out["errors"])
 ```
 
 ### Per Media Type Examples
@@ -357,9 +357,9 @@ for ev in events:
 
 - HTML/XML sanitization in `Upload_Sink.py` are placeholders (return original content with a warning).
 - MediaWiki vector store saving is scaffolded but not fully implemented in the current code.
-- `XML_Ingestion_Lib.py` follows an older pattern that writes to DB directly; newer endpoints prefer DB‑agnostic processors.
+- `XML_Ingestion_Lib.py` follows an older pattern that writes to DB directly; newer endpoints prefer DB-agnostic processors.
 - Some modules rely on optional dependencies; functions degrade gracefully with warnings when a dependency is absent.
-- Ingestion‑time claim extraction is available and wired in the embeddings pipeline (see `ChromaDB_Library.py`) behind `ENABLE_INGESTION_CLAIMS`; it is not run for every add‑media path by default.
+- Ingestion-time claim extraction is available and wired in the embeddings pipeline (see `ChromaDB_Library.py`) behind `ENABLE_INGESTION_CLAIMS`; it is not run for every add-media path by default.
 
 ---
 

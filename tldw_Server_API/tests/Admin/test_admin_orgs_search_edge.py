@@ -54,4 +54,3 @@ def test_admin_orgs_search_edge_cases(monkeypatch, tmp_path):
             assert "000000" not in ids
     finally:
         app.dependency_overrides.pop(require_admin, None)
-

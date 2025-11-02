@@ -4,18 +4,18 @@ This page documents the Watchlists endpoints relevant to sources, jobs, runs, it
 
 ## Endpoints (selected)
 
-- `POST /api/v1/watchlists/sources` — create a source
-- `GET /api/v1/watchlists/sources` — list sources (filters: `q`, `tag`, `type`, ...)
-- `GET /api/v1/watchlists/sources/{id}` — get a source
-- `PATCH /api/v1/watchlists/sources/{id}` — update a source
-- `DELETE /api/v1/watchlists/sources/{id}` — delete a source
-- `POST /api/v1/watchlists/sources/bulk` — bulk JSON create (per-entry status)
-- `POST /api/v1/watchlists/sources/import` — OPML import (multipart)
-- `GET  /api/v1/watchlists/sources/export` — OPML export
+- `POST /api/v1/watchlists/sources` - create a source
+- `GET /api/v1/watchlists/sources` - list sources (filters: `q`, `tag`, `type`, ...)
+- `GET /api/v1/watchlists/sources/{id}` - get a source
+- `PATCH /api/v1/watchlists/sources/{id}` - update a source
+- `DELETE /api/v1/watchlists/sources/{id}` - delete a source
+- `POST /api/v1/watchlists/sources/bulk` - bulk JSON create (per-entry status)
+- `POST /api/v1/watchlists/sources/import` - OPML import (multipart)
+- `GET  /api/v1/watchlists/sources/export` - OPML export
 
-- `GET  /api/v1/watchlists/runs` — list runs globally (filters: `q`, pagination)
-- `GET  /api/v1/watchlists/runs/{id}/details` — run details with optional filter tallies
- - `POST /api/v1/watchlists/jobs/{id}/preview` — preview candidates and filter decisions without ingestion
+- `GET  /api/v1/watchlists/runs` - list runs globally (filters: `q`, pagination)
+- `GET  /api/v1/watchlists/runs/{id}/details` - run details with optional filter tallies
+ - `POST /api/v1/watchlists/jobs/{id}/preview` - preview candidates and filter decisions without ingestion
 
 Jobs and outputs endpoints are available in the server OpenAPI and are covered in the product docs.
 
@@ -66,14 +66,14 @@ For OPML import/export and filters, see the server’s OpenAPI and the product d
 
 Endpoints:
 
-- `POST /api/v1/watchlists/sources/import` — multipart with fields:
+- `POST /api/v1/watchlists/sources/import` - multipart with fields:
   - `file`: OPML file
   - `active` (bool, default true): mark created sources active
   - `tags` (list[str], optional): tag names applied to each created source
   - `group_id` (int, optional): group to attach each created source to
   - Response: `{ items[], total, created, skipped, errors }` with per-entry `status: created|skipped|error` and `error` message when applicable.
 
-- `GET /api/v1/watchlists/sources/export` — returns OPML for RSS sources. Optional filters: `tag`, `group`, `type`.
+- `GET /api/v1/watchlists/sources/export` - returns OPML for RSS sources. Optional filters: `tag`, `group`, `type`.
 
 Examples
 
@@ -136,7 +136,7 @@ When `source_type = "rss"` and a URL points to YouTube, the server attempts to n
   - `X-YouTube-Normalized: 1`
   - `X-YouTube-Canonical-URL: <canonical-feed-url>`
 
-- Unsupported forms are rejected with `400 invalid_youtube_rss_url` (e.g., `/watch`, `/shorts`, some `@handle` or `/c/...` vanity URLs that cannot be normalized server‑side).
+- Unsupported forms are rejected with `400 invalid_youtube_rss_url` (e.g., `/watch`, `/shorts`, some `@handle` or `/c/...` vanity URLs that cannot be normalized server-side).
 
 Tip: The WebUI normalizes many common YouTube URLs before submitting to the server.
 
@@ -173,9 +173,10 @@ GET /api/v1/watchlists/runs/export.csv?scope=global&q=Alpha&page=1&size=200&incl
 GET /api/v1/watchlists/runs/export.csv?scope=job&job_id=123&page=1&size=200&include_tallies=true
 ```
 Columns: `id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag`.
+Headers: server includes `X-Has-More: true|false` to mirror pagination parity.
 
 When `include_tallies=true`, an additional column is appended:
-- `filter_tallies_json` — JSON map of per-filter tallies for that run (keys are filter identifiers; values are counts).
+- `filter_tallies_json` - JSON map of per-filter tallies for that run (keys are filter identifiers; values are counts).
 
 - Per-run tallies export:
 ```
@@ -193,7 +194,7 @@ Watchlists can optionally fetch older pages of RSS/Atom feeds to build a fuller 
 - 304 behavior: `on_304` (when true, still attempt backfill when the first page returns 304 Not Modified).
 - Boundary mode: `stop_on_seen` (when true, stop traversing when a fetched page has no items that are new relative to the source’s seen keys in the DB).
 
-Per‑source settings example (create/update):
+Per-source settings example (create/update):
 
 ```
 {
@@ -228,7 +229,7 @@ Run stats include history counters when backfill is used:
 
 Notes:
 - Atom RFC5005: we follow `<link rel="prev-archive" href="…"/>` to discover older pages.
-- WordPress feeds: we try common paged forms like `?paged=2` (heuristic and best‑effort).
+- WordPress feeds: we try common paged forms like `?paged=2` (heuristic and best-effort).
 - Deduplication occurs across pages and against the source’s seen keys.
 - To reduce network fetches for full text, prefer feed content via `settings.rss.use_feed_content_if_available` with a reasonable minimum length.
 
@@ -259,6 +260,19 @@ Include-only gating (summary):
 - If unset, a default can be sourced from `organizations.metadata.watchlists.require_include_default` (or flat key `watchlists_require_include_default`), falling back to `WATCHLISTS_REQUIRE_INCLUDE_DEFAULT`.
 - Per-run stats include `filters_matched`, `filters_actions` (include/exclude/flag counters), and `filter_tallies` keyed by rule id/index.
 
+Quick behavior table:
+
+| Setting source | Value | Include rules exist? | Behavior |
+| --- | --- | --- | --- |
+| Job `require_include` | true | yes | Only include-matched ingested; others `filtered` |
+| Job `require_include` | false | yes/no | Standard include/exclude/flag semantics; non-matching still ingested unless excluded |
+| Job `require_include` unset | org default / env | yes | Only include-matched ingested; others `filtered` |
+| Job `require_include` unset | org default / env | no | Standard include/exclude/flag semantics |
+
+Notes:
+- Org default lives at `organizations.metadata.watchlists.require_include_default` (flat key `watchlists_require_include_default` also read for backward compatibility). Env fallback: `WATCHLISTS_REQUIRE_INCLUDE_DEFAULT`.
+- Include-only gating applies only when at least one include rule exists.
+
 Quick reference:
 - Job flag: `job_filters.require_include = true|false`
 - Org default: `organizations.metadata.watchlists.require_include_default`
@@ -288,7 +302,7 @@ Migration:
 - Subscription → Source (`/watchlists/sources`)
 - SubscriptionChecks → Scrape Runs (`/watchlists/jobs/{id}/runs`, `/watchlists/runs/{run_id}`)
 - ImportRules → Job Filters (`/watchlists/jobs/{id}/filters`)
-### Preview candidates (dry‑run)
+### Preview candidates (dry-run)
 
 `POST /api/v1/watchlists/jobs/{id}/preview`
 
@@ -300,5 +314,5 @@ Migration:
 - PreviewItem fields: `source_id`, `source_type`, `url`, `title`, `summary`, `published_at`, `decision` (`ingest|filtered`), `matched_action` (`include|exclude|flag|None`), `matched_filter_key`, `flagged`.
 
 Notes
-- Include‑only gating is honored: when active and include rules exist, items that don’t match an include rule are shown as `decision=filtered`.
+- Include-only gating is honored: when active and include rules exist, items that don’t match an include rule are shown as `decision=filtered`.
 - No DB writes or ingestion occur during preview.

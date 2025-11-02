@@ -238,7 +238,7 @@ Monitor security events in real-time:
 
 ```sql
 -- Query suspicious activity
-SELECT * FROM rag_security_events 
+SELECT * FROM rag_security_events
 WHERE severity IN ('HIGH', 'CRITICAL')
 AND resolved = FALSE
 ORDER BY timestamp DESC;
@@ -324,13 +324,13 @@ Always use HTTPS in production:
 server {
     listen 443 ssl http2;
     server_name api.yourdomain.com;
-    
+
     ssl_certificate /etc/ssl/certs/tldw.crt;
     ssl_certificate_key /etc/ssl/private/tldw.key;
-    
+
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
-    
+
     location / {
         proxy_pass http://localhost:8000;
         proxy_set_header X-Real-IP $remote_addr;
@@ -516,5 +516,5 @@ For production support and enterprise features, contact:
 
 ---
 
-*Last Updated: 2025-08-19*  
+*Last Updated: 2025-08-19*
 *Version: 1.0.0*

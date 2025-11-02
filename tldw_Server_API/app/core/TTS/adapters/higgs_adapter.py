@@ -40,7 +40,7 @@ from ..tts_resource_manager import get_resource_manager
 
 class HiggsAdapter(TTSAdapter):
     """Adapter for Higgs Audio V2 TTS model from Boson AI"""
-    
+
     # Supported languages (50+ languages)
     SUPPORTED_LANGUAGES = {
         "en", "zh", "es", "fr", "de", "ja", "ko", "ru", "it", "pt",
@@ -49,7 +49,7 @@ class HiggsAdapter(TTSAdapter):
         "bg", "hr", "sr", "sl", "lt", "lv", "et", "sq", "mk", "ca",
         "eu", "gl", "is", "ga", "cy", "mt", "lb", "yi", "ur", "fa"
     }
-    
+
     # Voice presets (can be extended with voice cloning)
     VOICE_PRESETS = {
         "narrator": VoiceInfo(
@@ -81,10 +81,10 @@ class HiggsAdapter(TTSAdapter):
             use_case=["singing", "humming"]
         )
     }
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        
+
         # Model configuration
         self.model_path = self.config.get(
             "higgs_model_path",
@@ -112,7 +112,7 @@ class HiggsAdapter(TTSAdapter):
         else:
             # Preserve any custom device strings (e.g., 'mps'); default to CPU when unsupported
             self.device = preferred_device if preferred_device else ("cuda" if cuda_available else "cpu")
-        
+
         # Auto-download toggle: config override > env overrides > default True
         def _parse_bool(val, default=True):
             if isinstance(val, bool):
@@ -126,28 +126,28 @@ class HiggsAdapter(TTSAdapter):
         cfg_auto = self.config.get("higgs_auto_download")
         env_auto = os.getenv("HIGGS_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
         self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
-        
+
         # Audio configuration (24kHz for Higgs V2)
         self.sample_rate = 24000
         self.frame_rate = 25  # 25 frames per second tokenizer
-        
+
         # Model instances
         self.model = None
         self.tokenizer = None
         self.audio_tokenizer = None
-        
+
         # Performance settings
         self.use_fp16 = self.config.get("higgs_use_fp16", True) and self.device == "cuda"
         self.batch_size = self.config.get("higgs_batch_size", 1)
-    
+
     async def initialize(self) -> bool:
         """Initialize the Higgs Audio V2 model"""
         try:
             logger.info(f"{self.provider_name}: Loading Higgs Audio V2 model...")
-            
+
             # Get resource manager for memory monitoring
             resource_manager = await get_resource_manager()
-            
+
             # Check memory before loading model (support sync or async monitors in tests)
             _crit = resource_manager.memory_monitor.is_memory_critical()
             if asyncio.iscoroutine(_crit):
@@ -158,7 +158,7 @@ class HiggsAdapter(TTSAdapter):
                     provider=self.provider_name,
                     details=resource_manager.memory_monitor.get_memory_usage()
                 )
-            
+
             # Check if boson_multimodal library is available
             try:
                 from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
@@ -168,7 +168,7 @@ class HiggsAdapter(TTSAdapter):
                 # Gracefully indicate not configured rather than raising for integration environments
                 self._status = ProviderStatus.NOT_CONFIGURED
                 return False
-            
+
             # Initialize HiggsAudioServeEngine
             # If auto-download is disabled and a remote path is configured, abort with guidance
             if not self.auto_download:
@@ -220,7 +220,7 @@ class HiggsAdapter(TTSAdapter):
                     logger.warning(
                         f"{self.provider_name}: Failed to move tokenizer to CPU on MPS: {_mps_e}"
                     )
-            
+
             # Register model with resource manager
             if self.serve_engine:
                 register_result = resource_manager.register_model(
@@ -230,14 +230,14 @@ class HiggsAdapter(TTSAdapter):
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
-            
+
             logger.info(
                 f"{self.provider_name}: Initialized successfully "
                 f"(Device: {self.device})"
             )
             self._status = ProviderStatus.AVAILABLE
             return True
-            
+
         except (TTSInsufficientMemoryError, TTSModelLoadError):
             raise
         except RuntimeError as e:
@@ -256,7 +256,7 @@ class HiggsAdapter(TTSAdapter):
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
             )
-    
+
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Higgs Audio V2 capabilities"""
         return TTSCapabilities(
@@ -285,7 +285,7 @@ class HiggsAdapter(TTSAdapter):
             sample_rate=24000,
             default_format=AudioFormat.WAV
         )
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         """Generate speech using Higgs Audio V2"""
         if not await self.ensure_initialized():
@@ -293,29 +293,29 @@ class HiggsAdapter(TTSAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
-        
+
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_name.lower())
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
-        
+
         # Prepare generation parameters
         voice = request.voice or "conversational"
-        
+
         # Handle voice cloning if reference provided
         voice_reference_path = None
         if request.voice_reference:
             voice_reference_path = await self._prepare_voice_reference(request.voice_reference)
             # Use "cloned" as voice identifier when using reference
             voice = "cloned" if voice_reference_path else voice
-        
+
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "
             f"language={request.language}, format={request.format.value}"
         )
-        
+
         try:
             if request.stream:
                 # Return streaming response
@@ -338,11 +338,11 @@ class HiggsAdapter(TTSAdapter):
                     voice_used=voice,
                     provider=self.provider_name
                 )
-                
+
         except Exception as e:
             logger.error(f"{self.provider_name} generation error: {e}")
             raise
-    
+
     async def _stream_audio_higgs(
         self,
         request: TTSRequest,
@@ -351,25 +351,25 @@ class HiggsAdapter(TTSAdapter):
         """Stream audio from Higgs model"""
         if not hasattr(self, 'serve_engine') or not self.serve_engine:
             raise ValueError("Higgs serve engine not initialized")
-        
+
         # Import required modules (torchaudio optional; avoid hard dependency)
         from boson_multimodal.serve.serve_engine import HiggsAudioResponse
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
             StreamingAudioWriter,
             AudioNormalizer
         )
-        
+
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(
             format=request.format.value,
             sample_rate=self.sample_rate,
             channels=1
         )
-        
+
         try:
             # Prepare ChatML format for Higgs
             chat_ml_sample = self._prepare_higgs_chat_ml(request, voice_reference_path)
-            
+
             # Generate with HiggsAudioServeEngine
             logger.info(f"{self.provider_name}: Starting generation...")
             output: HiggsAudioResponse = self.serve_engine.generate(
@@ -380,32 +380,32 @@ class HiggsAdapter(TTSAdapter):
                 top_k=request.extra_params.get("top_k", 50),
                 stop_strings=["<|end_of_text|>", "<|eot_id|>"]
             )
-            
+
             # Convert numpy audio to tensor and back to numpy for processing
             audio_array = output.audio
-            
+
             # Process audio in chunks for streaming
             chunk_size = int(self.sample_rate * 0.5)  # 0.5 second chunks
             for i in range(0, len(audio_array), chunk_size):
                 chunk = audio_array[i:i + chunk_size]
-                
+
                 if len(chunk) > 0:
                     # Normalize to int16
                     normalized_chunk = normalizer.normalize(chunk, target_dtype=np.int16)
-                    
+
                     # Encode to target format
                     encoded_bytes = writer.write_chunk(normalized_chunk)
                     if encoded_bytes:
                         yield encoded_bytes
-            
+
             # Finalize stream
             final_bytes = writer.write_chunk(finalize=True)
             if final_bytes:
                 yield final_bytes
-            
+
             logger.info(f"{self.provider_name}: Successfully generated audio")
             logger.debug(f"Generated text: {output.generated_text}")
-            
+
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
@@ -419,7 +419,7 @@ class HiggsAdapter(TTSAdapter):
                     logger.debug(f"Cleaned up voice reference: {voice_reference_path}")
                 except Exception as e:
                     logger.warning(f"Failed to clean up voice reference: {e}")
-    
+
     async def _generate_complete_higgs(
         self,
         request: TTSRequest,
@@ -431,7 +431,7 @@ class HiggsAdapter(TTSAdapter):
         async for chunk in self._stream_audio_higgs(request, voice_reference_path):
             all_audio += chunk
         return all_audio
-    
+
     def _prepare_higgs_chat_ml(
         self,
         request: TTSRequest,
@@ -523,15 +523,15 @@ class HiggsAdapter(TTSAdapter):
             logger.info(f"Added voice reference to Higgs ChatML: {voice_reference_path}")
 
         return payload
-    
+
     async def _prepare_voice_reference(self, voice_reference: bytes) -> Optional[str]:
         """
         Prepare voice reference audio for Higgs.
         Higgs needs 3-10 seconds of audio at 24kHz.
-        
+
         Args:
             voice_reference: Voice reference audio bytes
-            
+
         Returns:
             Path to temporary voice reference file or None if processing fails
         """
@@ -539,7 +539,7 @@ class HiggsAdapter(TTSAdapter):
             import tempfile
             from pathlib import Path
             from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference
-            
+
             # Process voice reference for Higgs requirements
             processed_audio, error = process_voice_reference(
                 voice_reference,
@@ -547,11 +547,11 @@ class HiggsAdapter(TTSAdapter):
                 validate=True,
                 convert=True
             )
-            
+
             if error:
                 logger.error(f"Voice reference processing failed: {error}")
                 return None
-            
+
             # Save to temporary file
             with tempfile.NamedTemporaryFile(
                 suffix='.wav',
@@ -560,19 +560,19 @@ class HiggsAdapter(TTSAdapter):
             ) as tmp_file:
                 tmp_file.write(processed_audio)
                 tmp_path = tmp_file.name
-            
+
             logger.info(f"Voice reference prepared for Higgs: {tmp_path}")
             return tmp_path
-            
+
         except Exception as e:
             logger.error(f"Failed to prepare voice reference: {e}")
             return None
-    
+
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to Higgs voice preset"""
         if voice_id in self.VOICE_PRESETS:
             return voice_id
-        
+
         # Map common voice types
         voice_mappings = {
             "default": "conversational",
@@ -583,19 +583,19 @@ class HiggsAdapter(TTSAdapter):
             "singing": "melodic",
             "musical": "melodic"
         }
-        
+
         return voice_mappings.get(voice_id.lower(), "conversational")
-    
+
     async def close(self):
         """Clean up resources"""
         if hasattr(self, 'serve_engine') and self.serve_engine:
             del self.serve_engine
             self.serve_engine = None
-        
+
         # Clear GPU cache if using CUDA
         if self.device == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
-        
+
         await super().close()
 
 #

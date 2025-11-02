@@ -26,7 +26,7 @@ from ....DB_Management.db_path_utils import DatabasePaths
 class MediaModule(BaseModule):
     """
     Enhanced Media Module with production features.
-    
+
     Provides tools for:
     - Media search (full-text and semantic)
     - Media ingestion (URLs, files)
@@ -34,40 +34,40 @@ class MediaModule(BaseModule):
     - Media metadata management
     - Summary generation
     """
-    
+
     async def on_initialize(self) -> None:
         """Initialize media module with connection pooling"""
         try:
             # Get database path from config
             default_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
             db_path = self.config.settings.get("db_path") or default_db_path
-            
+
             # Ensure database directory exists
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Initialize database with async support
             self.db = MediaDatabase(
                 db_path=db_path,
                 client_id=f"mcp_media_{self.config.name}"
             )
-            
+
             # Initialize connection pool if supported
             if hasattr(self.db, 'initialize_pool'):
                 await self.db.initialize_pool(
                     pool_size=self.config.settings.get("pool_size", 10)
                 )
-            
+
             # Cache for frequently accessed data
             self._media_cache = {}
             self._cache_ttl = self.config.settings.get("cache_ttl", 300)  # 5 minutes
             self._semantic_retrievers: Dict[Tuple[Optional[str], Optional[str]], Any] = {}
-            
+
             logger.info(f"Media module initialized with database: {db_path}")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize media module: {e}")
             raise
-    
+
     async def on_shutdown(self) -> None:
         """Graceful shutdown with connection cleanup"""
         try:
@@ -85,16 +85,16 @@ class MediaModule(BaseModule):
                     self._semantic_retrievers.clear()
             except Exception:
                 pass
-            
+
             # Close database connections
             if hasattr(self.db, 'close_pool'):
                 await self.db.close_pool()
-            
+
             logger.info("Media module shutdown complete")
-            
+
         except Exception as e:
             logger.error(f"Error during media module shutdown: {e}")
-    
+
     async def check_health(self) -> Dict[str, bool]:
         """Comprehensive health checks"""
         checks = {
@@ -103,7 +103,7 @@ class MediaModule(BaseModule):
             "disk_space": False,
             "service_available": True
         }
-        
+
         try:
             # Check database connection (backend-agnostic)
             try:
@@ -113,7 +113,7 @@ class MediaModule(BaseModule):
             except Exception as _db_e:
                 logger.debug(f"Media DB connection check failed: {_db_e}")
                 checks["database_connection"] = False
-            
+
             # Check if database is writable (use a test table or transaction)
             # This is a simplified check - implement proper health check table
             try:
@@ -130,19 +130,19 @@ class MediaModule(BaseModule):
             except Exception as _w_e:
                 logger.debug(f"Media DB writable check failed: {_w_e}")
                 checks["database_writable"] = False
-            
+
             # Check disk space
             default_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
             db_path = self.config.settings.get("db_path", default_db_path)
             stat = os.statvfs(os.path.dirname(db_path))
             free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
             checks["disk_space"] = free_gb > 1  # At least 1GB free
-            
+
         except Exception as e:
             logger.error(f"Health check failed: {e}")
-        
+
         return checks
-    
+
     async def get_tools(self) -> List[Dict[str, Any]]:
         """Get available media tools"""
         tools = [
@@ -218,7 +218,7 @@ class MediaModule(BaseModule):
                 },
                 metadata={"category": "search", "auth_required": False}
             ),
-            
+
             create_tool_definition(
                 name="get_transcript",
                 description="Get the transcript for a specific media item",
@@ -244,7 +244,7 @@ class MediaModule(BaseModule):
                 },
                 metadata={"category": "retrieval", "auth_required": True}
             ),
-            
+
             create_tool_definition(
                 name="get_media_metadata",
                 description="Get metadata for a specific media item",
@@ -264,7 +264,7 @@ class MediaModule(BaseModule):
                 },
                 metadata={"category": "metadata", "auth_required": False}
             ),
-            
+
             create_tool_definition(
                 name="ingest_media",
                 description="Ingest a new media item from URL or file",
@@ -301,7 +301,7 @@ class MediaModule(BaseModule):
                 },
                 metadata={"category": "ingestion", "auth_required": True, "admin_only": False}
             ),
-            
+
             create_tool_definition(
                 name="update_media",
                 description="Update media metadata or content",
@@ -327,7 +327,7 @@ class MediaModule(BaseModule):
                 },
                 metadata={"category": "management", "auth_required": True}
             ),
-            
+
             create_tool_definition(
                 name="delete_media",
                 description="Delete a media item (soft delete)",
@@ -349,7 +349,7 @@ class MediaModule(BaseModule):
             )
         ]
         return tools
-    
+
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         """Execute media tool with validation and error handling"""
         # Validate and sanitize inputs
@@ -359,10 +359,10 @@ class MediaModule(BaseModule):
             self.validate_tool_arguments(tool_name, arguments)
         except Exception as ve:
             raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
-        
+
         # Log tool execution
         logger.info(f"Executing media tool: {tool_name}", extra={"audit": True})
-        
+
         try:
             if tool_name == "media.search":
                 return await self._media_search_normalized(context=context, **arguments)
@@ -385,10 +385,10 @@ class MediaModule(BaseModule):
 
             elif tool_name == "delete_media":
                 return await self._delete_media(context=context, **arguments)
-            
+
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
-                
+
         except Exception as e:
             logger.error(f"Tool execution failed: {tool_name} - {e}")
             raise
@@ -745,7 +745,7 @@ class MediaModule(BaseModule):
         # Default snippet mode
         body = self._make_snippet(content, None, snippet_length)
         return {"meta": item, "content": body, "attachments": None}
-    
+
     async def _search_media(
         self,
         query: str,
@@ -895,7 +895,7 @@ class MediaModule(BaseModule):
         except Exception as e:
             logger.error(f"Search failed: {e}")
             raise
-    
+
     def _serialize_for_cache(self, value: Any) -> Any:
         if isinstance(value, dict):
             return {str(k): self._serialize_for_cache(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
@@ -1168,7 +1168,7 @@ class MediaModule(BaseModule):
         for row in paged:
             row.setdefault("score_type", "hybrid")
         return paged, total_estimate
-    
+
     async def _get_transcript(
         self,
         media_id: int,
@@ -1183,10 +1183,10 @@ class MediaModule(BaseModule):
             self._assert_media_access(media_id, context)
             # Get transcript from database
             transcript_data = self.db.get_transcript(media_id)
-            
+
             if not transcript_data:
                 raise ValueError(f"No transcript found for media ID: {media_id}")
-            
+
             # Format based on requested type
             if format == "text":
                 if include_timestamps:
@@ -1194,30 +1194,30 @@ class MediaModule(BaseModule):
                     formatted = self._format_transcript_with_timestamps(transcript_data)
                 else:
                     formatted = transcript_data.get("text", "")
-            
+
             elif format == "srt":
                 formatted = self._convert_to_srt(transcript_data)
-            
+
             elif format == "vtt":
                 formatted = self._convert_to_vtt(transcript_data)
-            
+
             elif format == "json":
                 formatted = transcript_data
-            
+
             else:
                 formatted = transcript_data.get("text", "")
-            
+
             return {
                 "media_id": media_id,
                 "format": format,
                 "include_timestamps": include_timestamps,
                 "transcript": formatted
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get transcript: {e}")
             raise
-    
+
     async def _get_media_metadata(
         self,
         media_id: int,
@@ -1231,21 +1231,21 @@ class MediaModule(BaseModule):
             self._assert_media_access(media_id, context)
             # Get basic metadata
             metadata = self.db.get_media_metadata(media_id)
-            
+
             if not metadata:
                 raise ValueError(f"Media not found: {media_id}")
-            
+
             # Add statistics if requested
             if include_stats:
                 stats = await self._get_media_stats(media_id)
                 metadata["statistics"] = stats
-            
+
             return metadata
-            
+
         except Exception as e:
             logger.error(f"Failed to get metadata: {e}")
             raise
-    
+
     async def _ingest_media(
         self,
         url: str,
@@ -1260,7 +1260,7 @@ class MediaModule(BaseModule):
             # Validate URL
             if not self._validate_url(url):
                 raise ValueError("Invalid or unsupported URL")
-            
+
             # Create ingestion job
             job_id = await self._create_ingestion_job(
                 url=url,
@@ -1269,7 +1269,7 @@ class MediaModule(BaseModule):
                 tags=tags or [],
                 priority=priority
             )
-            
+
             # Start processing based on priority
             if priority == "high":
                 # Process immediately
@@ -1277,7 +1277,7 @@ class MediaModule(BaseModule):
             else:
                 # Queue for background processing
                 await self._queue_media_job(job_id)
-            
+
             return {
                 "job_id": job_id,
                 "status": "processing" if priority == "high" else "queued",
@@ -1285,11 +1285,11 @@ class MediaModule(BaseModule):
                 "title": title,
                 "process_type": process_type
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to ingest media: {e}")
             raise
-    
+
     async def _update_media(
         self,
         media_id: int,
@@ -1305,35 +1305,35 @@ class MediaModule(BaseModule):
             existing = self.db.get_media_metadata(media_id)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
-            
+
             # Apply updates
             updated_fields = []
-            
+
             if "title" in updates:
                 self.db.update_media_title(media_id, updates["title"])
                 updated_fields.append("title")
-            
+
             if "description" in updates:
                 self.db.update_media_description(media_id, updates["description"])
                 updated_fields.append("description")
-            
+
             if "tags" in updates:
                 self.db.update_media_tags(media_id, updates["tags"])
                 updated_fields.append("tags")
-            
+
             # Clear cache for this media
             self._clear_media_cache(media_id)
-            
+
             return {
                 "media_id": media_id,
                 "updated_fields": updated_fields,
                 "success": True
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to update media: {e}")
             raise
-    
+
     async def _delete_media(
         self,
         media_id: int,
@@ -1349,7 +1349,7 @@ class MediaModule(BaseModule):
             existing = self.db.get_media_metadata(media_id)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
-            
+
             if permanent:
                 # Hard delete (requires admin)
                 # Check would be done at protocol level
@@ -1359,20 +1359,20 @@ class MediaModule(BaseModule):
                 # Soft delete
                 self.db.delete_media_soft(media_id)
                 action = "soft_deleted"
-            
+
             # Clear cache
             self._clear_media_cache(media_id)
-            
+
             return {
                 "media_id": media_id,
                 "action": action,
                 "success": True
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to delete media: {e}")
             raise
-    
+
     async def get_resources(self) -> List[Dict[str, Any]]:
         """Get available media resources"""
         return [
@@ -1395,7 +1395,7 @@ class MediaModule(BaseModule):
                 mime_type="application/json"
             ),
         ]
-    
+
     async def read_resource(self, uri: str) -> Dict[str, Any]:
         """Read media resource"""
         def _rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1432,7 +1432,7 @@ class MediaModule(BaseModule):
                 "type": "media_list",
                 "items": _rows_to_items(rows),
             }
-        
+
         elif uri == "media://popular":
             rows, _ = self.db.search_media_db(
                 search_query=None,
@@ -1456,28 +1456,28 @@ class MediaModule(BaseModule):
         elif uri == "media://types":
             types = self.db.get_distinct_media_types()
             return {"uri": uri, "type": "media_types", "items": types}
-        
+
         else:
             raise ValueError(f"Unknown resource URI: {uri}")
-    
+
     # Helper methods
-    
+
     async def _clean_cache(self):
         """Clean expired cache entries"""
         current_time = datetime.utcnow()
         expired_keys = []
-        
+
         for key, value in self._media_cache.items():
             if (current_time - value["time"]).seconds > self._cache_ttl:
                 expired_keys.append(key)
-        
+
         for key in expired_keys:
             del self._media_cache[key]
-    
+
     def _clear_media_cache(self, media_id: int):
         """Clear cached search results (all entries)."""
         self._media_cache.clear()
-    
+
     def _validate_url(self, url: str) -> bool:
         """Validate URL for ingestion with SSRF safeguards.
 
@@ -1624,26 +1624,26 @@ class MediaModule(BaseModule):
                 raise ValueError("media_id must be a positive integer")
             if "permanent" in arguments and not isinstance(arguments.get("permanent"), bool):
                 raise ValueError("permanent must be a boolean")
-    
+
     async def _create_ingestion_job(self, **kwargs) -> str:
         """Create media ingestion job"""
         # Generate job ID
         job_id = str(uuid.uuid4())
-        
+
         # Store job details (in production, use job queue)
         # For now, return job ID
         return job_id
-    
+
     async def _process_media_job(self, job_id: str):
         """Process media ingestion job"""
         # Placeholder for actual processing
         await asyncio.sleep(0.1)
-    
+
     async def _queue_media_job(self, job_id: str):
         """Queue media job for background processing"""
         # Placeholder for job queue integration
         pass
-    
+
     async def _get_media_stats(self, media_id: int) -> Dict[str, Any]:
         """Get media statistics"""
         return {
@@ -1652,17 +1652,17 @@ class MediaModule(BaseModule):
             "transcriptions": 0,
             "last_accessed": None
         }
-    
+
     def _format_transcript_with_timestamps(self, transcript_data: Dict) -> str:
         """Format transcript with timestamps"""
         # Placeholder implementation
         return transcript_data.get("text", "")
-    
+
     def _convert_to_srt(self, transcript_data: Dict) -> str:
         """Convert transcript to SRT format"""
         # Placeholder implementation
         return ""
-    
+
     def _convert_to_vtt(self, transcript_data: Dict) -> str:
         """Convert transcript to WebVTT format"""
         # Placeholder implementation

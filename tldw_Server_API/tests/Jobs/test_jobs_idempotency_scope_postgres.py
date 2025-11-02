@@ -36,4 +36,3 @@ def test_idempotency_scoped_to_domain_queue_type_postgres(monkeypatch):
 
     j5 = jm.create_job(domain="other", queue="default", job_type="export", payload={}, owner_user_id="2", idempotency_key=key)
     assert int(j5["id"]) != int(j1["id"])  # different domain -> distinct
-

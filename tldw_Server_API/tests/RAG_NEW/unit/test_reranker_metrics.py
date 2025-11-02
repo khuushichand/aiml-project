@@ -50,4 +50,3 @@ async def test_llm_reranker_timeout_increments_metrics(monkeypatch):
     assert _sum_values("rag_reranker_llm_timeouts_total") >= 1
     # budget may or may not be exhausted depending on env/platform timing; assert docs_scored increments instead
     assert _sum_values("rag_reranker_llm_docs_scored_total") >= 1
-

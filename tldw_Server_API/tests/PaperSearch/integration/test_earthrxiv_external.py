@@ -27,4 +27,3 @@ def test_earthrxiv_by_id_notfound_ok(client_with_auth):
     # Likely nonexistent id - expect 404 or tolerant error mapping
     resp = client_with_auth.get("/api/v1/paper-search/earthrxiv/by-id", params={"osf_id": "zzznotreal"})
     assert resp.status_code in (404, 502, 504), resp.text
-

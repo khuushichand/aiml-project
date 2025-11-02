@@ -27,4 +27,3 @@ def test_illegal_fail_on_queued_is_noop_sqlite(jobs_db):
     assert ok is False
     j2 = jm.get_job(int(j["id"]))
     assert j2["status"] == "queued"
-

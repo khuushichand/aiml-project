@@ -3,7 +3,7 @@
 #
 # Imports:
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Sequence, Literal, Tuple, Set
+from typing import List, Dict, Any, Optional, Union, Sequence, Literal, Tuple, Set, Callable
 import threading
 import re
 import os
@@ -52,19 +52,19 @@ from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 def validate_user_id(user_id: str) -> str:
     """
     Validates and sanitizes user_id to prevent path traversal attacks.
-    
+
     Args:
         user_id: The user identifier to validate
-        
+
     Returns:
         Sanitized user_id
-        
+
     Raises:
         ValueError: If user_id contains invalid characters or patterns
     """
     if not user_id:
         raise ValueError("user_id cannot be empty")
-    
+
     # Convert to string
     raw_user_id = str(user_id)
     # First, check raw input for forbidden characters (before trimming)
@@ -73,52 +73,52 @@ def validate_user_id(user_id: str) -> str:
         # Best-effort unified audit (non-blocking)
         log_security_violation(user_id=raw_user_id[:50], action="path_traversal_attempt", metadata={"attempted_value": raw_user_id[:100]})
         raise ValueError("Invalid user_id: contains forbidden characters")
-    
+
     # Now trim safe leading/trailing whitespace
     user_id = raw_user_id.strip()
-    
+
     # Only allow alphanumeric, underscore, and hyphen
     if not re.match(r'^[a-zA-Z0-9_-]+$', user_id):
         logger.error(f"Invalid user_id format: {user_id[:50]}")
         log_security_violation(user_id=user_id[:50], action="invalid_user_id", metadata={"reason": "invalid_characters"})
         raise ValueError("Invalid user_id: must contain only alphanumeric characters, underscores, and hyphens")
-    
+
     # Limit length to prevent DoS
     if len(user_id) > 255:
         raise ValueError("Invalid user_id: exceeds maximum length of 255 characters")
-    
+
     return user_id
 
 def validate_model_id(model_id: str) -> str:
     """
     Validates model identifier to prevent injection attacks.
-    
+
     Args:
         model_id: The model identifier to validate
-        
+
     Returns:
         Validated model_id
-        
+
     Raises:
         ValueError: If model_id contains invalid patterns
     """
     if not model_id:
         raise ValueError("model_id cannot be empty")
-    
+
     model_id = str(model_id).strip()
-    
+
     # Allow forward slash for model paths like "org/model" but prevent traversal
     if '..' in model_id or model_id.startswith('/') or '\\' in model_id:
         logger.error(f"Invalid model_id format: {model_id[:100]}")
         raise ValueError("Invalid model_id: contains forbidden patterns")
-    
+
     # Allow alphanumeric, underscore, hyphen, forward slash, and dot
     if not re.match(r'^[a-zA-Z0-9_\-/\.]+$', model_id):
         raise ValueError("Invalid model_id: contains invalid characters")
-    
+
     if len(model_id) > 500:
         raise ValueError("Invalid model_id: exceeds maximum length")
-    
+
     return model_id
 
 #
@@ -132,7 +132,14 @@ class ChromaDBManager:
     """
     DEFAULT_COLLECTION_NAME_PREFIX = "user_embeddings_for_"  # Can be made configurable
 
-    def __init__(self, user_id: str, user_embedding_config: Dict[str, Any]):
+    def __init__(
+        self,
+        user_id: str,
+        user_embedding_config: Dict[str, Any],
+        *,
+        client: Optional[Any] = None,
+        client_factory: Optional[Callable[[Path, Dict[str, Any]], Any]] = None,
+    ):
         """
         Initializes the ChromaDBManager for a specific user.
 
@@ -150,7 +157,7 @@ class ChromaDBManager:
         except ValueError as e:
             logger.error(f"Initialization failed: {e}")
             raise
-        
+
         self.user_embedding_config = user_embedding_config
         self._lock = threading.RLock()  # Instance-specific lock
 
@@ -165,10 +172,10 @@ class ChromaDBManager:
         if not user_db_base_path.exists():
             logger.error(f"USER_DB_BASE_DIR does not exist: {user_db_base_path}")
             raise ValueError(f"USER_DB_BASE_DIR does not exist: {user_db_base_path}")
-        
+
         # Construct path safely with validated user_id
         self.user_chroma_path: Path = (user_db_base_path / self.user_id / "chroma_storage").resolve()
-        
+
         # Ensure the resolved path is within the base directory (defense in depth)
         try:
             self.user_chroma_path.relative_to(user_db_base_path)
@@ -187,26 +194,32 @@ class ChromaDBManager:
 
         chroma_client_settings_config = self.user_embedding_config.get("chroma_client_settings", {})
 
-        # Initialize embedding configuration early so it's available even if we return early (stub client)
+        # Initialize embedding configuration early so it's available regardless of backend choice
         self.embedding_config = self.user_embedding_config.get("embedding_config", {})
         self.default_embedding_model_id = self.embedding_config.get('default_model_id')
-
-        def _is_test_mode() -> bool:
+        # Backend selection and initialization
+        if client is not None:
+            # Constructor-injected client takes precedence
+            self.client = client
+            logger.info(f"User '{self.user_id}': Using injected Chroma client instance.")
+        elif client_factory is not None:
             try:
-                if os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                    return True
-                if os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
-                    return True
-                if os.getenv("PYTEST_CURRENT_TEST") is not None:
-                    return True
-            except Exception:
-                pass
-            return False
+                factory_settings: Dict[str, Any] = {
+                    **chroma_client_settings_config,
+                    "persist_directory": str(self.user_chroma_path),
+                }
+                self.client = client_factory(self.user_chroma_path, factory_settings)
+                logger.info(f"User '{self.user_id}': Created Chroma client via injected factory.")
+            except Exception as e:
+                logger.error(f"User '{self.user_id}': client_factory failed: {e}", exc_info=True)
+                raise RuntimeError(f"Chroma client factory failed: {e}") from e
+        else:
+            backend = str(chroma_client_settings_config.get("backend", "persistent")).lower()
+            use_stub = bool(chroma_client_settings_config.get("use_in_memory_stub", False) or backend == "stub")
+            allow_stub_fallback = bool(chroma_client_settings_config.get("allow_stub_fallback", True))
 
-        # In test mode, prefer a stable in-memory stub to avoid flaky embedded backends
-        try:
-            if _is_test_mode():
-                # Scope the stub client key by user and base dir to avoid cross-test leakage
+            if use_stub:
+                # Scope the stub client key by user and base dir to avoid cross-config leakage
                 stub_key = f"{self.user_id}::{str(user_db_base_path)}"
                 cli = _TEST_STUB_CLIENTS.get(stub_key)
                 if cli is None:
@@ -214,120 +227,37 @@ class ChromaDBManager:
                     _TEST_STUB_CLIENTS[stub_key] = cli
                 self.client = cli
                 logger.warning(
-                    f"TEST_MODE: Using internal in-memory Chroma client for user '{self.user_id}'."
+                    f"User '{self.user_id}': Using internal in-memory Chroma client (config backend=stub)."
                 )
-                # Continue setup without touching PersistentClient, but ensure embedding config is set
-                if not self.default_embedding_model_id:
-                    logger.warning(
-                        f"User '{self.user_id}': No 'default_model_id' found in 'embedding_config'. "
-                        "Operations will require explicit 'embedding_model_id_override'."
-                    )
-                model_details = self.embedding_config.get("models", {}).get(self.default_embedding_model_id, {})
-                logger.info(
-                    f"User '{self.user_id}' ChromaDBManager configured. "
-                    f"Default Embedding Model ID: {self.default_embedding_model_id or 'Not Set (Override Required)'} "
-                    f"(Provider: {model_details.get('provider', 'N/A')}, Name: {model_details.get('model_name_or_path', 'N/A')})"
+            else:
+                # Build robust Settings with explicit persist_directory for Chroma 0.4.x/1.x compatibility
+                client_settings = ChromaSettings(
+                    persist_directory=str(self.user_chroma_path),
+                    anonymized_telemetry=chroma_client_settings_config.get("anonymized_telemetry", False),
+                    allow_reset=chroma_client_settings_config.get("allow_reset", True),
                 )
-                return
-        except Exception:
-            # If test-mode detection fails for any reason, continue with normal flow below
-            pass
-
-        # Option: force use of internal in-memory stub (useful for CI/sandboxed tests)
-        try:
-            # Only enable stub when explicitly requested via environment variable.
-            # In test mode, prefer allowing tests to patch chromadb.Client/PersistentClient;
-            # therefore ignore the force-stub flag when a test is running.
-            force_stub = os.getenv("CHROMADB_FORCE_STUB", "").lower() in ("true", "1", "yes")
-            if force_stub and not _is_test_mode():
-                # Scope the stub client key by user and base dir to avoid cross-test leakage.
-                stub_key = f"{self.user_id}::{str(user_db_base_path)}"
-                cli = _TEST_STUB_CLIENTS.get(stub_key)
-                if cli is None:
-                    cli = _InMemoryChromaClient()
-                    _TEST_STUB_CLIENTS[stub_key] = cli
-                self.client = cli
-                logger.warning(
-                    f"CHROMADB_FORCE_STUB enabled; using internal in-memory client for user '{self.user_id}'."
-                )
-                # Continue setup without touching PersistentClient, but ensure embedding config is set
-                chroma_client_settings_config = {}
-                if not self.default_embedding_model_id:
-                    logger.warning(
-                        f"User '{self.user_id}': No 'default_model_id' found in 'embedding_config'. "
-                        "Operations will require explicit 'embedding_model_id_override'."
-                    )
-                model_details = self.embedding_config.get("models", {}).get(self.default_embedding_model_id, {})
-                logger.info(
-                    f"User '{self.user_id}' ChromaDBManager configured. "
-                    f"Default Embedding Model ID: {self.default_embedding_model_id or 'Not Set (Override Required)'} "
-                    f"(Provider: {model_details.get('provider', 'N/A')}, Name: {model_details.get('model_name_or_path', 'N/A')})"
-                )
-                return
-            elif force_stub and _is_test_mode():
-                logger.debug("CHROMADB_FORCE_STUB set but ignored in test mode to allow client patching.")
-        except Exception:
-            pass
-
-        # Build robust Settings with explicit persist_directory for Chroma 0.4.x/1.x compatibility
-        client_settings = ChromaSettings(
-            persist_directory=str(self.user_chroma_path),
-            anonymized_telemetry=chroma_client_settings_config.get("anonymized_telemetry", False),
-            allow_reset=chroma_client_settings_config.get("allow_reset", True),
-        )
-
-        try:
-            # Prefer PersistentClient so patched tests that key by 'path' share a single in-memory client
-            self.client = chromadb.PersistentClient(
-                path=str(self.user_chroma_path),
-                settings=client_settings,
-            )
-        except Exception as e:  # Catch broader exceptions during client initialization
-            # Known symptom (even on 1.x): tenant init failures or embedded service startup issues
-            logger.critical(
-                f"Failed to initialize ChromaDB PersistentClient for user '{self.user_id}' at {self.user_chroma_path}: {e}",
-                exc_info=True)
-            if _is_test_mode():
-                # In test contexts, first try a clean persistent directory fallback
                 try:
-                    # Use a per-user stable fallback directory to persist across requests in tests
-                    tmp_dir = _TEST_FALLBACK_DIRS.get(self.user_id)
-                    if not tmp_dir:
-                        tmp_dir = Path(tempfile.mkdtemp(prefix=f"chroma_fallback_{self.user_id}_"))
-                        _TEST_FALLBACK_DIRS[self.user_id] = tmp_dir
-                    tmp_settings = ChromaSettings(
-                        persist_directory=str(tmp_dir),
-                        anonymized_telemetry=False,
-                        allow_reset=True,
-                    )
                     self.client = chromadb.PersistentClient(
-                        path=str(tmp_dir),
-                        settings=tmp_settings,
+                        path=str(self.user_chroma_path),
+                        settings=client_settings,
                     )
-                    logger.warning(
-                        f"ChromaDB PersistentClient failed at {self.user_chroma_path}; using temp dir {tmp_dir} for tests."
-                    )
-                except Exception as e_temp:
+                except Exception as e:
                     logger.error(
-                        f"Temp persistent fallback also failed for user '{self.user_id}': {e_temp}",
-                        exc_info=True)
-                    # Fall back to a pure in-memory stub client as last resort
-                    try:
-                        cli = _TEST_STUB_CLIENTS.get(self.user_id)
+                        f"Failed to initialize Chroma persistent client at {self.user_chroma_path}: {e}",
+                        exc_info=True,
+                    )
+                    if allow_stub_fallback:
+                        stub_key = f"{self.user_id}::{str(user_db_base_path)}"
+                        cli = _TEST_STUB_CLIENTS.get(stub_key)
                         if cli is None:
                             cli = _InMemoryChromaClient()
-                            _TEST_STUB_CLIENTS[self.user_id] = cli
+                            _TEST_STUB_CLIENTS[stub_key] = cli
                         self.client = cli
                         logger.warning(
-                            f"Using internal in-memory Chroma stub client for tests (user '{self.user_id}')."
+                            f"User '{self.user_id}': Falling back to in-memory Chroma stub (allow_stub_fallback=true)."
                         )
-                    except Exception as e2:
-                        logger.critical(
-                            f"Internal in-memory fallback also failed for user '{self.user_id}': {e2}",
-                            exc_info=True)
-                        raise RuntimeError(f"ChromaDB client initialization failed (fallback failed): {e2}") from e2
-            else:
-                raise RuntimeError(f"ChromaDB client initialization failed: {e}") from e
+                    else:
+                        raise RuntimeError(f"ChromaDB client initialization failed: {e}") from e
 
         # Default embedding model_id for this manager instance.
         # Already initialized above; keep values consistent for non-stub client path.
@@ -650,7 +580,7 @@ class ChromaDBManager:
             # Try to get from embedding_config first, then fall back to False
             create_contextualized = self.embedding_config.get("enable_contextual_chunking", False)
             logger.debug(f"Using contextual chunking from config: {create_contextualized}")
-        
+
         effective_llm_model_for_context = llm_model_for_context or self.embedding_config.get(
             "contextual_llm_model", self.embedding_config.get(
                 "default_llm_for_contextualization", "gpt-3.5-turbo"))

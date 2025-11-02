@@ -66,31 +66,31 @@ class SimpleSearchRequest(BaseModel):
         max_length=1000,
         examples=["machine learning basics", "how to use RAG"]
     )
-    
+
     search_type: SearchType = Field(
         default=SearchType.HYBRID,
         description="Type of search to perform"
     )
-    
+
     limit: int = Field(
         default=10,
         ge=1,
         le=100,
         description="Maximum number of results to return"
     )
-    
+
     databases: List[str] = Field(
         default=["media_db"],
         description="List of databases to search. Options: media_db, notes, characters, chat_history",
         examples=[["media_db", "notes"], ["media_db"]]
     )
-    
+
     keywords: Optional[List[str]] = Field(
         default=None,
         description="Optional keywords to filter results",
         examples=[["AI", "ML"], ["python", "tutorial"]]
     )
-    
+
     @field_validator('databases')
     def validate_databases(cls, v):
         """Validate and normalize database names"""
@@ -141,7 +141,7 @@ class SimpleSearchResponse(BaseModel):
         ...,
         description="The search type that was used"
     )
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "results": [
@@ -257,24 +257,24 @@ class SimpleAgentRequest(BaseModel):
         max_length=4000,
         examples=["What is machine learning?", "Explain the concept of RAG"]
     )
-    
+
     conversation_id: Optional[str] = Field(
         default=None,
         description="Optional conversation ID to maintain context"
     )
-    
+
     search_databases: List[str] = Field(
         default=["media_db"],
         description="Which databases to search for context",
         examples=[["media_db", "notes"]]
     )
-    
+
     model: Optional[str] = Field(
         default=None,
         description="Optional model to use (uses default if not specified)",
         examples=["gpt-4", "claude-3", "llama-3"]
     )
-    
+
     @field_validator('search_databases')
     def validate_search_databases(cls, v):
         """Validate and normalize database names"""
@@ -316,7 +316,7 @@ class SimpleAgentResponse(BaseModel):
         default_factory=list,
         description="Sources used to generate the response"
     )
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "response": "Machine learning is a subset of artificial intelligence...",
@@ -411,7 +411,7 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
     detail: Optional[str] = Field(None, description="Detailed error information")
     code: Optional[str] = Field(None, description="Error code")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "error": "Invalid search type",
@@ -457,7 +457,7 @@ class SearchApiRequest(BaseModel):
     top_k: Optional[int] = Field(default=10, ge=1, le=100, description="Number of results to return")
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Optional filters")
     data_sources: Optional[List[str]] = Field(default=None, description="Databases to search")
-    
+
     # Additional fields expected by tests
     search_databases: Optional[List[str]] = Field(default=None, description="Databases to search (alias)")
     offset: Optional[int] = Field(default=0, ge=0, description="Pagination offset")

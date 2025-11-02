@@ -40,18 +40,18 @@ def temp_db():
     """Create a temporary database for testing with proper cleanup."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
-    
+
     # Initialize database with schema (including ChunkingTemplates table)
     db = MediaDatabase(db_path=db_path, client_id='test_client')
-    
+
     yield db, db_path
-    
+
     # Cleanup
     try:
         db.close_connection()
     except:
         pass
-    
+
     # Delete the database file
     try:
         if os.path.exists(db_path):
@@ -65,18 +65,18 @@ def test_client(temp_db):
     """Create a test client for API testing with proper database override."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-    
+
     db, db_path = temp_db
-    
+
     # Override the database dependency
     def override_get_db():
         return db
-    
+
     app.dependency_overrides[get_media_db_for_user] = override_get_db
-    
+
     with TestClient(app) as client:
         yield client
-    
+
     # Clear the override after the test
     app.dependency_overrides.clear()
 
@@ -123,35 +123,35 @@ def sample_template():
 # Database Tests
 class TestDatabaseOperations:
     """Test database CRUD operations for chunking templates."""
-    
+
     def test_create_template(self, temp_db):
         """Test creating a new template."""
         db, _ = temp_db
-        
+
         template = db.create_chunking_template(
             name="test_template",
             template_json='{"chunking": {"method": "words"}}',
             description="Test template",
             tags=["test"]
         )
-        
+
         assert template is not None
         assert template["name"] == "test_template"
         assert template["description"] == "Test template"
         assert template["is_builtin"] is False
         assert "test" in template["tags"]
-    
+
     def test_create_duplicate_template(self, temp_db):
         """Test that duplicate template names are rejected."""
         db, _ = temp_db
-        
+
         # Create first template
         db.create_chunking_template(
             name="unique_template",
             template_json='{"chunking": {"method": "words"}}',
             description="First template"
         )
-        
+
         # Try to create duplicate
         with pytest.raises(Exception) as exc_info:
             db.create_chunking_template(
@@ -159,34 +159,34 @@ class TestDatabaseOperations:
                 template_json='{"chunking": {"method": "sentences"}}',
                 description="Duplicate template"
             )
-        
+
         assert "already exists" in str(exc_info.value)
-    
+
     def test_get_template(self, temp_db):
         """Test retrieving a template."""
         db, _ = temp_db
-        
+
         # Create template
         created = db.create_chunking_template(
             name="get_test",
             template_json='{"chunking": {"method": "words"}}',
             description="Get test"
         )
-        
+
         # Get by name
         template = db.get_chunking_template(name="get_test")
         assert template is not None
         assert template["name"] == "get_test"
         assert template["description"] == "Get test"
-        
+
         # Get non-existent
         template = db.get_chunking_template(name="non_existent")
         assert template is None
-    
+
     def test_list_templates(self, temp_db):
         """Test listing templates."""
         db, _ = temp_db
-        
+
         # Create multiple templates
         for i in range(3):
             db.create_chunking_template(
@@ -195,50 +195,50 @@ class TestDatabaseOperations:
                 description=f"List test {i}",
                 tags=[f"tag_{i}", "common"]
             )
-        
+
         # List all
         templates = db.list_chunking_templates()
         assert len(templates) >= 3
-        
+
         # List with filters
         templates = db.list_chunking_templates(tags=["common"])
         assert len(templates) >= 3
         assert all("common" in t["tags"] for t in templates)
-        
+
         templates = db.list_chunking_templates(tags=["tag_1"])
         assert any(t["name"] == "list_test_1" for t in templates)
-    
+
     def test_update_template(self, temp_db):
         """Test updating a template."""
         db, _ = temp_db
-        
+
         # Create template
         created = db.create_chunking_template(
             name="update_test",
             template_json='{"chunking": {"method": "words"}}',
             description="Original description"
         )
-        
+
         # Update it
         result = db.update_chunking_template(
             name="update_test",
             description="Updated description",
             tags=["updated", "test"]
         )
-        
+
         assert result is True
-        
+
         # Get the updated template to verify changes
         updated = db.get_chunking_template(name="update_test")
         assert updated["description"] == "Updated description"
         assert "updated" in updated["tags"]
         assert "test" in updated["tags"]
         assert updated["version"] == created["version"] + 1
-    
+
     def test_cannot_update_builtin(self, temp_db):
         """Test that built-in templates cannot be updated."""
         db, _ = temp_db
-        
+
         # Create a builtin template
         db.create_chunking_template(
             name="builtin_test",
@@ -246,43 +246,43 @@ class TestDatabaseOperations:
             description="Built-in template",
             is_builtin=True
         )
-        
+
         # Try to update it
         with pytest.raises(Exception) as exc_info:
             db.update_chunking_template(
                 name="builtin_test",
                 description="Modified builtin"
             )
-        
+
         assert "built-in" in str(exc_info.value).lower()
-    
+
     def test_delete_template(self, temp_db):
         """Test deleting a template (soft delete)."""
         db, _ = temp_db
-        
+
         # Create template
         db.create_chunking_template(
             name="delete_test",
             template_json='{"chunking": {"method": "words"}}',
             description="To be deleted"
         )
-        
+
         # Delete it
         result = db.delete_chunking_template(name="delete_test")
         assert result is True
-        
+
         # Verify it's gone
         template = db.get_chunking_template(name="delete_test")
         assert template is None
-        
+
         # Try to delete non-existent
         result = db.delete_chunking_template(name="non_existent")
         assert result is False
-    
+
     def test_cannot_delete_builtin(self, temp_db):
         """Test that built-in templates cannot be deleted."""
         db, _ = temp_db
-        
+
         # Create a builtin template
         db.create_chunking_template(
             name="builtin_delete_test",
@@ -290,46 +290,46 @@ class TestDatabaseOperations:
             description="Built-in template",
             is_builtin=True
         )
-        
+
         # Try to delete it
         with pytest.raises(Exception) as exc_info:
             db.delete_chunking_template(name="builtin_delete_test")
-        
+
         assert "built-in" in str(exc_info.value).lower()
 
 
 # Template Initialization Tests
 class TestTemplateInitialization:
     """Test template loading and initialization."""
-    
+
     def test_load_builtin_templates(self):
         """Test loading built-in templates from files."""
         templates = load_builtin_templates()
-        
+
         assert isinstance(templates, list)
         # Should have loaded the templates we created
         template_names = {t["name"] for t in templates}
         expected_names = {
             "academic_paper",
-            "code_documentation", 
+            "code_documentation",
             "chat_conversation",
             "book_chapters",
             "transcript_dialogue",
             "legal_document"
         }
         assert expected_names.issubset(template_names)
-    
+
     def test_seed_builtin_templates(self, temp_db):
         """Test seeding built-in templates into database."""
         db, _ = temp_db
-        
+
         # Initialize templates
         initialize_chunking_templates(db)
-        
+
         # Check that built-in templates exist
         templates = db.list_chunking_templates(include_builtin=True, include_custom=False)
         assert len(templates) > 0
-        
+
         # Verify academic_paper template
         academic = db.get_chunking_template(name="academic_paper")
         assert academic is not None
@@ -337,14 +337,14 @@ class TestTemplateInitialization:
         assert "research" in academic["tags"]
 
 
-# API Endpoint Tests  
+# API Endpoint Tests
 class TestAPIEndpoints:
     """Test REST API endpoints for template management."""
-    
+
     def test_list_templates_endpoint(self, test_client, auth_headers, temp_db):
         """Test GET /api/v1/chunking/templates endpoint."""
         db, _ = temp_db
-        
+
         # Create test templates
         db.create_chunking_template(
             name="api_test1",
@@ -352,45 +352,45 @@ class TestAPIEndpoints:
             description="API test 1",
             tags=["api", "test"]
         )
-        
+
         # Test listing
         response = test_client.get("/api/v1/chunking/templates", headers=auth_headers)
         assert response.status_code == 200
-        
+
         data = response.json()
         assert "templates" in data
         assert "total" in data
         assert data["total"] >= 1
-        
+
         # Test filtering
         response = test_client.get("/api/v1/chunking/templates?tags=api", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert all("api" in t["tags"] for t in data["templates"])
-    
+
     def test_get_template_endpoint(self, test_client, auth_headers, temp_db):
         """Test GET /api/v1/chunking/templates/{name} endpoint."""
         db, _ = temp_db
-        
+
         # Create template
         db.create_chunking_template(
             name="get_api_test",
             template_json='{"chunking": {"method": "words"}}',
             description="Get API test"
         )
-        
+
         # Get existing template
         response = test_client.get("/api/v1/chunking/templates/get_api_test", headers=auth_headers)
         assert response.status_code == 200
-        
+
         data = response.json()
         assert data["name"] == "get_api_test"
         assert data["description"] == "Get API test"
-        
+
         # Get non-existent template
         response = test_client.get("/api/v1/chunking/templates/non_existent", headers=auth_headers)
         assert response.status_code == 404
-    
+
     def test_create_template_endpoint(self, test_client, auth_headers, sample_template):
         """Test POST /api/v1/chunking/templates endpoint."""
         # Create template via API
@@ -404,70 +404,70 @@ class TestAPIEndpoints:
                 "postprocessing": sample_template["postprocessing"]
             }
         }
-        
+
         response = test_client.post("/api/v1/chunking/templates", json=request_data, headers=auth_headers)
         assert response.status_code == 201
-        
+
         data = response.json()
         assert data["name"] == sample_template["name"]
         assert data["description"] == sample_template["description"]
         assert data["is_builtin"] is False
-        
+
         # Try to create duplicate
         response = test_client.post("/api/v1/chunking/templates", json=request_data, headers=auth_headers)
         assert response.status_code == 409
-    
+
     def test_update_template_endpoint(self, test_client, auth_headers, temp_db):
         """Test PUT /api/v1/chunking/templates/{name} endpoint."""
         db, _ = temp_db
-        
+
         # Create template first
         db.create_chunking_template(
             name="update_api_test",
             template_json='{"chunking": {"method": "words"}}',
             description="Original"
         )
-        
+
         # Update via API
         update_data = {
             "description": "Updated via API",
             "tags": ["updated", "api"]
         }
-        
+
         response = test_client.put("/api/v1/chunking/templates/update_api_test", json=update_data, headers=auth_headers)
         assert response.status_code == 200
-        
+
         data = response.json()
         assert data["description"] == "Updated via API"
         assert data["tags"] == ["updated", "api"]
-        
+
         # Update non-existent
         response = test_client.put("/api/v1/chunking/templates/non_existent", json=update_data, headers=auth_headers)
         assert response.status_code == 404
-    
+
     def test_delete_template_endpoint(self, test_client, auth_headers, temp_db):
         """Test DELETE /api/v1/chunking/templates/{name} endpoint."""
         db, _ = temp_db
-        
+
         # Create template first
         db.create_chunking_template(
             name="delete_api_test",
             template_json='{"chunking": {"method": "words"}}',
             description="To delete"
         )
-        
+
         # Delete via API
         response = test_client.delete("/api/v1/chunking/templates/delete_api_test", headers=auth_headers)
         assert response.status_code == 204
-        
+
         # Verify deleted
         response = test_client.get("/api/v1/chunking/templates/delete_api_test", headers=auth_headers)
         assert response.status_code == 404
-        
+
         # Delete non-existent
         response = test_client.delete("/api/v1/chunking/templates/non_existent", headers=auth_headers)
         assert response.status_code == 404
-    
+
     def test_validate_template_endpoint(self, test_client, auth_headers):
         """Test POST /api/v1/chunking/templates/validate endpoint."""
         # Valid template
@@ -481,20 +481,20 @@ class TestAPIEndpoints:
             },
             "postprocessing": []
         }
-        
+
         response = test_client.post("/api/v1/chunking/templates/validate", json=valid_template, headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["valid"] is True
         assert data["errors"] is None
-        
+
         # Invalid template (missing chunking)
         invalid_template = {
             "preprocessing": [
                 {"operation": "normalize_whitespace"}
             ]
         }
-        
+
         response = test_client.post("/api/v1/chunking/templates/validate", json=invalid_template, headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
@@ -584,32 +584,32 @@ class TestAPIEndpoints:
 # Template Processing Tests
 class TestTemplateProcessing:
     """Test template processing functionality."""
-    
+
     def test_template_processor_operations(self):
         """Test individual operations in TemplateProcessor."""
         processor = TemplateProcessor()
-        
+
         # Test normalize_whitespace
         text = "Test    text\n\n\n\nwith    spaces"
         result = processor._normalize_whitespace(text, {"max_line_breaks": 2})
         assert "\n\n\n\n" not in result
         assert "    " not in result
-        
+
         # Test filter_empty
         chunks = ["", "valid chunk", "   ", "another valid"]
         result = processor._filter_empty(chunks, {"min_length": 5})
         assert "" not in result
         assert "valid chunk" in result
-        
+
         # Test merge_small
         chunks = ["a", "b", "longer chunk", "c", "another long chunk"]
         result = processor._merge_small(chunks, {"min_size": 10, "separator": " "})
         assert all(len(chunk) >= 10 or chunk == result[-1] for chunk in result)
-    
+
     def test_process_template(self):
         """Test processing text through a template."""
         processor = TemplateProcessor()
-        
+
         # Create a simple template
         template = ChunkingTemplate(
             name="test_processing",
@@ -628,9 +628,9 @@ class TestTemplateProcessing:
             ],
             default_options={"max_size": 2}
         )
-        
+
         text = "This is a test.    Another sentence.\n\n\nShort.\nOne more test sentence."
-        
+
         # Mock the chunker since it's not available in test
         with patch('tldw_Server_API.app.core.Chunking.templates.Chunker') as mock_chunker:
             mock_instance = MagicMock()
@@ -639,9 +639,9 @@ class TestTemplateProcessing:
                 "One more test sentence."
             ]
             mock_chunker.return_value = mock_instance
-            
+
             result = processor.process_template(text, template)
-            
+
             assert isinstance(result, list)
             assert len(result) == 2  # After filtering out "Short."
 
@@ -685,11 +685,11 @@ class TestTemplateProcessing:
 # Integration Tests
 class TestIntegration:
     """Test integration between components."""
-    
+
     def test_apply_template_endpoint(self, test_client, auth_headers, temp_db):
         """Test applying a template to text via API."""
         db, _ = temp_db
-        
+
         # Create a template
         db.create_chunking_template(
             name="apply_test",
@@ -703,14 +703,14 @@ class TestIntegration:
             }),
             description="Template for apply test"
         )
-        
+
         # Apply it to text
         request_data = {
             "text": "This is a long text that should be chunked according to the template configuration.",
             "template_name": "apply_test",
             "options": {}
         }
-        
+
         # Mock the TemplateProcessor to avoid complex setup
         with patch('tldw_Server_API.app.api.v1.endpoints.chunking_templates.TemplateProcessor') as mock_processor:
             mock_instance = MagicMock()
@@ -721,10 +721,10 @@ class TestIntegration:
                 "configuration."
             ]
             mock_processor.return_value = mock_instance
-            
+
             response = test_client.post("/api/v1/chunking/templates/apply", json=request_data, headers=auth_headers)
             assert response.status_code == 200
-            
+
             data = response.json()
             assert data["template_name"] == "apply_test"
             assert "chunks" in data
@@ -761,12 +761,12 @@ class TestIntegration:
         assert body["template_name"] == "apply_real"
         assert isinstance(body["chunks"], list)
         assert len(body["chunks"]) >= 2
-    
+
     def test_template_in_chunking_endpoint(self):
         """Test using templates in the main chunking endpoint."""
         from tldw_Server_API.app.api.v1.endpoints.chunking import process_text_for_chunking_json
         from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingTextRequest, ChunkingOptionsRequest
-        
+
         # This would require more complex mocking of the chunking endpoint
         # For now, we just verify the schema accepts template_name
         options = ChunkingOptionsRequest(
@@ -775,7 +775,7 @@ class TestIntegration:
             max_size=100,
             overlap=50  # Explicitly set overlap < max_size to avoid validation error
         )
-        
+
         assert options.template_name == "test_template"
         assert hasattr(options, 'template_name')
 

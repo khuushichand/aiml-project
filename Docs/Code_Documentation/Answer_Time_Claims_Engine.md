@@ -37,7 +37,7 @@ Both the extractor and the LLM judge resolve provider, model, and temperature us
 - Otherwise fall back to RAG defaults (if present):
   - `RAG.default_llm_provider`, `RAG.default_llm_model`
 - Finally fall back to global default API:
-  - `default_api` (e.g., `openai`), with conservative temperature (`0.1`–`0.2`)
+  - `default_api` (e.g., `openai`), with conservative temperature (`0.1`-`0.2`)
 
 The engine accepts an injected `analyze` function and passes through `model_override` and temperature as resolved above for consistency across paths.
 
@@ -75,7 +75,7 @@ The engine accepts an injected `analyze` function and passes through `model_over
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import ClaimsEngine
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
-# Minimal Document type (id, content, score) – or use RAG types
+# Minimal Document type (id, content, score) - or use RAG types
 class Doc:
     def __init__(self, id, content, score=0.0):
         self.id = id
@@ -106,4 +106,4 @@ print(result["summary"])
 - `claim_extractor="auto"` currently prefers the LLM extractor with heuristic fallback; APS requires an LLM.
 - NLI is attempted first for efficiency; the LLM judge runs only when NLI is unavailable or below confidence threshold.
 - This engine is answer-time only; ingestion-time claims and API endpoints are documented separately.
- - Citations are populated for supported/refuted decisions using the selected evidence snippets (document IDs with best‑effort character ranges).
+ - Citations are populated for supported/refuted decisions using the selected evidence snippets (document IDs with best-effort character ranges).

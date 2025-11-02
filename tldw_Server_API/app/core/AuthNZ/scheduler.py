@@ -28,14 +28,14 @@ from tldw_Server_API.app.core.Metrics import set_gauge
 
 class AuthNZScheduler:
     """Manages scheduled maintenance tasks for the AuthNZ module"""
-    
+
     def __init__(self):
         """Initialize the scheduler"""
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.settings = get_settings()
         self._started = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        
+
     async def start(self):
         """Start the scheduler and register all jobs"""
         loop = asyncio.get_running_loop()
@@ -60,14 +60,14 @@ class AuthNZScheduler:
         if not self.scheduler:
             self.scheduler = AsyncIOScheduler(event_loop=loop)
             self._loop = loop
-        
+
         # Register cleanup jobs
         self._register_session_cleanup()
         self._register_api_key_cleanup()
         self._register_rate_limit_cleanup()
         self._register_audit_log_cleanup()
         self._register_expired_registration_cleanup()
-        
+
         # Register monitoring jobs
         self._register_auth_failure_monitor()
         self._register_api_usage_monitor()
@@ -83,13 +83,13 @@ class AuthNZScheduler:
         self._register_llm_usage_daily_cleanup()
         # Privilege snapshot retention housekeeping
         self._register_privilege_snapshot_retention()
-        
+
         # Start the scheduler
         self.scheduler.start()
         self._started = True
         self._loop = loop
         logger.info("AuthNZ scheduler started with all jobs registered")
-    
+
     async def stop(self):
         """Stop the scheduler"""
         if not self.scheduler:
@@ -107,7 +107,7 @@ class AuthNZScheduler:
         self._loop = None
         self.scheduler = None
         logger.info("AuthNZ scheduler stopped")
-    
+
     def _register_session_cleanup(self):
         """Register job to clean up expired sessions"""
         self.scheduler.add_job(
@@ -121,7 +121,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug(f"Registered session cleanup job (every {self.settings.SESSION_CLEANUP_INTERVAL_HOURS} hours)")
-    
+
     def _register_api_key_cleanup(self):
         """Register job to clean up expired API keys"""
         self.scheduler.add_job(
@@ -136,7 +136,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered API key cleanup job (daily at 2 AM)")
-    
+
     def _register_rate_limit_cleanup(self):
         """Register job to clean up old rate limit entries"""
         self.scheduler.add_job(
@@ -148,7 +148,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered rate limit cleanup job (every 6 hours)")
-    
+
     def _register_audit_log_cleanup(self):
         """Register job to prune old audit logs"""
         self.scheduler.add_job(
@@ -212,7 +212,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered llm_usage_daily cleanup job (daily at 03:45)")
-    
+
     def _register_privilege_snapshot_retention(self):
         """Register job to enforce privilege snapshot retention policy."""
         self.scheduler.add_job(
@@ -224,7 +224,7 @@ class AuthNZScheduler:
             max_instances=1,
         )
         logger.debug("Registered privilege snapshot retention job (daily at 02:20)")
-    
+
     def _register_expired_registration_cleanup(self):
         """Register job to clean up expired registration codes"""
         self.scheduler.add_job(
@@ -239,7 +239,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered registration code cleanup job (daily at 1:30 AM)")
-    
+
     def _register_auth_failure_monitor(self):
         """Register job to monitor authentication failures"""
         self.scheduler.add_job(
@@ -251,7 +251,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered auth failure monitor (every 5 minutes)")
-    
+
     def _register_api_usage_monitor(self):
         """Register job to monitor API key usage patterns"""
         self.scheduler.add_job(
@@ -263,7 +263,7 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered API usage monitor (hourly)")
-    
+
     def _register_rate_limit_monitor(self):
         """Register job to monitor rate limit violations"""
         self.scheduler.add_job(
@@ -328,9 +328,9 @@ class AuthNZScheduler:
                 logger.info(f"Evaluations idempotency cleanup removed {deleted_total} rows across user DBs")
         except Exception as e:
             logger.error(f"Failed evaluations idempotency cleanup: {e}")
-    
+
     # Cleanup Jobs
-    
+
     async def _cleanup_expired_sessions(self):
         """Clean up expired sessions from the database"""
         try:
@@ -340,7 +340,7 @@ class AuthNZScheduler:
                 logger.info(f"Cleaned up {count} expired sessions")
         except Exception as e:
             logger.error(f"Failed to cleanup expired sessions: {e}")
-    
+
     async def _cleanup_expired_api_keys(self):
         """Mark expired API keys as expired"""
         try:
@@ -349,7 +349,7 @@ class AuthNZScheduler:
             logger.info("Completed API key expiration check")
         except Exception as e:
             logger.error(f"Failed to cleanup expired API keys: {e}")
-    
+
     async def _cleanup_old_rate_limits(self):
         """Remove old rate limit entries"""
         try:
@@ -358,14 +358,14 @@ class AuthNZScheduler:
             logger.info("Cleaned up old rate limit entries")
         except Exception as e:
             logger.error(f"Failed to cleanup rate limits: {e}")
-    
+
     async def _prune_audit_logs(self):
         """Prune audit logs older than retention period"""
         try:
             db_pool = await get_db_pool()
             retention_days = self.settings.AUDIT_LOG_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            
+
             async with db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
@@ -383,7 +383,7 @@ class AuthNZScheduler:
                     )
                     count = cursor.rowcount
                     await conn.commit()
-            
+
             if count > 0:
                 logger.info(f"Pruned {count} audit log entries older than {retention_days} days")
         except Exception as e:
@@ -476,7 +476,7 @@ class AuthNZScheduler:
                 logger.info(f"Pruned {count} llm_usage_daily rows older than {retention_days} days")
         except Exception as e:
             logger.error(f"Failed to prune llm_usage_daily: {e}")
-    
+
     async def _prune_privilege_snapshots(self):
         """Enforce privilege snapshot retention (daily + weekly) and emit metrics."""
         try:
@@ -616,20 +616,20 @@ class AuthNZScheduler:
             )
         except Exception as e:
             logger.error(f"Failed to prune privilege snapshots: {e}")
-    
+
     async def _cleanup_expired_registration_codes(self):
         """Clean up expired registration codes"""
         try:
             db_pool = await get_db_pool()
-            
+
             async with db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
                     # PostgreSQL
                     result = await conn.execute(
                         """
-                        UPDATE registration_codes 
-                        SET is_active = FALSE 
-                        WHERE is_active = TRUE 
+                        UPDATE registration_codes
+                        SET is_active = FALSE
+                        WHERE is_active = TRUE
                         AND expires_at < $1
                         """,
                         datetime.utcnow()
@@ -639,23 +639,23 @@ class AuthNZScheduler:
                     # SQLite
                     cursor = await conn.execute(
                         """
-                        UPDATE registration_codes 
-                        SET is_active = 0 
-                        WHERE is_active = 1 
+                        UPDATE registration_codes
+                        SET is_active = 0
+                        WHERE is_active = 1
                         AND expires_at < ?
                         """,
                         (datetime.utcnow().isoformat(),)
                     )
                     count = cursor.rowcount
                     await conn.commit()
-            
+
             if count > 0:
                 logger.info(f"Deactivated {count} expired registration codes")
         except Exception as e:
             logger.error(f"Failed to cleanup registration codes: {e}")
-    
+
     # Monitoring Jobs
-    
+
     async def _monitor_auth_failures(self):
         """Monitor and alert on authentication failures"""
         try:
@@ -670,7 +670,7 @@ class AuthNZScheduler:
                     """
                     SELECT COUNT(*) as failure_count,
                            COUNT(DISTINCT ip_address) as unique_ips
-                    FROM audit_logs 
+                    FROM audit_logs
                     WHERE action = ANY($1)
                     AND created_at > $2
                     """,
@@ -682,23 +682,23 @@ class AuthNZScheduler:
                     """
                     SELECT COUNT(*) as failure_count,
                            COUNT(DISTINCT ip_address) as unique_ips
-                    FROM audit_logs 
+                    FROM audit_logs
                     WHERE action IN (?, ?, ?)
                     AND created_at > ?
                     """,
                     ('login_failed', 'invalid_api_key', 'invalid_token', cutoff),
                 )
-            
+
             if result:
                 failure_count = result['failure_count'] or 0
                 unique_ips = result['unique_ips'] or 0
-                
+
                 if failure_count > threshold:
                     logger.warning(
                         f"⚠️ High authentication failure rate detected: "
                         f"{failure_count} failures from {unique_ips} unique IPs in last 5 minutes"
                     )
-                    
+
                     # Here you would trigger actual alerts (email, Slack, etc.)
                     await self._send_security_alert(
                         "High Authentication Failure Rate",
@@ -712,12 +712,12 @@ class AuthNZScheduler:
                     )
         except Exception as e:
             logger.error(f"Failed to monitor auth failures: {e}")
-    
+
     async def _monitor_api_usage(self):
         """Monitor API key usage patterns"""
         try:
             db_pool = await get_db_pool()
-            
+
             # Get API usage statistics for the last hour
             time_window = datetime.utcnow() - timedelta(hours=1)
             is_postgres = getattr(db_pool, "pool", None) is not None
@@ -725,7 +725,7 @@ class AuthNZScheduler:
 
             results = await db_pool.fetchall(
                 """
-                SELECT 
+                SELECT
                     k.id,
                     k.name,
                     k.user_id,
@@ -742,26 +742,26 @@ class AuthNZScheduler:
                 """,
                 ('active', cutoff),
             )
-            
+
             for row in results:
                 usage = row['usage_count']
                 rate_limit = row['rate_limit'] or 60  # Default rate limit
-                
+
                 # Alert if usage is approaching rate limit
                 if usage > rate_limit * 0.8:  # 80% of rate limit
                     logger.warning(
                         f"API key '{row['name']}' (ID: {row['id']}) "
                         f"approaching rate limit: {usage}/{rate_limit} requests/hour"
                     )
-            
+
             # Log summary
             if results:
                 total_usage = sum(r['usage_count'] for r in results)
                 logger.info(f"API usage monitoring: {total_usage} total requests in last hour")
-                
+
         except Exception as e:
             logger.error(f"Failed to monitor API usage: {e}")
-    
+
     async def _monitor_rate_limits(self):
         """Monitor rate limit violations"""
         try:
@@ -769,13 +769,13 @@ class AuthNZScheduler:
             time_window = datetime.utcnow() - timedelta(minutes=15)
             is_postgres = getattr(db_pool, "pool", None) is not None
             cutoff = time_window if is_postgres else time_window.isoformat()
-            
+
             # Find IPs/users hitting rate limits
             rate_threshold = self.settings.RATE_LIMIT_PER_MINUTE * 15  # 15 minute threshold
-            
+
             results = await db_pool.fetchall(
                 """
-                SELECT 
+                SELECT
                     identifier,
                     endpoint,
                     SUM(request_count) as total_requests,
@@ -789,16 +789,16 @@ class AuthNZScheduler:
                 """,
                 (cutoff, rate_threshold),
             )
-            
+
             if results:
                 logger.warning(f"Rate limit violations detected for {len(results)} identifiers")
-                
+
                 for row in results:
                     logger.warning(
                         f"Rate limit violation: {row['identifier']} on {row['endpoint']} "
                         f"({row['total_requests']} requests in 15 minutes)"
                     )
-                
+
                 # Send alert if there are many violations
                 if len(results) > 10:
                     await self._send_security_alert(
@@ -811,10 +811,10 @@ class AuthNZScheduler:
                             "window_minutes": 15,
                         },
                     )
-                    
+
         except Exception as e:
             logger.error(f"Failed to monitor rate limits: {e}")
-    
+
     async def _send_security_alert(
         self,
         subject: str,
@@ -825,7 +825,7 @@ class AuthNZScheduler:
     ) -> bool:
         """
         Dispatch a security alert using the configured dispatcher.
-        
+
         Returns:
             True if the dispatcher attempted to send the alert, False otherwise.
         """

@@ -92,4 +92,3 @@ def test_biorxiv_raw_details_xml(client_with_auth):
     assert resp.status_code in (200, 502, 504), resp.text
     if resp.status_code == 200:
         assert "xml" in resp.headers.get("content-type", "").lower()
-

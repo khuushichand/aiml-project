@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptSt
 
 class PromptExecutor:
     """Executes prompts with various LLM providers."""
-    
+
     # Map provider names to functions
     PROVIDER_FUNCTIONS = {
         "openai": chat_with_openai,
@@ -49,53 +49,53 @@ class PromptExecutor:
         "custom": chat_with_custom_openai,
         "custom_openai": chat_with_custom_openai
     }
-    
+
     def __init__(self, db: PromptStudioDatabase):
         """
         Initialize PromptExecutor.
-        
+
         Args:
             db: Database instance
         """
         self.db = db
         self.client_id = db.client_id
-    
+
     ####################################################################################################################
     # Prompt Execution
-    
+
     async def execute_prompt(self, prompt_id: int, test_inputs: Dict[str, Any],
                              model_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a prompt with given inputs and model configuration.
-        
+
         Args:
             prompt_id: Prompt ID
             test_inputs: Input values for the prompt
             model_config: Model configuration (provider, model, parameters)
-            
+
         Returns:
             Execution result with output, metrics, and metadata
         """
         start_time = time.time()
-        
+
         try:
             # Get prompt details
             prompt = self._get_prompt(prompt_id)
             if not prompt:
                 raise ValueError(f"Prompt {prompt_id} not found")
-            
+
             # Get signature if linked
             signature = None
             if prompt.get("signature_id"):
                 signature = self._get_signature(prompt["signature_id"])
-            
+
             # Build the final prompt
             final_prompt = self._build_prompt(prompt, signature, test_inputs)
-            
+
             # Execute with LLM
             provider = model_config.get("provider", "openai")
             model = model_config.get("model", "gpt-3.5-turbo")
-            
+
             result = await self._call_llm(
                 provider=provider,
                 model=model,
@@ -103,13 +103,13 @@ class PromptExecutor:
                 system_prompt=prompt.get("system_prompt"),
                 parameters=model_config.get("parameters", {})
             )
-            
+
             # Parse output based on signature
             parsed_output = self._parse_output(result["content"], signature)
-            
+
             # Calculate metrics
             execution_time = (time.time() - start_time) * 1000  # ms
-            
+
             return {
                 "success": True,
                 "prompt_id": prompt_id,
@@ -129,11 +129,11 @@ class PromptExecutor:
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"Prompt execution failed: {e}")
             execution_time = (time.time() - start_time) * 1000
-            
+
             return {
                 "success": False,
                 "prompt_id": prompt_id,
@@ -146,24 +146,24 @@ class PromptExecutor:
                     "timestamp": datetime.utcnow().isoformat()
                 }
             }
-    
+
     async def execute_batch(self, prompt_id: int, test_cases: List[Dict[str, Any]],
                            model_configs: List[Dict[str, Any]],
                            max_concurrent: int = 5) -> List[Dict[str, Any]]:
         """
         Execute a prompt with multiple test cases and model configurations.
-        
+
         Args:
             prompt_id: Prompt ID
             test_cases: List of test cases with inputs
             model_configs: List of model configurations
             max_concurrent: Maximum concurrent executions
-            
+
         Returns:
             List of execution results
         """
         results = []
-        
+
         # Create all execution tasks
         tasks = []
         for test_case in test_cases:
@@ -174,7 +174,7 @@ class PromptExecutor:
                     model_config=model_config
                 )
                 tasks.append((test_case, model_config, task))
-        
+
         # Execute in batches
         for i in range(0, len(tasks), max_concurrent):
             batch = tasks[i:i + max_concurrent]
@@ -182,7 +182,7 @@ class PromptExecutor:
                 *[task for _, _, task in batch],
                 return_exceptions=True
             )
-            
+
             # Process results
             for (test_case, model_config, _), result in zip(batch, batch_results):
                 if isinstance(result, Exception):
@@ -198,25 +198,25 @@ class PromptExecutor:
                     result["test_case_id"] = test_case.get("id")
                     result["test_case_name"] = test_case.get("name")
                     results.append(result)
-        
+
         return results
-    
+
     ####################################################################################################################
     # LLM Integration
-    
+
     async def _call_llm(self, provider: str, model: str, prompt: str,
                        system_prompt: Optional[str] = None,
                        parameters: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Call the appropriate LLM provider.
-        
+
         Args:
             provider: Provider name
             model: Model name
             prompt: User prompt
             system_prompt: System prompt
             parameters: Additional parameters
-            
+
         Returns:
             LLM response
         """
@@ -225,18 +225,18 @@ class PromptExecutor:
         provider_func = self.PROVIDER_FUNCTIONS.get(provider_lower)
         if not provider_func:
             raise ValueError(f"Unknown provider: {provider}")
-        
+
         # Prepare parameters
         params = parameters or {}
         temperature = params.get("temperature", 0.7)
         max_tokens = params.get("max_tokens", 1000)
-        
+
         # Build messages
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        
+
         # Backoff + retry for transient/provider limit errors
         last_exc = None
         for attempt in range(3):
@@ -287,10 +287,10 @@ class PromptExecutor:
         # If we exhausted retries
         logger.error(f"LLM call failed after retries for {provider}/{model}: {last_exc}")
         raise last_exc if last_exc else RuntimeError("LLM call failed")
-    
+
     ####################################################################################################################
     # Helper Methods
-    
+
     def _get_prompt(self, prompt_id: int) -> Optional[Dict[str, Any]]:
         """Get prompt details from database."""
         prompt = self.db.get_prompt(prompt_id)
@@ -304,23 +304,23 @@ class PromptExecutor:
         if signature and signature.get("deleted"):
             return None
         return signature
-    
+
     def _build_prompt(self, prompt: Dict[str, Any], signature: Optional[Dict[str, Any]],
                      inputs: Dict[str, Any]) -> str:
         """
         Build the final prompt by substituting variables.
-        
+
         Args:
             prompt: Prompt data
             signature: Optional signature data
             inputs: Input values
-            
+
         Returns:
             Final prompt string
         """
         # Prompt Studio stores system and user prompts separately; use user_prompt as the template
         template = (prompt.get("user_prompt") or "")
-        
+
         # Replace variables in template
         for key, value in inputs.items():
             # Handle different placeholder formats
@@ -329,23 +329,23 @@ class PromptExecutor:
             template = template.replace(f"{{{{{key}}}}}", str(value))
             template = template.replace(f"${key}", str(value))
             template = template.replace(f"<{key}>", str(value))
-        
+
         # Add signature instructions if present
         if signature:
             sig_instruction = signature.get("instruction", "")
             if sig_instruction:
                 template = f"{sig_instruction}\n\n{template}"
-            
+
             # Add output format instruction
             if signature.get("output_schema"):
                 template += "\n\nPlease format your response as JSON with the following structure:\n"
                 template += json.dumps(
-                    {field["name"]: f"<{field.get('type', 'string')}>" 
+                    {field["name"]: f"<{field.get('type', 'string')}>"
                      for field in signature["output_schema"]
                      if isinstance(field, dict)},
                     indent=2
                 )
-        
+
         return template
 
     # Compatibility alias used by tests
@@ -370,21 +370,21 @@ class PromptExecutor:
             "parameters": parameters or {}
         }
         return await self.execute_prompt(prompt_id, inputs, model_config)
-    
+
     def _parse_output(self, output: str, signature: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Parse LLM output based on signature schema.
-        
+
         Args:
             output: Raw LLM output
             signature: Optional signature with output schema
-            
+
         Returns:
             Parsed output
         """
         if not signature or not signature.get("output_schema"):
             return {"raw": output}
-        
+
         # Try to parse as JSON
         try:
             # Look for JSON in the output
@@ -395,7 +395,7 @@ class PromptExecutor:
                 return parsed
         except Exception as e:
             logger.debug(f"Failed to parse JSON from LLM output for signature-guided parsing: error={e}")
-        
+
         # Try to extract fields from text
         parsed = {}
         for field in signature.get("output_schema", []):
@@ -407,21 +407,21 @@ class PromptExecutor:
                     match = re.search(pattern, output, re.IGNORECASE)
                     if match:
                         parsed[field_name] = match.group(1).strip()
-        
+
         if not parsed:
             parsed = {"raw": output}
-        
+
         return parsed
-    
+
     def _estimate_cost(self, provider: str, model: str, tokens: int) -> float:
         """
         Estimate cost based on provider and token usage.
-        
+
         Args:
             provider: Provider name
             model: Model name
             tokens: Token count
-            
+
         Returns:
             Estimated cost in USD
         """
@@ -457,24 +457,24 @@ class PromptExecutor:
                 "deepseek-chat": 0.0002
             }
         }
-        
+
         # Get cost rate
         provider_costs = cost_per_1k.get(provider.lower(), {})
-        
+
         # Try exact model match first
         cost_rate = provider_costs.get(model.lower(), 0)
-        
+
         # If not found, try partial match
         if cost_rate == 0:
             for model_key, rate in provider_costs.items():
                 if model_key in model.lower() or model.lower() in model_key:
                     cost_rate = rate
                     break
-        
+
         # Default to very small cost if unknown
         if cost_rate == 0:
             cost_rate = 0.0001
-        
+
         # Calculate cost
         return (tokens / 1000.0) * cost_rate
 
@@ -483,15 +483,15 @@ class PromptExecutor:
 
 class PromptValidator:
     """Validates prompts and signatures before execution."""
-    
+
     @staticmethod
     def validate_prompt(prompt: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """
         Validate a prompt.
-        
+
         Args:
             prompt: Prompt data
-            
+
         Returns:
             Tuple of (is_valid, error_message)
         """
@@ -507,20 +507,20 @@ class PromptValidator:
         import re
         variables = re.findall(r'\{(\w+)\}|\$(\w+)|<(\w+)>', user_text)
         flat_vars = [v for group in variables for v in group if v]
-        
+
         if len(set(flat_vars)) > 20:
             return False, "Too many variables (max 20)"
-        
+
         return True, None
-    
+
     @staticmethod
     def validate_signature(signature: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """
         Validate a signature.
-        
+
         Args:
             signature: Signature data
-            
+
         Returns:
             Tuple of (is_valid, error_message)
         """
@@ -530,7 +530,7 @@ class PromptValidator:
                 input_schema = json.loads(signature["input_schema"]) if isinstance(signature["input_schema"], str) else signature["input_schema"]
                 if not isinstance(input_schema, list):
                     return False, "Input schema must be a list"
-                
+
                 for field in input_schema:
                     if not isinstance(field, dict):
                         return False, "Each input field must be an object"
@@ -539,14 +539,14 @@ class PromptValidator:
             except Exception as e:
                 logger.debug(f"Invalid input schema format in signature: error={e}")
                 return False, "Invalid input schema format"
-        
+
         # Validate output schema
         if signature.get("output_schema"):
             try:
                 output_schema = json.loads(signature["output_schema"]) if isinstance(signature["output_schema"], str) else signature["output_schema"]
                 if not isinstance(output_schema, list):
                     return False, "Output schema must be a list"
-                
+
                 for field in output_schema:
                     if not isinstance(field, dict):
                         return False, "Each output field must be an object"
@@ -555,41 +555,41 @@ class PromptValidator:
             except Exception as e:
                 logger.debug(f"Invalid output schema format in signature: error={e}")
                 return False, "Invalid output schema format"
-        
+
         return True, None
-    
+
     @staticmethod
     def validate_test_inputs(inputs: Dict[str, Any], signature: Optional[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
         """
         Validate test inputs against signature schema.
-        
+
         Args:
             inputs: Test input values
             signature: Optional signature with schema
-            
+
         Returns:
             Tuple of (is_valid, error_message)
         """
         if not signature or not signature.get("input_schema"):
             return True, None
-        
+
         try:
             input_schema = signature["input_schema"]
             if isinstance(input_schema, str):
                 input_schema = json.loads(input_schema)
-            
+
             # Check required fields
             for field in input_schema:
                 if isinstance(field, dict):
                     field_name = field.get("name")
                     if field.get("required", True) and field_name not in inputs:
                         return False, f"Required input field missing: {field_name}"
-                    
+
                     # Type validation (basic)
                     if field_name in inputs:
                         value = inputs[field_name]
                         field_type = field.get("type", "string")
-                        
+
                         if field_type == "integer" and not isinstance(value, int):
                             return False, f"Field {field_name} must be an integer"
                         elif field_type == "boolean" and not isinstance(value, bool):
@@ -598,8 +598,8 @@ class PromptValidator:
                             return False, f"Field {field_name} must be an array"
                         elif field_type == "object" and not isinstance(value, dict):
                             return False, f"Field {field_name} must be an object"
-            
+
             return True, None
-            
+
         except Exception as e:
             return False, f"Validation error: {str(e)}"

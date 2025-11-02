@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import BackendFacto
 
 class TestDatabaseBackends:
     """Test suite for database backend implementations."""
-    
+
     @pytest.fixture
     def temp_db_path(self):
         """Create a temporary database file."""
@@ -38,7 +38,7 @@ class TestDatabaseBackends:
             os.unlink(temp_path)
         except:
             pass
-    
+
     @pytest.fixture
     def sqlite_config(self, temp_db_path):
         """Create SQLite configuration."""
@@ -47,38 +47,38 @@ class TestDatabaseBackends:
             sqlite_path=temp_db_path,
             client_id="test_client"
         )
-    
+
     def test_sqlite_backend_creation(self, sqlite_config):
         """Test that SQLite backend can be created."""
         backend = SQLiteBackend(sqlite_config)
         assert backend is not None
         assert backend.backend_type == BackendType.SQLITE
-        
+
     def test_sqlite_backend_features(self, sqlite_config):
         """Test that SQLite backend reports correct features."""
         backend = SQLiteBackend(sqlite_config)
         features = backend.features
-        
+
         assert features.full_text_search == True  # SQLite has FTS5
         assert features.json_support == True  # SQLite has JSON1
         assert features.window_functions == True  # Modern SQLite has window functions
-        
+
     def test_sqlite_backend_connection(self, sqlite_config):
         """Test that SQLite backend can connect to database."""
         backend = SQLiteBackend(sqlite_config)
-        
+
         # Test connection
         conn = backend.connect()
         assert conn is not None
-        
+
         # Test that we can execute a simple query
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         result = cursor.fetchone()
         assert result[0] == 1
-        
+
         conn.close()
-        
+
     def test_sqlite_backend_schema_creation(self, sqlite_config):
         """Test that SQLite backend can create schema via create_tables."""
         backend = SQLiteBackend(sqlite_config)
@@ -95,7 +95,7 @@ class TestDatabaseBackends:
         result = cursor.fetchone()
         assert result is not None
         conn.close()
-        
+
     def test_backend_factory_sqlite(self, temp_db_path):
         """Test that factory can create SQLite backend."""
         config = DatabaseConfig(
@@ -103,22 +103,22 @@ class TestDatabaseBackends:
             sqlite_path=temp_db_path,
             client_id="test_factory"
         )
-        
+
         backend = DatabaseBackendFactory.create_backend(config)
         assert backend is not None
         assert isinstance(backend, SQLiteBackend)
         assert backend.backend_type == BackendType.SQLITE
-        
+
     def test_backend_factory_invalid_type(self):
         """Test that factory raises error for invalid backend type."""
         config = DatabaseConfig(
             backend_type="invalid_type",  # Invalid
             client_id="test"
         )
-        
+
         with pytest.raises(ValueError):
             BackendFactory.create_backend(config)
-            
+
     @patch('tldw_Server_API.app.core.DB_Management.backends.postgresql_backend.PSYCOPG2_AVAILABLE', False)
     def test_postgresql_backend_unavailable(self):
         """Test that PostgreSQL backend fails gracefully when psycopg2 not available."""
@@ -128,13 +128,13 @@ class TestDatabaseBackends:
             pg_database="test",
             client_id="test"
         )
-        
+
         with pytest.raises(DatabaseError) as exc_info:
             backend = DatabaseBackendFactory.create_backend(config)
             backend.connect()
-            
+
         assert "psycopg2 is not installed" in str(exc_info.value)
-        
+
     def test_fts_query_creation(self):
         """Test FTS query object creation."""
         query = FTSQuery(
@@ -143,21 +143,21 @@ class TestDatabaseBackends:
             limit=10,
             offset=0
         )
-        
+
         assert query.query == "test search"
         assert query.columns == ["title", "content"]
         assert query.limit == 10
         assert query.offset == 0
-        
+
     def test_sqlite_backend_transaction(self, sqlite_config):
         """Test transaction management in SQLite backend."""
         backend = SQLiteBackend(sqlite_config)
-        
+
         # Test successful transaction
         with backend.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY)")
-            
+
         # Verify table was created
         conn = backend.connect()
         cursor = conn.cursor()
@@ -167,11 +167,11 @@ class TestDatabaseBackends:
         result = cursor.fetchone()
         assert result is not None
         conn.close()
-        
+
     def test_sqlite_backend_rollback(self, sqlite_config):
         """Test that transactions rollback on error."""
         backend = SQLiteBackend(sqlite_config)
-        
+
         # Test failed transaction
         try:
             with backend.transaction() as conn:
@@ -181,7 +181,7 @@ class TestDatabaseBackends:
                 cursor.execute("INVALID SQL")
         except:
             pass  # Expected to fail
-            
+
         # Verify table was NOT created (rolled back)
         conn = backend.connect()
         cursor = conn.cursor()
@@ -199,7 +199,7 @@ class TestDatabaseBackends:
 )
 class TestPostgreSQLBackend:
     """Tests for PostgreSQL backend (requires PostgreSQL server)."""
-    
+
     @pytest.fixture
     def pg_config(self):
         """Create PostgreSQL configuration from environment."""
@@ -212,22 +212,22 @@ class TestPostgreSQLBackend:
             pg_password=os.environ.get("POSTGRES_TEST_PASSWORD", "test_pass"),
             client_id="test_pg"
         )
-    
+
     def test_postgresql_backend_creation(self, pg_config):
         """Test PostgreSQL backend creation."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
-        
+
         backend = PostgreSQLBackend(pg_config)
         assert backend is not None
         assert backend.backend_type == BackendType.POSTGRESQL
-        
+
     def test_postgresql_features(self, pg_config):
         """Test PostgreSQL feature detection."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
-        
+
         backend = PostgreSQLBackend(pg_config)
         features = backend.features
-        
+
         assert features.full_text_search == True
         assert features.json_support == True
         assert features.array_support == True

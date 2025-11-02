@@ -14,4 +14,3 @@ def test_webhook_adapter_test_mode(monkeypatch):
     out = asyncio.run(run_webhook_adapter(cfg, ctx))
     assert out.get("dispatched") is False
     assert out.get("test_mode") is True
-

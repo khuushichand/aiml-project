@@ -34,17 +34,17 @@ class PromptTemplate:
     description: Optional[str] = None
     variables: List[str] = None
     metadata: Dict[str, Any] = None
-    
+
     def __post_init__(self):
         """Extract variables from template if not provided."""
         if self.variables is None:
             import re
             # Find all {variable} patterns
             self.variables = re.findall(r'\{(\w+)\}', self.template)
-        
+
         if self.metadata is None:
             self.metadata = {}
-    
+
     def format(self, **kwargs) -> str:
         """Format the template with provided variables."""
         try:
@@ -53,7 +53,7 @@ class PromptTemplate:
             logger.warning(f"Missing variable in template '{self.name}': {e}")
             # Return template with missing variables as-is
             return self.template
-    
+
     def validate_variables(self, variables: Dict[str, Any]) -> bool:
         """Check if all required variables are provided."""
         return all(var in variables for var in self.variables)
@@ -61,15 +61,15 @@ class PromptTemplate:
 
 class PromptTemplateLibrary:
     """Library of reusable prompt templates."""
-    
+
     def __init__(self):
         """Initialize with default templates."""
         self.templates: Dict[str, PromptTemplate] = {}
         self._load_default_templates()
-    
+
     def _load_default_templates(self):
         """Load default prompt templates."""
-        
+
         # System prompts
         self.add_template(PromptTemplate(
             name="default_system",
@@ -77,21 +77,21 @@ class PromptTemplateLibrary:
             type=TemplateType.SYSTEM,
             description="Default system prompt for general use"
         ))
-        
+
         self.add_template(PromptTemplate(
             name="research_system",
             template="You are an expert research assistant with deep knowledge across multiple domains. Analyze information critically and provide comprehensive, well-cited answers.",
             type=TemplateType.SYSTEM,
             description="System prompt for research tasks"
         ))
-        
+
         self.add_template(PromptTemplate(
             name="technical_system",
             template="You are a technical expert assistant. Provide precise, technically accurate answers with appropriate terminology and detail level for the context.",
             type=TemplateType.SYSTEM,
             description="System prompt for technical questions"
         ))
-        
+
         # Full prompts with context
         self.add_template(PromptTemplate(
             name="default_full",
@@ -109,7 +109,7 @@ Answer:""",
             description="Default full prompt with context",
             variables=["system_prompt", "context", "question"]
         ))
-        
+
         self.add_template(PromptTemplate(
             name="with_citations",
             template="""{system_prompt}
@@ -130,7 +130,7 @@ Answer with citations:""",
             description="Prompt requesting citations",
             variables=["system_prompt", "context", "question"]
         ))
-        
+
         self.add_template(PromptTemplate(
             name="comparative",
             template="""{system_prompt}
@@ -150,7 +150,7 @@ Comparative Analysis:""",
             description="Prompt for comparing multiple sources",
             variables=["system_prompt", "context", "question"]
         ))
-        
+
         self.add_template(PromptTemplate(
             name="step_by_step",
             template="""{system_prompt}
@@ -171,7 +171,7 @@ Step-by-Step Answer:""",
             description="Prompt for step-by-step reasoning",
             variables=["system_prompt", "context", "question"]
         ))
-        
+
         self.add_template(PromptTemplate(
             name="code_focused",
             template="""{system_prompt}
@@ -192,7 +192,7 @@ Technical Answer:""",
             description="Prompt for code-related questions",
             variables=["system_prompt", "context", "question"]
         ))
-        
+
         # Context formatting templates
         self.add_template(PromptTemplate(
             name="context_with_metadata",
@@ -207,7 +207,7 @@ Content:
             description="Format for individual context documents",
             variables=["index", "title", "source", "date", "content"]
         ))
-        
+
         self.add_template(PromptTemplate(
             name="context_simple",
             template="""Document {index}:
@@ -217,7 +217,7 @@ Content:
             description="Simple context format",
             variables=["index", "content"]
         ))
-        
+
         # Question formatting templates
         self.add_template(PromptTemplate(
             name="question_with_context_request",
@@ -228,7 +228,7 @@ Please base your answer on the provided context and indicate if additional infor
             description="Question with context awareness",
             variables=["question"]
         ))
-        
+
         # Answer formatting templates
         self.add_template(PromptTemplate(
             name="structured_answer",
@@ -276,16 +276,16 @@ Please base your answer on the provided context and indicate if additional infor
                         type=ttype,
                         description=f"Loaded from Prompts/rag: {ext_key}"
                     ))
-    
+
     def add_template(self, template: PromptTemplate) -> None:
         """Add a template to the library."""
         self.templates[template.name] = template
         logger.debug(f"Added template: {template.name}")
-    
+
     def get_template(self, name: str) -> Optional[PromptTemplate]:
         """Get a template by name."""
         return self.templates.get(name)
-    
+
     def list_templates(self, type: Optional[TemplateType] = None) -> List[str]:
         """List available template names, optionally filtered by type."""
         if type:
@@ -294,7 +294,7 @@ Please base your answer on the provided context and indicate if additional infor
                 if template.type == type
             ]
         return list(self.templates.keys())
-    
+
     def create_custom_template(
         self,
         name: str,
@@ -311,7 +311,7 @@ Please base your answer on the provided context and indicate if additional infor
         )
         self.add_template(template)
         return template
-    
+
     def format_context_documents(
         self,
         documents: List[Any],
@@ -325,12 +325,12 @@ Please base your answer on the provided context and indicate if additional infor
                 f"Document {i+1}:\n{doc.content}"
                 for i, doc in enumerate(documents)
             )
-        
+
         formatted_docs = []
         for i, doc in enumerate(documents):
             # Extract metadata
             metadata = doc.metadata if hasattr(doc, 'metadata') else {}
-            
+
             # Format individual document
             formatted = template.format(
                 index=i+1,
@@ -340,9 +340,9 @@ Please base your answer on the provided context and indicate if additional infor
                 content=doc.content if hasattr(doc, 'content') else str(doc)
             )
             formatted_docs.append(formatted)
-        
+
         return "\n\n".join(formatted_docs)
-    
+
     def build_full_prompt(
         self,
         question: str,
@@ -355,14 +355,14 @@ Please base your answer on the provided context and indicate if additional infor
         # Get templates
         full_template = self.get_template(template_name)
         system_template = self.get_template(system_prompt_name)
-        
+
         if not full_template:
             # Fallback to basic prompt
             return f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-        
+
         # Get system prompt
         system_prompt = system_template.template if system_template else ""
-        
+
         # Format full prompt
         return full_template.format(
             system_prompt=system_prompt,
@@ -370,7 +370,7 @@ Please base your answer on the provided context and indicate if additional infor
             question=question,
             **kwargs
         )
-    
+
     def save_to_file(self, filepath: str) -> None:
         """Save templates to a JSON file."""
         data = {
@@ -383,17 +383,17 @@ Please base your answer on the provided context and indicate if additional infor
             }
             for name, template in self.templates.items()
         }
-        
+
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=2)
-        
+
         logger.info(f"Saved {len(self.templates)} templates to {filepath}")
-    
+
     def load_from_file(self, filepath: str) -> None:
         """Load templates from a JSON file."""
         with open(filepath, 'r') as f:
             data = json.load(f)
-        
+
         for name, template_data in data.items():
             template = PromptTemplate(
                 name=name,
@@ -404,7 +404,7 @@ Please base your answer on the provided context and indicate if additional infor
                 metadata=template_data.get("metadata", {})
             )
             self.add_template(template)
-        
+
         logger.info(f"Loaded {len(data)} templates from {filepath}")
 
 

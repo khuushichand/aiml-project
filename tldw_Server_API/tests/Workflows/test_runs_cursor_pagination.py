@@ -95,4 +95,3 @@ def test_runs_cursor_pagination_flow(client: TestClient):
     if p1["runs"]:
         last_id = p1["runs"][ -1 ]["run_id"]
         assert all(it["run_id"] != last_id for it in p2["runs"])
-

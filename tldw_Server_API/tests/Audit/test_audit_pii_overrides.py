@@ -77,4 +77,3 @@ async def test_audit_pii_overrides_and_scan_fields(monkeypatch):
             Path(db_path).unlink(missing_ok=True)
         except Exception:
             pass
-

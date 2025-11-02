@@ -62,4 +62,3 @@ def test_rag_generation_grounding_smoke(api_client):
         syn = md.get("synthesis")
         gate = md.get("generation_gate")
         assert isinstance(syn, dict) or isinstance(gate, dict)
-

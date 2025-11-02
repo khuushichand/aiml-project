@@ -68,4 +68,3 @@ def test_memories_crud(client_with_personalization_db: TestClient):
     # Delete
     dl = c.delete(f"/api/v1/personalization/memories/{mid}")
     assert dl.status_code == 200
-

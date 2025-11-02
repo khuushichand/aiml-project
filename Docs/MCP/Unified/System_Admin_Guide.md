@@ -195,16 +195,16 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # Timeouts
         proxy_connect_timeout 60s;
         proxy_send_timeout 60s;
         proxy_read_timeout 60s;
-        
+
         # Buffering
         proxy_buffering off;
         proxy_request_buffering off;
-        
+
         # Max body size
         client_max_body_size 10M;
     }
@@ -309,7 +309,7 @@ from tldw_Server_API.app.core.MCP_unified.auth import JWTManager
 
 async def create_admin():
     jwt_manager = JWTManager()
-    
+
     # Create admin user
     admin_token = jwt_manager.create_access_token(
         subject="admin",
@@ -317,13 +317,13 @@ async def create_admin():
         roles=["admin"],
         permissions=["*"]
     )
-    
+
     print(f"Admin token: {admin_token}")
-    
+
     # Save to secure location
     with open("/etc/tldw/config/admin_token", "w") as f:
         f.write(admin_token)
-    
+
     os.chmod("/etc/tldw/config/admin_token", 0o600)
 
 asyncio.run(create_admin())
@@ -421,13 +421,13 @@ groups:
         for: 5m
         annotations:
           summary: "High error rate detected"
-          
+
       - alert: AuthenticationFailures
         expr: rate(mcp_auth_failures_total[5m]) > 10
         for: 2m
         annotations:
           summary: "High authentication failure rate"
-          
+
       - alert: DatabasePoolExhaustion
         expr: mcp_database_pool_available < 2
         for: 5m

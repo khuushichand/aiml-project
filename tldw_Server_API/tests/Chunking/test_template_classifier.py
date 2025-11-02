@@ -33,4 +33,3 @@ def test_template_processor_hierarchical_returns_dict_chunks():
     assert isinstance(chunks[0], dict)
     assert "text" in chunks[0]
     assert "metadata" in chunks[0]
-

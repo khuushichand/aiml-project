@@ -40,20 +40,20 @@ class TimestampMixin(BaseModel):
     """Mixin for timestamp fields"""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class SoftDeleteMixin(BaseModel):
     """Mixin for soft delete fields"""
     deleted: Optional[bool] = Field(default=False)
     deleted_at: Optional[datetime] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class UUIDMixin(BaseModel):
     """Mixin for UUID field"""
     uuid: Optional[str] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 ########################################################################################################################
@@ -108,14 +108,14 @@ class SecurityConfig(BaseModel):
     max_concurrent_jobs: int = Field(default=10, description="Maximum concurrent jobs per user")
     enable_prompt_validation: bool = Field(default=True, description="Enable prompt validation")
     enable_rate_limiting: bool = Field(default=True, description="Enable rate limiting")
-    
+
     @field_validator('max_prompt_length')
     @classmethod
     def validate_prompt_length(cls, v):
         if v < 100 or v > 1000000:
             raise ValueError("max_prompt_length must be between 100 and 1000000")
         return v
-    
+
     @field_validator('max_test_cases')
     @classmethod
     def validate_test_cases(cls, v):

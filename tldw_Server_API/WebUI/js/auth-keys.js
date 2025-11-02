@@ -145,4 +145,3 @@ if (typeof document !== 'undefined') {
 }
 
 export default { listMyApiKeys, createMyApiKey, rotateMyApiKey, revokeMyApiKey, renderKeys, bindAuthKeys };
-

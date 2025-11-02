@@ -240,7 +240,7 @@ from typing import Optional, List
 
 class RequestModel(BaseModel):
     field: str = Field(..., description="Field description")
-    
+
 class ResponseModel(BaseModel):
     result: str
     metadata: Optional[dict] = None
@@ -255,7 +255,7 @@ from .schemas import RequestModel, ResponseModel
 class DomainService:
     def __init__(self, repository: DomainRepository):
         self.repository = repository
-    
+
     async def perform_action(self, request: RequestModel) -> ResponseModel:
         # Business logic here
         data = await self.repository.get_data(request.field)
@@ -272,7 +272,7 @@ from typing import Optional
 class DomainRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
-    
+
     async def get_data(self, field: str) -> Optional[dict]:
         # Database operations here
         pass

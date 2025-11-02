@@ -53,6 +53,17 @@ from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from fastapi import Response as FastAPIResponse
 
+# Compatibility aliases for status codes across Starlette versions
+try:
+    HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
+except AttributeError:  # Starlette < 0.27
+    HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
+
+try:
+    HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
+except AttributeError:  # Starlette < 0.27
+    HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
 # FastAPI router must be defined before any @router decorators are executed
 router = APIRouter()
 
@@ -262,7 +273,7 @@ async def get_process_code_form(
             if isinstance(ctx, dict):
                 err['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in ctx.items()}
             serializable_errors.append(err)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=serializable_errors) from e
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
 
 
 @router.post(
@@ -862,7 +873,7 @@ def get_add_media_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Coerce JSON string inputs for urls into a list for robustness
         if isinstance(urls, str):
@@ -973,7 +984,7 @@ def get_add_media_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for /add endpoint: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e: # Catch other potential errors during instantiation
@@ -2154,9 +2165,9 @@ async def list_all_media(
             logger.debug(f"Data causing validation error: items_count={len(formatted_items)}, pagination={pagination_info.model_dump_json(indent=2) if pagination_info else 'None'}")
             raise HTTPException(status_code=500, detail="Internal server error: Response creation failed.")
 
-    except ValueError as ve: # Catch ValueError from db.get_paginated_media_list
+    except ValueError as ve:  # Catch ValueError from db.get_paginated_media_list
         logger.warning(f"Invalid pagination parameters for list_all_media: {ve}")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(ve))
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=str(ve)) from ve
     except DatabaseError as e:
         logger.error(f"Database error fetching paginated media in list_all_media endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database error retrieving media list.")
@@ -2221,12 +2232,12 @@ async def get_transcription_models():
             {"value": "parakeet-onnx", "label": "Parakeet ONNX", "description": "Cross-platform optimization"}
         ]
     }
-    
+
     # Also return a flat list of all values for validation
     all_models = []
     for category_models in models_by_category.values():
         all_models.extend([model["value"] for model in category_models])
-    
+
     return {
         "categories": models_by_category,
         "all_models": all_models
@@ -2361,9 +2372,9 @@ async def search_media_items(
             logger.error(f"Pydantic validation error creating MediaListResponse for search: {ve.errors()}", exc_info=True)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error: Response creation failed.")
 
-    except ValueError as ve: # Catch custom ValueErrors from db.search_media_db or param validation
+    except ValueError as ve:  # Catch custom ValueErrors from db.search_media_db or param validation
         logger.warning(f"Invalid parameters for media search: {ve}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(ve))
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=str(ve)) from ve
     except DatabaseError as e:
         logger.error(f"Database error during media search: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="A database error occurred during the search.")
@@ -2521,7 +2532,7 @@ async def _save_uploaded_files(
                     "error": f"File type '{file_extension}' is not allowed for security reasons"
                 })
                 continue # Skip to the next file
-            
+
             # Honor allowed_extensions if provided by checking all candidate suffixes
             if normalized_allowed_extensions and not any(c in normalized_allowed_extensions for c in candidates or [file_extension]):
                 logger.warning(f"Skipping file '{original_filename}' due to disallowed extension '{file_extension}'. Allowed: {allowed_extensions}")
@@ -2622,9 +2633,13 @@ async def _save_uploaded_files(
                         await buffer.write(chunk)
             except Exception as write_err:
                 # Cleanup and report
-                if local_file_path.exists():
-                    try: local_file_path.unlink(missing_ok=True)
-                    except Exception: pass
+                try:
+                    local_file_path.unlink(missing_ok=True)
+                except OSError as unlink_err:
+                    logger.warning(
+                        f"Failed to remove partially written upload file: {local_file_path}: {unlink_err}",
+                        exc_info=True,
+                    )
                 file_handling_errors.append({
                     "original_filename": original_filename,
                     "input_ref": input_ref,
@@ -2641,8 +2656,13 @@ async def _save_uploaded_files(
                     "status": "Error",
                     "error": "Uploaded file content is empty.",
                 })
-                try: local_file_path.unlink(missing_ok=True)
-                except Exception: pass
+                try:
+                    local_file_path.unlink(missing_ok=True)
+                except OSError as unlink_err:
+                    logger.warning(
+                        f"Failed to remove empty upload file: {local_file_path}: {unlink_err}",
+                        exc_info=True,
+                    )
                 continue
 
             try:
@@ -3726,7 +3746,7 @@ async def _process_document_like_item(
                          has_quota, info = await quota_service.check_quota(user_id, size_bytes, raise_on_exceed=False)
                          if not has_quota:
                              raise HTTPException(
-                                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                                 status_code=HTTP_413_TOO_LARGE,
                                  detail=(
                                      f"Storage quota exceeded. Current: {info['current_usage_mb']}MB, "
                                      f"New: {info['new_size_mb']}MB, Quota: {info['quota_mb']}MB, "
@@ -4600,13 +4620,13 @@ async def add_media(
                 allowed_extensions=allowed_exts,
                 skip_archive_scanning=(str(form_data.media_type).lower() == 'email' and bool(getattr(form_data, 'accept_archives', False)))
             )
-            
+
             # Check for file errors and return appropriate HTTP errors immediately
             for err_info in file_save_errors:
                 error_msg = err_info.get("error", "")
                 if "exceeds maximum allowed size" in error_msg:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                       status_code=HTTP_413_TOO_LARGE,
                         detail=error_msg
                     )
                 elif "not allowed for security reasons" in error_msg:
@@ -4619,7 +4639,7 @@ async def add_media(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail=error_msg
                     )
-            
+
             # Adapt file saving errors to the standard result format
             for err_info in file_save_errors:
                  results.append({
@@ -4654,7 +4674,7 @@ async def add_media(
                                 f"New: {info['new_size_mb']}MB, Quota: {info['quota_mb']}MB, "
                                 f"Available: {info['available_mb']}MB"
                             )
-                            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=detail)
+                            raise HTTPException(status_code=HTTP_413_TOO_LARGE, detail=detail)
                         # Record upload metrics
                         try:
                             reg = get_metrics_registry()
@@ -4792,13 +4812,13 @@ async def add_media(
         if form_data.generate_embeddings:
             logger.info("Generating embeddings for successfully processed media items...")
             embedding_tasks = []
-            
+
             for result in results:
                 # Only generate embeddings for successfully stored items
                 if result.get("status") == "Success" and result.get("db_id"):
                     media_id = result["db_id"]
                     logger.info(f"Scheduling embedding generation for media ID {media_id}")
-                    
+
                     # Add background task for embedding generation
                     async def generate_embeddings_task(media_id: int):
                         try:
@@ -4806,11 +4826,11 @@ async def add_media(
                                 generate_embeddings_for_media,
                                 get_media_content
                             )
-                            
+
                             media_content = await get_media_content(media_id, db)
                             embedding_model = form_data.embedding_model or "Qwen/Qwen3-Embedding-4B-GGUF"
                             embedding_provider = form_data.embedding_provider or "huggingface"
-                            
+
                             result = await generate_embeddings_for_media(
                                 media_id=media_id,
                                 media_content=media_content,
@@ -4822,11 +4842,11 @@ async def add_media(
                             logger.info(f"Embedding generation result for media {media_id}: {result}")
                         except Exception as e:
                             logger.error(f"Failed to generate embeddings for media {media_id}: {e}")
-                    
+
                     # Run embedding generation in background
                     background_tasks.add_task(generate_embeddings_task, media_id)
                     result["embeddings_scheduled"] = True
-        
+
         # --- 8. Determine Final Status Code and Return Response (Success Path) ---
         # TempDirManager handles cleanup automatically on exit from 'with' block
         final_status_code = _determine_final_status(results)
@@ -4968,7 +4988,7 @@ def get_process_videos_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Create the Pydantic model instance using the parsed form data.
         form_instance = ProcessVideosForm(
@@ -5036,7 +5056,7 @@ def get_process_videos_form(
         logger.warning(f"Pydantic validation failed: {json.dumps(serializable_errors)}")
         # Raise HTTPException with the processed, serializable error details
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,  # Pass the cleaned list
         ) from e
     except Exception as e: # Catch other potential errors during instantiation
@@ -5446,7 +5466,7 @@ def get_process_audios_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Map form fields to ProcessAudiosForm fields
         form_instance = ProcessAudiosForm(
@@ -5497,7 +5517,7 @@ def get_process_audios_form(
         # Log the validation error details for debugging
         logger.warning(f"Form validation failed for /process-audios: {e.errors()}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=e.errors(),
         ) from e
     except Exception as e:
@@ -6066,7 +6086,7 @@ def get_process_ebooks_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for Ebook processing: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e:
@@ -6497,7 +6517,7 @@ def get_process_emails_form(
             serializable_error['input'] = serializable_error.get('input', serializable_error.get('loc'))
             serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for Email processing: {json.dumps(serializable_errors)}")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=serializable_errors) from e
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
     except Exception as e:
         logger.error(f"Unexpected error creating ProcessEmailsForm: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error during form processing: {type(e).__name__}")
@@ -6856,7 +6876,7 @@ def get_process_documents_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for Document processing: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e:
@@ -6900,7 +6920,7 @@ async def process_documents_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
     process_document_content(Path("/abs/article.docx"), perform_chunking=True, perform_analysis=True, api_name="openai")
     ```
-    
+
     URL inputs must resolve to a supported document format. The server accepts URLs that either:
     - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, .json, or
     - provide `Content-Disposition` with a filename that ends with an allowed extension, or
@@ -7268,7 +7288,7 @@ def get_process_pdfs_form(
         if transcription_model not in valid_models:
             logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
             transcription_model = "whisper-large-v3"  # Default to a reliable model
-    
+
     try:
         # Create the Pydantic model instance using the parsed form data.
         form_instance = ProcessPDFsForm(
@@ -7334,7 +7354,7 @@ def get_process_pdfs_form(
              serializable_errors.append(serializable_error)
         logger.warning(f"Pydantic validation failed for PDF processing: {json.dumps(serializable_errors)}")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=HTTP_422_UNPROCESSABLE,
             detail=serializable_errors,
         ) from e
     except Exception as e:
@@ -7477,7 +7497,7 @@ async def process_pdfs_endpoint(
     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
     await process_pdf_task(file_bytes, filename="paper.pdf", parser="pymupdf4llm", perform_chunking=True, api_name="openai")
     ```
-    
+
     URL inputs must resolve to a PDF. The server accepts URLs that either:
     - end with `.pdf`, or
     - provide `Content-Disposition` with a filename ending in `.pdf`, or
@@ -7832,9 +7852,11 @@ def get_mediawiki_form_data(
     if namespaces_str:
         try:
             namespaces = [int(ns.strip()) for ns in namespaces_str.split(',')]
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail="Invalid namespace format. Must be comma-separated integers.")
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail="Invalid namespace format. Must be comma-separated integers."
+            ) from ve
 
     chunk_options_override = {'max_size': chunk_max_size}
     # Potentially add other chunk options from config or form here if needed by optimized_chunking

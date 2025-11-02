@@ -123,4 +123,3 @@ class UserPersonalizationStore:
         except Exception:
             pass
         return boosted
-

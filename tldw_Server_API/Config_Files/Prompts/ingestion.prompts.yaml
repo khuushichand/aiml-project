@@ -4,4 +4,3 @@ claims_extractor_system: |
 claims_extractor_prompt: |
   Extract up to {max_claims} atomic factual propositions from the ANSWER. Each proposition should stand
   alone without the surrounding context, be specific and checkable. Return JSON: {"claims":[{"text":str}]}. Do not include explanations.
-

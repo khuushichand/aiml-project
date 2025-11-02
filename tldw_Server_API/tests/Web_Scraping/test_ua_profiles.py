@@ -28,4 +28,3 @@ def test_profile_to_impersonate_mapping():
     imp = profile_to_impersonate(profile)
     # For known profiles we expect a non-empty impersonation token
     assert imp is None or isinstance(imp, str)
-

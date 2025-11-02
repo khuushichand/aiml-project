@@ -1,4 +1,4 @@
-# tldw_Server_API – API Guide
+# tldw_Server_API - API Guide
 
 This document covers the API layout, how to run the server, authentication, and how to add or work with endpoints inside `tldw_Server_API`.
 
@@ -7,12 +7,12 @@ This document covers the API layout, how to run the server, authentication, and 
 The server is FastAPI-based with an OpenAI-compatible Chat and Audio API, a unified RAG module, a unified Evaluations module, and an integrated WebUI served from the same origin.
 
 Key directories:
-- `app/main.py` – FastAPI app, router includes, middleware, WebUI mount
-- `app/api/v1/endpoints/` – Endpoint modules (media, chat, audio, rag, evals, prompts, notes, etc.)
-- `app/api/v1/schemas/` – Pydantic request/response models
-- `app/api/v1/API_Deps/` – Shared dependencies (auth, DB, rate limits)
-- `app/core/` – Business logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
-- `WebUI/` – Static WebUI served at `/webui`
+- `app/main.py` - FastAPI app, router includes, middleware, WebUI mount
+- `app/api/v1/endpoints/` - Endpoint modules (media, chat, audio, rag, evals, prompts, notes, etc.)
+- `app/api/v1/schemas/` - Pydantic request/response models
+- `app/api/v1/API_Deps/` - Shared dependencies (auth, DB, rate limits)
+- `app/core/` - Business logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
+- `WebUI/` - Static WebUI served at `/webui`
 
 ## Running the Server
 
@@ -80,7 +80,7 @@ See `app/main.py` for router includes and full route namespaces.
 
 - `CHATBOOKS_JOBS_BACKEND`: Selects job backend for Chatbooks. Values: `core` (default) or `prompt_studio`.
 - `TLDW_JOBS_BACKEND`: Module-wide default job backend (domain overrides take precedence).
-- Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` — use `CHATBOOKS_JOBS_BACKEND=prompt_studio` instead.
+- Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` - use `CHATBOOKS_JOBS_BACKEND=prompt_studio` instead.
 
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable/disable the shared core worker when using the `core` backend (default `true`). Set to `false` to skip starting the background worker even if `core` is selected.
 
@@ -99,10 +99,10 @@ Lease behavior and backoff
 - Backoff: retryable failures use exponential backoff with jitter; the next attempt’s `available_at` advances with each retry.
 
 Signed download URLs (optional):
-- `CHATBOOKS_SIGNED_URLS=true|false` — enable HMAC-signed download URLs.
-- `CHATBOOKS_SIGNING_SECRET` — shared secret used to sign download links.
-- `CHATBOOKS_ENFORCE_EXPIRY=true|false` — enforce job `expires_at` with `410` when expired.
-- `CHATBOOKS_URL_TTL_SECONDS` — default expiry TTL for generated links (default 86400 seconds).
+- `CHATBOOKS_SIGNED_URLS=true|false` - enable HMAC-signed download URLs.
+- `CHATBOOKS_SIGNING_SECRET` - shared secret used to sign download links.
+- `CHATBOOKS_ENFORCE_EXPIRY=true|false` - enforce job `expires_at` with `410` when expired.
+- `CHATBOOKS_URL_TTL_SECONDS` - default expiry TTL for generated links (default 86400 seconds).
 
 ## Running Tests
 

@@ -61,14 +61,14 @@ async def process_web_scraping_task(
     - Progress tracking and resumability
     - Content deduplication
     - Robust error handling and retries
-    
+
     This function delegates to the enhanced service while maintaining
     backward compatibility with the existing API.
     """
     # Try to use enhanced service
     try:
         service = get_web_scraping_service()
-        
+
         # Determine priority based on number of URLs or max_pages
         priority = "normal"
         if scrape_method == "Individual URLs":
@@ -77,7 +77,7 @@ async def process_web_scraping_task(
                 priority = "high"
         elif max_pages > 50:
             priority = "high"
-        
+
         # Call enhanced service
         result = await service.process_web_scraping_task(
             scrape_method=scrape_method,
@@ -100,9 +100,9 @@ async def process_web_scraping_task(
             user_agent=user_agent,
             custom_headers=custom_headers
         )
-        
+
         return result
-        
+
     except Exception as e:
         # Log error with full details
         import logging
@@ -110,7 +110,7 @@ async def process_web_scraping_task(
         logging.error(f"Enhanced scraping service failed: {str(e)}")
         logging.error(f"Full traceback: {traceback.format_exc()}")
         logging.warning(f"Falling back to legacy implementation")
-        
+
         # Fallback to legacy implementation
         try:
             # 1) Perform scraping based on method
@@ -191,7 +191,7 @@ async def process_web_scraping_task(
                     client_id="webscraping_legacy_service",
                     db_path=db_path,
                 )
-                
+
                 # Persist each article in the DB
                 media_ids = []
                 try:
@@ -211,7 +211,7 @@ async def process_web_scraping_task(
 
                         # Combine content and metadata
                         content_text = article.get("content", "")
-                        
+
                         # Fix the function call to match the actual signature
                         # Build safe metadata
                         safe_meta = {

@@ -23,10 +23,10 @@ Current transcription workflows focus on generic media ingestion. Power users ne
 
 ## Personas & JTBD
 
-- **Product Manager “Riley”** – runs cross-functional meetings; wants quick recap with assigned owners.
-- **Sales Lead “Jordan”** – logs discovery calls; needs CRM-ready notes covering objectives, objections.
-- **Researcher “Morgan”** – conducts interviews; wants tagged insights, highlight reels, follow-up tasks.
-- **Ops Admin “Casey”** – manages process templates; enforces taxonomy, audits compliance.
+- **Product Manager “Riley”** - runs cross-functional meetings; wants quick recap with assigned owners.
+- **Sales Lead “Jordan”** - logs discovery calls; needs CRM-ready notes covering objectives, objections.
+- **Researcher “Morgan”** - conducts interviews; wants tagged insights, highlight reels, follow-up tasks.
+- **Ops Admin “Casey”** - manages process templates; enforces taxonomy, audits compliance.
 
 ## Use Cases
 
@@ -69,9 +69,9 @@ Current transcription workflows focus on generic media ingestion. Power users ne
 
 ## Competitive Inspiration
 
-- **Granola** – guided pre-meeting briefs, real-time anchored notes.
-- **Hyprnote** – templated notes, AI-suggested follow-ups, shareable history.
-- **Shadow** – robust diarization, secure workspace, knowledge graph linking.
+- **Granola** - guided pre-meeting briefs, real-time anchored notes.
+- **Hyprnote** - templated notes, AI-suggested follow-ups, shareable history.
+- **Shadow** - robust diarization, secure workspace, knowledge graph linking.
 
 ## Technical Approach
 
@@ -87,24 +87,24 @@ Current transcription workflows focus on generic media ingestion. Power users ne
 
 ## Phased Roadmap
 
-1. **MVP (≈6 weeks)**  
-   - Template CRUD + default library  
-   - Meeting metadata schema, offline processing pipeline  
-   - Summary & action items generation  
-   - WebUI: template picker, transcript + summary view, manual owner assignment  
-   - API docs & automated tests  
+1. **MVP (≈6 weeks)**
+   - Template CRUD + default library
+   - Meeting metadata schema, offline processing pipeline
+   - Summary & action items generation
+   - WebUI: template picker, transcript + summary view, manual owner assignment
+   - API docs & automated tests
    - Instrumentation scaffold: event tracking for template usage, baseline metrics, feedback hooks
 
-2. **Live Experience (≈8 weeks)**  
-   - Real-time streaming UI and SSE endpoint  
-   - Live action item callouts, diarization updates  
-   - Slack export, manual calendar import (ICS)  
+2. **Live Experience (≈8 weeks)**
+   - Real-time streaming UI and SSE endpoint
+   - Live action item callouts, diarization updates
+   - Slack export, manual calendar import (ICS)
    - Expand analytics: latency reporting, post-meeting survey prompt
 
-3. **Integrations & Intelligence (≈10+ weeks)**  
-   - Automated owner mapping from calendar participants  
-   - CRM/PM exports (Notion, HubSpot, Jira)  
-   - Analytics dashboards (meeting trends)  
+3. **Integrations & Intelligence (≈10+ weeks)**
+   - Automated owner mapping from calendar participants
+   - CRM/PM exports (Notion, HubSpot, Jira)
+   - Analytics dashboards (meeting trends)
    - Knowledge base linking within RAG
 
 ## Dependencies & Risks
@@ -141,7 +141,7 @@ Current transcription workflows focus on generic media ingestion. Power users ne
 
 ## Next Steps
 
-1. Re‑review PRD scope and governance wording; refine while context is fresh.
+1. Re-review PRD scope and governance wording; refine while context is fresh.
 2. Plan enhanced diarization spike: select candidate models, assemble sample recordings, define accuracy metrics.
 3. Map instrumentation work: enumerate events, fields, and storage strategy for metrics and surveys.
 4. Outline template governance implementation: default set definition, toggle controls, admin/user flows.

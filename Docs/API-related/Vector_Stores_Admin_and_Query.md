@@ -1,4 +1,4 @@
-# Vector Stores API – Admin and Query Filters
+# Vector Stores API - Admin and Query Filters
 
 This document describes vector store administration endpoints and advanced query filters.
 

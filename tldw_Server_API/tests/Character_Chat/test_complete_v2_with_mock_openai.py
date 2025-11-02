@@ -54,4 +54,3 @@ async def test_complete_v2_with_mock_openai_server():
             assert r.status_code in (200, 502)  # 502 if mock is unreachable/misconfigured
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-

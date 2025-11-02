@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 class SampleDataGenerator:
     """Generate sample data for testing."""
-    
+
     @staticmethod
     def generate_text(min_length: int = 10, max_length: int = 100) -> str:
         """Generate random text of specified length."""
@@ -22,17 +22,17 @@ class SampleDataGenerator:
             "evaluation", "system", "metrics", "performance", "quality", "response",
             "analysis", "data", "model", "test", "sample", "content", "result"
         ]
-        
+
         num_words = random.randint(min_length, max_length) // 5
         return " ".join(random.choices(words, k=num_words))
-    
+
     @staticmethod
     def generate_evaluation_spec() -> Dict[str, Any]:
         """Generate a random evaluation specification."""
         eval_types = ["model_graded", "g_eval", "rag", "response_quality", "custom"]
-        metrics = ["accuracy", "relevance", "coherence", "fluency", "factuality", 
+        metrics = ["accuracy", "relevance", "coherence", "fluency", "factuality",
                   "completeness", "consistency", "helpfulness"]
-        
+
         return {
             "evaluator_model": random.choice(["gpt-4", "gpt-3.5-turbo", "claude-2", "llama-2"]),
             "eval_type": random.choice(eval_types),
@@ -42,12 +42,12 @@ class SampleDataGenerator:
             "max_tokens": random.choice([500, 1000, 1500, 2000]),
             "top_p": round(random.uniform(0.8, 1.0), 2)
         }
-    
+
     @staticmethod
     def generate_dataset_samples(count: int = 5) -> List[Dict[str, Any]]:
         """Generate dataset samples."""
         samples = []
-        
+
         for i in range(count):
             samples.append({
                 "input": {
@@ -64,9 +64,9 @@ class SampleDataGenerator:
                     "category": random.choice(["factual", "reasoning", "creative"])
                 }
             })
-        
+
         return samples
-    
+
     @staticmethod
     def generate_rag_evaluation_data() -> Dict[str, Any]:
         """Generate RAG evaluation test data."""
@@ -81,12 +81,12 @@ class SampleDataGenerator:
             "api_name": "openai",
             "metrics": ["relevance", "faithfulness", "answer_similarity", "context_precision"]
         }
-    
+
     @staticmethod
     def generate_geval_data() -> Dict[str, Any]:
         """Generate G-Eval test data."""
         source_text = SampleDataGenerator.generate_text(100, 200)
-        
+
         return {
             "source_text": source_text,
             "summary": SampleDataGenerator.generate_text(20, 40),
@@ -98,7 +98,7 @@ class SampleDataGenerator:
                 "language": "en"
             }
         }
-    
+
     @staticmethod
     def generate_response_quality_data() -> Dict[str, Any]:
         """Generate response quality evaluation data."""
@@ -115,29 +115,29 @@ class SampleDataGenerator:
             },
             "api_name": "openai"
         }
-    
+
     @staticmethod
     def generate_batch_evaluation_request(size: int = 3) -> Dict[str, Any]:
         """Generate batch evaluation request."""
         evaluations = []
-        
+
         for i in range(size):
             eval_type = random.choice(["g_eval", "rag", "response_quality"])
-            
+
             if eval_type == "g_eval":
                 data = SampleDataGenerator.generate_geval_data()
             elif eval_type == "rag":
                 data = SampleDataGenerator.generate_rag_evaluation_data()
             else:
                 data = SampleDataGenerator.generate_response_quality_data()
-            
+
             evaluations.append({
                 "name": f"batch_eval_{i}_{uuid.uuid4().hex[:6]}",
                 "eval_type": eval_type,
                 "data": data,
                 "priority": random.choice(["low", "medium", "high"])
             })
-        
+
         return {
             "evaluation_type": "geval",  # Default to one type for batch
             "items": evaluations,
@@ -149,7 +149,7 @@ class SampleDataGenerator:
                 "user": f"test_user_{random.randint(1, 10)}"
             }
         }
-    
+
     @staticmethod
     def generate_webhook_payload() -> Dict[str, Any]:
         """Generate webhook payload."""
@@ -158,7 +158,7 @@ class SampleDataGenerator:
             "run.started", "run.completed", "run.failed",
             "dataset.created", "dataset.updated"
         ]
-        
+
         return {
             "event": random.choice(event_types),
             "timestamp": datetime.utcnow().isoformat(),
@@ -179,7 +179,7 @@ class SampleDataGenerator:
                 "version": "1.0.0"
             }
         }
-    
+
     @staticmethod
     def generate_error_scenarios() -> List[Dict[str, Any]]:
         """Generate various error scenarios for testing."""
@@ -231,7 +231,7 @@ class SampleDataGenerator:
 def generate_evaluation_request() -> Dict[str, Any]:
     """Generate a complete evaluation request."""
     generator = SampleDataGenerator()
-    
+
     return {
         "name": f"test_eval_{uuid.uuid4().hex[:8]}",
         "description": generator.generate_text(10, 30),
@@ -249,7 +249,7 @@ def generate_evaluation_request() -> Dict[str, Any]:
 def generate_run_request(eval_id: str) -> Dict[str, Any]:
     """Generate a run request for an evaluation."""
     generator = SampleDataGenerator()
-    
+
     return {
         "eval_id": eval_id,
         "model": random.choice(["gpt-4", "gpt-3.5-turbo", "claude-2"]),

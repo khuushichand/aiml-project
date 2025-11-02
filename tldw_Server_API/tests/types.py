@@ -33,7 +33,7 @@ class TestDocument:
     content: str
     metadata: Dict[str, Any]
     embedding: Optional[List[float]] = None
-    
+
 
 @dataclass
 class SearchResult:
@@ -56,15 +56,15 @@ class TestConfig(TypedDict):
 
 class MockDatabase(Protocol):
     """Protocol for mock database implementations"""
-    
+
     def connect(self) -> None:
         """Connect to database"""
         ...
-    
+
     def execute(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
         """Execute query"""
         ...
-    
+
     def close(self) -> None:
         """Close connection"""
         ...
@@ -79,7 +79,7 @@ class RAGTestCase:
     search_mode: SearchMode
     keywords: Optional[List[str]] = None
     filters: Optional[Dict[str, Any]] = None
-    
+
 
 @dataclass
 class PerformanceMetrics:
@@ -93,15 +93,15 @@ class PerformanceMetrics:
 
 class TestFixture:
     """Base class for test fixtures"""
-    
+
     def __init__(self):
         self.setup_complete = False
         self.teardown_complete = False
-    
+
     def setup(self) -> None:
         """Setup test fixture"""
         self.setup_complete = True
-    
+
     def teardown(self) -> None:
         """Teardown test fixture"""
         self.teardown_complete = True
@@ -110,7 +110,7 @@ class TestFixture:
 # Re-export commonly used types
 __all__ = [
     'TestStatus',
-    'SearchMode', 
+    'SearchMode',
     'TestDocument',
     'SearchResult',
     'TestConfig',

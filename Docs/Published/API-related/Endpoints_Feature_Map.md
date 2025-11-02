@@ -1,6 +1,6 @@
 # Endpoints Feature Map
 
-This page summarizes the primary API endpoints exposed by the server, grouped by router prefix. It complements the OpenAPI docs and provides a quick, human‑readable index of capabilities.
+This page summarizes the primary API endpoints exposed by the server, grouped by router prefix. It complements the OpenAPI docs and provides a quick, human-readable index of capabilities.
 
 Note: This map focuses on the most important, stable routes. Many modules expose additional granular endpoints not listed here for brevity.
 
@@ -362,4 +362,3 @@ Note: This map focuses on the most important, stable routes. Many modules expose
 ---
 
 For the complete, authoritative list of routes and schemas, see the interactive OpenAPI docs at `/docs` and the endpoint modules under `tldw_Server_API/app/api/v1/endpoints/`.
-

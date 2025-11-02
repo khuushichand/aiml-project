@@ -1,4 +1,4 @@
-# Prompt Studio – Phase 2 TODOs
+# Prompt Studio - Phase 2 TODOs
 
 This file enumerates follow-up tasks for Prompt Studio Phase 2 (Correctness + Concurrency). Each task includes an ID, scope, and acceptance criteria.
 
@@ -44,4 +44,3 @@ This file enumerates follow-up tasks for Prompt Studio Phase 2 (Correctness + Co
 - Summary: Extend optional validation for new knobs as they’re defined (beam pruning policies, anneal schedules, genetic crossover variants).
 - Acceptance:
   - New knobs validated when present; tests added for negative/positive cases
-

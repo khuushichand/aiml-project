@@ -207,7 +207,7 @@ RAG_SERVICE_CONFIG = {
     "num_workers": 4,  # Limited for multi-user server
     "log_level": "INFO",
     "log_performance_metrics": True,
-    
+
     # Cache configuration
     "cache": {
         "enable_cache": True,
@@ -217,7 +217,7 @@ RAG_SERVICE_CONFIG = {
         "cache_embeddings": True,
         "cache_llm_responses": False  # Don't cache LLM responses by default
     },
-    
+
     # Retriever configuration
     "retriever": {
         "fts_top_k": 10,
@@ -229,7 +229,7 @@ RAG_SERVICE_CONFIG = {
         "re_ranking_model": "flashrank",
         "timeout_seconds": 30
     },
-    
+
     # Processor configuration
     "processor": {
         "enable_reranking": True,
@@ -242,7 +242,7 @@ RAG_SERVICE_CONFIG = {
         "enable_metadata_filtering": True,
         "token_counter": "tiktoken"
     },
-    
+
     # Generator configuration
     "generator": {
         "default_model": "gpt-3.5-turbo",
@@ -263,29 +263,29 @@ DIARIZATION_CONFIG = {
     "vad_threshold": 0.5,  # Silero VAD confidence threshold
     "segment_duration": 30,  # Maximum segment duration in seconds
     "speech_pad_ms": 400,  # Padding around speech segments in milliseconds
-    
+
     # Embedding model settings
     "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
     "embedding_batch_size": 32,
     "embedding_device": "auto",  # auto, cpu, cuda, or cuda:0
-    
+
     # Clustering settings
     "clustering_method": "spectral",  # spectral or agglomerative
     "num_speakers": None,  # None for automatic detection
     "min_speakers": 1,
     "max_speakers": 10,
-    
+
     # Post-processing settings
     "min_segment_duration": 0.5,  # Minimum segment duration in seconds
     "merge_threshold": 0.5,  # Threshold for merging adjacent segments
     "overlap_detection": True,  # Enable overlap detection
     "overlap_confidence_threshold": 0.7,
-    
+
     # Performance settings
     "num_threads": 4,  # Number of threads for processing
     "use_auth_token": None,  # HuggingFace auth token if needed
     "cache_dir": None,  # Directory for model cache
-    
+
     # Output settings
     "include_embeddings": False,  # Include embeddings in output
     "include_vad_scores": False,  # Include VAD scores in output
@@ -295,29 +295,29 @@ DIARIZATION_CONFIG = {
 def load_tts_config() -> Dict[str, Any]:
     """
     Load TTS configuration from YAML file and integrate with existing config.
-    
+
     Returns:
         Dictionary containing TTS configuration
     """
     current_file_path = Path(__file__).resolve()
     # Navigate to TTS config file: .../tldw_Server_API/app/core/TTS/tts_providers_config.yaml
     tts_config_path = current_file_path.parent / 'TTS' / 'tts_providers_config.yaml'
-    
+
     _log_info(f"Loading TTS configuration from: {tts_config_path}")
-    
+
     if not tts_config_path.exists():
         _log_warning(f"TTS config file not found at {tts_config_path}, using defaults")
         return _get_default_tts_config()
-    
+
     try:
         with open(tts_config_path, 'r', encoding='utf-8') as f:
             tts_config = yaml.safe_load(f)
-        
+
         # Validate and process the configuration
         processed_config = _process_tts_config(tts_config)
         _log_info("TTS configuration loaded successfully")
         return processed_config
-        
+
     except Exception as e:
         _log_error(f"Error loading TTS configuration: {e}")
         _log_info("Falling back to default TTS configuration")
@@ -326,53 +326,53 @@ def load_tts_config() -> Dict[str, Any]:
 def _process_tts_config(tts_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Process and validate TTS configuration from YAML.
-    
+
     Args:
         tts_config: Raw configuration from YAML file
-        
+
     Returns:
         Processed configuration dictionary
     """
     processed = {}
-    
+
     # Extract provider priority
     if 'provider_priority' in tts_config:
         processed['provider_priority'] = tts_config['provider_priority']
-    
+
     # Process provider configurations
     if 'providers' in tts_config:
         for provider_name, provider_config in tts_config['providers'].items():
             processed[f'{provider_name}_config'] = provider_config
-            
+
             # Enable/disable flags
             processed[f'{provider_name}_enabled'] = provider_config.get('enabled', True)
-    
+
     # Extract voice mappings
     if 'voice_mappings' in tts_config:
         processed['voice_mappings'] = tts_config['voice_mappings']
-    
+
     # Extract format preferences
     if 'format_preferences' in tts_config:
         processed['format_preferences'] = tts_config['format_preferences']
-    
+
     # Extract performance settings
     if 'performance' in tts_config:
         processed.update(tts_config['performance'])
-    
+
     # Extract fallback settings
     if 'fallback' in tts_config:
         processed.update(tts_config['fallback'])
-    
+
     # Extract logging settings
     if 'logging' in tts_config:
         processed['tts_logging'] = tts_config['logging']
-    
+
     return processed
 
 def _get_default_tts_config() -> Dict[str, Any]:
     """
     Get default TTS configuration when YAML config is not available.
-    
+
     Returns:
         Default configuration dictionary
     """
@@ -432,7 +432,17 @@ openai_tts_mappings = {
 
 # --- Helper Function (Optional but can keep dictionary creation clean) ---
 def load_settings():
-    """Loads all settings from environment variables or defaults into a dictionary."""
+    """
+    Assembles application configuration from environment variables and configuration files into a single mapping.
+
+    Builds a consolidated dictionary of runtime settings (paths, feature flags, numeric limits, provider blocks, and raw comprehensive config) used by the application. The returned mapping contains keys such as PROJECT_ROOT, DATABASE_URL, USER_DB_BASE_DIR, REDIS_*, SANDBOX_*, feature-flag knobs, and COMPREHENSIVE_CONFIG_RAW among many others.
+
+    Returns:
+        dict: A dictionary of consolidated configuration values keyed by setting name.
+
+    Notes:
+        This function may load .env files, consult on-disk config files, emit startup warnings, and create filesystem directories (for the main SQLite database and the user data base directory) as needed.
+    """
 
     # Determine Actual Project Root based on the location of this file
     # config.py is in project_root/tldw_server_api/app/core/config.py
@@ -663,6 +673,26 @@ def load_settings():
     # WebSocket server poll timeout (seconds) for sandbox log streams
     # Tests may override to a smaller value (e.g., 1) via env to speed disconnects
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
+    # Optional: signed WS URLs for log_stream_url issuance
+    SANDBOX_WS_SIGNED_URL_TTL_SEC = _sbx_int("SANDBOX_WS_SIGNED_URL_TTL_SEC", "ws_signed_url_ttl_sec", 60)
+    SANDBOX_WS_SIGNED_URLS = (
+        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    )(
+        os.getenv("SANDBOX_WS_SIGNED_URLS")
+        or _sbx_get("ws_signed_urls", "false")
+        or "false"
+    )
+    SANDBOX_WS_SIGNING_SECRET = os.getenv("SANDBOX_WS_SIGNING_SECRET") or _sbx_get("ws_signing_secret", None)
+    # Test-only helper: when true, the WS endpoint will publish synthetic
+    # start/end frames to ensure subscribers see frames immediately. Disabled
+    # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
+    SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS = (
+        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    )(
+        os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
+        or _sbx_get("ws_synthetic_frames_for_tests", "false")
+        or "false"
+    )
     SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0"])
     SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
         os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"
@@ -717,7 +747,7 @@ def load_settings():
         "REDIS_URL": redis_url,
         "CACHE_TTL": cache_ttl,
         "REDIS_ENABLED": redis_enabled,
-        # Character-Chat (rate limiting) – file-backed defaults; env may override later
+        # Character-Chat (rate limiting) - file-backed defaults; env may override later
         "CHARACTER_RATE_LIMIT_OPS": _character_rate_limit_ops,
         "CHARACTER_RATE_LIMIT_WINDOW": _character_rate_limit_window,
         "MAX_CHARACTERS_PER_USER": _max_characters_per_user,
@@ -726,7 +756,7 @@ def load_settings():
         "MAX_MESSAGES_PER_CHAT": _max_messages_per_chat,
         "MAX_CHAT_COMPLETIONS_PER_MINUTE": _max_chat_completions_per_minute,
         "MAX_MESSAGE_SENDS_PER_MINUTE": _max_message_sends_per_minute,
-    
+
         # Chat Configuration - Load from config file with default
         "CHAT_DICT_MAX_TOKENS": int(
             comprehensive_config.get('Chat-Dictionaries', {}).get('max_tokens', '5000')
@@ -780,6 +810,11 @@ def load_settings():
         "SANDBOX_MAX_MEM_MB": SANDBOX_MAX_MEM_MB,
         "SANDBOX_WORKSPACE_CAP_MB": SANDBOX_WORKSPACE_CAP_MB,
         "SANDBOX_SUPPORTED_SPEC_VERSIONS": SANDBOX_SUPPORTED_SPEC_VERSIONS,
+        "SANDBOX_WS_POLL_TIMEOUT_SEC": SANDBOX_WS_POLL_TIMEOUT_SEC,
+        "SANDBOX_WS_SIGNED_URL_TTL_SEC": SANDBOX_WS_SIGNED_URL_TTL_SEC,
+        "SANDBOX_WS_SIGNED_URLS": SANDBOX_WS_SIGNED_URLS,
+        # WebSocket stream settings for sandbox UI/logs
+        "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS": SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS,
         "SANDBOX_IDEMPOTENCY_TTL_SEC": SANDBOX_IDEMPOTENCY_TTL_SEC,
         "SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC": SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC,
         "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC": SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC,
@@ -1424,55 +1459,55 @@ def should_disable_cors() -> bool:
 def load_comprehensive_config_with_tts():
     """
     Load comprehensive configuration including TTS settings.
-    
+
     Returns:
         Combined configuration object with TTS settings integrated
     """
     # Load main config
     config_parser = load_comprehensive_config()
-    
+
     # Load TTS config
     tts_config = load_tts_config()
-    
+
     # Create combined configuration object
     class CombinedConfig:
         def __init__(self, config_parser: configparser.ConfigParser, tts_config: Dict[str, Any]):
             self.config_parser = config_parser
             self.tts_config = tts_config
-        
+
         def get(self, section: str, key: str, fallback=None):
             """Get value from main config"""
             return self.config_parser.get(section, key, fallback=fallback)
-        
+
         def has_section(self, section: str) -> bool:
             """Check if section exists in main config"""
             return self.config_parser.has_section(section)
-        
+
         def has_option(self, section: str, key: str) -> bool:
             """Check if option exists in main config"""
             return self.config_parser.has_option(section, key)
-        
+
         def items(self, section: str):
             """Get items from main config section"""
             return self.config_parser.items(section)
-        
+
         def sections(self):
             """Get sections from main config"""
             return self.config_parser.sections()
-        
+
         def get_tts_config(self) -> Dict[str, Any]:
             """Get TTS configuration"""
             # Merge with API keys from main config for convenience
             merged_tts = self.tts_config.copy()
-            
+
             # Add API keys if available
             if self.config_parser.has_option('API', 'openai_api_key'):
                 merged_tts['openai_api_key'] = self.config_parser.get('API', 'openai_api_key')
             if self.config_parser.has_option('API', 'elevenlabs_api_key'):
                 merged_tts['elevenlabs_api_key'] = self.config_parser.get('API', 'elevenlabs_api_key')
-            
+
             return merged_tts
-    
+
     return CombinedConfig(config_parser, tts_config)
 
 
@@ -1520,7 +1555,6 @@ def _route_toggle_policy() -> dict:
         "connectors",
         "workflows",
         "scheduler",
-        "flashcards",
         "personalization",
         "persona",
         "jobs",  # jobs admin

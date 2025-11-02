@@ -50,4 +50,3 @@ export function JsonViewer({ data, className, highlight = true }: JsonViewerProp
 }
 
 export default JsonViewer;
-

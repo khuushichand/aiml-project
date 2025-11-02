@@ -17,7 +17,7 @@ try:
     from .postgresql_backend import PostgreSQLBackend
     __all__ = [
         'create_backend',
-        'test_backend_connection', 
+        'test_backend_connection',
         'get_backend_info',
         'BackendManager',
         'SQLiteBackend',
@@ -28,7 +28,7 @@ except ImportError:
     __all__ = [
         'create_backend',
         'test_backend_connection',
-        'get_backend_info', 
+        'get_backend_info',
         'BackendManager',
         'SQLiteBackend',
         'MemoryBackend'

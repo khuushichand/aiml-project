@@ -60,4 +60,3 @@ def test_jobs_ttl_with_clock_pg(monkeypatch):
     j2r = jm.get_job(int(got["id"]))
     assert j1r and j1r["status"] == "cancelled"
     assert j2r and j2r["status"] == "cancelled"
-

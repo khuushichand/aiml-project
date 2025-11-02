@@ -10,8 +10,8 @@ embeddings of context-expanded blocks.
 
 ## Auth + Rate Limits
 
-- Single‑user mode: send `X-API-KEY: <your_key>`
-- Multi‑user mode (JWT): send `Authorization: Bearer <JWT>`
+- Single-user mode: send `X-API-KEY: <your_key>`
+- Multi-user mode (JWT): send `Authorization: Bearer <JWT>`
 
 Rate limiting: 30 requests/minute per IP (SlowAPI).
 
@@ -39,7 +39,7 @@ Fields:
 - `min_segment_size`: Minimum utterances per segment.
 - `lambda_balance`: Balance penalty to discourage degenerate splits.
 - `utterance_expansion_width`: Number of previous utterances concatenated to each block.
-- `min_improvement_ratio`: Stop splitting when relative improvement (per split) drops below this threshold (0–1).
+- `min_improvement_ratio`: Stop splitting when relative improvement (per split) drops below this threshold (0-1).
 - `embeddings_provider`/`embeddings_model`: Optional overrides when using the built-in embedding service.
 
 ## Response Body

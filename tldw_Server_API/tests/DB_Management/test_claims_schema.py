@@ -73,4 +73,3 @@ def test_insert_and_fetch_claims(temp_media_db_path):
     claims = db.get_claims_by_media(media_id)
     assert len(claims) == 1
     assert claims[0]["claim_text"].startswith("Hello world")
-

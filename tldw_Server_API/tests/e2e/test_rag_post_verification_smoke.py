@@ -17,7 +17,7 @@ def test_rag_search_with_post_verification_smoke(api_client):
         "search_mode": "hybrid",
         "top_k": 5,
         # Enable generation + post-verification. If generation is unavailable,
-        # this is still a smoke test – we assert basic shape of response.
+        # this is still a smoke test - we assert basic shape of response.
         "enable_generation": True,
         "enable_post_verification": True,
         "adaptive_max_retries": 1,
@@ -42,4 +42,3 @@ def test_rag_search_with_post_verification_smoke(api_client):
         assert "unsupported_ratio" in pv
         assert "total_claims" in pv
         assert "unsupported_count" in pv
-

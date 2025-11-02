@@ -44,4 +44,3 @@ def test_js_required_emits_fallback_metric(monkeypatch):
     # Ensure js_required metric was emitted at least once
     js_fallbacks = [c for c in calls if c[0] == "scrape_playwright_fallback_total" and c[1].get("reason") == "js_required"]
     assert js_fallbacks, f"expected js_required fallback metric, got: {calls}"
-

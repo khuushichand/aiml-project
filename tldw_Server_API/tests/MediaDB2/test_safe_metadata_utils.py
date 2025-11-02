@@ -34,4 +34,3 @@ def test_normalize_safe_metadata_arxiv_pass_through():
 
     sm = normalize_safe_metadata({"arXiv": "1706.03762v2"})
     assert sm.get("arxiv_id") == "1706.03762v2"
-

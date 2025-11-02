@@ -76,4 +76,3 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
     assert len(out.get("backup_codes", [])) >= 2
 
     reset_settings()
-

@@ -4,13 +4,13 @@ Status: Draft v0.1 • Owner: Platform • Related: PG-Support-Plan.md
 
 ## 1) Executive Summary
 
-Goal: evolve from a 10k-doc SQLite + Chroma deployment to a multi-tenant, millions-of-documents architecture using PostgreSQL for metadata/full‑text and pgvector for embeddings, without breaking existing APIs. The system must support: high‑throughput ingestion, hybrid retrieval (FTS + vectors + re‑rank), multi‑user isolation, and predictable performance targets.
+Goal: evolve from a 10k-doc SQLite + Chroma deployment to a multi-tenant, millions-of-documents architecture using PostgreSQL for metadata/full-text and pgvector for embeddings, without breaking existing APIs. The system must support: high-throughput ingestion, hybrid retrieval (FTS + vectors + re-rank), multi-user isolation, and predictable performance targets.
 
 Non-goals: switch primary programming model or API surface; introduce external managed services; change WebUI/API semantics.
 
 ## 2) Requirements & Targets
 
-- Scale: 5–10M chunks (documents split into chunks) per instance; multiple tenants.
+- Scale: 5-10M chunks (documents split into chunks) per instance; multiple tenants.
 - Latency targets (hot cache, tuned):
   - FTS candidate fetch: p95 ≤ 60 ms (k<=100)
   - Vector ANN (k=10): p95 ≤ 150 ms with prefilters
@@ -21,7 +21,7 @@ Non-goals: switch primary programming model or API surface; introduce external m
 
 ## 3) Current State (Brief)
 
-- SQLite is used for media/notes DBs; FTS5 powers search; Chroma stores embeddings per user. 
+- SQLite is used for media/notes DBs; FTS5 powers search; Chroma stores embeddings per user.
 - RAG has a pluggable vector store with adapters for Chroma and pgvector (`rag_service/vector_stores/*`).
 - Separate work exists for a database backend abstraction (see PG-Support-Plan.md) but it is not yet integrated into Media_DB_v2 and other modules.
 
@@ -30,10 +30,10 @@ Non-goals: switch primary programming model or API surface; introduce external m
 - Storage:
   - PostgreSQL 16+ as the system of record for metadata and text.
   - Extensions: `pgvector`, `pg_trgm` (for fuzzy search), `uuid-ossp` (optional).
-  - Full‑text search via `tsvector/tsquery` with GIN indexes.
+  - Full-text search via `tsvector/tsquery` with GIN indexes.
   - Embeddings in pgvector with HNSW (preferred) or IVFFLAT indexes.
-- Multi‑tenancy: single database with `tenant_id` column on all core tables; optional RLS.
-- Retrieval: hybrid pipeline combining FTS candidates and ANN candidates, then re‑ranks (BM25/ts_rank + vector score normalization).
+- Multi-tenancy: single database with `tenant_id` column on all core tables; optional RLS.
+- Retrieval: hybrid pipeline combining FTS candidates and ANN candidates, then re-ranks (BM25/ts_rank + vector score normalization).
 - Ingestion: chunking + batch inserts + background workers; COPY/`executemany` paths; backpressure controls.
 - Compatibility: keep SQLite/Chroma as a mode for small/local installs.
 
@@ -43,7 +43,7 @@ Two complementary layers:
 
 1) Text + Metadata (normalized in Postgres)
 
-- `tenants(tenant_id, name, created_at)` — optional helper table.
+- `tenants(tenant_id, name, created_at)` - optional helper table.
 - `documents(id, tenant_id, external_ref, title, source_uri, author, created_at, updated_at, soft_deleted_at, meta jsonb)`
 - `chunks(id, tenant_id, document_id, ordinal, text, meta jsonb, ts tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(text,''))) STORED, created_at, updated_at, soft_deleted_at)`
 
@@ -132,7 +132,7 @@ Notes:
 ## 7) Ingestion & Jobs
 
 - Chunking: leverage the unified chunking module and ingestion pipeline; ensure chunks carry stable `chunk_id` and `tenant_id`.
-- Batch writes: use COPY (psycopg `copy_expert`) or `executemany` with batches of 500–2000 rows depending on payload size.
+- Batch writes: use COPY (psycopg `copy_expert`) or `executemany` with batches of 500-2000 rows depending on payload size.
 - Background workers: use existing worker/orchestrator modules to process embedding jobs and storage in parallel (bounded concurrency per tenant).
 - Backpressure & retries: queue size caps per tenant; exponential backoff; idempotent upserts by `chunk_id`.
 - Large files: store raw media outside DB (disk/object store); DB keeps normalized text+metadata only.
@@ -147,19 +147,19 @@ Phases (align with PG-Support-Plan.md):
    - Export from SQLite (documents, chunks, metadata).
    - Re-embed or import embeddings (if Chroma export with aligned IDs is available).
    - Verify counts and sample retrieval parity.
-5) Dual‑write (optional, short window) → cut over reads to Postgres/pgvector → decommission dual writes.
+5) Dual-write (optional, short window) → cut over reads to Postgres/pgvector → decommission dual writes.
 
 Validation:
 - Row counts match (±0 with soft-deletes considered).
-- Sampled queries (FTS only, vector only, hybrid) produce equivalent or better top‑k.
+- Sampled queries (FTS only, vector only, hybrid) produce equivalent or better top-k.
 - p95 latencies within targets after warmup.
 
 ## 9) Deployment & Tuning
 
 - Topology: Postgres 16+ with `pgvector` and `pg_trgm`; pgbouncer for pooling; optional read replica for analytics.
 - Tuning (starting points; adjust per hardware):
-  - `shared_buffers`: ~25% RAM; `effective_cache_size`: 50–75% RAM
-  - `work_mem`: 16–64MB; `maintenance_work_mem`: 512MB–2GB for index builds
+  - `shared_buffers`: ~25% RAM; `effective_cache_size`: 50-75% RAM
+  - `work_mem`: 16-64MB; `maintenance_work_mem`: 512MB-2GB for index builds
   - Autovacuum: more aggressive on `chunks` and `chunk_embeddings`
   - Analyze tables after bulk loads; rebuild HNSW offline during low-traffic windows if needed
 - Observability: slow query log; `pg_stat_statements`; metrics via exporters; application tracing of retrieval steps.
@@ -170,9 +170,9 @@ Validation:
   - `pgvector_pool_min_size` (default 1), `pgvector_pool_max_size` (default 5), `pgvector_pool_size` (alias)
   - `pgvector_hnsw_ef_search` (default 64; higher = better recall, higher latency)
 - Recommended values:
-  - Up to 1M chunks: pool_min=1, pool_max=5–10, ef_search=64–128
-  - 1–10M chunks: pool_min=2–4, pool_max=10–20, ef_search=128–256
-  - >10M chunks: consider partitioning; pool_max 20–50, ef_search 128–256; add read replicas if needed
+  - Up to 1M chunks: pool_min=1, pool_max=5-10, ef_search=64-128
+  - 1-10M chunks: pool_min=2-4, pool_max=10-20, ef_search=128-256
+  - >10M chunks: consider partitioning; pool_max 20-50, ef_search 128-256; add read replicas if needed
 
 ## 10) Configuration & Interfaces
 
@@ -212,7 +212,7 @@ Validation:
 
 ---
 
-Appendix A — Example Queries
+Appendix A - Example Queries
 
 - FTS candidates:
 ```sql

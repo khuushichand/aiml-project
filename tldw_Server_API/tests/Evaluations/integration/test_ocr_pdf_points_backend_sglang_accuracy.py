@@ -97,4 +97,3 @@ def test_points_sglang_accuracy():
 
         app.dependency_overrides.pop(eval_mod.verify_api_key, None)
         app.dependency_overrides.pop(auth_deps.get_rate_limiter_dep, None)
-

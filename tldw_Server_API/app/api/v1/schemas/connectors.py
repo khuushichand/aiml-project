@@ -68,4 +68,3 @@ class ConnectorPolicy(BaseModel):
     allowed_notion_workspaces: List[str] = Field(default_factory=list)
     denied_notion_workspaces: List[str] = Field(default_factory=list)
     quotas_per_role: Dict[str, Dict[str, int]] = Field(default_factory=dict, description="e.g., {role: {max_jobs_per_day: N}}")
-

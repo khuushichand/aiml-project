@@ -10,8 +10,8 @@ Supported backends
 Common usage
 - Set `enable_ocr=true` and choose `ocr_backend` (`tesseract`, `dots`, or `points`).
 - `ocr_mode`: `fallback` (only pages lacking text) or `always` (force OCR).
-- `ocr_dpi`: 200–300 is a good balance.
-- Parallelism: `OCR_PAGE_CONCURRENCY` controls per-page OCR concurrency (default 1). Keep small (1–2) for GPU-backed models.
+- `ocr_dpi`: 200-300 is a good balance.
+- Parallelism: `OCR_PAGE_CONCURRENCY` controls per-page OCR concurrency (default 1). Keep small (1-2) for GPU-backed models.
 
 ## dots.ocr (backend: `dots`)
 

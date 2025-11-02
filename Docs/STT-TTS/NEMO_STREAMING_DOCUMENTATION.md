@@ -134,6 +134,7 @@ Transcription results from Nemo models (Hypothesis objects) are automatically co
 - WebSocket endpoints use a separate router to avoid conflicts with HTTP authentication middleware
 - Token validation happens after WebSocket upgrade
 - CSRF protection is bypassed for WebSocket connections
+- See also `Docs/API-related/Audio_Transcription_API.md` for detailed auth flows, quota error frames, and close codes (4401/4403/4003/1008/1011). The `GET /api/v1/audio/stream/limits` endpoint provides per-user minutes remaining and active stream counts.
 
 ## Usage Examples
 
@@ -147,7 +148,7 @@ import numpy as np
 
 async def stream_audio():
     uri = "ws://localhost:8000/api/v1/audio/stream/transcribe?token=YOUR_API_KEY"
-    
+
     async with websockets.connect(uri) as websocket:
         # Send configuration
         config = {
@@ -158,23 +159,23 @@ async def stream_audio():
             "enable_partial": True
         }
         await websocket.send(json.dumps(config))
-        
+
         # Wait for ready status
         response = await websocket.recv()
         print(f"Status: {response}")
-        
+
         # Send audio chunks
         for i in range(10):
             # Generate or read audio data
             audio_data = np.random.randn(16000).astype(np.float32)  # 1 second
             audio_base64 = base64.b64encode(audio_data.tobytes()).decode()
-            
+
             message = {
                 "type": "audio",
                 "data": audio_base64
             }
             await websocket.send(json.dumps(message))
-            
+
             # Check for transcription results
             try:
                 response = await asyncio.wait_for(websocket.recv(), timeout=0.1)
@@ -183,9 +184,9 @@ async def stream_audio():
                     print(f"Transcription: {data.get('text')}")
             except asyncio.TimeoutError:
                 pass
-            
+
             await asyncio.sleep(1)
-        
+
         # Get final transcript
         await websocket.send(json.dumps({"type": "commit"}))
         response = await websocket.recv()
@@ -201,11 +202,11 @@ class StreamingClient {
         this.apiKey = apiKey;
         this.ws = null;
     }
-    
+
     async connect() {
         const wsUrl = `ws://localhost:8000/api/v1/audio/stream/transcribe?token=${this.apiKey}`;
         this.ws = new WebSocket(wsUrl);
-        
+
         this.ws.onopen = () => {
             // Send configuration
             this.ws.send(JSON.stringify({
@@ -216,7 +217,7 @@ class StreamingClient {
                 enable_partial: true
             }));
         };
-        
+
         this.ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'partial' || data.type === 'final') {
@@ -224,7 +225,7 @@ class StreamingClient {
             }
         };
     }
-    
+
     sendAudio(audioData) {
         // Convert Float32Array to base64
         const base64 = btoa(String.fromCharCode(...new Uint8Array(audioData.buffer)));

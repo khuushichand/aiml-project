@@ -128,4 +128,3 @@ def test_runner_execution_timeout_on_wait(monkeypatch: pytest.MonkeyPatch) -> No
     assert (rs.message or "") == "execution_timeout"
     frames = list(hub._buffers.get(rid, []))  # type: ignore[attr-defined]
     assert any(f.get("type") == "event" and f.get("event") == "end" and f.get("data", {}).get("reason") == "execution_timeout" for f in frames)
-

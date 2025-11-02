@@ -12,4 +12,3 @@ export function Switch({ checked, onChange, label, className }: { checked: boole
     </label>
   );
 }
-

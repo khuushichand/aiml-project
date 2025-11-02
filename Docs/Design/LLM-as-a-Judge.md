@@ -10,7 +10,3 @@ https://arxiv.org/abs/2506.02945
 https://arxiv.org/html/2506.02945v1#S6
 
 https://arxiv.org/abs/2506.01789
-
-
-
-

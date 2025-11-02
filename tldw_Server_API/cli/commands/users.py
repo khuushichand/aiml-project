@@ -25,15 +25,15 @@ def users_group():
 def list_users(ctx, output_format):
     """List users and their tiers."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
-        
+
         # Get user list (simplified - would need proper user management)
         users_data = []  # This would come from actual user database
-        
+
         if output_format == 'json':
             print_json(users_data, "Users List")
         else:
@@ -41,7 +41,7 @@ def list_users(ctx, output_format):
                 print_table(users_data, "Users and Tiers")
             else:
                 print_info("No users found")
-        
+
     except Exception as e:
         logger.exception("User listing failed")
         print_error(f"User listing failed: {e}")
@@ -55,14 +55,14 @@ def list_users(ctx, output_format):
 def show_user_limits(ctx, user_id, output_format):
     """Show user's current limits and usage."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
         limiter = get_user_rate_limiter_for_user(int(user_id))
         stats = limiter.get_user_stats(user_id)
-        
+
         if output_format == 'json':
             print_json(stats, f"User Limits: {user_id}")
         else:
@@ -71,7 +71,7 @@ def show_user_limits(ctx, user_id, output_format):
                 print_table(table_data, f"User Limits: {user_id}")
             else:
                 print_info(f"No data found for user: {user_id}")
-        
+
     except Exception as e:
         logger.exception("User limits retrieval failed")
         print_error(f"User limits retrieval failed: {e}")
@@ -85,22 +85,22 @@ def show_user_limits(ctx, user_id, output_format):
 def set_user_tier(ctx, user_id, tier):
     """Set user tier."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user, UserTier
-        
+
         tier_enum = UserTier(tier)
         limiter = get_user_rate_limiter_for_user(int(user_id))
         success = limiter.set_user_tier(user_id, tier_enum)
-        
+
         if success:
             print_success(f"User {user_id} tier set to {tier}")
         else:
             print_error(f"Failed to set tier for user {user_id}")
             sys.exit(1)
-        
+
     except Exception as e:
         logger.exception("User tier setting failed")
         print_error(f"User tier setting failed: {e}")
@@ -113,20 +113,20 @@ def set_user_tier(ctx, user_id, tier):
 def reset_user_limits(ctx, user_id):
     """Reset user's rate limits."""
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
         limiter = get_user_rate_limiter_for_user(int(user_id))
         success = limiter.reset_user_limits(user_id)
-        
+
         if success:
             print_success(f"Rate limits reset for user {user_id}")
         else:
             print_error(f"Failed to reset limits for user {user_id}")
             sys.exit(1)
-        
+
     except Exception as e:
         logger.exception("User limits reset failed")
         print_error(f"User limits reset failed: {e}")

@@ -18,4 +18,3 @@ def test_personalization_boost(tmp_path, monkeypatch):
     boosted = store.boost_documents(docs, corpus="demo")
     # d2 should be ranked first after boost
     assert boosted[0].id == "d2"
-

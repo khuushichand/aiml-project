@@ -10,4 +10,3 @@ data:
   UVICORN_WORKERS: "4"
   LOG_LEVEL: "info"
   ALLOWED_ORIGINS: "https://your.domain.com"
-

@@ -88,4 +88,3 @@ groups:
           description: |
             p99 step duration exceeds 5s for the last 10 minutes.
             Inspect specific step types for hotspots.
-

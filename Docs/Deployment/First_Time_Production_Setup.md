@@ -3,7 +3,7 @@
 Version: v0.1.0
 Audience: DevOps/SREs and self-hosters deploying tldw_server for the first time
 
-This guide walks you through a secure, production‑ready first deployment of tldw_server. It covers Docker Compose (recommended) and a bare‑metal alternative, plus the initial setup wizard, TLS, CORS, and basic verification.
+This guide walks you through a secure, production-ready first deployment of tldw_server. It covers Docker Compose (recommended) and a bare-metal alternative, plus the initial setup wizard, TLS, CORS, and basic verification.
 
 Related documents
 - Reverse proxy examples (Nginx/Traefik): `Docs/Deployment/Reverse_Proxy_Examples.md`
@@ -18,10 +18,10 @@ Related documents
 - OS: Linux (Ubuntu 22.04 LTS or similar recommended). macOS/Windows supported for small installs.
 - CPU/RAM: Minimum 2 vCPU / 4 GB RAM; recommended 4+ vCPU / 8+ GB.
 - Storage: 50 GB+ SSD for media, databases, and models.
-- FFmpeg installed (Docker image includes it; bare‑metal must install via package manager).
+- FFmpeg installed (Docker image includes it; bare-metal must install via package manager).
 - DNS configured for your domain (if exposing over the internet).
 - TLS via reverse proxy (Nginx/Traefik/Caddy). See reverse proxy guide.
-- Database: SQLite is fine for single‑user; Postgres recommended for production multi‑user.
+- Database: SQLite is fine for single-user; Postgres recommended for production multi-user.
 
 Security preflight
 - Decide auth mode: `single_user` (API key) or `multi_user` (JWT).
@@ -34,14 +34,14 @@ Security preflight
 ## 2) Quick Decision Matrix
 
 - Want the fastest secure start, one host? Choose Docker Compose (recommended).
-- Need package‑managed services and systemd? Use bare‑metal + Nginx.
+- Need package-managed services and systemd? Use bare-metal + Nginx.
 - Expect multiple users/teams? Prefer Postgres and reverse proxy TLS from day one.
 
-## 3) Option A — Docker Compose (recommended)
+## 3) Option A - Docker Compose (recommended)
 
 The repository ships with a Compose stack for the API + Postgres + Redis.
 
-Step A1 — Clone and prepare env
+Step A1 - Clone and prepare env
 ```bash
 git clone https://github.com/<your-org>/tldw_server.git
 cd tldw_server
@@ -62,7 +62,7 @@ export tldw_production=true
 export ALLOWED_ORIGINS=https://your.domain.com
 ```
 
-Step A2 — Bring the stack up
+Step A2 - Bring the stack up
 ```bash
 # Build and start (detached)
 docker compose up --build -d
@@ -73,21 +73,21 @@ docker compose ps
 
 The app listens on `:8000` inside the container and is exposed on the host at `:8000` by default.
 Compose note
-- `docker-compose.override.yml` ships with production‑leaning defaults and is auto‑loaded with `docker-compose.yml`.
+- `docker-compose.override.yml` ships with production-leaning defaults and is auto-loaded with `docker-compose.yml`.
 
-Step A3 — First‑time setup (optional wizard)
-- The server exposes a local‑only setup flow at `/setup` when enabled.
+Step A3 - First-time setup (optional wizard)
+- The server exposes a local-only setup flow at `/setup` when enabled.
 - Check status: `curl http://127.0.0.1:8000/api/v1/setup/status`
 - If `enabled` and `needs_setup` are true, open `http://127.0.0.1:8000/setup` on the host.
 - Behind a proxy, do not expose `/setup` publicly. If you must reach it remotely on a trusted network, set `TLDW_SETUP_ALLOW_REMOTE=1` temporarily and remove it afterward.
 
-Step A4 — Add TLS and reverse proxy
+Step A4 - Add TLS and reverse proxy
 - Terminate TLS at the proxy; forward to `app:8000`.
 - Ensure WebSocket upgrade for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
 - See: `Docs/Deployment/Reverse_Proxy_Examples.md` for Nginx/Traefik configs and labels.
 - Caddy example: `Samples/Caddy/Caddyfile` (simple HTTPS reverse proxy to the app).
 
-Step A5 — Verify health
+Step A5 - Verify health
 ```bash
 curl -s http://127.0.0.1:8000/health | jq .
 curl -s http://127.0.0.1:8000/ready  | jq .
@@ -97,18 +97,18 @@ open http://127.0.0.1:8000/webui/
 ```
 
 Notes
-- For multi‑user production, keep Postgres running via the `postgres` service in the Compose file. Back up its volume.
+- For multi-user production, keep Postgres running via the `postgres` service in the Compose file. Back up its volume.
 - To scale CPU workers: set `UVICORN_WORKERS` via the app environment and rebuild or override in Compose.
 
-## 4) Option B — Bare‑Metal (systemd + Nginx)
+## 4) Option B - Bare-Metal (systemd + Nginx)
 
-Step B1 — System packages
+Step B1 - System packages
 ```bash
 sudo apt-get update
 sudo apt-get install -y python3.11 python3.11-venv ffmpeg nginx curl
 ```
 
-Step B2 — App install
+Step B2 - App install
 ```bash
 git clone https://github.com/<your-org>/tldw_server.git
 cd tldw_server
@@ -124,7 +124,7 @@ vi .env   # set AUTH_MODE, keys, DATABASE_URL, ALLOWED_ORIGINS, tldw_production=
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
 
-Step B3 — Systemd service
+Step B3 - Systemd service
 Create `/etc/systemd/system/tldw.service`:
 ```ini
 [Unit]
@@ -154,7 +154,7 @@ sudo systemctl enable --now tldw
 sudo systemctl status tldw --no-pager
 ```
 
-Step B4 — Nginx reverse proxy + TLS
+Step B4 - Nginx reverse proxy + TLS
 Use the examples in `Docs/Deployment/Reverse_Proxy_Examples.md` or configure a site:
 ```nginx
 server {
@@ -178,9 +178,9 @@ server {
 ## 5) Configuration essentials
 
 - `AUTH_MODE`: `single_user` or `multi_user`.
-- `SINGLE_USER_API_KEY` (single‑user) or `JWT_SECRET_KEY` (multi‑user).
-- `DATABASE_URL`: SQLite for dev; Postgres URL recommended in production multi‑user.
-- `ALLOWED_ORIGINS`: Comma‑separated or JSON array of trusted origins.
+- `SINGLE_USER_API_KEY` (single-user) or `JWT_SECRET_KEY` (multi-user).
+- `DATABASE_URL`: SQLite for dev; Postgres URL recommended in production multi-user.
+- `ALLOWED_ORIGINS`: Comma-separated or JSON array of trusted origins.
 - `tldw_production`: `true` in production to mask secrets and enable production guards.
 - Provider keys: e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
 
@@ -194,7 +194,7 @@ curl -f http://127.0.0.1:8000/health
 curl -f http://127.0.0.1:8000/ready
 ```
 
-Auth check (single‑user example)
+Auth check (single-user example)
 ```bash
 curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" http://127.0.0.1:8000/api/v1/llm/providers | jq .
 ```
@@ -209,10 +209,10 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 ## 7) Production checklist (summary)
 
 - Secrets:
-  - Strong `SINGLE_USER_API_KEY` (single‑user) or `JWT_SECRET_KEY` (multi‑user).
+  - Strong `SINGLE_USER_API_KEY` (single-user) or `JWT_SECRET_KEY` (multi-user).
   - Don’t print keys on startup in production; keep `SHOW_API_KEY_ON_STARTUP` unset/false.
 - Database:
-  - Use Postgres for multi‑user; back up volumes regularly.
+  - Use Postgres for multi-user; back up volumes regularly.
   - If migrating from SQLite, follow `Postgres_Migration_Guide.md`.
 - Network:
   - TLS via reverse proxy; enable WebSocket upgrades.
@@ -221,6 +221,6 @@ curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   - Enable Prometheus scraping; import Grafana dashboards (see Metrics Cheatsheet).
   - Centralize logs; set `LOG_LEVEL=info`.
 - Rate limits:
-  - Keep global and module‑specific rate limiters enabled and tuned for your users.
+  - Keep global and module-specific rate limiters enabled and tuned for your users.
 
 For a comprehensive list, see `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.

@@ -109,10 +109,10 @@ class AudioConversionError(AudioProcessingError):
 def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
     """
     Check if a transcription model is available or needs to be downloaded.
-    
+
     Args:
         model_name: Name of the transcription model to check
-        
+
     Returns:
         Dictionary with status information:
         - 'available': True if model is ready, False if needs download
@@ -120,7 +120,7 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
         - 'model': The model name
     """
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import check_model_exists
-    
+
     if check_model_exists(model_name):
         return {
             'available': True,
@@ -138,10 +138,10 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
 def _get_model_estimated_size(model_name: str) -> str:
     """
     Get estimated download size for a model.
-    
+
     Args:
         model_name: Name of the model
-        
+
     Returns:
         Estimated size as a string
     """
@@ -164,12 +164,12 @@ def _get_model_estimated_size(model_name: str) -> str:
         'distil-medium.en': '394 MB',
         'distil-small.en': '166 MB',
     }
-    
+
     # Check for exact match or partial match
     for key, size in size_map.items():
         if key in model_name.lower():
             return size
-    
+
     # Default for unknown models
     return 'Unknown size'
 
@@ -519,7 +519,7 @@ def process_audio_files(
                         from urllib.parse import urlparse
                         parsed_url = urlparse(input_item)
                         is_youtube = 'youtube.com' in parsed_url.netloc or 'youtu.be' in parsed_url.netloc
-                        
+
                         if is_youtube:
                             # Use yt-dlp for YouTube URLs
                             update_progress(f"Detected YouTube URL, using yt-dlp for extraction...")
@@ -530,7 +530,7 @@ def process_audio_files(
                             )
                             if not downloaded_path:
                                 raise RuntimeError(f"YouTube download failed: {download_message}")
-                            
+
                             # Move the downloaded file to our temp directory
                             source_path = Path(downloaded_path)
                             target_path = processing_temp_dir_path / source_path.name
@@ -648,10 +648,10 @@ def process_audio_files(
                         diarize=diarize,
                     )
                     raw_segments = transcription_output
-                    
+
                     # Check if this is a model download status message
-                    if (raw_segments and len(raw_segments) == 1 and 
-                        isinstance(raw_segments[0], dict) and 
+                    if (raw_segments and len(raw_segments) == 1 and
+                        isinstance(raw_segments[0], dict) and
                         raw_segments[0].get('status') == 'model_downloading'):
                         # Model is being downloaded. Use a placeholder transcript so chunking can proceed.
                         model_message = raw_segments[0].get('message') or raw_segments[0].get('Text') or 'Model is being downloaded...'
@@ -684,7 +684,7 @@ def process_audio_files(
                             'start_seconds': 0,
                             'end_seconds': 0
                         }]
-                    
+
                     # ... (process segments, set item_result["content"], item_result["segments"]) ...
                     if not raw_segments:
                         item_result.setdefault("warnings", [])

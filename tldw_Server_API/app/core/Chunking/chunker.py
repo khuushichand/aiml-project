@@ -114,11 +114,11 @@ class LRUCache:
     """
     Thread-safe LRU (Least Recently Used) cache implementation.
     """
-    
+
     def __init__(self, max_size: int = 100, *, copy_on_access: bool = True):
         """
         Initialize the LRU cache.
-        
+
         Args:
             max_size: Maximum number of items to store in cache
         """
@@ -128,14 +128,14 @@ class LRUCache:
         self.hits = 0
         self.misses = 0
         self.copy_on_access = bool(copy_on_access)
-        
+
     def get(self, key: str) -> Optional[Any]:
         """
         Get an item from cache.
-        
+
         Args:
             key: Cache key
-            
+
         Returns:
             Cached value or None if not found
         """
@@ -153,11 +153,11 @@ class LRUCache:
                     return self.cache[key]
             self.misses += 1
             return None
-    
+
     def put(self, key: str, value: Any) -> None:
         """
         Put an item into cache.
-        
+
         Args:
             key: Cache key
             value: Value to cache
@@ -185,18 +185,18 @@ class LRUCache:
                 # Remove oldest if over capacity
                 if len(self.cache) > self.max_size:
                     self.cache.popitem(last=False)
-    
+
     def clear(self) -> None:
         """Clear the cache."""
         with self._lock:
             self.cache.clear()
             self.hits = 0
             self.misses = 0
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Get cache statistics.
-        
+
         Returns:
             Dictionary with cache statistics
         """
@@ -218,13 +218,13 @@ class Chunker:
     Provides a unified interface for text chunking with support for
     multiple methods, languages, and configurations.
     """
-    
-    def __init__(self, config: Optional[ChunkerConfig] = None, 
+
+    def __init__(self, config: Optional[ChunkerConfig] = None,
                  llm_call_func: Optional[Any] = None,
                  llm_config: Optional[Dict[str, Any]] = None):
         """
         Initialize the chunker with configuration.
-        
+
         Args:
             config: Chunker configuration (uses defaults if not provided)
             llm_call_func: Optional LLM function for strategies that need it
@@ -233,21 +233,21 @@ class Chunker:
         self.config = config or ChunkerConfig()
         self.llm_call_func = llm_call_func
         self.llm_config = llm_config or {}
-        
+
         # Strategy instances (lazy)
         self._strategies = {}
         self._strategy_factories = {}
         self._register_strategy_factories()
-        
+
         # Cache for processed results - using LRU cache
         self._cache = (
             LRUCache(max_size=self.config.cache_size, copy_on_access=getattr(self.config, 'cache_copy_on_access', True))
             if self.config.enable_cache else None
         )
-        
+
         # Security logger
         self._security_logger = get_security_logger()
-        
+
         if getattr(self.config, 'verbose_logging', False):
             logger.info(f"Chunker initialized with default method: {self.config.default_method.value}")
         else:
@@ -270,7 +270,7 @@ class Chunker:
                 f"Text size ({byte_length} bytes) exceeds maximum allowed size "
                 f"({self.config.max_text_size} bytes)"
             )
-    
+
     def _register_strategy_factories(self):
         """Register factories for lazy strategy instantiation."""
         lang = self.config.language
@@ -1167,23 +1167,23 @@ class Chunker:
             method_options=method_options,
         )
         return self.flatten_hierarchical(tree)
-    
+
     def _sanitize_input(self, text: str, *, suppress_security_log: bool = False) -> str:
         """
         Sanitize input text for security.
-        
+
         Args:
             text: Raw input text
-            
+
         Returns:
             Sanitized text
-            
+
         Raises:
             InvalidInputError: If text contains dangerous content
         """
         if not isinstance(text, str):
             raise InvalidInputError(f"Expected string input, got {type(text).__name__}")
-        
+
         # Test-mode detection for relaxed sanitization in unit/property tests
         import os as _os
         _is_test_mode = (
@@ -1202,7 +1202,7 @@ class Chunker:
                 )
             if not _is_test_mode:
                 text = text.replace('\x00', ' ')
-        
+
         # Normalize unicode to prevent various unicode-based attacks (preserve offsets)
         # Only keep normalization when it does not affect string length.
         try:
@@ -1219,7 +1219,7 @@ class Chunker:
                     )
         except Exception:
             pass
-        
+
         # Check for control characters (except common ones like \n, \t, \r)
         allowed_control_chars = {'\n', '\t', '\r', '\f'}
         control_characters: List[str] = []
@@ -1229,7 +1229,7 @@ class Chunker:
                 control_characters.append(char)
                 if len(control_char_samples) < 10:
                     control_char_samples.append(repr(char))
-        
+
         if control_characters:
             logger.warning(f"Suspicious control characters found: {control_char_samples}")
             if not suppress_security_log:
@@ -1241,7 +1241,7 @@ class Chunker:
                 # Replace suspicious control characters with spaces to preserve offsets
                 translation_map = {ord(ch): ' ' for ch in set(control_characters)}
                 text = text.translate(translation_map)
-        
+
         # Check for bidirectional text override characters (could be used for spoofing)
         bidi_chars = ['\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069']
         total_bidi_overrides = 0
@@ -1258,9 +1258,9 @@ class Chunker:
                     f"Found {total_bidi_overrides} bidirectional override characters",
                     source="sanitize_input"
                 )
-        
+
         return text
-    
+
     def chunk_text(self,
                    text: str,
                    method: Optional[str] = None,
@@ -1270,7 +1270,7 @@ class Chunker:
                    **options) -> List[str]:
         """
         Chunk text using the specified method.
-        
+
         Args:
             text: Text to chunk
             method: Chunking method (uses default if not specified)
@@ -1278,10 +1278,10 @@ class Chunker:
             overlap: Overlap between chunks (uses default if not specified)
             language: Language of the text (uses default if not specified)
             **options: Additional method-specific options
-            
+
         Returns:
             List of text chunks
-            
+
         Raises:
             InvalidInputError: If input validation fails
             InvalidChunkingMethodError: If method is not supported
@@ -1289,13 +1289,13 @@ class Chunker:
         """
         # Sanitize and validate input
         text = self._sanitize_input(text)
-        
+
         if not text.strip():
             logger.debug("Empty text provided, returning empty list")
             return []
-        
+
         self._enforce_text_size(text, source="chunk_text")
-        
+
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
         # Configuration-only flags (removed before invoking strategy)
@@ -1375,7 +1375,7 @@ class Chunker:
                 increment_counter("chunker_cache_get_total", labels={"result": "skip", "reason": cache_reason})
             except Exception:
                 pass
-        
+
         # Get strategy lazily
         strategy = self.get_strategy(method)
         self._sync_strategy_llm(strategy)
@@ -1388,18 +1388,18 @@ class Chunker:
                         setattr(strategy, "_tokenizer", None)
             except Exception:
                 logger.debug("Failed to update tokenizer override", exc_info=True)
-        
+
         # Update strategy language if different
         if language != strategy.language:
             strategy.language = language
-        
+
         try:
             # Perform chunking
             logger.debug(f"Chunking with method={method}, max_size={max_size}, "
                         f"overlap={overlap}, language={language}")
-            
+
             chunks = strategy.chunk(text, max_size, overlap, **strategy_options)
-            
+
             # Cache result if enabled
             if self._cache is not None and len(chunks) > 0 and cache_allowed and cache_key is not None:
                 try:
@@ -1425,19 +1425,19 @@ class Chunker:
                     increment_counter("chunker_cache_put_total", labels={"result": "skipped", "reason": cache_reason})
                 except Exception:
                     pass
-            
+
             if getattr(self.config, 'verbose_logging', False):
                 logger.info(f"Created {len(chunks)} chunks using {method} method")
             else:
                 logger.debug(f"Created {len(chunks)} chunks using {method} method")
             return chunks
-            
+
         except Exception as e:
             logger.error(f"Chunking failed: {e}")
             if isinstance(e, ChunkingError):
                 raise
             raise ChunkingError(f"Chunking failed: {str(e)}")
-    
+
     def chunk_text_with_metadata(self,
                                  text: str,
                                  method: Optional[str] = None,
@@ -1447,7 +1447,7 @@ class Chunker:
                                  **options) -> List[ChunkResult]:
         """
         Chunk text and return results with metadata.
-        
+
         Args:
             text: Text to chunk
             method: Chunking method (uses default if not specified)
@@ -1455,7 +1455,7 @@ class Chunker:
             overlap: Overlap between chunks (uses default if not specified)
             language: Language of the text (uses default if not specified)
             **options: Additional method-specific options
-            
+
         Returns:
             List of ChunkResult objects with text and metadata
         """
@@ -1465,7 +1465,7 @@ class Chunker:
             logger.debug("Empty text provided, returning empty list")
             return []
         self._enforce_text_size(text, source="chunk_text_with_metadata")
-        
+
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
         tokenizer_override = options_raw.get("tokenizer_name")
@@ -1506,11 +1506,11 @@ class Chunker:
                         setattr(strategy, "_tokenizer", None)
             except Exception:
                 logger.debug("Failed to update tokenizer override", exc_info=True)
-        
+
         # Update strategy language if different
         if language != strategy.language:
             strategy.language = language
-        
+
         try:
             # Get chunks with metadata
             results = strategy.chunk_with_metadata(text, max_size, overlap, **strategy_options)
@@ -1542,7 +1542,7 @@ class Chunker:
         else:
             logger.debug(f"Created {len(results)} chunks with metadata using {method} method")
         return results
-    
+
     def chunk_text_generator(self,
                            text: str,
                            method: Optional[str] = None,
@@ -1552,7 +1552,7 @@ class Chunker:
                            **options) -> Generator[str, None, None]:
         """
         Memory-efficient generator for chunking large texts.
-        
+
         Args:
             text: Text to chunk
             method: Chunking method (uses default if not specified)
@@ -1560,14 +1560,14 @@ class Chunker:
             overlap: Overlap between chunks (uses default if not specified)
             language: Language of the text (uses default if not specified)
             **options: Additional method-specific options
-            
+
         Yields:
             Individual text chunks
         """
         # Sanitize input
         text = self._sanitize_input(text)
         self._enforce_text_size(text, source="chunk_text_generator")
-        
+
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
         tokenizer_override = options_raw.get("tokenizer_name")
@@ -1595,7 +1595,7 @@ class Chunker:
             pass
         language = language or self.config.language
         method = self._resolve_method(method, language, options_raw)
-        
+
         # Get strategy lazily (supports factory registration)
         strategy = self.get_strategy(method)
         self._sync_strategy_llm(strategy)
@@ -1607,11 +1607,11 @@ class Chunker:
                         setattr(strategy, "_tokenizer", None)
             except Exception:
                 logger.debug("Failed to update tokenizer override", exc_info=True)
-        
+
         # Update strategy language if different
         if language != strategy.language:
             strategy.language = language
-        
+
         # Use generator method when available, otherwise fall back to eager chunking
         chunk_gen = getattr(strategy, 'chunk_generator', None)
         if callable(chunk_gen):
@@ -1621,26 +1621,26 @@ class Chunker:
             logger.debug(f"{strategy.__class__.__name__} lacks chunk_generator; falling back to chunk()")
             for chunk in strategy.chunk(text, max_size, overlap, **strategy_options):
                 yield chunk
-    
+
     def get_available_methods(self) -> List[str]:
         """
         Get list of available chunking methods.
-        
+
         Returns:
             List of method names
         """
         return sorted(set(list(self._strategies.keys()) + list(getattr(self, '_strategy_factories', {}).keys())))
-    
+
     def get_strategy(self, method: str):
         """
         Get a specific chunking strategy instance.
-        
+
         Args:
             method: Method name
-            
+
         Returns:
             Strategy instance
-            
+
         Raises:
             InvalidChunkingMethodError: If method not found
         """
@@ -1696,7 +1696,7 @@ class Chunker:
             if code_mode in ('auto', None) and lang_hint.startswith('py'):
                 return 'code_ast'
         return normalized
-    
+
     @staticmethod
     def _normalize_method_argument(method: Optional[Any]) -> Optional[str]:
         """Normalize chunking method input to a lowercase-friendly string."""
@@ -1716,7 +1716,7 @@ class Chunker:
             return str(method).lower()
         except Exception:
             return None
-    
+
     @staticmethod
     def _canonicalize_value(value: Any) -> Any:
         """Canonicalize nested structures for stable hashing."""
@@ -1765,7 +1765,7 @@ class Chunker:
                       llm_signature: str = "") -> str:
         """
         Generate cache key for chunking parameters.
-        
+
         Args:
             text: Input text
             method: Chunking method
@@ -1773,7 +1773,7 @@ class Chunker:
             overlap: Overlap size
             language: Language code
             options: Additional options
-            
+
         Returns:
             Cache key string
         """
@@ -1792,7 +1792,7 @@ class Chunker:
         except Exception:
             options_str = str(sorted((options or {}).items()))
         return f"{text_hash}:{method}:{max_size}:{overlap}:{language}:{options_str}:{llm_signature}"
-    
+
     def _compute_overlap_buffer_text(
         self,
         text: str,
@@ -1891,11 +1891,11 @@ class Chunker:
         if self._cache is not None:
             self._cache.clear()
             logger.debug("Chunk cache cleared")
-    
+
     def get_cache_stats(self) -> Optional[Dict[str, Any]]:
         """
         Get cache statistics.
-        
+
         Returns:
             Dictionary with cache statistics or None if cache is disabled
         """
@@ -2358,13 +2358,13 @@ class Chunker:
                 add_span_event(span, "chunker.completed")
         except Exception as e:
             record_span_exception(None, e)
-        
+
         return out
 
     # Backwards-compatible alias to tolerate triple-s typo in requests
     def processs_text(self, *args, **kwargs):
         return self.process_text(*args, **kwargs)
-    
+
     def chunk_file_stream(self,
                          file_path: Union[str, Path],
                          method: Optional[str] = None,
@@ -2397,7 +2397,7 @@ class Chunker:
             Semantics” in tldw_Server_API/app/core/Chunking/README.md.
         """
         file_path = Path(file_path)
-        
+
         if not file_path.exists():
             raise InvalidInputError(f"File not found: {file_path}")
 
@@ -2421,15 +2421,15 @@ class Chunker:
         elif overlap >= max_size:
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
             overlap = max_size - 1
-        
+
         # Check file size
         file_size = file_path.stat().st_size
         if file_size > self.config.max_text_size:
             logger.warning(f"File size ({file_size} bytes) exceeds max size "
                          f"({self.config.max_text_size} bytes), will process in streaming mode")
-        
+
         logger.info(f"Stream processing file: {file_path} ({file_size} bytes)")
-        
+
         # Read file in chunks and accumulate until we have enough for chunking
         buffer = ""
         overlap_buffer: Any = ""
@@ -2461,7 +2461,7 @@ class Chunker:
                 and not segment[0].isspace()
             ) else ''
             return overlap_text + sep + segment
-        
+
         options_dict = dict(options)
         encoding_name = encoding or 'utf-8'
         try:
@@ -2511,15 +2511,15 @@ class Chunker:
                             method, max_size, overlap, language, **options_dict
                         ):
                             yield text_chunk
-                        
+
                         # Keep overlap for next iteration using strategy-aware logic
                         overlap_buffer = self._compute_overlap_buffer_text(
                             combined, method, overlap, language, options_dict
                         )
-                        
+
                         # Keep the rest in buffer
                         buffer = buffer[split_point:]
-                        
+
         except UnicodeDecodeError as e:
             logger.error(f"File stream decoding failed for {file_path}: {e}")
             raise InvalidInputError(
@@ -2591,22 +2591,22 @@ class Chunker:
         """
         if len(text) <= target:
             return len(text)
-        
+
         # Look for paragraph break near target
         for i in range(target, min(target + 500, len(text))):
             if text[i:i+2] == '\n\n':
                 return i + 2
-        
+
         # Look for sentence end near target
         for i in range(target, min(target + 200, len(text))):
             if text[i] in '.!?' and i + 1 < len(text) and text[i + 1].isspace():
                 return i + 1
-        
+
         # Look for any newline
         for i in range(target, min(target + 100, len(text))):
             if text[i] == '\n':
                 return i + 1
-        
+
         # Prefer breaking on whitespace to avoid splitting tokens
         if text:
             pivot = min(target, len(text) - 1)
@@ -2618,7 +2618,7 @@ class Chunker:
             for i in range(pivot, back_limit - 1, -1):
                 if text[i].isspace():
                     return i + 1
-        
+
         # Default to target position
         return target
 
@@ -2627,10 +2627,10 @@ class Chunker:
 def create_chunker(config: Optional[Dict[str, Any]] = None) -> Chunker:
     """
     Create a chunker instance with optional configuration.
-    
+
     Args:
         config: Configuration dictionary
-        
+
     Returns:
         Configured Chunker instance
     """
@@ -2638,5 +2638,5 @@ def create_chunker(config: Optional[Dict[str, Any]] = None) -> Chunker:
         chunker_config = ChunkerConfig(**config)
     else:
         chunker_config = ChunkerConfig()
-    
+
     return Chunker(chunker_config)

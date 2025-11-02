@@ -46,7 +46,7 @@ def _ensure_secure_xml_support() -> None:
 
 
 def _read_text(path: Path) -> str:
-    """Read file content as UTF‑8, fallback to latin‑1 if needed."""
+    """Read file content as UTF-8, fallback to latin-1 if needed."""
     try:
         return path.read_text(encoding="utf-8") # Corrected encoding name
     except UnicodeDecodeError:

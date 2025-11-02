@@ -262,7 +262,7 @@ dia:
 
 #### System Requirements
 - **Disk Space**: ~3.2GB for model
-- **RAM**: 6GB minimum  
+- **RAM**: 6GB minimum
 - **VRAM**: 4GB+ for GPU inference
 - **Best for**: Dialogue, conversations, storytelling
 
@@ -355,7 +355,7 @@ vibevoice:
 - **Disk Space**: ~3GB (1.5B) or ~14GB (7B)
 - **RAM**: 8GB minimum (1.5B), 16GB (7B)
 - **VRAM**: 4GB+ (1.5B), 16GB+ (7B)
-- **Features**: 
+- **Features**:
   - Long-form generation (up to 90 min)
   - Multi-speaker (up to 4 distinct voices)
   - Spontaneous background music
@@ -571,12 +571,12 @@ voice_cloning:
   max_reference_size_mb: 10
   cache_processed_references: true
   cache_ttl_hours: 24
-  
+
   # Processing settings
   auto_normalize: true
   remove_silence: true
   denoise: false
-  
+
   # Security settings
   require_consent: true
   log_usage: true
@@ -590,13 +590,13 @@ providers:
       max_duration: 10.0
       preferred_format: "wav"
       sample_rate: 24000
-      
+
   chatterbox:
     voice_clone_settings:
       min_duration: 5.0
       max_duration: 20.0
       enable_perth_watermark: true
-      
+
   vibevoice:
     voice_clone_settings:
       min_duration: 3.0
@@ -616,11 +616,11 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 
 async def test_providers():
     service = await get_tts_service_v2()
-    
+
     # Check available providers
     status = service.get_status()
     print(f"Available providers: {status['available']}/{status['total_providers']}")
-    
+
     # List capabilities
     caps = await service.get_capabilities()
     for provider, cap in caps.items():

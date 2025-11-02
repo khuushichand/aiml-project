@@ -52,11 +52,11 @@ except Exception:
 
 class EvaluationRunner:
     """Manages asynchronous evaluation execution"""
-    
+
     def __init__(self, db_path: str, max_concurrent_evals: int = 10, eval_timeout: int = 60):
         """
         Initialize evaluation runner with concurrency controls.
-        
+
         Args:
             db_path: Path to evaluations database
             max_concurrent_evals: Maximum number of concurrent evaluations
@@ -68,25 +68,25 @@ class EvaluationRunner:
         self._rag_evaluator = None
         self._quality_evaluator = None
         self.running_tasks = {}  # Track running evaluations
-        
+
         # Concurrency control
         self.semaphore = asyncio.Semaphore(max_concurrent_evals)
         self.eval_timeout = eval_timeout
-    
+
     @property
     def rag_evaluator(self) -> RAGEvaluator:
         """Get or create RAG evaluator instance (lazy initialization)."""
         if self._rag_evaluator is None:
             self._rag_evaluator = RAGEvaluator()
         return self._rag_evaluator
-    
+
     @property
     def quality_evaluator(self) -> ResponseQualityEvaluator:
         """Get or create quality evaluator instance (lazy initialization)."""
         if self._quality_evaluator is None:
             self._quality_evaluator = ResponseQualityEvaluator()
         return self._quality_evaluator
-    
+
     async def run_evaluation(
         self,
         run_id: str,
@@ -96,7 +96,7 @@ class EvaluationRunner:
     ):
         """
         Run an evaluation asynchronously.
-        
+
         Args:
             run_id: The run ID
             eval_id: The evaluation ID
@@ -111,7 +111,7 @@ class EvaluationRunner:
         else:
             # Run synchronously (for testing)
             return await self._execute_evaluation(run_id, eval_id, eval_config)
-    
+
     async def _execute_evaluation(
         self,
         run_id: str,
@@ -123,19 +123,19 @@ class EvaluationRunner:
             # Update status to running
             self.db.update_run_status(run_id, "running")
             start_time = time.time()
-            
+
             # Get evaluation details
             evaluation = self.db.get_evaluation(eval_id)
             if not evaluation:
                 raise ValueError(f"Evaluation {eval_id} not found")
-            
+
             eval_type = evaluation["eval_type"]
             eval_spec = evaluation["eval_spec"]
-            
+
             # Get samples
             samples = await self._get_samples(evaluation, eval_config)
             total_samples = len(samples)
-            
+
             # Initialize progress
             progress = {
                 "total_samples": total_samples,
@@ -144,7 +144,7 @@ class EvaluationRunner:
                 "current_batch": 0
             }
             self.db.update_run_progress(run_id, progress)
-            
+
             # Special-case: rag_pipeline orchestrates across configs and samples
             sub_type = None
             try:
@@ -180,18 +180,18 @@ class EvaluationRunner:
 
             # Get evaluation function for standard types
             eval_fn = self._get_evaluation_function(eval_type, eval_spec)
-            
+
             # Process samples in batches
             batch_size = eval_config.get("config", {}).get("batch_size", 10)
             max_workers = eval_config.get("config", {}).get("max_workers", 4)
-            
+
             all_results = []
             sample_results = []
-            
+
             for i in range(0, total_samples, batch_size):
                 batch = samples[i:i + batch_size]
                 progress["current_batch"] = i // batch_size + 1
-                
+
                 # Process batch
                 batch_results = await self._process_batch(
                     batch,
@@ -200,7 +200,7 @@ class EvaluationRunner:
                     eval_config,
                     max_workers
                 )
-                
+
                 # Update progress
                 for result in batch_results:
                     if result.get("error"):
@@ -208,21 +208,21 @@ class EvaluationRunner:
                     else:
                         progress["completed_samples"] += 1
                         all_results.append(result)
-                    
+
                     sample_results.append(result)
-                
+
                 self.db.update_run_progress(run_id, progress)
-            
+
             # Calculate aggregate results
             aggregate = self._calculate_aggregate_results(
                 all_results,
                 eval_spec.get("metrics", []),
                 eval_spec.get("threshold", 0.7)
             )
-            
+
             # Calculate token usage
             usage = self._calculate_usage(all_results)
-            
+
             # Prepare final results
             duration = time.time() - start_time
             results = {
@@ -231,27 +231,27 @@ class EvaluationRunner:
                 "sample_results": sample_results,
                 "failed_samples": [r for r in sample_results if r.get("error")]
             }
-            
+
             # Store results
             self.db.store_run_results(run_id, results, usage)
-            
+
             # Send webhook if configured
             webhook_url = eval_config.get("webhook_url")
             if webhook_url:
                 await self._send_webhook(webhook_url, run_id, eval_id, "completed", results)
-            
+
             logger.info(f"Evaluation run {run_id} completed in {duration:.2f}s")
             return results
-            
+
         except Exception as e:
             logger.error(f"Evaluation run {run_id} failed: {e}")
             self.db.update_run_status(run_id, "failed", error_message=str(e))
-            
+
             # Send failure webhook
             webhook_url = eval_config.get("webhook_url")
             if webhook_url:
                 await self._send_webhook(webhook_url, run_id, eval_id, "failed", {"error": str(e)})
-            
+
             raise
         finally:
             # Clean up running task
@@ -903,7 +903,7 @@ class EvaluationRunner:
             "type_ratios": type_ratios,
         }
         return chunk_stats
-    
+
     async def _get_samples(
         self,
         evaluation: Dict[str, Any],
@@ -913,20 +913,20 @@ class EvaluationRunner:
         # Check for dataset override
         if eval_config.get("dataset_override"):
             return eval_config["dataset_override"]["samples"]
-        
+
         # Get from evaluation's dataset
         dataset_id = evaluation.get("dataset_id")
         if dataset_id:
             dataset = self.db.get_dataset(dataset_id)
             if dataset:
                 return dataset["samples"]
-        
+
         # Check if evaluation has inline dataset
         if evaluation.get("dataset"):
             return evaluation["dataset"]
-        
+
         raise ValueError("No samples found for evaluation")
-    
+
     def _get_evaluation_function(
         self,
         eval_type: str,
@@ -938,7 +938,7 @@ class EvaluationRunner:
             # Default to summarization if sub_type is None or empty
             if not sub_type:
                 sub_type = "summarization"
-            
+
             if sub_type == "summarization":
                 return self._eval_summarization
             elif sub_type == "rag":
@@ -947,16 +947,16 @@ class EvaluationRunner:
                 return self._eval_response_quality
             else:
                 raise ValueError(f"Unknown model_graded sub_type: {sub_type}")
-        
+
         elif eval_type == "exact_match":
             return self._eval_exact_match
-        
+
         elif eval_type == "includes":
             return self._eval_includes
-        
+
         elif eval_type == "fuzzy_match":
             return self._eval_fuzzy_match
-        
+
         elif eval_type == "proposition_extraction":
             return self._eval_propositions
 
@@ -965,10 +965,10 @@ class EvaluationRunner:
 
         elif eval_type == "nli_factcheck":
             return self._eval_nli_factcheck
-        
+
         else:
             raise ValueError(f"Unknown evaluation type: {eval_type}")
-    
+
     async def _process_batch(
         self,
         batch: List[Dict[str, Any]],
@@ -978,7 +978,7 @@ class EvaluationRunner:
         max_workers: int
     ) -> List[Dict[str, Any]]:
         """Process a batch of samples with proper concurrency control"""
-        
+
         async def eval_with_timeout_and_semaphore(sample, sample_id):
             """Evaluate a single sample with timeout and semaphore control"""
             async with self.semaphore:
@@ -1000,17 +1000,17 @@ class EvaluationRunner:
                 except Exception as e:
                     logger.error(f"Evaluation failed for {sample_id}: {e}")
                     return {"sample_id": sample_id, "error": str(e)}
-        
+
         # Create tasks with proper error handling
         tasks = []
         for i, sample in enumerate(batch):
             sample_id = f"sample_{i:04d}"
             task = eval_with_timeout_and_semaphore(sample, sample_id)
             tasks.append(task)
-        
+
         # Process all tasks concurrently (semaphore will limit actual concurrency)
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Handle any unexpected exceptions from gather
         processed_results = []
         for i, result in enumerate(results):
@@ -1021,11 +1021,11 @@ class EvaluationRunner:
                 })
             else:
                 processed_results.append(result)
-        
+
         return processed_results
-    
+
     # ============= Evaluation Functions =============
-    
+
     async def _eval_summarization(
         self,
         sample: Dict[str, Any],
@@ -1038,7 +1038,7 @@ class EvaluationRunner:
             # Extract required fields
             source_text = sample["input"].get("source_text", "")
             summary = sample["input"].get("summary", "")
-            
+
             # Run G-Eval with controlled thread pool usage
             # Use a dedicated executor to avoid exhausting the default thread pool
             loop = asyncio.get_event_loop()
@@ -1050,7 +1050,7 @@ class EvaluationRunner:
                 eval_spec.get("evaluator_model", "openai"),
                 False  # save=False
             )
-            
+
             # Parse results
             scores = {}
             for metric in eval_spec.get("metrics", ["fluency", "consistency", "relevance", "coherence"]):
@@ -1060,22 +1060,22 @@ class EvaluationRunner:
                 match = re.search(pattern, result, re.IGNORECASE)
                 if match:
                     scores[metric] = float(match.group(1)) / 5.0  # Normalize to 0-1
-            
+
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
             passed = avg_score >= eval_spec.get("threshold", 0.7)
-            
+
             return {
                 "sample_id": sample_id,
                 "scores": scores,
                 "passed": passed,
                 "avg_score": avg_score
             }
-            
+
         except Exception as e:
             logger.error(f"Summarization eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
-    
+
     async def _eval_rag(
         self,
         sample: Dict[str, Any],
@@ -1090,7 +1090,7 @@ class EvaluationRunner:
             contexts = sample["input"].get("contexts", [])
             response = sample["input"].get("response", "")
             ground_truth = sample.get("expected", {}).get("answer", "")
-            
+
             # Run RAG evaluation
             result = await self.rag_evaluator.evaluate(
                 query=query,
@@ -1100,27 +1100,27 @@ class EvaluationRunner:
                 metrics=eval_spec.get("metrics", ["relevance", "faithfulness"]),
                 api_name=eval_spec.get("evaluator_model", "openai")
             )
-            
+
             # Extract scores
             scores = {}
             for metric_name, metric_data in result.get("metrics", {}).items():
                 scores[metric_name] = metric_data.score
-            
+
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
             passed = avg_score >= eval_spec.get("threshold", 0.7)
-            
+
             return {
                 "sample_id": sample_id,
                 "scores": scores,
                 "passed": passed,
                 "avg_score": avg_score
             }
-            
+
         except Exception as e:
             logger.error(f"RAG eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
-    
+
     async def _eval_response_quality(
         self,
         sample: Dict[str, Any],
@@ -1134,7 +1134,7 @@ class EvaluationRunner:
             prompt = sample["input"].get("prompt", "")
             response = sample["input"].get("response", "")
             expected_format = sample["input"].get("expected_format")
-            
+
             # Run quality evaluation
             result = await self.quality_evaluator.evaluate(
                 prompt=prompt,
@@ -1143,19 +1143,19 @@ class EvaluationRunner:
                 custom_criteria=eval_spec.get("custom_criteria"),
                 api_name=eval_spec.get("evaluator_model", "openai")
             )
-            
+
             # Extract scores
             scores = {}
             for metric_name, metric_data in result.get("metrics", {}).items():
                 scores[metric_name] = metric_data.score
-            
+
             # Add overall quality
             scores["overall_quality"] = result.get("overall_quality", 0)
-            
+
             # Calculate pass/fail
             avg_score = scores.get("overall_quality", 0)
             passed = avg_score >= eval_spec.get("threshold", 0.7)
-            
+
             return {
                 "sample_id": sample_id,
                 "scores": scores,
@@ -1163,11 +1163,11 @@ class EvaluationRunner:
                 "avg_score": avg_score,
                 "format_compliance": result.get("format_compliance", True)
             }
-            
+
         except Exception as e:
             logger.error(f"Quality eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
-    
+
     async def _eval_exact_match(
         self,
         sample: Dict[str, Any],
@@ -1179,25 +1179,25 @@ class EvaluationRunner:
         try:
             output = sample["input"].get("output", "")
             expected = sample.get("expected", {}).get("output", "")
-            
+
             # Normalize strings
             output = str(output).strip().lower()
             expected = str(expected).strip().lower()
-            
+
             passed = output == expected
             score = 1.0 if passed else 0.0
-            
+
             return {
                 "sample_id": sample_id,
                 "scores": {"exact_match": score},
                 "passed": passed,
                 "avg_score": score
             }
-            
+
         except Exception as e:
             logger.error(f"Exact match eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
-    
+
     async def _eval_includes(
         self,
         sample: Dict[str, Any],
@@ -1209,19 +1209,19 @@ class EvaluationRunner:
         try:
             output = str(sample["input"].get("output", ""))
             expected_items = sample.get("expected", {}).get("includes", [])
-            
+
             if isinstance(expected_items, str):
                 expected_items = [expected_items]
-            
+
             # Check each expected item
             found_count = 0
             for item in expected_items:
                 if str(item).lower() in output.lower():
                     found_count += 1
-            
+
             score = found_count / len(expected_items) if expected_items else 0
             passed = score >= eval_spec.get("threshold", 0.7)
-            
+
             return {
                 "sample_id": sample_id,
                 "scores": {"includes": score},
@@ -1230,11 +1230,11 @@ class EvaluationRunner:
                 "found": found_count,
                 "total": len(expected_items)
             }
-            
+
         except Exception as e:
             logger.error(f"Includes eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
-    
+
     async def _eval_fuzzy_match(
         self,
         sample: Dict[str, Any],
@@ -1245,21 +1245,21 @@ class EvaluationRunner:
         """Evaluate fuzzy string matching"""
         try:
             from difflib import SequenceMatcher
-            
+
             output = str(sample["input"].get("output", ""))
             expected = str(sample.get("expected", {}).get("output", ""))
-            
+
             # Calculate similarity
             similarity = SequenceMatcher(None, output, expected).ratio()
             passed = similarity >= eval_spec.get("threshold", 0.7)
-            
+
             return {
                 "sample_id": sample_id,
                 "scores": {"fuzzy_match": similarity},
                 "passed": passed,
                 "avg_score": similarity
             }
-            
+
         except Exception as e:
             logger.error(f"Fuzzy match eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
@@ -1692,9 +1692,9 @@ class EvaluationRunner:
         except Exception as e:
             logger.error(f"nli_factcheck eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
-    
+
     # ============= Helper Methods =============
-    
+
     def _calculate_aggregate_results(
         self,
         results: List[Dict[str, Any]],
@@ -1712,17 +1712,17 @@ class EvaluationRunner:
                 "total_samples": 0,
                 "failed_samples": 0
             }
-        
+
         # Get all scores
         all_scores = []
         passed_count = 0
-        
+
         for result in results:
             if "avg_score" in result:
                 all_scores.append(result["avg_score"])
                 if result.get("passed", False):
                     passed_count += 1
-        
+
         if not all_scores:
             return {
                 "mean_score": 0,
@@ -1733,7 +1733,7 @@ class EvaluationRunner:
                 "total_samples": len(results),
                 "failed_samples": len(results)
             }
-        
+
         return {
             "mean_score": statistics.mean(all_scores),
             "std_dev": statistics.stdev(all_scores) if len(all_scores) > 1 else 0,
@@ -1743,7 +1743,7 @@ class EvaluationRunner:
             "total_samples": len(results),
             "failed_samples": len(results) - len(all_scores)
         }
-    
+
     def _calculate_metric_stats(
         self,
         results: List[Dict[str, Any]],
@@ -1751,13 +1751,13 @@ class EvaluationRunner:
     ) -> Dict[str, Dict[str, float]]:
         """Calculate per-metric statistics"""
         metric_scores = {metric: [] for metric in metrics}
-        
+
         for result in results:
             if "scores" in result:
                 for metric, score in result["scores"].items():
                     if metric in metric_scores:
                         metric_scores[metric].append(score)
-        
+
         metric_stats = {}
         for metric, scores in metric_scores.items():
             if scores:
@@ -1769,27 +1769,27 @@ class EvaluationRunner:
                 }
             else:
                 metric_stats[metric] = {"mean": 0, "std": 0, "min": 0, "max": 0}
-        
+
         return metric_stats
-    
+
     def _calculate_usage(self, results: List[Dict[str, Any]]) -> Dict[str, int]:
         """Calculate token usage"""
         total_tokens = 0
         prompt_tokens = 0
         completion_tokens = 0
-        
+
         for result in results:
             if "usage" in result:
                 total_tokens += result["usage"].get("total_tokens", 0)
                 prompt_tokens += result["usage"].get("prompt_tokens", 0)
                 completion_tokens += result["usage"].get("completion_tokens", 0)
-        
+
         return {
             "total_tokens": total_tokens,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens
         }
-    
+
     async def _send_webhook(
         self,
         webhook_url: str,
@@ -1810,14 +1810,14 @@ class EvaluationRunner:
                     "results_url": f"/api/v1/runs/{run_id}/results",
                     "summary": summary
                 }
-                
+
                 response = await client.post(webhook_url, json=payload, timeout=10)
                 response.raise_for_status()
                 logger.info(f"Webhook sent to {webhook_url} for run {run_id}")
-                
+
         except Exception as e:
             logger.error(f"Failed to send webhook to {webhook_url}: {e}")
-    
+
     def cancel_run(self, run_id: str) -> bool:
         """Cancel a running evaluation"""
         if run_id in self.running_tasks:

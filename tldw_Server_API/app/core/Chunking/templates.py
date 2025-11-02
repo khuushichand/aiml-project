@@ -25,9 +25,9 @@ class TemplateStage:
     name: str  # 'preprocess', 'chunk', 'postprocess'
     operations: List[Dict[str, Any]] = field(default_factory=list)
     enabled: bool = True
-    
 
-@dataclass 
+
+@dataclass
 class ChunkingTemplate:
     """Defines a complete chunking strategy template."""
     name: str
@@ -36,11 +36,11 @@ class ChunkingTemplate:
     stages: List[TemplateStage] = field(default_factory=list)
     default_options: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
 
 class TemplateProcessor:
     """Processes text through template-defined chunking pipelines."""
-    
+
     def __init__(self, chunker: Optional[Chunker] = None):
         """Initialize the template processor.
 
@@ -50,15 +50,15 @@ class TemplateProcessor:
         self._operations: Dict[str, Callable] = {}
         self._register_builtin_operations()
         self._chunker = chunker
-        
+
         logger.debug("TemplateProcessor initialized")
-    
+
     def _get_chunker(self) -> Chunker:
         """Get or create chunker instance."""
         if self._chunker is None:
             self._chunker = Chunker()
         return self._chunker
-    
+
     def _register_builtin_operations(self):
         """Register built-in preprocessing and postprocessing operations."""
         # Preprocessing operations
@@ -67,53 +67,53 @@ class TemplateProcessor:
         self.register_operation("extract_sections", self._extract_sections)
         self.register_operation("clean_markdown", self._clean_markdown)
         self.register_operation("detect_language", self._detect_language)
-        
+
         # Postprocessing operations
         self.register_operation("add_overlap", self._add_overlap)
         self.register_operation("filter_empty", self._filter_empty)
         self.register_operation("merge_small", self._merge_small)
         self.register_operation("add_metadata", self._add_metadata)
         self.register_operation("format_chunks", self._format_chunks)
-    
+
     def register_operation(self, name: str, func: Callable):
         """
         Register a custom operation.
-        
+
         Args:
             name: Operation name
             func: Function to execute (signature: func(data, options) -> data)
         """
         self._operations[name] = func
         logger.debug(f"Registered operation: {name}")
-    
+
     def process_template(self,
                         text: str,
                         template: ChunkingTemplate,
                         **options) -> List[Dict[str, Any]]:
         """
         Process text through a template pipeline.
-        
+
         Args:
             text: Text to process
             template: Template defining the pipeline
             **options: Additional options overriding template defaults
-            
+
         Returns:
             List of processed chunks
         """
         # Merge options with template defaults
         final_options = {**template.default_options, **options}
-        
+
         # Initialize data that flows through pipeline
         data = {"text": text, "chunks": [], "metadata": {}}
-        
+
         # Process each stage
         for stage in template.stages:
             if not stage.enabled:
                 continue
-            
+
             logger.debug(f"Processing stage: {stage.name}")
-            
+
             if stage.name == "preprocess":
                 data = self._run_preprocess_stage(data, stage, final_options)
             elif stage.name == "chunk":
@@ -122,7 +122,7 @@ class TemplateProcessor:
                 data = self._run_postprocess_stage(data, stage, final_options)
             else:
                 logger.warning(f"Unknown stage: {stage.name}")
-        
+
         # Ensure standardized shape: List[Dict{text, metadata}]
         out_chunks: List[Dict[str, Any]] = []
         for ch in data.get("chunks", []) or []:
@@ -131,7 +131,7 @@ class TemplateProcessor:
             elif isinstance(ch, str):
                 out_chunks.append({'text': ch, 'metadata': {}})
         return out_chunks
-    
+
     def _run_preprocess_stage(self,
                              data: Dict[str, Any],
                              stage: TemplateStage,
@@ -165,7 +165,7 @@ class TemplateProcessor:
 
         data["text"] = text
         return data
-    
+
     def _run_chunk_stage(self,
                         data: Dict[str, Any],
                         stage: TemplateStage,
@@ -256,7 +256,7 @@ class TemplateProcessor:
             norm = [{'text': c, 'metadata': {}} if isinstance(c, str) else c for c in (chunks or [])]
             data["chunks"] = norm
         return data
-    
+
     def _run_postprocess_stage(self,
                               data: Dict[str, Any],
                               stage: TemplateStage,
@@ -292,7 +292,7 @@ class TemplateProcessor:
         # will wrap them with minimal metadata for consistency.
         data["chunks"] = texts
         return data
-    
+
     # Built-in preprocessing operations
     def _normalize_whitespace(self, text: str, options: Dict[str, Any]) -> str:
         """Normalize whitespace in text."""
@@ -307,7 +307,7 @@ class TemplateProcessor:
             max_breaks = 2
         text = re.sub(r'\n{' + str(max_breaks + 1) + ',}', '\n' * max_breaks, text)
         return text.strip()
-    
+
     def _remove_headers(self, text: str, options: Dict[str, Any]) -> str:
         """Remove headers/footers from text."""
         patterns = options.get("patterns", [])
@@ -325,7 +325,7 @@ class TemplateProcessor:
             except Exception as e:
                 logger.warning(f"Failed to apply header removal pattern; skipping. Error: {e}")
         return text
-    
+
     def _extract_sections(self, text: str, options: Dict[str, Any]) -> Dict[str, Any]:
         """Extract sections from text and store as metadata."""
         raw_pat = options.get("pattern", r'^#+\s+(.+)$')
@@ -340,7 +340,7 @@ class TemplateProcessor:
             # Fall back to default
             pass
         sections = []
-        
+
         try:
             for match in re.finditer(section_pattern, text, re.MULTILINE):
                 try:
@@ -354,34 +354,34 @@ class TemplateProcessor:
                 })
         except Exception as e:
             logger.warning(f"Section extraction regex failed; returning empty sections. Error: {e}")
-        
+
         return {
             "text": text,
             "metadata": {"sections": sections}
         }
-    
+
     def _clean_markdown(self, text: str, options: Dict[str, Any]) -> str:
         """Clean markdown formatting from text."""
         if options.get("remove_links", False):
             # Remove markdown links but keep text
             text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-        
+
         if options.get("remove_images", False):
             # Remove markdown images
             text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', text)
-        
+
         if options.get("remove_formatting", False):
             # Remove bold/italic
             text = re.sub(r'\*{1,2}([^\*]+)\*{1,2}', r'\1', text)
             text = re.sub(r'_{1,2}([^_]+)_{1,2}', r'\1', text)
-        
+
         return text
-    
+
     def _detect_language(self, text: str, options: Dict[str, Any]) -> Dict[str, Any]:
         """Detect text language and store as metadata."""
         # Simplified language detection based on character patterns
         language = "en"  # Default
-        
+
         # Check for common non-English patterns
         if re.search(r'[\u4e00-\u9fff]', text):
             language = "zh"  # Chinese
@@ -391,22 +391,22 @@ class TemplateProcessor:
             language = "ko"  # Korean
         elif re.search(r'[\u0600-\u06ff]', text):
             language = "ar"  # Arabic
-        
+
         return {
             "text": text,
             "metadata": {"detected_language": language}
         }
-    
+
     # Built-in postprocessing operations
     def _add_overlap(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
         """Add overlap context between chunks."""
         overlap_size = options.get("size", 50)  # characters
         overlap_marker = options.get("marker", "")
-        
+
         enhanced_chunks = []
         for i, chunk in enumerate(chunks):
             enhanced_chunk = chunk
-            
+
             # Add end of previous chunk
             if i > 0 and overlap_size > 0:
                 prev_end = chunks[i-1][-overlap_size:]
@@ -414,24 +414,24 @@ class TemplateProcessor:
                     enhanced_chunk = f"{overlap_marker}\n{prev_end}\n{overlap_marker}\n{enhanced_chunk}"
                 else:
                     enhanced_chunk = prev_end + enhanced_chunk
-            
+
             enhanced_chunks.append(enhanced_chunk)
-        
+
         return enhanced_chunks
-    
+
     def _filter_empty(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
         """Filter out empty or too-small chunks."""
         min_length = options.get("min_length", 10)
         return [chunk for chunk in chunks if len(chunk.strip()) >= min_length]
-    
+
     def _merge_small(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
         """Merge small chunks together."""
         min_size = options.get("min_size", 100)
         separator = options.get("separator", "\n\n")
-        
+
         merged_chunks = []
         current_chunk = ""
-        
+
         for chunk in chunks:
             if not current_chunk:
                 current_chunk = chunk
@@ -442,34 +442,34 @@ class TemplateProcessor:
                 # Current chunk is large enough, save it and start new one
                 merged_chunks.append(current_chunk)
                 current_chunk = chunk
-        
+
         if current_chunk:
             merged_chunks.append(current_chunk)
-        
+
         return merged_chunks
-    
+
     def _add_metadata(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
         """Add metadata to chunks."""
         prefix = options.get("prefix", "")
         suffix = options.get("suffix", "")
-        
+
         enhanced_chunks = []
         for i, chunk in enumerate(chunks):
             enhanced = chunk
-            
+
             if prefix:
                 enhanced = prefix.format(index=i, total=len(chunks)) + enhanced
             if suffix:
                 enhanced = enhanced + suffix.format(index=i, total=len(chunks))
-            
+
             enhanced_chunks.append(enhanced)
-        
+
         return enhanced_chunks
-    
+
     def _format_chunks(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
         """Format chunks according to template."""
         template_str = options.get("template", "{chunk}")
-        
+
         formatted_chunks = []
         for i, chunk in enumerate(chunks):
             formatted = template_str.format(
@@ -478,31 +478,31 @@ class TemplateProcessor:
                 total=len(chunks)
             )
             formatted_chunks.append(formatted)
-        
+
         return formatted_chunks
 
 
 class TemplateManager:
     """Manages loading and saving of chunking templates."""
-    
+
     def __init__(self, templates_dir: Optional[Path] = None):
         """
         Initialize template manager.
-        
+
         Args:
             templates_dir: Directory containing template files
         """
         self.templates_dir = templates_dir or Path(__file__).parent / "template_library"
         self.templates_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self._cache: Dict[str, ChunkingTemplate] = {}
         self._processor = TemplateProcessor()
-        
+
         # Load built-in templates
         self._load_builtin_templates()
-        
+
         logger.info(f"TemplateManager initialized with dir: {self.templates_dir}")
-    
+
     def _load_builtin_templates(self):
         """Load built-in template definitions."""
         # Academic paper template
@@ -525,7 +525,7 @@ class TemplateManager:
             ],
             default_options={"max_size": 5, "overlap": 1}
         ))
-        
+
         # Code documentation template
         self.register_template(ChunkingTemplate(
             name="code_documentation",
@@ -544,7 +544,7 @@ class TemplateManager:
                 ])
             ]
         ))
-        
+
         # Chat conversation template
         self.register_template(ChunkingTemplate(
             name="chat_conversation",
@@ -562,18 +562,18 @@ class TemplateManager:
                 ])
             ]
         ))
-    
+
     def register_template(self, template: ChunkingTemplate):
         """Register a template in the cache."""
         self._cache[template.name] = template
         logger.debug(f"Registered template: {template.name}")
-    
+
     def get_template(self, name: str) -> Optional[ChunkingTemplate]:
         """Get a template by name."""
         # Check cache first
         if name in self._cache:
             return self._cache[name]
-        
+
         # Try to load from file
         template_file = self.templates_dir / f"{name}.json"
         if template_file.exists():
@@ -581,9 +581,9 @@ class TemplateManager:
                 return self.load_template(template_file)
             except Exception as e:
                 logger.error(f"Failed to load template {name}: {e}")
-        
+
         return None
-    
+
     def load_template(self, path: Path) -> ChunkingTemplate:
         """Load a template from file.
 
@@ -643,12 +643,12 @@ class TemplateManager:
         # Cache it
         self._cache[template.name] = template
         return template
-    
+
     def save_template(self, template: ChunkingTemplate, path: Optional[Path] = None):
         """Save a template to file."""
         if path is None:
             path = self.templates_dir / f"{template.name}.json"
-        
+
         # Convert to JSON-serializable format
         data = {
             "name": template.name,
@@ -665,42 +665,42 @@ class TemplateManager:
             "default_options": template.default_options,
             "metadata": template.metadata
         }
-        
+
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        
+
         logger.info(f"Saved template {template.name} to {path}")
-    
+
     def list_templates(self) -> List[str]:
         """List available template names."""
         templates = set(self._cache.keys())
-        
+
         # Add templates from files
         if self.templates_dir.exists():
             for path in self.templates_dir.glob("*.json"):
                 templates.add(path.stem)
-        
+
         return sorted(list(templates))
-    
+
     def process(self, text: str, template_name: str, **options) -> List[str]:
         """
         Process text using a named template.
-        
+
         Args:
             text: Text to process
             template_name: Name of template to use
             **options: Additional options
-            
+
         Returns:
             List of processed chunks
-            
+
         Raises:
             TemplateError: If template not found
         """
         template = self.get_template(template_name)
         if not template:
             raise TemplateError(f"Template not found: {template_name}")
-        
+
         return self._processor.process_template(text, template, **options)
 
 

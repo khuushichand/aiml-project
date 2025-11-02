@@ -42,4 +42,3 @@ def test_uct_exploration_constant_affects_selection():
     uct_a_large = child_a.uct(exploration_c=c_large)
     uct_b_large = child_b.uct(exploration_c=c_large)
     assert uct_b_large > uct_a_large, "With large c, exploration bonus should prefer low-visit child"
-

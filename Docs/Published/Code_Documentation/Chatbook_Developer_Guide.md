@@ -24,25 +24,25 @@ graph TB
         Schema[Pydantic Schemas]
         Auth[Authentication]
     end
-    
+
     subgraph "Service Layer"
         Service[ChatbookService]
         Validator[ChatbookValidator]
         Quota[QuotaManager]
     end
-    
+
     subgraph "Core Components"
         Models[Chatbook Models]
         JobQueue[Job Queue]
         FileHandler[File Handler]
     end
-    
+
     subgraph "Data Layer"
         DB[(SQLite DB)]
         FS[File System]
         Vector[(ChromaDB) - optional]
     end
-    
+
     API --> Service
     Service --> Models
     Service --> JobQueue
@@ -154,17 +154,17 @@ class ChatbookService:
         """Initialize service with user context and database."""
         self.user_id = user_id
         self.db = db
-        
+
         # Global shim-backed queue; db is attached for handlers
         self.job_queue = get_job_queue()
         self.job_queue.db = db
-        
+
         # Per-user secure directories under base data dir
         # (see Directory Setup details below)
         self.export_dir = ...
         self.import_dir = ...
         self.temp_dir = ...
-        
+
         self._init_job_tables()
         self._register_job_handlers()
 ```
@@ -180,7 +180,7 @@ async def create_chatbook(
     **kwargs
 ) -> Tuple[bool, str, Optional[str]]:
     """Create a chatbook from selected content."""
-    
+
 async def import_chatbook(
     self,
     file_path: str,
@@ -214,13 +214,13 @@ class ChatbookManifest:
     created_at: datetime
     updated_at: datetime
     content_items: List[ContentItem]
-    
+
     # Statistics
     total_conversations: int = 0
     total_notes: int = 0
     total_characters: int = 0
     total_media_items: int = 0
-    
+
     # Options
     include_media: bool = False
     include_embeddings: bool = False
@@ -271,7 +271,7 @@ def _collect_conversations(
             self.db.get_conversation(conv_id)
             for conv_id in selection
         ]
-    
+
     for conv in conversations:
         # Process and add to content
         content_item = ContentItem(
@@ -300,18 +300,18 @@ def _import_conversations(
 ):
     """Import conversations from chatbook."""
     conv_dir = extract_dir / "content" / "conversations"
-    
+
     for item in manifest.content_items:
         if item.type != ContentType.CONVERSATION:
             continue
         if selection and item.id not in selection:
             continue
-            
+
         # Load conversation data
         file_path = conv_dir / f"conversation_{item.id}.json"
         with open(file_path, 'r') as f:
             conv_data = json.load(f)
-        
+
         # Handle conflicts
         existing = self._get_conversation_by_name(conv_data['name'])
         if existing:
@@ -322,13 +322,13 @@ def _import_conversations(
                 self.db.update_conversation(existing['id'], conv_data)
             elif conflict_resolution == ConflictResolution.RENAME:
                 conv_data['name'] = self._generate_unique_name(
-                    conv_data['name'], 
+                    conv_data['name'],
                     'conversation'
                 )
                 self.db.create_conversation(conv_data)
         else:
             self.db.create_conversation(conv_data)
-        
+
         import_status.successful_items += 1
 ```
 
@@ -341,15 +341,15 @@ A temporary synchronous implementation that will be replaced with a proper queue
 ```python
 class JobQueueShim:
     """Temporary job queue implementation."""
-    
+
     def __init__(self):
         self.jobs: Dict[str, Job] = {}
         self.handlers: Dict[str, Callable] = {}
-    
+
     def submit_job(self, job: Job) -> str:
         """Submit a job for processing."""
         self.jobs[job.job_id] = job
-        
+
         # Execute synchronously for now
         if job.job_type in self.handlers:
             handler = self.handlers[job.job_type]
@@ -360,7 +360,7 @@ class JobQueueShim:
             except Exception as e:
                 job.status = JobStatus.FAILED
                 job.error = str(e)
-        
+
         return job.job_id
 ```
 
@@ -426,7 +426,7 @@ def _create_chatbook_archive(
         # Add manifest
         manifest_path = work_dir / 'manifest.json'
         zf.write(manifest_path, 'manifest.json')
-        
+
         # Add content recursively
         content_dir = work_dir / 'content'
         for root, dirs, files in os.walk(content_dir):
@@ -434,12 +434,12 @@ def _create_chatbook_archive(
                 file_path = Path(root) / file
                 arc_path = file_path.relative_to(work_dir)
                 zf.write(file_path, arc_path)
-        
+
         # Add README
         readme_path = work_dir / 'README.md'
         if readme_path.exists():
             zf.write(readme_path, 'README.md')
-    
+
     return output_path.exists()
 ```
 
@@ -454,13 +454,13 @@ class CreateChatbookRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str = Field(..., min_length=1, max_length=1000)
     content_selections: Dict[ContentType, List[str]]
-    
+
     @validator('name')
     def validate_name(cls, v):
         if not re.match(r'^[\w\s.-]+$', v):
             raise ValueError('Invalid characters in name')
         return v
-    
+
     @validator('content_selections')
     def validate_selections(cls, v):
         for content_type, ids in v.items():
@@ -474,27 +474,27 @@ class CreateChatbookRequest(BaseModel):
 ```python
 class QuotaManager:
     """Manages user quotas and limits."""
-    
+
     async def check_export_quota(self) -> Tuple[bool, Optional[str]]:
         """Check if user can create an export."""
         # Check daily limit
         today_exports = await self._count_today_exports()
         if today_exports >= self.tier_limits['exports_per_day']:
             return False, "Daily export limit reached"
-        
+
         # Check storage quota
         used_storage = await self._calculate_storage_used()
         if used_storage >= self.tier_limits['storage_bytes']:
             return False, "Storage quota exceeded"
-        
+
         return True, None
-    
+
     async def check_file_size(self, size_bytes: int) -> Tuple[bool, Optional[str]]:
         """Check if file size is within limits."""
         max_size = self.tier_limits['max_file_size_bytes']
         if size_bytes > max_size:
             return False, f"File too large. Max: {max_size} bytes"
-        
+
         return True, None
 ```
 
@@ -539,25 +539,25 @@ Test individual components:
 ```python
 class TestChatbookService:
     """Unit tests for ChatbookService."""
-    
+
     def test_init_creates_tables(self, service, mock_db):
         """Test that initialization creates required tables."""
         # Verify execute_query was called with CREATE TABLE
         calls = mock_db.execute_query.call_args_list
-        create_export = any('CREATE TABLE' in str(call) and 'export_jobs' in str(call) 
+        create_export = any('CREATE TABLE' in str(call) and 'export_jobs' in str(call)
                           for call in calls)
-        create_import = any('CREATE TABLE' in str(call) and 'import_jobs' in str(call) 
+        create_import = any('CREATE TABLE' in str(call) and 'import_jobs' in str(call)
                           for call in calls)
         assert create_export
         assert create_import
-    
+
     @pytest.mark.asyncio
     async def test_export_chatbook_sync(self, service, mock_db):
         """Test synchronous export."""
         # Setup mock data
         mock_db.search_conversations_by_title.return_value = []
         mock_db.search_notes.return_value = []
-        
+
         # Call export
         success, message, file_path = await service.create_chatbook(
             name="Test Export",
@@ -565,7 +565,7 @@ class TestChatbookService:
             content_selections={},
             async_mode=False
         )
-        
+
         assert success is True
         assert file_path is not None
         assert "chatbook" in file_path
@@ -578,7 +578,7 @@ Test with real database:
 ```python
 class TestChatbookIntegration:
     """Integration tests with real database."""
-    
+
     @pytest.fixture
     def test_db(self, tmp_path):
         """Create real test database."""
@@ -588,7 +588,7 @@ class TestChatbookIntegration:
         # Cleanup
         if db_path.exists():
             db_path.unlink()
-    
+
     @pytest.mark.asyncio
     async def test_export_import_roundtrip(self, service, tmp_path):
         """Test full export and import cycle."""
@@ -602,16 +602,16 @@ class TestChatbookIntegration:
             },
             async_mode=False
         )
-        
+
         success, message, export_path = export_result
         assert success is True
-        
+
         # Import back
         import_result = await service.import_chatbook(
             file_path=export_path,
             conflict_resolution="rename"
         )
-        
+
         assert import_result[0] is True
 ```
 
@@ -685,12 +685,12 @@ class ExportFormat(str, Enum):
 
 class ExportFormatter:
     """Format exports for different outputs."""
-    
+
     @staticmethod
     def format_csv(content: ChatbookContent) -> bytes:
         """Format content as CSV."""
         # Implementation
-    
+
     @staticmethod
     def format_jsonl(content: ChatbookContent) -> bytes:
         """Format content as JSON Lines."""
@@ -704,7 +704,7 @@ Implement custom strategies:
 ```python
 class SmartMergeResolver:
     """Intelligent content merging."""
-    
+
     def resolve_conversation(
         self,
         existing: Dict,
@@ -716,13 +716,13 @@ class SmartMergeResolver:
         for msg in imported['messages']:
             if msg['id'] not in existing_msgs:
                 existing['messages'].append(msg)
-        
+
         # Update metadata
         existing['updated_at'] = max(
             existing['updated_at'],
             imported['updated_at']
         )
-        
+
         return existing
 ```
 
@@ -739,14 +739,14 @@ def _export_embeddings(self, content_ids: List[str], work_dir: Path):
     """Export ChromaDB embeddings."""
     embeddings_dir = work_dir / 'embeddings'
     embeddings_dir.mkdir(exist_ok=True)
-    
+
     for content_id in content_ids:
         # Get embedding from ChromaDB
         embedding = self.chroma_client.get(
             collection_name="conversations",
             ids=[content_id]
         )
-        
+
         # Save to file
         emb_file = embeddings_dir / f"{content_id}.npy"
         np.save(emb_file, embedding['embeddings'][0])
@@ -780,7 +780,7 @@ async def _notify_webhook(self, job: ExportJob):
     webhook_url = self.user_settings.get('webhook_url')
     if not webhook_url:
         return
-    
+
     payload = {
         'event': 'export.completed',
         'job_id': job.job_id,
@@ -791,7 +791,7 @@ async def _notify_webhook(self, job: ExportJob):
             'total_items': job.total_items
         }
     }
-    
+
     async with aiohttp.ClientSession() as session:
         await session.post(webhook_url, json=payload)
 ```
@@ -836,9 +836,9 @@ openapi-generator generate -i chatbooks_openapi.yaml -g typescript-axios -o ./sd
 def _batch_insert_conversations(self, conversations: List[Dict]):
     """Insert multiple conversations efficiently."""
     self.db.execute_many(
-        """INSERT INTO conversations (id, title, content, user_id) 
+        """INSERT INTO conversations (id, title, content, user_id)
            VALUES (?, ?, ?, ?)""",
-        [(c['id'], c['title'], c['content'], self.user_id) 
+        [(c['id'], c['title'], c['content'], self.user_id)
          for c in conversations]
     )
 ```
@@ -846,7 +846,7 @@ def _batch_insert_conversations(self, conversations: List[Dict]):
 2. **Indexing**:
 ```sql
 -- Add composite index for common queries
-CREATE INDEX idx_export_jobs_user_status 
+CREATE INDEX idx_export_jobs_user_status
 ON export_jobs(user_id, status, created_at DESC);
 ```
 
@@ -862,7 +862,7 @@ async def _stream_to_archive(
 ):
     """Stream large files to archive."""
     CHUNK_SIZE = 1024 * 1024  # 1MB chunks
-    
+
     with open(source_path, 'rb') as src:
         with zf.open(arc_name, 'w') as dst:
             while chunk := src.read(CHUNK_SIZE):
@@ -879,13 +879,13 @@ async def _collect_content_parallel(
 ):
     """Collect content in parallel."""
     tasks = []
-    
+
     for content_type, selection in content_selections.items():
         if content_type == ContentType.CONVERSATION:
             tasks.append(self._collect_conversations_async(selection))
         elif content_type == ContentType.NOTE:
             tasks.append(self._collect_notes_async(selection))
-    
+
     results = await asyncio.gather(*tasks)
     return self._merge_results(results)
 ```
@@ -931,14 +931,14 @@ class ChatbookService:
             service="chatbook",
             user_id=user_id
         )
-    
+
     async def create_chatbook(self, **kwargs):
         self.logger.info(
             "Creating chatbook",
             name=kwargs.get('name'),
             content_types=list(kwargs.get('content_selections', {}).keys())
         )
-        
+
         try:
             # ... operation ...
             self.logger.info(
@@ -1014,9 +1014,9 @@ async def health_check(
         'storage': await service._check_storage(),
         'job_queue': await service._check_job_queue()
     }
-    
+
     status = 'healthy' if all(checks.values()) else 'unhealthy'
-    
+
     return {
         'status': status,
         'checks': checks,
@@ -1059,7 +1059,7 @@ VOLUME ["/var/lib/tldw/user_data"]
 async def backup_job_tables():
     """Backup job tables daily."""
     backup_path = Path('/backups') / f"jobs_{datetime.now():%Y%m%d}.sql"
-    
+
     await db.execute(f"""
         .output {backup_path}
         .dump export_jobs import_jobs

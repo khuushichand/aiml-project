@@ -114,7 +114,7 @@ def test_jobs_prune_filters_scope_sqlite(monkeypatch, tmp_path):
 
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as client:
-        # Scoped to chatbooks/default/export — should not match the seeded job
+        # Scoped to chatbooks/default/export - should not match the seeded job
         body = {
             "statuses": ["completed"],
             "older_than_days": 1,

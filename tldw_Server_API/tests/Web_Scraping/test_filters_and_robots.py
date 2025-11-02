@@ -55,4 +55,3 @@ async def test_robots_filter_mocked(monkeypatch):
     rf = RobotsFilter(user_agent="TestBot/1.0", ttl_seconds=1)
     allowed = await rf.allowed("https://example.com/private")
     assert allowed is False
-

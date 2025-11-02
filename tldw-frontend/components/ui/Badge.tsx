@@ -18,4 +18,3 @@ export function Badge({ children, variant = 'neutral', className }: { children: 
     </span>
   );
 }
-

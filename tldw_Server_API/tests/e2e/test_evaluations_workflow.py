@@ -29,19 +29,19 @@ from tldw_Server_API.tests.e2e.test_data import TestDataGenerator
 
 class TestEvaluationWorkflow:
     """Test evaluation API endpoints comprehensively."""
-    
+
     # Class variables to share state between test methods
     eval_id = None
     standard_eval_id = None
     run_id = None
-    
+
     @pytest.fixture(autouse=True)
     def setup(self, authenticated_client, data_tracker):
         """Setup for each test."""
         self.client = authenticated_client
         self.tracker = data_tracker
         self.data_gen = TestDataGenerator()
-        
+
         # Simple performance tracking
         class PerfTracker:
             def measure(self, name):
@@ -54,11 +54,11 @@ class TestEvaluationWorkflow:
                     duration = time.time() - start
                     print(f"⏱️ {name}: {duration:.2f}s")
                 return _measure()
-        
+
         self.perf = PerfTracker()
-        
+
     # ===================== OpenAI-Compatible Evaluation Tests =====================
-    
+
     def test_create_openai_evaluation(self):
         """Test creating an OpenAI-compatible evaluation."""
         with self.perf.measure("create_openai_evaluation"):
@@ -91,78 +91,78 @@ class TestEvaluationWorkflow:
                     "version": "1.0.0"
                 }
             }
-            
+
             try:
                 response = self.client.client.post("/api/v1/evaluations", json=eval_data)
                 response.raise_for_status()
-                
+
                 result = response.json()
                 # Use proper assertions
                 AssertionHelpers.assert_api_response_structure(result, ["id", "object", "name", "eval_type"])
                 assert result["object"] == "evaluation"
                 assert result["name"] == eval_data["name"]
                 assert result["eval_type"] == "model_graded"
-                
+
                 # Track for cleanup
                 self.tracker.track("evaluation", result["id"])
-                
+
                 # Store for later tests
                 TestEvaluationWorkflow.eval_id = result["id"]
-                
+
                 print(f"✓ Created evaluation: {result['id']}")
-                
+
             except httpx.HTTPStatusError as e:
                 SmartErrorHandler.handle_error(e, "evaluation creation")
-    
-    
+
+
     def test_list_openai_evaluations(self):
         """Test listing OpenAI-compatible evaluations."""
         with self.perf.measure("list_openai_evaluations"):
             response = self.client.client.get("/api/v1/evaluations?limit=10")
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert "object" in result
                 assert result["object"] == "list"
                 assert "data" in result
                 assert isinstance(result["data"], list)
-                
+
                 if result["data"]:
                     # Verify evaluation structure
                     eval_item = result["data"][0]
                     assert "id" in eval_item
                     assert "object" in eval_item
                     assert eval_item["object"] == "evaluation"
-                    
+
                 print(f"✓ Listed {len(result['data'])} evaluations")
             else:
                 print(f"Evaluation listing failed: {response.status_code}")
-    
-    
+
+
     def test_get_openai_evaluation(self):
         """Test retrieving a specific OpenAI-compatible evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
-            
+
         with self.perf.measure("get_openai_evaluation"):
             response = self.client.client.get(f"/api/v1/evaluations/{TestEvaluationWorkflow.eval_id}")
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert result["id"] == TestEvaluationWorkflow.eval_id
                 assert result["object"] == "evaluation"
                 assert "eval_spec" in result
-                
+
                 print(f"✓ Retrieved evaluation: {self.eval_id}")
             else:
                 print(f"Evaluation retrieval failed: {response.status_code}")
-    
-    
+
+
     def test_update_openai_evaluation(self):
         """Test updating an OpenAI-compatible evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
-            
+
         with self.perf.measure("update_openai_evaluation"):
             update_data = {
                 "description": "Updated E2E test evaluation",
@@ -175,26 +175,26 @@ class TestEvaluationWorkflow:
                     "version": "1.1.0"
                 }
             }
-            
+
             response = self.client.client.patch(
                 f"/api/v1/evaluations/{TestEvaluationWorkflow.eval_id}",
                 json=update_data
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert result["description"] == update_data["description"]
-                
+
                 print(f"✓ Updated evaluation: {self.eval_id}")
             else:
                 print(f"Evaluation update failed: {response.status_code}")
-    
-    
+
+
     def test_run_openai_evaluation(self):
         """Test running an OpenAI-compatible evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
-            
+
         with self.perf.measure("run_openai_evaluation"):
             run_data = {
                 "target_model": "gpt-3.5-turbo",
@@ -205,93 +205,93 @@ class TestEvaluationWorkflow:
                     "batch_size": 5
                 }
             }
-            
+
             response = self.client.client.post(
                 f"/api/v1/evaluations/{TestEvaluationWorkflow.eval_id}/runs",
                 json=run_data
             )
-            
+
             if response.status_code == 202:  # Accepted for async processing
                 result = response.json()
                 assert "id" in result
                 # Unified evaluations return 'run' as object type
                 assert result["object"] == "run"
                 assert result["status"] in ["pending", "running"]
-                
+
                 # Track run ID for later tests
                 self.run_id = result["id"]
-                
+
                 print(f"✓ Started evaluation run: {result['id']}")
             else:
                 print(f"Evaluation run failed: {response.status_code} - {response.text}")
-    
-    
+
+
     def test_list_evaluation_runs(self):
         """Test listing runs for an evaluation."""
         if TestEvaluationWorkflow.eval_id is None:
             pytest.skip("No evaluation ID available")
-            
+
         with self.perf.measure("list_evaluation_runs"):
             response = self.client.client.get(f"/api/v1/evaluations/{TestEvaluationWorkflow.eval_id}/runs")
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert result["object"] == "list"
                 assert "data" in result
-                
+
                 if result["data"]:
                     run = result["data"][0]
                     assert "id" in run
                     assert "status" in run
-                    
+
                 print(f"✓ Listed {len(result['data'])} evaluation runs")
             else:
                 print(f"Run listing failed: {response.status_code}")
-    
+
     # ===================== Standard Evaluation Tests =====================
-    
-    
+
+
     def test_geval_summarization(self):
         """Test G-Eval summarization evaluation."""
         with self.perf.measure("geval_summarization"):
             eval_data = {
                 "document": """
-                Machine learning has revolutionized many industries by enabling computers 
-                to learn from data without explicit programming. Deep learning, a subset 
-                of machine learning, uses neural networks with multiple layers to process 
-                complex patterns. Applications include image recognition, natural language 
+                Machine learning has revolutionized many industries by enabling computers
+                to learn from data without explicit programming. Deep learning, a subset
+                of machine learning, uses neural networks with multiple layers to process
+                complex patterns. Applications include image recognition, natural language
                 processing, and autonomous vehicles.
                 """,
                 "summary": """
-                Machine learning allows computers to learn from data. Deep learning uses 
-                neural networks for complex pattern recognition in applications like 
+                Machine learning allows computers to learn from data. Deep learning uses
+                neural networks for complex pattern recognition in applications like
                 image recognition and NLP.
                 """,
                 "metrics": ["coherence", "consistency", "fluency", "relevance"],
                 "model": "gpt-3.5-turbo",
                 "custom_prompt": None
             }
-            
+
             response = self.client.client.post("/api/v1/evaluations/geval", json=eval_data)
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert "overall_score" in result
                 assert "individual_scores" in result
                 assert len(result["individual_scores"]) == len(eval_data["metrics"])
-                
+
                 for metric in eval_data["metrics"]:
                     assert metric in result["individual_scores"]
                     score = result["individual_scores"][metric]
                     assert 1 <= score <= 5
-                
+
                 print(f"✓ G-Eval score: {result['overall_score']:.2f}")
             elif response.status_code == 503:
                 print("G-Eval skipped: Service unavailable (likely no API key)")
             else:
                 print(f"G-Eval failed: {response.status_code} - {response.text}")
-    
-    
+
+
     def test_rag_evaluation(self):
         """Test RAG system evaluation."""
         with self.perf.measure("rag_evaluation"):
@@ -314,25 +314,25 @@ class TestEvaluationWorkflow:
                 """,
                 "metrics": ["context_relevance", "answer_relevance", "faithfulness", "correctness"]
             }
-            
+
             response = self.client.client.post("/api/v1/evaluations/rag", json=rag_data)
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert "overall_score" in result
                 assert "metrics" in result
-                
+
                 for metric in rag_data["metrics"]:
                     assert metric in result["metrics"]
                     assert 0 <= result["metrics"][metric] <= 1
-                
+
                 print(f"✓ RAG evaluation score: {result['overall_score']:.2f}")
             elif response.status_code in [503, 422]:
                 print(f"RAG evaluation skipped: {response.status_code}")
             else:
                 print(f"RAG evaluation failed: {response.status_code}")
-    
-    
+
+
     def test_response_quality_evaluation(self):
         """Test response quality evaluation."""
         with self.perf.measure("response_quality_evaluation"):
@@ -353,28 +353,28 @@ class TestEvaluationWorkflow:
                 "reference_response": None,
                 "model": "gpt-3.5-turbo"
             }
-            
+
             response = self.client.client.post(
                 "/api/v1/evaluations/response-quality",
                 json=quality_data
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 # Unified endpoint fields
                 assert "overall_quality" in result
                 assert "metrics" in result
-                
+
                 for criterion in quality_data["criteria"]:
                     assert criterion in result["metrics"]
-                
+
                 print(f"✓ Response quality score: {result['overall_quality']:.2f}")
             elif response.status_code in [503, 422]:
                 print(f"Response quality evaluation skipped: {response.status_code}")
             else:
                 print(f"Response quality evaluation failed: {response.status_code}")
-    
-    
+
+
     def test_batch_evaluation(self):
         """Test batch evaluation processing."""
         with self.perf.measure("batch_evaluation"):
@@ -400,9 +400,9 @@ class TestEvaluationWorkflow:
                     "retry_failed": True
                 }
             }
-            
+
             response = self.client.client.post("/api/v1/evaluations/batch", json=batch_data)
-            
+
             if response.status_code == 200:
                 result = response.json()
                 # Unified batch response
@@ -410,14 +410,14 @@ class TestEvaluationWorkflow:
                 assert "successful" in result
                 assert "results" in result
                 assert len(result["results"]) <= len(batch_data["items"])
-                
+
                 print(f"✓ Batch evaluation submitted: {result['successful']}/{result['total_items']} succeeded")
             elif response.status_code in [503, 422]:
                 print(f"Batch evaluation skipped: {response.status_code}")
             else:
                 print(f"Batch evaluation failed: {response.status_code}")
-    
-    
+
+
     def test_evaluation_comparison(self):
         """Test comparing multiple evaluations."""
         with self.perf.measure("evaluation_comparison"):
@@ -450,25 +450,25 @@ class TestEvaluationWorkflow:
                     "coherence": 0.25
                 }
             }
-            
+
             response = self.client.client.post(
                 "/api/v1/evaluations/compare",
                 json=comparison_data
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert "comparison_id" in result
                 assert "rankings" in result
                 assert "detailed_comparison" in result
-                
+
                 print(f"✓ Evaluation comparison completed")
             elif response.status_code in [503, 422]:
                 print(f"Evaluation comparison skipped: {response.status_code}")
             else:
                 print(f"Evaluation comparison failed: {response.status_code}")
-    
-    
+
+
     def test_custom_metric_evaluation(self):
         """Test custom metric evaluation."""
         with self.perf.measure("custom_metric_evaluation"):
@@ -478,7 +478,7 @@ class TestEvaluationWorkflow:
                 "evaluation_prompt": """
                 Rate the following response for domain expertise in {domain}:
                 Response: {response}
-                
+
                 Score from 0-1 based on:
                 - Technical accuracy
                 - Use of domain terminology
@@ -490,25 +490,25 @@ class TestEvaluationWorkflow:
                 },
                 "model": "gpt-3.5-turbo"
             }
-            
+
             response = self.client.client.post(
                 "/api/v1/evaluations/custom-metric",
                 json=custom_data
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert "metric_name" in result
                 assert "score" in result
                 assert 0 <= result["score"] <= 1
-                
+
                 print(f"✓ Custom metric score: {result['score']:.2f}")
             elif response.status_code in [503, 422]:
                 print(f"Custom metric evaluation skipped: {response.status_code}")
             else:
                 print(f"Custom metric evaluation failed: {response.status_code}")
-    
-    
+
+
     def test_evaluation_history(self):
         """Test retrieving evaluation history."""
         with self.perf.measure("evaluation_history"):
@@ -519,31 +519,31 @@ class TestEvaluationWorkflow:
                 "limit": 20,
                 "include_metadata": True
             }
-            
+
             response = self.client.client.post(
                 "/api/v1/evaluations/history",
                 json=history_params
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 assert "items" in result
                 assert "total_count" in result
                 # Unified endpoint uses 'aggregations' instead of 'average_scores'
                 assert "aggregations" in result
-                
+
                 print(f"✓ Retrieved {result['total_count']} historical evaluations")
             else:
                 print(f"Evaluation history failed: {response.status_code}")
-    
+
     # ===================== Cleanup Tests =====================
-    
-    
+
+
     def test_cleanup_evaluations(self):
         """Clean up created evaluations."""
         with self.perf.measure("cleanup_evaluations"):
             cleaned = 0
-            
+
             # Clean up OpenAI-compatible evaluations
             if TestEvaluationWorkflow.eval_id is not None:
                 try:
@@ -552,7 +552,7 @@ class TestEvaluationWorkflow:
                         cleaned += 1
                 except Exception as e:
                     print(f"Failed to delete evaluation {TestEvaluationWorkflow.eval_id}: {e}")
-            
+
             # Clean up any tracked evaluations
             if hasattr(self.tracker, 'resources'):
                 for eval_id in self.tracker.resources.get("evaluation", []):
@@ -562,18 +562,18 @@ class TestEvaluationWorkflow:
                             cleaned += 1
                     except:
                         pass
-            
+
             print(f"✓ Cleaned up {cleaned} evaluations")
 
 
 class TestEvaluationEdgeCases:
     """Test edge cases and error handling for evaluation endpoints."""
-    
+
     @pytest.fixture(autouse=True)
     def setup(self, authenticated_client):
         """Setup for each test."""
         self.client = authenticated_client
-        
+
         # Simple performance tracking
         class PerfTracker:
             def measure(self, name):
@@ -586,10 +586,10 @@ class TestEvaluationEdgeCases:
                     duration = time.time() - start
                     print(f"⏱️ {name}: {duration:.2f}s")
                 return _measure()
-        
+
         self.perf = PerfTracker()
-    
-    
+
+
     def test_invalid_evaluation_type(self):
         """Test creating evaluation with invalid type."""
         with self.perf.measure("invalid_evaluation_type"):
@@ -601,17 +601,17 @@ class TestEvaluationEdgeCases:
                 },
                 "dataset": [{"input": "test"}]
             }
-            
+
             response = self.client.client.post("/api/v1/evaluations", json=eval_data)
             # Should get 401 in single-user mode if auth fails, or 422/400 for validation
             assert response.status_code in [401, 422, 400]
-            
+
             if response.status_code == 401:
                 print("✓ Authentication required for evaluation endpoint")
             else:
                 print("✓ Invalid evaluation type rejected correctly")
-    
-    
+
+
     def test_missing_dataset(self):
         """Test creating evaluation without dataset."""
         with self.perf.measure("missing_dataset"):
@@ -623,17 +623,17 @@ class TestEvaluationEdgeCases:
                 }
                 # Missing both dataset and dataset_id
             }
-            
+
             response = self.client.client.post("/api/v1/evaluations", json=eval_data)
             # Should get 401 in single-user mode if auth fails, or 422/400 for validation
             assert response.status_code in [401, 422, 400]
-            
+
             if response.status_code == 401:
                 print("✓ Authentication required for evaluation endpoint")
             else:
                 print("✓ Missing dataset rejected correctly")
-    
-    
+
+
     def test_evaluation_timeout_handling(self):
         """Test evaluation timeout handling."""
         with self.perf.measure("evaluation_timeout"):
@@ -644,11 +644,11 @@ class TestEvaluationEdgeCases:
                 "model": "gpt-3.5-turbo"
                 # Note: removed 'timeout' field as it's not a valid field for this endpoint
             }
-            
+
             response = self.client.client.post("/api/v1/evaluations/geval", json=eval_data)
             # Should either succeed, timeout, be rate limited, or be rejected due to size/validation
             assert response.status_code in [200, 408, 422, 429, 503, 504]
-            
+
             if response.status_code == 422:
                 print("✓ Large request rejected by validation")
             elif response.status_code == 429:
@@ -659,14 +659,14 @@ class TestEvaluationEdgeCases:
                 print("✓ Service unavailable (likely no API key configured)")
             else:
                 print("✓ Request processed successfully")
-    
-    
+
+
     async def test_concurrent_evaluations(self):
         """Test running multiple evaluations concurrently."""
         with self.perf.measure("concurrent_evaluations"):
             import asyncio
             import httpx
-            
+
             async def make_request(client_session, eval_data):
                 """Make an async request."""
                 try:
@@ -677,7 +677,7 @@ class TestEvaluationEdgeCases:
                     return response
                 except Exception as e:
                     return e
-            
+
             # Create async httpx client with same auth headers
             async with httpx.AsyncClient(
                 base_url=self.client.base_url,
@@ -685,7 +685,7 @@ class TestEvaluationEdgeCases:
                 timeout=30
             ) as async_client:
                 tasks = []
-                
+
                 for i in range(3):
                     eval_data = {
                         "prompt": f"Test prompt {i}",
@@ -694,27 +694,27 @@ class TestEvaluationEdgeCases:
                             "quality": "Is this a good response?"
                         }
                     }
-                    
+
                     task = make_request(async_client, eval_data)
                     tasks.append(task)
-                
+
                 # Run concurrently
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                
+
                 success_count = sum(
                     1 for r in results
                     if not isinstance(r, Exception) and hasattr(r, 'status_code') and r.status_code == 200
                 )
-                
+
                 print(f"✓ Completed {success_count}/3 concurrent evaluations")
-    
-    
+
+
     async def test_rate_limiting(self):
         """Test rate limiting on evaluation endpoints."""
         with self.perf.measure("rate_limiting_test"):
             import asyncio
             import httpx
-            
+
             async def make_request(client_session, eval_data):
                 """Make an async request."""
                 try:
@@ -725,7 +725,7 @@ class TestEvaluationEdgeCases:
                     return response
                 except Exception as e:
                     return e
-            
+
             # Create async httpx client with same auth headers
             async with httpx.AsyncClient(
                 base_url=self.client.base_url,
@@ -733,7 +733,7 @@ class TestEvaluationEdgeCases:
                 timeout=30
             ) as async_client:
                 rapid_requests = []
-                
+
                 for i in range(15):  # Exceed typical rate limit
                     eval_data = {
                         "document": f"Doc {i}",
@@ -741,19 +741,19 @@ class TestEvaluationEdgeCases:
                         "metrics": ["coherence"],
                         "model": "gpt-3.5-turbo"
                     }
-                    
+
                     rapid_requests.append(
                         make_request(async_client, eval_data)
                     )
-                
+
                 results = await asyncio.gather(*rapid_requests, return_exceptions=True)
-                
+
                 # Check if any were rate limited
                 rate_limited = sum(
                     1 for r in results
                     if not isinstance(r, Exception) and hasattr(r, 'status_code') and r.status_code == 429
                 )
-                
+
                 if rate_limited > 0:
                     print(f"✓ Rate limiting working: {rate_limited} requests limited")
                 else:

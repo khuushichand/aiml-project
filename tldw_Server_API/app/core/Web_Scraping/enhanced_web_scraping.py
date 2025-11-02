@@ -103,7 +103,7 @@ class ScrapingJob:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert job to dictionary"""
         return {
@@ -124,8 +124,8 @@ class ScrapingJob:
 
 class RateLimiter:
     """Rate limiting for scraping requests"""
-    
-    def __init__(self, max_requests_per_second: float = 2.0, 
+
+    def __init__(self, max_requests_per_second: float = 2.0,
                  max_requests_per_minute: int = 60,
                  max_requests_per_hour: int = 1000):
         self.max_rps = max_requests_per_second
@@ -133,24 +133,24 @@ class RateLimiter:
         self.max_rph = max_requests_per_hour
         self._request_times: deque = deque(maxlen=max_requests_per_hour)
         self._lock = asyncio.Lock()
-    
+
     async def acquire(self):
         """Acquire permission to make a request"""
         async with self._lock:
             now = time.time()
-            
+
             # Clean old request times
             cutoff_hour = now - 3600
             while self._request_times and self._request_times[0] < cutoff_hour:
                 self._request_times.popleft()
-            
+
             # Check hourly limit
             if len(self._request_times) >= self.max_rph:
                 wait_time = 3600 - (now - self._request_times[0])
                 if wait_time > 0:
                     logger.info(f"Rate limit: waiting {wait_time:.1f}s for hourly limit")
                     await asyncio.sleep(wait_time)
-            
+
             # Check minute limit
             minute_ago = now - 60
             recent_minute = sum(1 for t in self._request_times if t > minute_ago)
@@ -159,19 +159,19 @@ class RateLimiter:
                 if wait_time > 0:
                     logger.info(f"Rate limit: waiting {wait_time:.1f}s for minute limit")
                     await asyncio.sleep(wait_time)
-            
+
             # Check second limit
             if self._request_times and (now - self._request_times[-1]) < (1.0 / self.max_rps):
                 wait_time = (1.0 / self.max_rps) - (now - self._request_times[-1])
                 await asyncio.sleep(wait_time)
-            
+
             # Record request time
             self._request_times.append(now)
 
 
 class CookieManager:
     """Manages cookies and sessions for scraping"""
-    
+
     def __init__(self, storage_path: Optional[Path] = None, *, connector_limit: int = 10, per_host_limit: int = 2):
         if storage_path is None:
             base = Path(get_database_dir()) / "webscraper"
@@ -183,7 +183,7 @@ class CookieManager:
         self._connector_limit = int(connector_limit)
         self._per_host_limit = int(per_host_limit)
         self._load_cookies()
-    
+
     def _load_cookies(self):
         """Load cookies from storage"""
         if self.storage_path.exists():
@@ -193,7 +193,7 @@ class CookieManager:
                 logger.info(f"Loaded cookies for {len(self._cookies)} domains")
             except Exception as e:
                 logger.error(f"Failed to load cookies: {e}")
-    
+
     def _save_cookies(self):
         """Save cookies to storage"""
         try:
@@ -201,12 +201,12 @@ class CookieManager:
                 json.dump(self._cookies, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save cookies: {e}")
-    
+
     def add_cookies(self, domain: str, cookies: List[Dict[str, Any]]):
         """Add cookies for a domain"""
         self._cookies[domain] = cookies
         self._save_cookies()
-    
+
     def get_cookies(self, url: str) -> Optional[List[Dict[str, Any]]]:
         """Get cookies for a URL"""
         domain = urlparse(url).netloc
@@ -271,7 +271,7 @@ class CookieManager:
                         self._sessions[session_key].cookie_jar.update_cookies(cookie)
 
         return self._sessions[session_key]
-    
+
     async def close_all(self):
         """Close all sessions"""
         for session in self._sessions.values():
@@ -281,7 +281,7 @@ class CookieManager:
 
 class ContentDeduplicator:
     """Handles content deduplication"""
-    
+
     def __init__(self, storage_path: Optional[Path] = None):
         if storage_path is None:
             base = Path(get_database_dir()) / "webscraper"
@@ -290,7 +290,7 @@ class ContentDeduplicator:
         self.storage_path = storage_path
         self._hashes: Dict[str, Dict[str, Any]] = {}
         self._load_hashes()
-    
+
     def _load_hashes(self):
         """Load content hashes from storage"""
         if self.storage_path.exists():
@@ -300,7 +300,7 @@ class ContentDeduplicator:
                 logger.info(f"Loaded {len(self._hashes)} content hashes")
             except Exception as e:
                 logger.error(f"Failed to load hashes: {e}")
-    
+
     def _save_hashes(self):
         """Save content hashes to storage"""
         try:
@@ -308,26 +308,26 @@ class ContentDeduplicator:
                 pickle.dump(self._hashes, f)
         except Exception as e:
             logger.error(f"Failed to save hashes: {e}")
-    
+
     def compute_hash(self, content: str) -> str:
         """Compute hash for content"""
         # Normalize content before hashing
         normalized = ' '.join(content.lower().split())
         return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
-    
+
     def is_duplicate(self, url: str, content: str) -> bool:
         """Check if content is duplicate"""
         content_hash = self.compute_hash(content)
-        
+
         # Check if exact hash exists
         if content_hash in self._hashes:
             existing = self._hashes[content_hash]
             if existing['url'] != url:
                 logger.info(f"Duplicate content found: {url} duplicates {existing['url']}")
                 return True
-        
+
         return False
-    
+
     def add_content(self, url: str, content: str, title: str = ""):
         """Add content hash to deduplication store"""
         content_hash = self.compute_hash(content)
@@ -338,7 +338,7 @@ class ContentDeduplicator:
             "last_seen": datetime.now().isoformat()
         }
         self._save_hashes()
-    
+
     def update_seen(self, content_hash: str):
         """Update last seen time for content"""
         if content_hash in self._hashes:
@@ -355,7 +355,7 @@ class ContentDeduplicator:
 
 class ScrapingJobQueue:
     """Priority job queue for scraping tasks"""
-    
+
     def __init__(self, max_concurrent: int = 5, parent_scraper=None):
         self.max_concurrent = max_concurrent
         self.parent_scraper = parent_scraper  # Store reference to parent scraper
@@ -368,18 +368,18 @@ class ScrapingJobQueue:
         self._workers: List[asyncio.Task] = []
         self._shutdown = False
         self._lock = asyncio.Lock()
-    
+
     async def start(self):
         """Start worker tasks"""
         for i in range(self.max_concurrent):
             worker = asyncio.create_task(self._worker(f"worker-{i}"))
             self._workers.append(worker)
         logger.info(f"Started {self.max_concurrent} scraping workers")
-    
+
     async def stop(self):
         """Stop all workers"""
         self._shutdown = True
-        
+
         # Cancel all pending jobs
         for queue in self._queues.values():
             while not queue.empty():
@@ -392,28 +392,28 @@ class ScrapingJobQueue:
                         )
                 except Exception as e:
                     logger.debug(f"Failed to cancel pending scraping job during shutdown: error={e}")
-        
+
         # Wait for workers to finish
         await asyncio.gather(*self._workers, return_exceptions=True)
         logger.info("All scraping workers stopped")
-    
+
     async def add_job(self, job: ScrapingJob) -> asyncio.Future:
         """Add job to queue and return future for result"""
         async with self._lock:
             # Create future for job result
             future = asyncio.Future()
             self._job_futures[job.job_id] = future
-            
+
             # Add to appropriate priority queue
             await self._queues[job.priority].put(job)
             logger.info(f"Added job {job.job_id} with priority {job.priority.name}")
-            
+
             return future
-    
+
     async def _worker(self, worker_id: str):
         """Worker task to process jobs"""
         logger.info(f"{worker_id} started")
-        
+
         while not self._shutdown:
             job = None
             try:
@@ -421,33 +421,33 @@ class ScrapingJobQueue:
                 for priority in sorted(JobPriority, key=lambda p: p.value, reverse=True):
                     if not self._queues[priority].empty():
                         job = await asyncio.wait_for(
-                            self._queues[priority].get(), 
+                            self._queues[priority].get(),
                             timeout=0.1
                         )
                         break
-                
+
                 if not job:
                     await asyncio.sleep(0.1)
                     continue
-                
+
                 # Process job
                 async with self._lock:
                     job.status = JobStatus.IN_PROGRESS
                     job.started_at = datetime.now()
                     self._active_jobs[job.job_id] = job
-                
+
                 logger.info(f"{worker_id} processing job {job.job_id}")
-                
+
                 # Execute job (implement actual scraping logic)
                 result = await self._execute_job(job)
-                
+
                 # Update job status
                 async with self._lock:
                     job.completed_at = datetime.now()
                     if result.get("error"):
                         job.status = JobStatus.FAILED
                         job.error = result["error"]
-                        
+
                         # Retry if possible
                         if job.retries < job.max_retries:
                             job.retries += 1
@@ -458,11 +458,11 @@ class ScrapingJobQueue:
                     else:
                         job.status = JobStatus.COMPLETED
                         job.result = result
-                    
+
                     # Move to completed
                     del self._active_jobs[job.job_id]
                     self._completed_jobs[job.job_id] = job
-                    
+
                     # Resolve future
                     if job.job_id in self._job_futures:
                         if job.status == JobStatus.COMPLETED:
@@ -472,23 +472,23 @@ class ScrapingJobQueue:
                                 Exception(job.error or "Job failed")
                             )
                         del self._job_futures[job.job_id]
-                
+
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
                 logger.error(f"{worker_id} error: {e}")
                 if job and job.job_id in self._job_futures:
                     self._job_futures[job.job_id].set_exception(e)
-        
+
         logger.info(f"{worker_id} stopped")
-    
+
     async def _execute_job(self, job: ScrapingJob) -> Dict[str, Any]:
         """Execute a scraping job"""
         # Get the scraper instance from parent
         if self.parent_scraper:
             # Use the parent scraper's actual scraping method
             return await self.parent_scraper.scrape_article(
-                job.url, 
+                job.url,
                 job.method,
                 custom_cookies=job.metadata.get('custom_cookies'),
                 user_agent=job.metadata.get('user_agent'),
@@ -499,14 +499,14 @@ class ScrapingJobQueue:
             logger.warning(f"No parent scraper available for job {job.job_id}, using fallback scraping")
             from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
             return await scrape_article(job.url, custom_cookies=job.metadata.get('custom_cookies'))
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get queue status"""
         return {
             "active_jobs": len(self._active_jobs),
             "completed_jobs": len(self._completed_jobs),
             "pending_by_priority": {
-                priority.name: self._queues[priority].qsize() 
+                priority.name: self._queues[priority].qsize()
                 for priority in JobPriority
             }
         }
@@ -514,7 +514,7 @@ class ScrapingJobQueue:
 
 class EnhancedWebScraper:
     """Main enhanced web scraping class"""
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         raw_cfg = config or load_and_log_configs().get('web_scraper', {})
         # Normalize config values
@@ -529,7 +529,7 @@ class EnhancedWebScraper:
             except Exception:
                 return int(d)
         self.config = raw_cfg
-        
+
         # Initialize components
         self.rate_limiter = RateLimiter(
             max_requests_per_second=_as_float(self.config.get('max_rps', 2.0), 2.0),
@@ -544,18 +544,18 @@ class EnhancedWebScraper:
             max_concurrent=_as_int(self.config.get('max_concurrent', 5), 5),
             parent_scraper=self  # Pass self reference to job queue
         )
-        
+
         # Playwright browser
         self._browser: Optional[Browser] = None
         self._playwright = None
-        
+
         # Progress tracking
         self._progress: Dict[str, Any] = defaultdict(dict)
-        
+
     async def start(self):
         """Start the scraper"""
         await self.job_queue.start()
-        
+
         try:
             # Initialize Playwright
             self._playwright = await async_playwright().start()
@@ -574,25 +574,25 @@ class EnhancedWebScraper:
             logger.warning("Web scraping will proceed without JavaScript rendering support")
             self._playwright = None
             self._browser = None
-        
+
         # Ensure dedup flush on process exit
         atexit.register(lambda: self.deduplicator.flush())
         logger.info("Enhanced web scraper started")
-    
+
     async def stop(self):
         """Stop the scraper"""
         await self.job_queue.stop()
         await self.cookie_manager.close_all()
-        
+
         if self._browser:
             await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
         # Final flush
         self.deduplicator.flush()
-        
+
         logger.info("Enhanced web scraper stopped")
-    
+
     async def scrape_article(
         self,
         url: str,
@@ -620,7 +620,7 @@ class EnhancedWebScraper:
             }
         # Apply rate limiting
         await self.rate_limiter.acquire()
-        
+
         try:
             if method == "trafilatura":
                 return await self._scrape_with_trafilatura(
@@ -645,7 +645,7 @@ class EnhancedWebScraper:
                 )
             else:
                 raise ValueError(f"Unknown scraping method: {method}")
-        
+
         except Exception as e:
             logger.error(f"Failed to scrape {url}: {e}")
             return {
@@ -653,7 +653,7 @@ class EnhancedWebScraper:
                 "error": str(e),
                 "extraction_successful": False
             }
-    
+
     async def _scrape_with_trafilatura(
         self,
         url: str,
@@ -667,14 +667,14 @@ class EnhancedWebScraper:
             user_agent=user_agent,
             custom_headers=custom_headers,
         )
-        
+
         if custom_cookies:
             for cookie in custom_cookies:
                 session.cookie_jar.update_cookies(cookie)
-        
+
         async with session.get(url) as response:
             html = await response.text()
-            
+
             # Extract with trafilatura
             content = trafilatura.extract(
                 html,
@@ -683,10 +683,10 @@ class EnhancedWebScraper:
                 include_images=False,
                 output_format='json'
             )
-            
+
             if content:
                 content_dict = json.loads(content)
-                
+
                 # Check for duplicates
                 if self.deduplicator.is_duplicate(url, content_dict.get('text', '')):
                     return {
@@ -695,14 +695,14 @@ class EnhancedWebScraper:
                         "extraction_successful": False,
                         "is_duplicate": True
                     }
-                
+
                 # Add to deduplicator
                 self.deduplicator.add_content(
-                    url, 
+                    url,
                     content_dict.get('text', ''),
                     content_dict.get('title', '')
                 )
-                
+
                 return {
                     "url": url,
                     "title": content_dict.get('title', 'Untitled'),
@@ -712,13 +712,13 @@ class EnhancedWebScraper:
                     "extraction_successful": True,
                     "method": "trafilatura"
                 }
-            
+
             return {
                 "url": url,
                 "error": "No content extracted",
                 "extraction_successful": False
             }
-    
+
     async def _scrape_with_playwright(
         self,
         url: str,
@@ -742,22 +742,22 @@ class EnhancedWebScraper:
 
         if headers_copy:
             await context.set_extra_http_headers(headers_copy)
-        
+
         if custom_cookies:
             await context.add_cookies(custom_cookies)
-        
+
         page = await context.new_page()
-        
+
         try:
             # Navigate with timeout
             await page.goto(url, wait_until="networkidle", timeout=30000)
-            
+
             # Wait for content to load
             await page.wait_for_load_state("domcontentloaded")
-            
+
             # Extract content
             title = await page.title()
-            
+
             # Try to find main content
             content = ""
             for selector in ['main', 'article', '[role="main"]', '#content', '.content']:
@@ -767,22 +767,22 @@ class EnhancedWebScraper:
                         text = await element.inner_text()
                         if len(text) > len(content):
                             content = text
-            
+
             # Fallback to body if no content found
             if not content:
                 content = await page.inner_text('body')
-            
+
             # Extract metadata
             author = await page.evaluate('''() => {
                 const meta = document.querySelector('meta[name="author"]');
                 return meta ? meta.content : "Unknown";
             }''')
-            
+
             date = await page.evaluate('''() => {
                 const meta = document.querySelector('meta[property="article:published_time"]');
                 return meta ? meta.content : "";
             }''')
-            
+
             # Check for duplicates
             if self.deduplicator.is_duplicate(url, content):
                 return {
@@ -791,10 +791,10 @@ class EnhancedWebScraper:
                     "extraction_successful": False,
                     "is_duplicate": True
                 }
-            
+
             # Add to deduplicator
             self.deduplicator.add_content(url, content, title)
-            
+
             return {
                 "url": url,
                 "title": title,
@@ -804,11 +804,11 @@ class EnhancedWebScraper:
                 "extraction_successful": True,
                 "method": "playwright"
             }
-        
+
         finally:
             await page.close()
             await context.close()
-    
+
     async def _scrape_with_beautifulsoup(
         self,
         url: str,
@@ -822,24 +822,24 @@ class EnhancedWebScraper:
             user_agent=user_agent,
             custom_headers=custom_headers,
         )
-        
+
         if custom_cookies:
             for cookie in custom_cookies:
                 session.cookie_jar.update_cookies(cookie)
-        
+
         async with session.get(url) as response:
             html = await response.text()
             soup = BeautifulSoup(html, 'html.parser')
-            
+
             # Extract title
             title_tag = soup.find('title')
             title = title_tag.string.strip() if title_tag else "Untitled"
-            
+
             # Extract content
             # Remove script and style elements
             for script in soup(["script", "style"]):
                 script.decompose()
-            
+
             # Try to find main content
             content = ""
             for tag in ['main', 'article', 'div']:
@@ -849,18 +849,18 @@ class EnhancedWebScraper:
                 if elements:
                     content = '\n\n'.join(elem.get_text(strip=True) for elem in elements)
                     break
-            
+
             # Fallback to body
             if not content:
                 content = soup.get_text(strip=True)
-            
+
             # Extract metadata
             author_meta = soup.find('meta', {'name': 'author'})
             author = author_meta.get('content', 'Unknown') if author_meta else 'Unknown'
-            
+
             date_meta = soup.find('meta', {'property': 'article:published_time'})
             date = date_meta.get('content', '') if date_meta else ''
-            
+
             # Check for duplicates
             if self.deduplicator.is_duplicate(url, content):
                 return {
@@ -869,10 +869,10 @@ class EnhancedWebScraper:
                     "extraction_successful": False,
                     "is_duplicate": True
                 }
-            
+
             # Add to deduplicator
             self.deduplicator.add_content(url, content, title)
-            
+
             return {
                 "url": url,
                 "title": title,
@@ -882,7 +882,7 @@ class EnhancedWebScraper:
                 "extraction_successful": True,
                 "method": "beautifulsoup"
             }
-    
+
     async def scrape_multiple(self, urls: List[str], method: str = "trafilatura",
                             priority: JobPriority = JobPriority.NORMAL,
                             summarize: bool = False,
@@ -890,7 +890,7 @@ class EnhancedWebScraper:
         """Scrape multiple URLs concurrently"""
         jobs = []
         futures = []
-        
+
         # Create jobs
         for url in urls:
             job = ScrapingJob(
@@ -903,10 +903,10 @@ class EnhancedWebScraper:
             future = await self.job_queue.add_job(job)
             jobs.append(job)
             futures.append(future)
-        
+
         # Wait for all jobs to complete
         results = await asyncio.gather(*futures, return_exceptions=True)
-        
+
         # Process results
         final_results = []
         for i, result in enumerate(results):
@@ -924,11 +924,11 @@ class EnhancedWebScraper:
                         **kwargs
                     )
                     result['summary'] = summary
-                
+
                 final_results.append(result)
-        
+
         return final_results
-    
+
     async def _summarize_content(self, content: str, **kwargs) -> str:
         """Summarize content using LLM"""
         try:
@@ -944,7 +944,7 @@ class EnhancedWebScraper:
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             return "Summary generation failed"
-    
+
     async def scrape_sitemap(
         self,
         sitemap_url: str,
@@ -977,11 +977,11 @@ class EnhancedWebScraper:
 
         async with session.get(sitemap_url) as response:
             content = await response.text()
-            
+
         # Parse sitemap
         soup = BeautifulSoup(content, 'xml')
         urls = []
-        
+
         for loc in soup.find_all('loc'):
             url = loc.text.strip()
             if filter_func and not filter_func(url):
@@ -989,9 +989,9 @@ class EnhancedWebScraper:
             urls.append(url)
             if max_urls and len(urls) >= max_urls:
                 break
-        
+
         logger.info(f"Found {len(urls)} URLs in sitemap")
-        
+
         # Scrape all URLs
         return await self.scrape_multiple(
             urls,
@@ -999,7 +999,7 @@ class EnhancedWebScraper:
             user_agent=user_agent,
             custom_headers=custom_headers,
         )
-    
+
     async def recursive_scrape(
         self,
         base_url: str,
@@ -1466,7 +1466,7 @@ class EnhancedWebScraper:
                                     pass
 
         return results
-    
+
     async def _extract_links(self, base_url: str, content: str) -> List[str]:
         """Extract links. If provided content looks like plain text, fetch HTML first."""
         html_text = content or ""
@@ -1491,17 +1491,17 @@ class EnhancedWebScraper:
         except Exception as e:
             logger.warning(f"Error parsing links from content: {e}")
             return []
-    
+
     def get_progress(self, task_name: str) -> Dict[str, Any]:
         """Get progress for a specific task"""
         return self._progress.get(task_name, {})
-    
+
     async def save_progress(self, task_name: str, filepath: Path):
         """Save progress to file for resumability"""
         progress_data = self._progress.get(task_name, {})
         async with aiofiles.open(filepath, 'w') as f:
             await f.write(json.dumps(progress_data, indent=2))
-    
+
     async def load_progress(self, task_name: str, filepath: Path):
         """Load progress from file"""
         if filepath.exists():
@@ -1523,7 +1523,7 @@ if __name__ == "__main__":
     async def test_enhanced_scraper():
         """Test the enhanced scraper"""
         scraper = await create_enhanced_scraper()
-        
+
         try:
             # Test single article scraping
             print("Testing single article scraping...")
@@ -1532,7 +1532,7 @@ if __name__ == "__main__":
                 method="trafilatura"
             )
             print(f"Result: {result['title'] if result.get('extraction_successful') else result['error']}")
-            
+
             # Test multiple URL scraping
             print("\nTesting multiple URL scraping...")
             urls = [
@@ -1546,7 +1546,7 @@ if __name__ == "__main__":
                 summarize=True
             )
             print(f"Scraped {len(results)} articles")
-            
+
             # Test recursive scraping
             print("\nTesting recursive scraping...")
             results = await scraper.recursive_scrape(
@@ -1555,12 +1555,12 @@ if __name__ == "__main__":
                 max_depth=2
             )
             print(f"Recursively scraped {len(results)} pages")
-            
+
             # Get queue status
             status = scraper.job_queue.get_status()
             print(f"\nQueue status: {status}")
-            
+
         finally:
             await scraper.stop()
-    
+
     asyncio.run(test_enhanced_scraper())

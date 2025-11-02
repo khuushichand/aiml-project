@@ -28,4 +28,3 @@ def client_with_auth():
 def require_external_api():
     if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
         pytest.skip("External API tests disabled. Set RUN_EXTERNAL_API_TESTS=1 to enable.")
-

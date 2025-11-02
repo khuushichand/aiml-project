@@ -8,7 +8,7 @@
 # Function List
 #
 # 1. BaseStreamingTranscriber - Abstract base class for streaming transcription
-# 2. ParakeetStreamingTranscriber - Parakeet-specific implementation  
+# 2. ParakeetStreamingTranscriber - Parakeet-specific implementation
 # 3. CanaryStreamingTranscriber - Canary-specific implementation
 # 4. UnifiedStreamingTranscriber - Factory and unified interface
 # 5. handle_unified_websocket - Unified WebSocket handler
@@ -41,6 +41,14 @@ from .Audio_Transcription_Nemo import (
     load_parakeet_model,
     transcribe_with_parakeet
 )
+from .model_utils import normalize_model_and_variant
+
+# Expose config loader for tests to monkeypatch at module scope
+try:  # pragma: no cover - import may fail in minimal test environments
+    from tldw_Server_API.app.core.config import load_comprehensive_config as load_comprehensive_config  # type: ignore
+except Exception:  # pragma: no cover
+    def load_comprehensive_config():  # type: ignore
+        return None
 
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
@@ -59,6 +67,118 @@ except Exception:  # pragma: no cover - optional dependency probing
         """Fallback diarization error when service is unavailable."""
         pass
 
+# Optional: Parakeet Core adapter
+try:  # pragma: no cover - optional integration path
+    from .Parakeet_Core_Streaming.transcriber import ParakeetCoreTranscriber as _CoreTranscriber
+    from .Parakeet_Core_Streaming.config import StreamingConfig as _CoreConfig
+
+    class _ParakeetCoreAdapter:
+        """Adapter exposing the same interface expected by handle_unified_websocket.
+
+        Delegates to the self-contained Parakeet core streaming transcriber so this
+        unified path can benefit from the improved buffering/metadata and variant handling.
+        """
+
+        def __init__(self, config: 'UnifiedStreamingConfig') -> None:
+            """
+            Initialize the adapter with the provided unified streaming configuration.
+
+            Stores the given UnifiedStreamingConfig and prepares an internal placeholder for the underlying core transcriber (left as None until initialization).
+
+            Parameters:
+                config (UnifiedStreamingConfig): Configuration that drives model selection, runtime options, and behavior for the underlying transcriber.
+            """
+            self._uconf = config
+            self._core = None  # type: ignore
+
+        def initialize(self) -> None:
+            # Map Unified config to core config
+            """
+            Initialize the core Parakeet transcriber adapter by mapping the unified streaming configuration to the core transcriber config and creating the core transcriber instance.
+
+            Creates a _CoreConfig from the adapter's unified config, instantiates _CoreTranscriber with that config, and validates that the chosen model variant is available. Raises a RuntimeError with message "parakeet_variant_unavailable: <variant>" when the core transcriber does not expose the expected decode function, to trigger higher-level fallback logic.
+            """
+            c = _CoreConfig(
+                model=self._uconf.model,
+                model_variant=self._uconf.model_variant,
+                sample_rate=self._uconf.sample_rate,
+                chunk_duration=self._uconf.chunk_duration,
+                overlap_duration=self._uconf.overlap_duration,
+                max_buffer_duration=self._uconf.max_buffer_duration,
+                enable_partial=self._uconf.enable_partial,
+                partial_interval=self._uconf.partial_interval,
+                min_partial_duration=self._uconf.min_partial_duration,
+                language=self._uconf.language,
+            )
+            self._core = _CoreTranscriber(config=c)
+            # Ensure chosen variant is available; if not, raise to trigger fallback logic
+            try:
+                # Prefer explicit check against the core helper so tests can monkeypatch it
+                from .Parakeet_Core_Streaming import transcriber as _core_tx  # type: ignore
+                _fn = getattr(_core_tx, "_variant_decode_fn", None)
+                if callable(_fn):
+                    available = _fn(c.model, c.model_variant)
+                    if available is None:
+                        raise RuntimeError(f"parakeet_variant_unavailable: {c.model_variant}")
+                # Fallback: inspect instantiated core transcriber
+                if getattr(self._core, "decode_fn", None) is None:
+                    raise RuntimeError(f"parakeet_variant_unavailable: {c.model_variant}")
+            except RuntimeError:
+                # Re-raise variant unavailability to be caught by higher-level handler
+                raise
+            except Exception:
+                # If validation fails unexpectedly, defer to runtime; do not block initialization
+                # The streaming path will still handle decode failures gracefully.
+                pass
+            try:
+                decode_fn = getattr(self._core, 'decode_fn', None)
+            except Exception:
+                decode_fn = None
+            if decode_fn is None:
+                raise RuntimeError(f"parakeet_variant_unavailable: {self._uconf.model_variant}")
+        async def process_audio_chunk(self, audio_data: bytes):  # -> Optional[Dict[str, Any]]
+            """
+            Forward an incoming audio chunk to the underlying core transcriber and return any resulting transcription data.
+
+            Parameters:
+                audio_data (bytes): Raw audio bytes received from the client.
+
+            Returns:
+                dict: A transcription result object (partial or final) when available, or `None` if no transcription is produced.
+            """
+            return await self._core.process_audio_chunk(audio_data)  # type: ignore
+
+        def get_full_transcript(self) -> str:
+            """
+            Retrieve the concatenated transcript produced by the underlying transcriber.
+
+            Returns:
+                full_transcript (str): The combined transcript text of all finalized segments in chronological order.
+            """
+            return self._core.get_full_transcript()  # type: ignore
+
+        def reset(self) -> None:
+            """
+            Reset the adapter and its underlying core transcriber state.
+
+            This clears any internal buffers and runtime state held by the adapter by delegating reset to the wrapped core transcriber.
+            """
+            self._core.reset()  # type: ignore
+
+        def cleanup(self) -> None:
+            """
+            Reset the underlying core adapter/transcriber and ignore any errors raised.
+
+            This calls the core object's `reset` method if present; exceptions from that call are suppressed to ensure cleanup does not raise.
+            """
+            try:
+                self._core.reset()  # type: ignore
+            except Exception:
+                pass
+
+except Exception:  # pragma: no cover - keep unified path working when core module absent
+    _ParakeetCoreAdapter = None  # type: ignore
+
 
 @dataclass
 class UnifiedStreamingConfig(StreamingConfig):
@@ -69,6 +189,7 @@ class UnifiedStreamingConfig(StreamingConfig):
     auto_detect_language: bool = False  # Auto-detect language
     enable_vad: bool = False  # Voice Activity Detection
     vad_threshold: float = 0.5
+    min_partial_duration: float = 0.5
     # Whisper-specific options
     whisper_model_size: str = 'distil-large-v3'  # Whisper model size
     beam_size: int = 5  # Beam search size
@@ -92,6 +213,15 @@ class StreamingDiarizer:
         storage_dir: Optional[str] = None,
         num_speakers: Optional[int] = None,
     ) -> None:
+        """
+        Initialize the streaming diarizer used to collect audio and produce speaker-aligned segments.
+
+        Parameters:
+            sample_rate (int): Audio sample rate in Hz used for buffering and diarization. Defaults to 16000 when falsy.
+            store_audio (bool): If True, persist the combined audio to disk when finalizing diarization.
+            storage_dir (Optional[str]): Directory path where persisted audio will be written when store_audio is True.
+            num_speakers (Optional[int]): Optional hint for the expected number of speakers; passed to the underlying diarization service when available.
+        """
         self.sample_rate = int(sample_rate or 16000)
         self.store_audio = bool(store_audio)
         self.storage_dir = Path(storage_dir).expanduser() if storage_dir else None
@@ -102,6 +232,7 @@ class StreamingDiarizer:
         self._last_result: Dict[str, Any] = {}
         self._dirty = False
         self._persist_path: Optional[Path] = None
+        self._persist_method: Optional[str] = None  # 'soundfile' | 'scipy' | 'wave' | None
         self._lock = asyncio.Lock()
         self._service = None
         self.available = False
@@ -139,7 +270,11 @@ class StreamingDiarizer:
             return mapping, audio_path, speakers
 
     async def reset(self) -> None:
-        """Reset cached audio and transcripts."""
+        """
+        Clear all buffered audio, transcripts, and diarization state, and reset persistence metadata.
+
+        This empties the internal audio chunk and transcript segment buffers, clears any computed speaker mapping, resets the last result and dirty flag, and clears persistence path and method so the diarizer returns to an initial state.
+        """
         async with self._lock:
             self._audio_chunks.clear()
             self._transcript_segments.clear()
@@ -147,8 +282,12 @@ class StreamingDiarizer:
             self._last_result = {}
             self._dirty = False
             self._persist_path = None
+            self._persist_method = None
 
     async def close(self) -> None:
+        """
+        Close the diarizer, clear buffered audio and transcripts, and release any held resources.
+        """
         await self.reset()
 
     async def ensure_ready(self) -> bool:
@@ -252,18 +391,63 @@ class StreamingDiarizer:
         return np.concatenate(self._audio_chunks)
 
     def _write_temp_wav(self, audio_np: np.ndarray) -> Path:
+        """
+        Write a temporary WAV file from a mono audio NumPy array and return its filesystem path.
+
+        Parameters:
+            audio_np (np.ndarray): 1-D NumPy array of audio samples, expected in float32 range [-1.0, 1.0]; the method will convert to an appropriate PCM format if needed.
+
+        Returns:
+            Path: Filesystem path to the created temporary WAV file.
+        """
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         tmp_path = Path(tmp.name)
         tmp.close()
-        import soundfile as sf
-        sf.write(str(tmp_path), audio_np, self.sample_rate)
+        # Prefer soundfile; fall back to scipy.io.wavfile or wave if unavailable
+        try:
+            import soundfile as sf  # type: ignore
+            sf.write(str(tmp_path), audio_np, self.sample_rate)
+        except Exception as sf_err:
+            logger.warning(f"soundfile unavailable for temp WAV write: {sf_err}; falling back")
+            # Try scipy
+            try:
+                from scipy.io import wavfile  # type: ignore
+                # Convert float32 [-1,1] to int16 for scipy
+                pcm16 = np.clip(audio_np, -1.0, 1.0)
+                pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                wavfile.write(str(tmp_path), self.sample_rate, pcm16)
+            except Exception as scipy_err:
+                logger.warning(f"scipy.io.wavfile write failed: {scipy_err}; using wave module")
+                # Fallback to wave module (int16 PCM)
+                import wave
+                pcm16 = np.clip(audio_np, -1.0, 1.0)
+                pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                with wave.open(str(tmp_path), 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(self.sample_rate)
+                    wf.writeframes(pcm16.tobytes())
         return tmp_path
 
     async def _persist_audio(self) -> Optional[str]:
+        """
+        Run the synchronous audio persistence routine in a thread executor and return the persisted file path if any.
+
+        Returns:
+            persisted_path (Optional[str]): Path to the persisted audio file if persistence succeeded, `None` if no file was written.
+        """
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._persist_audio_sync)
 
     def _persist_audio_sync(self) -> Optional[str]:
+        """
+        Persist the currently buffered audio to a WAV file using the best available backend.
+
+        Attempts to write the concatenated buffered audio to disk (preferred backends tried in order: soundfile, scipy.io.wavfile, wave). On success sets self._persist_path to the file path and self._persist_method to the backend used and returns the file path as a string. If no audio is buffered or all backends fail, sets self._persist_method to None and returns `None`.
+
+        Returns:
+            str or None: Absolute path to the persisted WAV file on success, `None` if no audio was written.
+        """
         audio_np = self._combined_audio()
         if audio_np.size == 0:
             return None
@@ -275,9 +459,53 @@ class StreamingDiarizer:
         if not self._persist_path:
             filename = f"stream_{uuid4().hex}.wav"
             self._persist_path = out_dir / filename
-        import soundfile as sf
-        sf.write(str(self._persist_path), audio_np, self.sample_rate)
-        return str(self._persist_path)
+        # Prefer soundfile; fall back to scipy.io.wavfile or wave if unavailable
+        try:
+            try:
+                import soundfile as sf  # type: ignore
+                sf.write(str(self._persist_path), audio_np, self.sample_rate)
+                self._persist_method = "soundfile"
+                return str(self._persist_path)
+            except Exception as sf_err:
+                logger.warning(f"soundfile unavailable for persistence: {sf_err}; falling back")
+                try:
+                    from scipy.io import wavfile  # type: ignore
+                    pcm16 = np.clip(audio_np, -1.0, 1.0)
+                    pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                    wavfile.write(str(self._persist_path), self.sample_rate, pcm16)
+                    self._persist_method = "scipy"
+                    return str(self._persist_path)
+                except Exception as scipy_err:
+                    logger.warning(f"scipy.io.wavfile persistence failed: {scipy_err}; using wave module")
+                    try:
+                        import wave
+                        pcm16 = np.clip(audio_np, -1.0, 1.0)
+                        pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                        with wave.open(str(self._persist_path), 'wb') as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(self.sample_rate)
+                            wf.writeframes(pcm16.tobytes())
+                        self._persist_method = "wave"
+                        return str(self._persist_path)
+                    except Exception as wave_err:
+                        logger.warning(f"wave module persistence failed: {wave_err}")
+                        self._persist_method = None
+                        return None
+        except Exception as persist_err:
+            logger.error(f"Audio persistence failed: {persist_err}")
+            self._persist_method = None
+            return None
+
+    @property
+    def persistence_method(self) -> Optional[str]:
+        """
+        Name of the audio persistence backend selected for writing WAV files.
+
+        Returns:
+            persistence_backend (Optional[str]): The backend identifier (`'soundfile'`, `'scipy'`, or `'wave'`) if a persistence writer was selected, or `None` if no persistence backend is available.
+        """
+        return self._persist_method
 
 
 class QuotaExceeded(Exception):
@@ -290,10 +518,10 @@ class QuotaExceeded(Exception):
 class BaseStreamingTranscriber(ABC):
     """
     Abstract base class for streaming transcribers.
-    
+
     Defines the common interface for all streaming transcription implementations.
     """
-    
+
     def __init__(self, config: UnifiedStreamingConfig):
         """Initialize base transcriber."""
         self.config = config
@@ -307,21 +535,21 @@ class BaseStreamingTranscriber(ABC):
         self.last_partial_time = 0
         self.segment_index = 0
         self.total_processed_seconds = 0.0
-    
+
     @abstractmethod
     def initialize(self):
         """Load and initialize the model."""
         pass
-    
+
     @abstractmethod
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """Process a chunk of audio data."""
         pass
-    
+
     def get_full_transcript(self) -> str:
         """Get the complete transcript so far."""
         return " ".join(self.transcription_history)
-    
+
     def reset(self):
         """Reset the transcriber state."""
         self.buffer.clear()
@@ -329,7 +557,7 @@ class BaseStreamingTranscriber(ABC):
         self.last_partial_time = 0
         self.segment_index = 0
         self.total_processed_seconds = 0.0
-    
+
     def cleanup(self):
         """Clean up resources."""
         self.model = None
@@ -387,15 +615,15 @@ class BaseStreamingTranscriber(ABC):
 class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
     """
     Parakeet-specific streaming transcriber.
-    
+
     Supports all Parakeet variants: standard, ONNX, MLX.
     """
-    
+
     def initialize(self):
         """Load the Parakeet model based on configuration."""
         variant = self.config.model_variant
         logger.info(f"Loading Parakeet model (variant: {variant})")
-        
+
         if variant == 'mlx':
             # MLX model is loaded on-demand in transcribe function
             # First check if MLX dependencies are available
@@ -430,31 +658,31 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                                          f"Install Nemo with: pip install nemo_toolkit[asr] "
                                          f"OR install MLX with: pip install mlx mlx-lm")
                 raise
-    
+
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
         Process audio chunk with Parakeet.
-        
+
         Args:
             audio_data: Raw audio bytes
-            
+
         Returns:
             Transcription result or None
         """
         # Convert bytes to numpy array
         audio_np = np.frombuffer(audio_data, dtype=np.float32)
-        
+
         # Add to buffer
         self.buffer.add(audio_np)
-        
+
         current_time = time.time()
         buffer_duration = self.buffer.get_duration()
-        
+
         # Check if we should send a partial result
-        if (self.config.enable_partial and 
+        if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
             buffer_duration > 0.5):
-            
+
             # Get audio for partial transcription
             audio_for_partial = self.buffer.get_audio()
             if audio_for_partial is not None and len(audio_for_partial) > 0:
@@ -474,9 +702,9 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         self.config.sample_rate,
                         self.config.model_variant
                     )
-                
+
                 self.last_partial_time = current_time
-                
+
                 if text:
                     # Apply custom vocabulary post-replacements if enabled
                     try:
@@ -494,12 +722,12 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     }
                     result.update(metadata)
                     return result
-        
+
         # Check if we have enough audio for a final chunk
         if buffer_duration >= self.config.chunk_duration:
             # Get chunk for transcription
             audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
-            
+
             if audio_chunk is not None:
                 # Transcribe the chunk
                 if self.config.model_variant == 'mlx':
@@ -515,13 +743,13 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         self.config.sample_rate,
                         self.config.model_variant
                     )
-                
+
                 # Consume the buffer, keeping overlap
                 self.buffer.consume(
                     self.config.chunk_duration,
                     self.config.overlap_duration
                 )
-                
+
                 if text:
                     # Apply custom vocabulary post-replacements if enabled
                     try:
@@ -542,17 +770,17 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     result.update(metadata)
                     result["_audio_chunk"] = np.array(audio_chunk, copy=True)
                     return result
-        
+
         return None
 
 
 class CanaryStreamingTranscriber(BaseStreamingTranscriber):
     """
     Canary-specific streaming transcriber.
-    
+
     Supports multilingual transcription with language detection.
     """
-    
+
     def initialize(self):
         """Load the Canary model."""
         logger.info("Loading Canary multilingual model")
@@ -560,35 +788,35 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
         if self.model is None:
             raise RuntimeError("Failed to load Canary model")
         logger.info("Loaded Canary model")
-        
+
         # Set default language if not specified
         if not self.config.language:
             self.config.language = 'en'  # Default to English
-    
+
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
         Process audio chunk with Canary.
-        
+
         Args:
             audio_data: Raw audio bytes
-            
+
         Returns:
             Transcription result or None
         """
         # Convert bytes to numpy array
         audio_np = np.frombuffer(audio_data, dtype=np.float32)
-        
+
         # Add to buffer
         self.buffer.add(audio_np)
-        
+
         current_time = time.time()
         buffer_duration = self.buffer.get_duration()
-        
+
         # Check if we should send a partial result
-        if (self.config.enable_partial and 
+        if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
             buffer_duration > 0.5):
-            
+
             # Get audio for partial transcription
             audio_for_partial = self.buffer.get_audio()
             if audio_for_partial is not None and len(audio_for_partial) > 0:
@@ -598,9 +826,9 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     self.config.sample_rate,
                     self.config.language
                 )
-                
+
                 self.last_partial_time = current_time
-                
+
                 if text:
                     # Apply custom vocabulary post-replacements if enabled
                     try:
@@ -613,7 +841,7 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     if self.config.auto_detect_language:
                         # Simple heuristic - could be improved with actual language detection
                         detected_language = self._detect_language(text)
-                    
+
                     metadata = self._prepare_partial_metadata(buffer_duration)
                     result = {
                         "type": "partial",
@@ -625,12 +853,12 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     }
                     result.update(metadata)
                     return result
-        
+
         # Check if we have enough audio for a final chunk
         if buffer_duration >= self.config.chunk_duration:
             # Get chunk for transcription
             audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
-            
+
             if audio_chunk is not None:
                 # Transcribe the chunk
                 text = transcribe_with_canary(
@@ -638,13 +866,13 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     self.config.sample_rate,
                     self.config.language
                 )
-                
+
                 # Consume the buffer, keeping overlap
                 self.buffer.consume(
                     self.config.chunk_duration,
                     self.config.overlap_duration
                 )
-                
+
                 if text:
                     # Apply custom vocabulary post-replacements if enabled
                     try:
@@ -671,13 +899,13 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
                     result.update(metadata)
                     result["_audio_chunk"] = np.array(audio_chunk, copy=True)
                     return result
-        
+
         return None
-    
+
     def _detect_language(self, text: str) -> str:
         """
         Simple language detection heuristic.
-        
+
         In production, this should use a proper language detection library.
         """
         # This is a placeholder - in reality, you'd use langdetect or similar
@@ -688,16 +916,16 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
 class WhisperStreamingTranscriber(BaseStreamingTranscriber):
     """
     Whisper-specific streaming transcriber using faster-whisper.
-    
+
     Optimized for accuracy with configurable model sizes and features.
     """
-    
+
     def initialize(self):
         """Load the Whisper model based on configuration."""
         logger.info(f"WhisperStreamingTranscriber.initialize() called with config: "
                    f"whisper_model_size={self.config.whisper_model_size}, "
                    f"language={self.config.language}, task={self.config.task}")
-        
+
         try:
             # Prefer a module-level override (tests may monkeypatch this symbol on
             # Audio_Streaming_Unified) and fall back to the library import.
@@ -706,24 +934,24 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 logger.debug("Importing get_whisper_model from Audio_Transcription_Lib")
                 from .Audio_Transcription_Lib import get_whisper_model  # type: ignore[no-redef]
                 logger.debug("Successfully imported get_whisper_model")
-            
+
             # Determine device and compute type
             import torch
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            
+
             # Compute type is determined by the device, not a config parameter
             compute_type = 'float16' if device == 'cuda' else 'int8'
-            
+
             logger.info(f"Loading Whisper model: {self.config.whisper_model_size} on {device} with compute_type: {compute_type}")
-            
+
             # Load the model using existing function
             self.model = get_whisper_model(self.config.whisper_model_size, device)  # type: ignore[misc]
-            
+
             if self.model is None:
                 raise RuntimeError(f"Failed to load Whisper model: {self.config.whisper_model_size}")
-            
+
             logger.info(f"Successfully loaded Whisper model: {self.config.whisper_model_size}, model object: {type(self.model)}")
-            
+
             # Set transcription options
             self.transcribe_options = {
                 'beam_size': self.config.beam_size,
@@ -731,7 +959,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 'vad_filter': self.config.vad_filter,
                 'task': self.config.task
             }
-            
+
             if self.config.language and not self.config.auto_detect_language:
                 self.transcribe_options['language'] = self.config.language
             # Inject custom vocabulary initial prompt if configured
@@ -743,51 +971,51 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                     logger.info("Applied custom vocabulary initial_prompt for Whisper streaming")
             except Exception as _cv_err:
                 logger.debug(f"Whisper streaming initial_prompt skipped: {_cv_err}")
-            
+
             # Whisper works better with longer audio chunks
             self.min_chunk_duration = 1.0  # Minimum 1 second of audio
             self.optimal_chunk_duration = 5.0  # Optimal chunk size for Whisper
-            
+
         except ImportError as e:
             logger.error(f"Failed to import Whisper dependencies: {e}")
             raise RuntimeError("Whisper dependencies not available")
         except Exception as e:
             logger.error(f"Failed to initialize Whisper model: {e}")
             raise
-    
+
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
         Process audio chunk with Whisper.
-        
+
         Args:
             audio_data: Raw audio bytes
-            
+
         Returns:
             Transcription result or None
         """
         # Convert bytes to numpy array
         audio_np = np.frombuffer(audio_data, dtype=np.float32)
-        
+
         # Add to buffer
         self.buffer.add(audio_np)
-        
+
         current_time = time.time()
         buffer_duration = self.buffer.get_duration()
-        
+
         # Check if we should send a partial result
         # Whisper needs more audio for good results, so we wait for more data
-        if (self.config.enable_partial and 
+        if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
             buffer_duration >= self.min_chunk_duration):
-            
+
             # Get audio for partial transcription
             audio_for_partial = self.buffer.get_audio()
             if audio_for_partial is not None and len(audio_for_partial) > 0:
                 # Transcribe partial audio
                 text = self._transcribe_audio(audio_for_partial)
-                
+
                 self.last_partial_time = current_time
-                
+
                 if text:
                     metadata = self._prepare_partial_metadata(buffer_duration)
                     result = {
@@ -799,23 +1027,23 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                     }
                     result.update(metadata)
                     return result
-        
+
         # Check if we have enough audio for a final chunk
         # Use optimal chunk duration for better accuracy
         if buffer_duration >= self.optimal_chunk_duration:
             # Get chunk for transcription
             audio_chunk = self.buffer.get_audio(self.optimal_chunk_duration)
-            
+
             if audio_chunk is not None:
                 # Transcribe the chunk
                 text = self._transcribe_audio(audio_chunk)
-                
+
                 # Consume the buffer, keeping overlap for context
                 self.buffer.consume(
                     self.optimal_chunk_duration,
                     self.config.overlap_duration
                 )
-                
+
                 if text:
                     self.transcription_history.append(text)
                     chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
@@ -831,16 +1059,16 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                     result.update(metadata)
                     result["_audio_chunk"] = np.array(audio_chunk, copy=True)
                     return result
-        
+
         return None
-    
+
     def _transcribe_audio(self, audio_np: np.ndarray) -> str:
         """
         Transcribe audio using Whisper model.
-        
+
         Args:
             audio_np: Audio data as numpy array
-            
+
         Returns:
             Transcribed text
         """
@@ -848,24 +1076,24 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             # Save audio to temporary file (Whisper needs file input)
             import tempfile
             import soundfile as sf
-            
+
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                 sf.write(tmp_file.name, audio_np, self.config.sample_rate)
-                
+
                 # Transcribe using Whisper
                 segments_raw, info = self.model.transcribe(
                     tmp_file.name,
                     **self.transcribe_options
                 )
-                
+
                 # Collect all text from segments
                 text_parts = []
                 for segment in segments_raw:
                     text_parts.append(segment.text.strip())
-                
+
                 # Clean up temp file
                 Path(tmp_file.name).unlink()
-                
+
                 # Join all text parts
                 text = " ".join(text_parts)
                 # Apply custom vocabulary post-replacements if enabled
@@ -874,13 +1102,13 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                     text = postprocess_text_if_enabled(text)
                 except Exception:
                     pass
-                
+
                 # Log detected language if auto-detecting
                 if self.config.auto_detect_language and hasattr(info, 'language'):
                     logger.debug(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
-                
+
                 return text
-                
+
         except Exception as e:
             logger.error(f"Error during Whisper transcription: {e}")
             return ""
@@ -889,46 +1117,54 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
 class UnifiedStreamingTranscriber:
     """
     Factory and unified interface for streaming transcribers.
-    
+
     Automatically selects the appropriate transcriber based on configuration.
     """
-    
+
     def __init__(self, config: UnifiedStreamingConfig):
         """Initialize unified transcriber."""
         self.config = config
         self.transcriber = None
-        
+
     def initialize(self):
-        """Initialize the appropriate transcriber."""
+        """
+        Selects and initializes the model-specific streaming transcriber based on this instance's configuration.
+
+        For the Parakeet model, prefers the Parakeet Core adapter when available and falls back to the legacy Parakeet transcriber otherwise. After selection, the chosen transcriber is instantiated, its initialize method is called, and the transcriber instance is stored on self.transcriber.
+        """
         model_lower = self.config.model.lower()
-        
+
         if model_lower == 'canary':
             self.transcriber = CanaryStreamingTranscriber(self.config)
         elif model_lower == 'whisper':
             self.transcriber = WhisperStreamingTranscriber(self.config)
-        else:  # Default to Parakeet
-            self.transcriber = ParakeetStreamingTranscriber(self.config)
-        
+        else:  # Parakeet
+            # Prefer the core adapter when available; fall back to legacy transcriber
+            if _ParakeetCoreAdapter is not None:
+                self.transcriber = _ParakeetCoreAdapter(self.config)  # type: ignore
+            else:
+                self.transcriber = ParakeetStreamingTranscriber(self.config)
+
         self.transcriber.initialize()
         logger.info(f"Initialized {self.config.model} transcriber")
-    
+
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """Process audio chunk with selected transcriber."""
         if not self.transcriber:
             raise RuntimeError("Transcriber not initialized")
         return await self.transcriber.process_audio_chunk(audio_data)
-    
+
     def get_full_transcript(self) -> str:
         """Get complete transcript."""
         if not self.transcriber:
             return ""
         return self.transcriber.get_full_transcript()
-    
+
     def reset(self):
         """Reset transcriber state."""
         if self.transcriber:
             self.transcriber.reset()
-    
+
     def cleanup(self):
         """Clean up resources."""
         if self.transcriber:
@@ -950,30 +1186,33 @@ async def handle_unified_websocket(
     websocket,
     config: Optional[UnifiedStreamingConfig] = None,
     on_audio_seconds: Optional[Callable[[float, int], Awaitable[None]]] = None,
+    on_heartbeat: Optional[Callable[[], Awaitable[None]]] = None,
 ):
     """
-    Handle WebSocket connection for unified real-time transcription.
-    
-    This handler supports both Parakeet and Canary models with dynamic selection.
-    
-    Args:
-        websocket: WebSocket connection
-        config: Initial streaming configuration
+    Handle a WebSocket connection to perform unified real-time transcription across Parakeet, Canary, and Whisper models.
+
+    This handler waits for an optional client configuration message, initializes a model-specific transcriber (with runtime fallback logic), and processes incoming base64-encoded audio messages into partial and final transcription results sent to the client as JSON frames. It optionally integrates streaming diarization and live insights, emits structured status/warning/error frames, supports a commit/reset/stop control messages, and ensures proper cleanup of transcriber, diarizer, and insights resources on exit.
+
+    Parameters:
+        websocket: The WebSocket connection object used to receive client messages and send JSON frames.
+        config (Optional[UnifiedStreamingConfig]): Optional initial streaming configuration; updated if a client config message is received.
+        on_audio_seconds (Optional[Callable[[float, int], Awaitable[None]]]): Optional callback invoked before processing each audio chunk with two arguments: computed audio duration in seconds and the sample rate in Hz.
+        on_heartbeat (Optional[Callable[[], Awaitable[None]]]): Optional callback invoked on each received audio message to refresh external TTLs (e.g., Redis-based heartbeats).
     """
     logger.info("=== handle_unified_websocket STARTED ===")
-    
+
     if not config:
         config = UnifiedStreamingConfig()
         logger.info("Created default config")
     else:
         logger.info(f"Received config from caller: model={config.model}, variant={config.model_variant}")
-    
+
     logger.info(f"Initial config: model={config.model}, variant={config.model_variant}")
     transcriber = None  # Initialize transcriber after config is set
     insights_settings: Optional[LiveInsightSettings] = None
     insights_engine: Optional[LiveMeetingInsights] = None
     diarizer: Optional[StreamingDiarizer] = None
-    
+
     try:
         # Always wait for configuration message from client
         config_received = False
@@ -984,23 +1223,20 @@ async def handle_unified_websocket(
             logger.info(f"Received message (length={len(config_message)})")
             config_data = json.loads(config_message)
             logger.info(f"Parsed config data type: {config_data.get('type')}")
-            
+
             if config_data.get("type") == "config":
                 # Update configuration
                 old_variant = config.model_variant
                 raw_model = config_data.get("model", "parakeet")
-                # Allow combined form like "parakeet-mlx" to set variant
-                if isinstance(raw_model, str) and '-' in raw_model:
-                    base_model, suffix = raw_model.split('-', 1)
-                    if base_model.lower() == 'parakeet' and not config_data.get("variant") and not config_data.get("model_variant"):
-                        config.model = 'parakeet'
-                        config.model_variant = suffix.lower()
-                    else:
-                        config.model = base_model
-                        config.model_variant = config_data.get("variant", config_data.get("model_variant", config.model_variant))
-                else:
-                    config.model = raw_model
-                    config.model_variant = config_data.get("variant", config_data.get("model_variant", config.model_variant))
+                variant_override = config_data.get("variant") or config_data.get("model_variant")
+                new_model, new_variant = normalize_model_and_variant(
+                    raw_model,
+                    current_model=config.model,
+                    current_variant=config.model_variant,
+                    variant_override=variant_override,
+                )
+                config.model = new_model
+                config.model_variant = new_variant
                 config.language = config_data.get("language", "en")
                 config.sample_rate = config_data.get("sample_rate", 16000)
                 config.auto_detect_language = config_data.get("auto_detect_language", False)
@@ -1008,7 +1244,13 @@ async def handle_unified_websocket(
                 config.enable_partial = config_data.get("enable_partial", True)
                 config.enable_vad = config_data.get("enable_vad", False)
                 config.vad_threshold = config_data.get("vad_threshold", 0.5)
-                
+                # Optional partial emission tuning
+                try:
+                    if "min_partial_duration" in config_data:
+                        config.min_partial_duration = max(0.0, float(config_data.get("min_partial_duration")))
+                except (TypeError, ValueError):
+                    logger.warning("Invalid min_partial_duration in config; keeping previous value")
+
                 # Whisper-specific configuration
                 if config.model.lower() == "whisper":
                     config.whisper_model_size = config_data.get("whisper_model_size", "distil-large-v3")
@@ -1046,18 +1288,18 @@ async def handle_unified_websocket(
                     config.diarization_enabled = bool(config_data.get("diarization_enabled"))
                 if "diarization_store_audio" in config_data:
                     config.diarization_store_audio = bool(config_data.get("diarization_store_audio"))
-                
+
                 logger.info(f"Config updated: model={config.model}, variant changed from {old_variant} to {config.model_variant}, "
                            f"sample_rate={config.sample_rate}, chunk_duration={config.chunk_duration}")
                 config_received = True
-                
+
                 # Prepare acknowledgment (do not send to keep protocol noise-free for tests)
                 status_msg = {
                     "type": "status",
                     "state": "configured",
                     "model": config.model
                 }
-                
+
                 if config.model.lower() == "parakeet":
                     status_msg["variant"] = config.model_variant
                 elif config.model.lower() == "canary":
@@ -1066,7 +1308,7 @@ async def handle_unified_websocket(
                     status_msg["whisper_model"] = config.whisper_model_size
                     status_msg["task"] = config.task
                     status_msg["language"] = config.language if config.language else "auto"
-                
+
                 # Intentionally not sending status frame; log only
                 logger.info(f"Config acknowledged (not sent to client): {status_msg}")
             else:
@@ -1082,15 +1324,15 @@ async def handle_unified_websocket(
         except Exception as e:
             logger.error(f"Unexpected error receiving config message: {e}", exc_info=True)
             logger.warning("Using default configuration due to error")
-        
+
         if not config_received:
             logger.warning(f"No valid config received. Proceeding with: model={config.model}, variant={config.model_variant}")
-        
+
         # Create transcriber with config
         if transcriber is None:
             logger.info(f"Creating UnifiedStreamingTranscriber for model: {config.model}")
             transcriber = UnifiedStreamingTranscriber(config)
-        
+
         try:
             logger.info(f"Initializing transcriber for model: {config.model}")
             logger.info(f"Configuration details: model_variant={config.model_variant}, "
@@ -1101,11 +1343,25 @@ async def handle_unified_websocket(
         except Exception as e:
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
             logger.error(error_msg, exc_info=True)
-            
-            # Check if fallback to Whisper is enabled in config
-            from tldw_Server_API.app.core.config import load_comprehensive_config
+            # Emit structured warning about model/variant unavailability before fallback attempts
+            try:
+                await websocket.send_json({
+                    "type": "warning",
+                    "state": "model_unavailable",
+                    "error_type": "model_unavailable",
+                    "message": "Requested model/variant unavailable; attempting fallback if enabled",
+                    "details": {
+                        "model": config.model,
+                        "variant": getattr(config, 'model_variant', None),
+                        "error": str(e),
+                    },
+                })
+            except Exception:
+                pass
+
+            # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
             comprehensive_config = load_comprehensive_config()
-            
+
             # ConfigParser returns a ConfigParser object, not a dict
             fallback_enabled = False
             try:
@@ -1117,7 +1373,7 @@ async def handle_unified_websocket(
                 logger.warning(f"Could not read streaming_fallback_to_whisper from config: {config_error}")
                 # Defer Whisper fallback unless explicitly configured
                 fallback_enabled = False
-            
+
             # Try to fall back to Whisper if enabled and not already using Whisper
             if fallback_enabled and config.model.lower() != 'whisper':
                 logger.info("Fallback to Whisper is enabled in config. Attempting to fall back...")
@@ -1128,7 +1384,7 @@ async def handle_unified_websocket(
                     transcriber = UnifiedStreamingTranscriber(config)
                     transcriber.initialize()
                     logger.info("Successfully fell back to Whisper model")
-                    
+
                     # Notify client about fallback
                     await websocket.send_json({
                         "type": "warning",
@@ -1142,14 +1398,17 @@ async def handle_unified_websocket(
                     # Send error with more details
                     await websocket.send_json({
                         "type": "error",
+                        "error_type": "model_unavailable",
                         "message": "No transcription models available. Please install required dependencies.",
                         "details": {
+                            "model": config.model,
+                            "variant": getattr(config, 'model_variant', None),
                             "original_error": str(e),
                             "fallback_error": str(fallback_error),
                             "suggestion": "Install nemo_toolkit[asr] for Parakeet/Canary or ensure faster-whisper is installed"
                         }
                     })
-                    
+
                     # Close with error code
                     await websocket.close(code=1011, reason="No models available")
                     return
@@ -1160,10 +1419,11 @@ async def handle_unified_websocket(
                     suggestion = "Install nemo_toolkit[asr]: pip install nemo_toolkit[asr]"
                 elif config.model.lower() == 'whisper':
                     suggestion = "Ensure faster-whisper is installed: pip install faster-whisper"
-                
+
                 # Send error with more details
                 await websocket.send_json({
                     "type": "error",
+                    "error_type": "model_unavailable",
                     "message": error_msg,
                     "details": {
                         "model": config.model,
@@ -1173,7 +1433,7 @@ async def handle_unified_websocket(
                         "suggestion": suggestion
                     }
                 })
-                
+
                 # Close with error code
                 await websocket.close(code=1011, reason=error_msg[:120])  # 1011 = Internal Error
                 return
@@ -1238,15 +1498,15 @@ async def handle_unified_websocket(
                 insights_engine = None
         elif insights_settings and not insights_settings.enabled:
             logger.info("Live insights explicitly disabled for this session.")
-        
+
         # Do not send a ready status frame to minimize protocol chatter
-        
+
         # Process messages
         while True:
             try:
                 message = await websocket.receive_text()
                 data = json.loads(message)
-                
+
                 if data.get("type") == "audio":
                     # Decode audio data
                     audio_base64 = data.get("data", "")
@@ -1254,12 +1514,22 @@ async def handle_unified_websocket(
                     # Optional callback to account for usage seconds before processing
                     if on_audio_seconds is not None:
                         # Compute seconds from byte length and configured sample rate
-                        seconds = float(len(audio_bytes)) / float(4 * max(1, config.sample_rate))
-                        await on_audio_seconds(seconds, config.sample_rate)
-                    
+                        try:
+                            from tldw_Server_API.app.core.Usage.audio_quota import bytes_to_seconds as _bytes_to_seconds
+                            seconds = _bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
+                        except Exception:
+                            seconds = float(len(audio_bytes)) / float(4 * max(1, int(config.sample_rate or 16000)))
+                        await on_audio_seconds(seconds, int(config.sample_rate or 16000))
+                    # Optional heartbeat to refresh stream TTL when using Redis counters
+                    if on_heartbeat is not None:
+                        try:
+                            await on_heartbeat()
+                        except Exception:
+                            pass
+
                     # Process audio chunk
                     result = await transcriber.process_audio_chunk(audio_bytes)
-                    
+
                     if result:
                         audio_np = result.pop("_audio_chunk", None)
                         if audio_np is not None and diarizer:
@@ -1282,14 +1552,14 @@ async def handle_unified_websocket(
                                         result.setdefault("speaker_label", speaker_info["speaker_label"])
                             except Exception as diar_err:
                                 logger.error(f"Diarization update failed: {diar_err}", exc_info=True)
-                        
+
                         await websocket.send_json(result)
                         if insights_engine and result.get("is_final"):
                             try:
                                 await insights_engine.on_transcript(result)
                             except Exception as insight_err:
                                 logger.error(f"Live insights failed to ingest segment: {insight_err}", exc_info=True)
-                
+
                 elif data.get("type") == "commit":
                     # Get final transcript
                     full_transcript = transcriber.get_full_transcript()
@@ -1320,10 +1590,24 @@ async def handle_unified_websocket(
                                     "speaker_map": speaker_map,
                                     "audio_path": audio_path,
                                     "speakers": speakers,
+                                    "persistence_method": getattr(diarizer, "persistence_method", None),
                                 })
+                                # Emit structured warning when persistence requested but unavailable
+                                try:
+                                    if (
+                                        config.diarization_store_audio
+                                        and (audio_path is None or not audio_path)
+                                    ):
+                                        await websocket.send_json({
+                                            "type": "warning",
+                                            "warning_type": "audio_persistence_unavailable",
+                                            "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
+                                        })
+                                except Exception:
+                                    pass
                         except Exception as diar_err:
                             logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
-                
+
                 elif data.get("type") == "reset":
                     # Reset transcriber
                     transcriber.reset()
@@ -1341,11 +1625,11 @@ async def handle_unified_websocket(
                         "type": "status",
                         "state": "reset"
                     })
-                
+
                 elif data.get("type") == "stop":
                     # Stop transcription
                     break
-                    
+
             except json.JSONDecodeError:
                 await websocket.send_json({
                     "type": "error",
@@ -1372,7 +1656,7 @@ async def handle_unified_websocket(
                     "type": "error",
                     "message": f"Processing error: {str(e)}"
                 })
-    
+
     except asyncio.TimeoutError:
         await websocket.send_json({
             "type": "error",

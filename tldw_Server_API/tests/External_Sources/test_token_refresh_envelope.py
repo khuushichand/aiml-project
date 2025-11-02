@@ -15,7 +15,8 @@ async def test_update_account_tokens_encrypted_env(monkeypatch, tmp_path):
     monkeypatch.setattr(svc, "is_postgres_backend", lambda: f)
 
     # Enable encryption
-    monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo9PQ==")  # base64 32-byte
+    # Valid base64-encoded 32-byte key (AES-256)
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
 
     import aiosqlite
     db_path = tmp_path / "enc.db"
@@ -81,4 +82,3 @@ async def test_update_account_tokens_plaintext_without_env(monkeypatch, tmp_path
         # get_account_tokens reflects new value
         toks = await svc.get_account_tokens(db, 1, account_id)
         assert toks.get("access_token") == "n2"
-

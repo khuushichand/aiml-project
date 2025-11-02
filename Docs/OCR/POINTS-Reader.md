@@ -110,7 +110,7 @@ Example (form fields):
 - Prefer SGLang for production workloads; it avoids repeated model loads and can scale.
 - On local inference, ensure CUDA is available; otherwise, expect slower throughput.
 - Use `ocr_mode=fallback` to skip OCR on pages with selectable text.
-- Consider lowering `ocr_dpi` (e.g., 200–300) for speed if acceptable.
+- Consider lowering `ocr_dpi` (e.g., 200-300) for speed if acceptable.
 
 ## Known Issues (Upstream)
 

@@ -36,17 +36,21 @@ class ChatbooksPSJobAdapter:
         self._db = PromptStudioDatabase()
         self._jm = JobManager(self._db)
 
-    def create_export_job(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def create_export_job(self, payload: Dict[str, Any], *, request_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Create a PS job representing a chatbook export."""
         try:
+            if request_id:
+                payload = {**payload, "request_id": request_id}
             job = self._jm.create_job(JobType.GENERATION, entity_id=0, payload=payload)
             return job
         except Exception as e:
             logger.warning(f"Failed to create PS export job: {e}")
             return None
 
-    def create_import_job(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def create_import_job(self, payload: Dict[str, Any], *, request_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         try:
+            if request_id:
+                payload = {**payload, "request_id": request_id}
             job = self._jm.create_job(JobType.GENERATION, entity_id=0, payload=payload)
             return job
         except Exception as e:

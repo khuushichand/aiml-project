@@ -52,4 +52,3 @@ def test_allowed_endpoints_and_max_calls(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         asyncio.run(dep(request=req, credentials=creds))
     assert ei.value.status_code == 403
-

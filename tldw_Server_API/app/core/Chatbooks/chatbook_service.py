@@ -81,11 +81,11 @@ except Exception:  # pragma: no cover
 
 class ChatbookService:
     """Service for creating and importing chatbooks with user isolation."""
-    
+
     def __init__(self, user_id: Union[str, int], db: CharactersRAGDB, user_id_int: Optional[int] = None):
         """
         Initialize the chatbook service for a specific user.
-        
+
         Args:
             user_id: User identifier (string or integer)
             db: User's ChaChaNotes database instance
@@ -100,22 +100,22 @@ class ChatbookService:
             except (TypeError, ValueError):
                 self.user_id_int = None
         self.db = db
-        
+
         # Track TODOs once per session so we comply with PRD while exposing gaps
         self._todo_messages: Set[str] = set()
-        
+
         # In-process async task registry (best-effort cancellation)
         self._tasks: _Dict[str, asyncio.Task] = {}
         self._prompts_db: Optional["PromptsDatabase"] = None
         self._media_db: Optional["MediaDatabase"] = None
         self._evaluations_db: Optional["EvaluationsDatabase"] = None
-        
+
         # Secure user-specific directory using application data path
         # Get base path from environment or use appropriate default
         import os
         import tempfile
         import re
-        
+
         # Sanitize user_id to prevent path traversal
         # Only allow alphanumeric characters, hyphens, and underscores
         safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(self.user_id))
@@ -123,7 +123,7 @@ class ChatbookService:
         safe_user_id = safe_user_id.replace('..', '_').replace('/', '_').replace('\\', '_')
         # Limit length to prevent excessively long paths
         safe_user_id = safe_user_id[:255]
-        
+
         # Use environment variable, or temp dir for testing, or system default
         if os.environ.get('TLDW_USER_DATA_PATH'):
             base_data_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
@@ -133,7 +133,7 @@ class ChatbookService:
         else:
             # Production default
             base_data_dir = Path('/var/lib/tldw/user_data')
-        
+
         # Create secure user-specific directory with restricted permissions
         self.user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
         try:
@@ -143,12 +143,12 @@ class ChatbookService:
             base_data_dir = Path(tempfile.gettempdir()) / 'tldw_data'
             self.user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Separate directories for exports and imports
         self.export_dir = self.user_data_dir / 'exports'
         self.import_dir = self.user_data_dir / 'imports'
         self.temp_dir = self.user_data_dir / 'temp'
-        
+
         for directory in [self.export_dir, self.import_dir, self.temp_dir]:
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 
@@ -181,7 +181,7 @@ class ChatbookService:
                 self._jobs_db_path = ensure_jobs_tables()
             except Exception as exc:
                 logger.debug(f"Jobs core backend migrations skipped: {exc}")
-        
+
         # Initialize job tracking tables
         self._init_job_tables()
 
@@ -385,7 +385,7 @@ class ChatbookService:
             "image/gif": ".gif"
         }
         return mapping.get(mime_type.lower(), ".bin")
-    
+
     def _fetch_results(self, cursor_or_list):
         """
         Helper to convert cursor or list to list of results.
@@ -396,11 +396,11 @@ class ChatbookService:
             results = cursor_or_list.fetchall()
             if not results:
                 return []
-            
+
             # sqlite3.Row objects can be converted directly to dict
             # but we need to handle different cases
             first_row = results[0]
-            
+
             # Try the simplest approach first - direct dict conversion
             try:
                 # This works for sqlite3.Row objects
@@ -416,7 +416,7 @@ class ChatbookService:
         else:
             # It's already a list (from mocked tests)
             return cursor_or_list
-    
+
     def _get_conversation_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """Get conversation by name/title - wrapper for search method."""
         try:
@@ -436,7 +436,7 @@ class ChatbookService:
                     if conv_title == name or conv_name == name:
                         logger.debug(f"  Found exact match via FTS!")
                         return conv
-            
+
             # If FTS didn't find it, try direct query (FTS might not be updated yet)
             if hasattr(self.db, 'execute_query'):
                 logger.debug(f"FTS failed, trying direct query for '{name}'")
@@ -457,13 +457,13 @@ class ChatbookService:
                         return results[0]
                 else:
                     logger.debug(f"Direct query returned None/empty cursor")
-            
+
             logger.debug(f"No match found for '{name}' via FTS or direct query")
             return None
         except Exception as e:
             logger.debug(f"Error searching for conversation by name: {e}")
             return None
-    
+
     def _get_note_by_title(self, title: str) -> Optional[Dict[str, Any]]:
         """Get note by title - wrapper for search method."""
         try:
@@ -478,7 +478,7 @@ class ChatbookService:
                     if note_title == title:
                         logger.debug(f"  Found exact match via FTS!")
                         return note
-            
+
             # If FTS didn't find it, try direct query (FTS might not be updated yet)
             if hasattr(self.db, 'execute_query'):
                 logger.debug(f"FTS failed, trying direct query for note '{title}'")
@@ -499,17 +499,17 @@ class ChatbookService:
                         return results[0]
                 else:
                     logger.debug(f"Direct query returned None/empty cursor for note")
-            
+
             logger.debug(f"No match found for note '{title}' via FTS or direct query")
             return None
         except Exception as e:
             logger.debug(f"Error searching for note by title: {e}")
             return None
-    
+
     def _register_job_handlers(self):
         """No-op; legacy job queue handlers removed."""
         return
-    
+
     def _init_job_tables(self):
         """Initialize database tables for job tracking."""
         try:
@@ -533,7 +533,7 @@ class ChatbookService:
                     expires_at TIMESTAMP
                 )
             """)
-            
+
             # Import jobs table
             self.db.execute_query("""
                 CREATE TABLE IF NOT EXISTS import_jobs (
@@ -557,22 +557,22 @@ class ChatbookService:
             """)
         except Exception as e:
             logger.error(f"Error initializing job tables: {e}")
-    
+
     # Alias for compatibility with tests
     async def export_chatbook(self, **kwargs):
         """Alias for create_chatbook to match test expectations."""
         # Extract user_id for internal use but don't pass it to create_chatbook
         user_id = kwargs.pop('user_id', None)
-        
+
         # Extract chatbook_name and use it as 'name'
         if 'chatbook_name' in kwargs:
             kwargs['name'] = kwargs.pop('chatbook_name')
-        
+
         # Extract options and merge them into kwargs
         if 'options' in kwargs:
             options = kwargs.pop('options')
             kwargs.update(options)
-        
+
         # Map content_types to content_selections for compatibility
         if 'content_types' in kwargs:
             content_types = kwargs.pop('content_types')
@@ -639,17 +639,17 @@ class ChatbookService:
                         logger.debug(f"Error getting dictionaries: {e}")
                     content_selections[ContentType.DICTIONARY] = dict_ids
             kwargs['content_selections'] = content_selections
-        
+
         # Set default values for required params if missing
         kwargs.setdefault('name', 'Test Export')
         kwargs.setdefault('description', 'Test Description')
-        
-        # Handle async_job parameter 
+
+        # Handle async_job parameter
         if 'async_job' in kwargs:
             kwargs['async_mode'] = kwargs.pop('async_job')
-        
+
         result = await self.create_chatbook(**kwargs)
-        
+
         # Convert tuple result to dict for tests
         if isinstance(result, tuple):
             success = result[0]
@@ -659,7 +659,7 @@ class ChatbookService:
             file_path = None if is_async else payload
             job_id = payload if is_async else None
             content_summary: Dict[str, int] = {}
-            
+
             # If we have a file path (sync export), read manifest to populate summary
             if file_path:
                 try:
@@ -683,7 +683,7 @@ class ChatbookService:
                 except Exception as _e:
                     # Fallback to empty summary on any error
                     logger.debug(f"Could not read manifest for content summary: {_e}")
-            
+
             return {
                 "success": success,
                 "message": message,
@@ -693,7 +693,7 @@ class ChatbookService:
                 "content_summary": content_summary,
             }
         return result
-    
+
     async def create_chatbook(
         self,
         name: str,
@@ -706,11 +706,12 @@ class ChatbookService:
         include_generated_content: bool = True,
         tags: List[str] = None,
         categories: List[str] = None,
-        async_mode: bool = False
+        async_mode: bool = False,
+        request_id: Optional[str] = None
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Create a chatbook from selected content.
-        
+
         Args:
             name: Chatbook name
             description: Chatbook description
@@ -723,7 +724,7 @@ class ChatbookService:
             tags: Chatbook tags
             categories: Chatbook categories
             async_mode: Run as background job
-            
+
         Returns:
             Tuple of (success, message, job_id or file_path)
         """
@@ -744,7 +745,7 @@ class ChatbookService:
                     "categories": categories or [],
                 }
                 try:
-                    ps_job = self._ps_job_adapter.create_export_job(payload)
+                    ps_job = self._ps_job_adapter.create_export_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
                 except Exception:
@@ -757,11 +758,11 @@ class ChatbookService:
                 status=ExportStatus.PENDING,
                 chatbook_name=name
             )
-            
+
             # Store job in database
             self._save_export_job(job)
-            
-            # Start async task
+
+            # Start async processing depending on backend
             if self._jobs_backend == "core":
                 # Enqueue into core Jobs and start worker if needed
                 try:
@@ -790,19 +791,15 @@ class ChatbookService:
                         owner_user_id=self.user_id,
                         priority=5,
                         max_retries=3,
+                        request_id=request_id,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to enqueue export job into core Jobs: {e}")
-            else:
-                # Start async task (legacy in-process)
-                task = asyncio.create_task(self._create_chatbook_job_async(
-                    job_id, name, description, content_selections,
-                    author, include_media, media_quality, include_embeddings,
-                    include_generated_content, tags, categories
-                ))
-                self._tasks[job_id] = task
-                task.add_done_callback(lambda _t: self._tasks.pop(job_id, None))
-            
+            elif self._jobs_backend == "prompt_studio":
+                # Do not start local processing when using Prompt Studio backend.
+                # PS worker (external) is responsible for running the job.
+                pass
+
             return True, f"Export job started: {job_id}", job_id
         else:
             # Run synchronously (wrapped in async)
@@ -811,7 +808,7 @@ class ChatbookService:
                 author, include_media, media_quality, include_embeddings,
                 include_generated_content, tags, categories
             )
-    
+
     def _with_transaction(self, func, *args, **kwargs):
         """Execute a function within a database transaction."""
         conn = None
@@ -820,16 +817,16 @@ class ChatbookService:
             conn = self.db.get_connection() if hasattr(self.db, 'get_connection') else None
             if conn:
                 conn.execute("BEGIN TRANSACTION")
-            
+
             # Execute the function
             result = func(*args, **kwargs)
-            
+
             # Commit if we have a connection
             if conn:
                 conn.execute("COMMIT")
-            
+
             return result
-            
+
         except Exception as e:
             # Rollback on error
             if conn:
@@ -846,7 +843,7 @@ class ChatbookService:
                     conn.close()
                 except Exception as e3:
                     logger.debug(f"Connection close failed after transaction: error={e3}")
-    
+
     async def _create_chatbook_sync_wrapper(
         self,
         name: str,
@@ -862,7 +859,7 @@ class ChatbookService:
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Wrapper for synchronous chatbook creation.
-        
+
         Returns:
             Tuple of (success, message, file_path)
         """
@@ -874,7 +871,7 @@ class ChatbookService:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             work_dir = self.temp_dir / f"export_{timestamp}_{uuid4().hex[:8]}"
             work_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            
+
             # Initialize manifest
             manifest = ChatbookManifest(
                 version=ChatbookVersion.V1,
@@ -890,41 +887,41 @@ class ChatbookService:
                 categories=categories or [],
                 export_id=str(uuid4())
             )
-            
+
             # Collect content
             content = ChatbookContent()
-            
+
             # Process each content type
             if ContentType.CONVERSATION in content_selections:
                 self._collect_conversations(
                     content_selections[ContentType.CONVERSATION],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.NOTE in content_selections:
                 self._collect_notes(
                     content_selections[ContentType.NOTE],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.CHARACTER in content_selections:
                 self._collect_characters(
                     content_selections[ContentType.CHARACTER],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.WORLD_BOOK in content_selections:
                 self._collect_world_books(
                     content_selections[ContentType.WORLD_BOOK],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.DICTIONARY in content_selections:
                 self._collect_dictionaries(
                     content_selections[ContentType.DICTIONARY],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.MEDIA in content_selections:
                 self._collect_media_items(
                     content_selections[ContentType.MEDIA],
@@ -932,30 +929,30 @@ class ChatbookService:
                     include_media=include_media,
                     include_embeddings=include_embeddings
                 )
-            
+
             if ContentType.PROMPT in content_selections:
                 self._collect_prompts(
                     content_selections[ContentType.PROMPT],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.EVALUATION in content_selections:
                 self._collect_evaluations(
                     content_selections[ContentType.EVALUATION],
                     work_dir, manifest, content
                 )
-            
+
             if ContentType.EMBEDDING in content_selections:
                 self._note_todo(
                     "Explicit embedding exports are pending; embeddings are currently derived from media when include_embeddings=true."
                 )
-            
+
             if include_generated_content and ContentType.GENERATED_DOCUMENT in content_selections:
                 self._collect_generated_documents(
                     content_selections[ContentType.GENERATED_DOCUMENT],
                     work_dir, manifest, content
                 )
-            
+
             # Update statistics
             manifest.total_conversations = len(content.conversations)
             manifest.total_notes = len(content.notes)
@@ -967,21 +964,21 @@ class ChatbookService:
             manifest.total_world_books = len(content.world_books)
             manifest.total_dictionaries = len(content.dictionaries)
             manifest.total_documents = len(content.generated_documents)
-            
+
             # Write manifest asynchronously
             manifest_path = work_dir / "manifest.json"
             async with aiofiles.open(manifest_path, 'w', encoding='utf-8') as f:
                 await f.write(json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False))
-            
+
             # Create README asynchronously
             await self._create_readme_async(work_dir, manifest)
-            
+
             # Create archive in secure export directory
             safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)
             output_filename = f"{safe_name}_{timestamp}_{uuid4().hex[:8]}.zip"
             output_path = self.export_dir / output_filename
             await self._create_zip_archive_async(work_dir, output_path)
-            
+
             # Update manifest with file size
             manifest.total_size_bytes = output_path.stat().st_size
             success = True
@@ -989,9 +986,9 @@ class ChatbookService:
             # Store file path in job record (will be retrieved by job_id)
             # No direct filename access for security
             download_url = None  # Will be generated from job_id
-            
+
             return True, f"Chatbook created successfully", str(output_path)
-            
+
         except Exception as e:
             logger.error(f"Error creating chatbook: {e}")
             if output_path and output_path.exists():
@@ -1006,7 +1003,7 @@ class ChatbookService:
                     await asyncio.to_thread(shutil.rmtree, work_dir)
                 except Exception as cleanup_err:
                     logger.debug(f"Failed to remove work directory {work_dir}: {cleanup_err}")
-    
+
     async def _create_chatbook_job_async(
         self,
         job_id: str,
@@ -1028,7 +1025,7 @@ class ChatbookService:
         job = self._get_export_job(job_id)
         if not job:
             return
-        
+
         try:
             # Update job status
             job.status = ExportStatus.IN_PROGRESS
@@ -1040,14 +1037,14 @@ class ChatbookService:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
                 except Exception:
                     pass
-            
+
             # Create chatbook using the sync wrapper (could be made truly async)
             success, message, file_path = await self._create_chatbook_sync_wrapper(
                 name, description, content_selections,
                 author, include_media, media_quality, include_embeddings,
                 include_generated_content, tags, categories
             )
-            
+
             if success:
                 # Update job with success; respect cancellation
                 latest = self._get_export_job(job.job_id)
@@ -1082,7 +1079,7 @@ class ChatbookService:
                 except Exception:
                     pass
             self._save_export_job(job)
-            
+
         except Exception as e:
             # Update job with error
             job.status = ExportStatus.FAILED
@@ -1094,7 +1091,7 @@ class ChatbookService:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
                 except Exception:
                     pass
-    
+
     async def import_chatbook(
         self,
         file_path: str,
@@ -1104,11 +1101,12 @@ class ChatbookService:
         prefix_imported: bool = False,
         import_media: bool = True,
         import_embeddings: bool = False,
-        async_mode: bool = False
+        async_mode: bool = False,
+        request_id: Optional[str] = None
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Import a chatbook.
-        
+
         Args:
             file_path: Path to chatbook file
             content_selections: Specific content to import
@@ -1117,14 +1115,14 @@ class ChatbookService:
             import_media: Import media files
             import_embeddings: Import embeddings
             async_mode: Run as background job
-            
+
         Returns:
             Tuple of (success, message, job_id or None)
         """
         # Handle both conflict_resolution and conflict_strategy (for test compatibility)
         if conflict_strategy and not conflict_resolution:
             conflict_resolution = conflict_strategy
-            
+
         # Convert string to enum if needed
         if isinstance(conflict_resolution, str):
             try:
@@ -1135,7 +1133,7 @@ class ChatbookService:
         elif conflict_resolution is None:
             # Default to skip if not specified
             conflict_resolution = ConflictResolution.SKIP
-            
+
         if async_mode:
             # Create job and run asynchronously
             job_id = None
@@ -1150,7 +1148,7 @@ class ChatbookService:
                     "conflict_resolution": str(conflict_resolution.value if hasattr(conflict_resolution, 'value') else conflict_resolution),
                 }
                 try:
-                    ps_job = self._ps_job_adapter.create_import_job(payload)
+                    ps_job = self._ps_job_adapter.create_import_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
                 except Exception:
@@ -1163,10 +1161,10 @@ class ChatbookService:
                 status=ImportStatus.PENDING,
                 chatbook_path=file_path
             )
-            
+
             # Store job in database
             self._save_import_job(job)
-            
+
             # Start async task
             if self._jobs_backend == "core":
                 try:
@@ -1191,6 +1189,7 @@ class ChatbookService:
                         owner_user_id=self.user_id,
                         priority=5,
                         max_retries=3,
+                        request_id=request_id,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")
@@ -1202,7 +1201,7 @@ class ChatbookService:
                 ))
                 self._tasks[job_id] = task
                 task.add_done_callback(lambda _t: self._tasks.pop(job_id, None))
-            
+
             return True, f"Import job started: {job_id}", job_id
         else:
             # Run synchronously (wrapped in executor for async compatibility)
@@ -1212,7 +1211,7 @@ class ChatbookService:
                 conflict_resolution, prefix_imported,
                 import_media, import_embeddings
             )
-    
+
     def _import_chatbook_sync(
         self,
         file_path: str,
@@ -1236,50 +1235,50 @@ class ChatbookService:
                 if isinstance(detail, str) and detail.lower().startswith("file does not exist"):
                     detail = "Invalid or potentially malicious archive file"
                 return False, f"Error: {detail}", None
-            
+
             # Extract chatbook to secure temp location
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             extract_dir = self.temp_dir / f"import_{timestamp}_{uuid4().hex[:8]}"
             extract_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            
+
             # Extract archive with size limits
             with zipfile.ZipFile(file_path, 'r') as zf:
                 # Check total uncompressed size
                 total_size = sum(zinfo.file_size for zinfo in zf.filelist)
                 if total_size > 500 * 1024 * 1024:  # 500MB limit
                     return False, "Archive too large (>500MB uncompressed)", None
-                
+
                 # Extract with path validation
                 for member in zf.namelist():
                     # Normalize and validate the path
                     normalized_path = os.path.normpath(member)
                     if os.path.isabs(normalized_path) or ".." in normalized_path or normalized_path.startswith("/"):
                         return False, f"Unsafe path in archive: {member}", None
-                    
+
                     # Additional check: ensure the path stays within extract_dir
                     target_path = os.path.join(extract_dir, member)
                     real_extract_dir = os.path.realpath(extract_dir)
                     real_target = os.path.realpath(os.path.dirname(target_path))
                     if not real_target.startswith(real_extract_dir):
                         return False, f"Path traversal attempt detected: {member}", None
-                    
+
                     # Extract individual file safely
                     zf.extract(member, extract_dir)
-            
+
             # Load manifest
             manifest_path = extract_dir / "manifest.json"
             if not manifest_path.exists():
                 return False, "Error: Invalid chatbook - manifest.json not found", None
-            
+
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest_data = json.load(f)
-            
+
             manifest = ChatbookManifest.from_dict(manifest_data)
-            
+
             # Check version compatibility
             if manifest.version != ChatbookVersion.V1:
                 logger.warning(f"Chatbook version {manifest.version.value} may not be fully compatible")
-            
+
             # Set up content selections if not provided
             if content_selections is None:
                 content_selections = {}
@@ -1287,7 +1286,7 @@ class ChatbookService:
                     if item.type not in content_selections:
                         content_selections[item.type] = []
                     content_selections[item.type].append(item.id)
-            
+
             # Import each content type
             import_status = ImportJob(
                 job_id="temp",
@@ -1295,9 +1294,9 @@ class ChatbookService:
                 status=ImportStatus.IN_PROGRESS,
                 chatbook_path=file_path
             )
-            
+
             import_status.total_items = sum(len(ids) for ids in content_selections.values())
-            
+
             # Import characters first (they may be dependencies)
             if ContentType.CHARACTER in content_selections:
                 self._import_characters(
@@ -1306,7 +1305,7 @@ class ChatbookService:
                     conflict_resolution, prefix_imported,
                     import_status
                 )
-            
+
             # Import world books
             if ContentType.WORLD_BOOK in content_selections:
                 self._import_world_books(
@@ -1315,7 +1314,7 @@ class ChatbookService:
                     conflict_resolution, prefix_imported,
                     import_status
                 )
-            
+
             # Import dictionaries
             if ContentType.DICTIONARY in content_selections:
                 self._import_dictionaries(
@@ -1324,7 +1323,7 @@ class ChatbookService:
                     conflict_resolution, prefix_imported,
                     import_status
                 )
-            
+
             # Import conversations
             if ContentType.CONVERSATION in content_selections:
                 self._import_conversations(
@@ -1333,7 +1332,7 @@ class ChatbookService:
                     conflict_resolution, prefix_imported,
                     import_status
                 )
-            
+
             # Import notes
             if ContentType.NOTE in content_selections:
                 self._import_notes(
@@ -1342,12 +1341,12 @@ class ChatbookService:
                     conflict_resolution, prefix_imported,
                     import_status
                 )
-            
+
             # Note: We do NOT delete the original import file - the caller owns it
-            
+
             # Build result message
             logger.debug(f"Import status: total={import_status.total_items}, successful={import_status.successful_items}, skipped={import_status.skipped_items}, failed={import_status.failed_items}")
-            
+
             if import_status.successful_items > 0:
                 message = f"Successfully imported {import_status.successful_items}/{import_status.total_items} items"
                 if import_status.skipped_items > 0:
@@ -1362,14 +1361,14 @@ class ChatbookService:
             else:
                 logger.debug(f"Import failed: No items were successfully imported or skipped")
                 return False, "No items were imported", None
-            
+
         except Exception as e:
             logger.error(f"Error importing chatbook: {e}")
             return False, f"Error importing chatbook: {str(e)}", None
         finally:
             if extract_dir and extract_dir.exists():
                 shutil.rmtree(extract_dir, ignore_errors=True)
-    
+
     async def _import_chatbook_async(
         self,
         job_id: str,
@@ -1387,7 +1386,7 @@ class ChatbookService:
         job = self._get_import_job(job_id)
         if not job:
             return
-        
+
         try:
             # Update job status
             job.status = ImportStatus.IN_PROGRESS
@@ -1398,7 +1397,7 @@ class ChatbookService:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
                 except Exception:
                     pass
-            
+
             # Import chatbook synchronously using thread pool
             success, message, _ = await asyncio.to_thread(
                 self._import_chatbook_sync,
@@ -1406,7 +1405,7 @@ class ChatbookService:
                 conflict_resolution, prefix_imported,
                 import_media, import_embeddings
             )
-            
+
             if success:
                 latest = self._get_import_job(job.job_id)
                 if latest and latest.status == ImportStatus.CANCELLED:
@@ -1420,7 +1419,7 @@ class ChatbookService:
             else:
                 job.status = ImportStatus.FAILED
                 job.error_message = message
-            
+
             job.completed_at = datetime.utcnow()
             self._save_import_job(job)
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
@@ -1431,7 +1430,7 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
                 except Exception:
                     pass
-            
+
         except Exception as e:
             job.status = ImportStatus.FAILED
             job.completed_at = datetime.utcnow()
@@ -1450,14 +1449,14 @@ class ChatbookService:
                     fp.unlink()
             except Exception as _e:
                 logger.debug(f"Could not remove import archive (async) {file_path}: {_e}")
-    
+
     def preview_chatbook(self, file_path: str) -> Tuple[Optional[ChatbookManifest], Optional[str]]:
         """
         Preview a chatbook without importing it.
-        
+
         Args:
             file_path: Path to chatbook file
-            
+
         Returns:
             Tuple of (manifest, error_message)
         """
@@ -1475,7 +1474,7 @@ class ChatbookService:
             # Extract to temporary directory
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             extract_dir = self.temp_dir / f"preview_{timestamp}"
-            
+
             # Extract archive with path validation
             with zipfile.ZipFile(file_path, 'r') as zf:
                 # Validate all paths before extraction to prevent path traversal
@@ -1484,29 +1483,29 @@ class ChatbookService:
                     normalized_path = os.path.normpath(member)
                     if os.path.isabs(normalized_path) or ".." in normalized_path or normalized_path.startswith("/"):
                         return None, f"Unsafe path in archive: {member}"
-                    
+
                     # Additional check: ensure the path stays within extract_dir
                     target_path = os.path.join(extract_dir, member)
                     real_extract_dir = os.path.realpath(extract_dir)
                     real_target = os.path.realpath(os.path.dirname(target_path))
                     if not real_target.startswith(real_extract_dir):
                         return None, f"Path traversal attempt detected: {member}"
-                
+
                 # Safe to extract after validation
                 zf.extractall(extract_dir)
-            
+
             # Load manifest
             manifest_path = extract_dir / "manifest.json"
             if not manifest_path.exists():
                 return None, "Invalid chatbook: manifest.json not found"
-            
+
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest_data = json.load(f)
-            
+
             manifest = ChatbookManifest.from_dict(manifest_data)
-            
+
             return manifest, None
-            
+
         except Exception as e:
             logger.error(f"Error previewing chatbook: {e}")
             return None, f"Error previewing chatbook: {str(e)}"
@@ -1672,7 +1671,7 @@ class ChatbookService:
             except Exception as e:
                 logger.error(f"Core worker error: {e}")
                 await asyncio.sleep(1)
-    
+
     def get_export_job(self, job_id: str) -> Optional[ExportJob]:
         """Get export job status."""
         job = self._get_export_job(job_id)
@@ -1696,7 +1695,7 @@ class ChatbookService:
             except Exception:
                 pass
         return job
-    
+
     def get_import_job(self, job_id: str) -> Optional[ImportJob]:
         """Get import job status."""
         job = self._get_import_job(job_id)
@@ -1719,7 +1718,7 @@ class ChatbookService:
             except Exception:
                 pass
         return job
-    
+
     def list_export_jobs(self, status: Optional[str] = None, limit: int = 100) -> List[ExportJob]:
         """List all export jobs for this user."""
         try:
@@ -1727,13 +1726,13 @@ class ChatbookService:
                 "SELECT * FROM export_jobs WHERE user_id = ? ORDER BY created_at DESC",
                 (self.user_id,)
             )
-            
+
             # Fetch results from cursor
             results = self._fetch_results(cursor)
-            
+
             if not results:
                 return []
-            
+
             jobs: List[ExportJob] = []
             for row in results:
                 # Handle both dict and tuple formats (for test compatibility)
@@ -1750,7 +1749,7 @@ class ChatbookService:
                             else:
                                 return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
                         return ts
-                    
+
                     job = ExportJob(
                         job_id=row['job_id'],
                         user_id=row['user_id'],
@@ -1812,11 +1811,11 @@ class ChatbookService:
                     except Exception:
                         pass
                 jobs.append(job)
-            
+
             return jobs
         except Exception as e:
             logger.error(f"Error listing export jobs: {e}")
-            return []    
+            return []
     def list_import_jobs(self, status: Optional[str] = None, limit: int = 100) -> List[ImportJob]:
         """List all import jobs for this user."""
         try:
@@ -1824,13 +1823,13 @@ class ChatbookService:
                 "SELECT * FROM import_jobs WHERE user_id = ? ORDER BY created_at DESC",
                 (self.user_id,)
             )
-            
+
             # Fetch results from cursor
             results = self._fetch_results(cursor)
-            
+
             if not results:
                 return []
-                
+
             jobs: List[ImportJob] = []
             for row in results:
                 # Handle both dict and tuple formats (for test compatibility)
@@ -1847,7 +1846,7 @@ class ChatbookService:
                             else:
                                 return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
                         return ts
-                    
+
                     job = ImportJob(
                         job_id=row['job_id'],
                         user_id=row['user_id'],
@@ -1909,12 +1908,12 @@ class ChatbookService:
                     except Exception:
                         pass
                 jobs.append(job)
-            
+
             return jobs
         except Exception as e:
             logger.error(f"Error listing import jobs: {e}")
             return []
-    
+
     def cleanup_expired_exports(self) -> int:
         """Clean up expired export files. Returns number of files deleted."""
         try:
@@ -1960,7 +1959,7 @@ class ChatbookService:
         except Exception as e:
             logger.error(f"Error cleaning up expired exports: {e}")
             return 0
-    
+
     def _collect_prompts(
         self,
         prompt_ids: List[str],
@@ -2143,7 +2142,7 @@ class ChatbookService:
             normalized = self._normalize_evaluation_record(record)
             runs_payload: List[Dict[str, Any]] = []
             try:
-                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=200)
+                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=200, return_has_more=True)
                 runs_payload = [self._normalize_evaluation_run(run) for run in runs]
                 if has_more:
                     self._note_todo("Evaluation export limited to first 200 runs; add pagination support.")
@@ -2166,7 +2165,7 @@ class ChatbookService:
             ))
 
     # Helper methods for collecting content
-    
+
     def _collect_conversations(
         self,
         conversation_ids: List[str],
@@ -2177,17 +2176,17 @@ class ChatbookService:
         """Collect conversations for export."""
         conv_dir = work_dir / "content" / "conversations"
         conv_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for conv_id in conversation_ids:
             try:
                 # Get conversation
                 conv = self.db.get_conversation_by_id(conv_id)
                 if not conv:
                     continue
-                
+
                 # Get messages
                 messages = self.db.get_messages_for_conversation(conv_id)
-                
+
                 attachments_dir: Optional[Path] = None
                 conversation_messages: List[Dict[str, Any]] = []
                 for msg in (messages or []):
@@ -2241,15 +2240,15 @@ class ChatbookService:
                     "attachments_path": f"content/conversations/{attachments_dir.name}" if attachments_dir else None,
                     "messages": conversation_messages
                 }
-                
+
                 # Write to file
                 conv_file = conv_dir / f"conversation_{conv_id}.json"
                 with open(conv_file, 'w', encoding='utf-8') as f:
                     json.dump(conv_data, f, indent=2, ensure_ascii=False)
-                
+
                 # Add to content
                 content.conversations[conv_id] = conv_data
-                
+
                 # Add to manifest
                 manifest.content_items.append(ContentItem(
                     id=conv_id,
@@ -2257,10 +2256,10 @@ class ChatbookService:
                     title=conv_data['name'],
                     file_path=f"content/conversations/conversation_{conv_id}.json"
                 ))
-                
+
             except Exception as e:
                 logger.error(f"Error collecting conversation {conv_id}: {e}")
-    
+
     def _collect_notes(
         self,
         note_ids: List[str],
@@ -2271,14 +2270,14 @@ class ChatbookService:
         """Collect notes for export."""
         notes_dir = work_dir / "content" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for note_id in note_ids:
             try:
                 # Get note
                 note = self.db.get_note_by_id(note_id)
                 if not note:
                     continue
-                
+
                 # Create note data
                 note_data = {
                     "id": note['id'],
@@ -2286,7 +2285,7 @@ class ChatbookService:
                     "content": note['content'],
                     "created_at": note['created_at'].isoformat() if hasattr(note['created_at'], 'isoformat') else note['created_at']
                 }
-                
+
                 # Write markdown file
                 note_file = notes_dir / f"note_{note_id}.md"
                 with open(note_file, 'w', encoding='utf-8') as f:
@@ -2297,10 +2296,10 @@ class ChatbookService:
                     f.write(f"created_at: {note_data['created_at']}\n")
                     f.write("---\n\n")
                     f.write(note['content'])
-                
+
                 # Add to content
                 content.notes[note_id] = note_data
-                
+
                 # Add to manifest
                 manifest.content_items.append(ContentItem(
                     id=note_id,
@@ -2308,10 +2307,10 @@ class ChatbookService:
                     title=note['title'],
                     file_path=f"content/notes/note_{note_id}.md"
                 ))
-                
+
             except Exception as e:
                 logger.error(f"Error collecting note {note_id}: {e}")
-    
+
     def _collect_characters(
         self,
         character_ids: List[str],
@@ -2322,22 +2321,22 @@ class ChatbookService:
         """Collect character cards for export."""
         chars_dir = work_dir / "content" / "characters"
         chars_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for char_id in character_ids:
             try:
                 # Get character
                 char = self.db.get_character_card_by_id(int(char_id))
                 if not char:
                     continue
-                
+
                 # Write character file
                 char_file = chars_dir / f"character_{char_id}.json"
                 with open(char_file, 'w', encoding='utf-8') as f:
                     json.dump(char, f, indent=2, ensure_ascii=False)
-                
+
                 # Add to content
                 content.characters[char_id] = char
-                
+
                 # Add to manifest
                 manifest.content_items.append(ContentItem(
                     id=char_id,
@@ -2345,10 +2344,10 @@ class ChatbookService:
                     title=char.get('name', 'Unnamed'),
                     file_path=f"content/characters/character_{char_id}.json"
                 ))
-                
+
             except Exception as e:
                 logger.error(f"Error collecting character {char_id}: {e}")
-    
+
     def _collect_world_books(
         self,
         world_book_ids: List[str],
@@ -2359,19 +2358,19 @@ class ChatbookService:
         """Collect world books for export."""
         wb_dir = work_dir / "content" / "world_books"
         wb_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Import the world book service
         from ..Character_Chat.world_book_manager import WorldBookService
-        
+
         wb_service = WorldBookService(self.db)
-        
+
         for wb_id in world_book_ids:
             try:
                 # Get world book with entries
                 wb_data = wb_service.get_world_book(int(wb_id))
                 if not wb_data:
                     continue
-                
+
                 # Convert datetime objects to strings for JSON serialization
                 def convert_datetimes(obj):
                     if isinstance(obj, dict):
@@ -2381,17 +2380,17 @@ class ChatbookService:
                     elif isinstance(obj, datetime):
                         return obj.isoformat()
                     return obj
-                
+
                 wb_data_serializable = convert_datetimes(wb_data)
-                
+
                 # Write world book file
                 wb_file = wb_dir / f"world_book_{wb_id}.json"
                 with open(wb_file, 'w', encoding='utf-8') as f:
                     json.dump(wb_data_serializable, f, indent=2, ensure_ascii=False)
-                
+
                 # Add to content
                 content.world_books[wb_id] = wb_data
-                
+
                 # Add to manifest
                 manifest.content_items.append(ContentItem(
                     id=wb_id,
@@ -2399,10 +2398,10 @@ class ChatbookService:
                     title=wb_data.get('name', 'Unnamed'),
                     file_path=f"content/world_books/world_book_{wb_id}.json"
                 ))
-                
+
             except Exception as e:
                 logger.error(f"Error collecting world book {wb_id}: {e}")
-    
+
     def _collect_dictionaries(
         self,
         dictionary_ids: List[str],
@@ -2413,19 +2412,19 @@ class ChatbookService:
         """Collect chat dictionaries for export."""
         dict_dir = work_dir / "content" / "dictionaries"
         dict_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Import the dictionary service
         from ..Character_Chat.chat_dictionary import ChatDictionaryService
-        
+
         dict_service = ChatDictionaryService(self.db)
-        
+
         for dict_id in dictionary_ids:
             try:
                 # Get dictionary with entries
                 dict_data = dict_service.get_dictionary(int(dict_id))
                 if not dict_data:
                     continue
-                
+
                 # Convert datetime objects to strings for JSON serialization
                 def convert_datetimes(obj):
                     if isinstance(obj, dict):
@@ -2435,17 +2434,17 @@ class ChatbookService:
                     elif isinstance(obj, datetime):
                         return obj.isoformat()
                     return obj
-                
+
                 dict_data_serializable = convert_datetimes(dict_data)
-                
+
                 # Write dictionary file
                 dict_file = dict_dir / f"dictionary_{dict_id}.json"
                 with open(dict_file, 'w', encoding='utf-8') as f:
                     json.dump(dict_data_serializable, f, indent=2, ensure_ascii=False)
-                
+
                 # Add to content
                 content.dictionaries[dict_id] = dict_data
-                
+
                 # Add to manifest
                 manifest.content_items.append(ContentItem(
                     id=dict_id,
@@ -2453,10 +2452,10 @@ class ChatbookService:
                     title=dict_data.get('name', 'Unnamed'),
                     file_path=f"content/dictionaries/dictionary_{dict_id}.json"
                 ))
-                
+
             except Exception as e:
                 logger.error(f"Error collecting dictionary {dict_id}: {e}")
-    
+
     def _collect_generated_documents(
         self,
         document_ids: List[str],
@@ -2467,27 +2466,27 @@ class ChatbookService:
         """Collect generated documents for export."""
         docs_dir = work_dir / "content" / "generated_documents"
         docs_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Import the document generator service
         from ..Chat.document_generator import DocumentGeneratorService
-        
+
         doc_service = DocumentGeneratorService(self.db, self.user_id)
-        
+
         for doc_id in document_ids:
             try:
                 # Get document
                 doc = doc_service.get_document(doc_id)
                 if not doc:
                     continue
-                
+
                 # Write document file
                 doc_file = docs_dir / f"document_{doc_id}.json"
                 with open(doc_file, 'w', encoding='utf-8') as f:
                     json.dump(doc, f, indent=2, ensure_ascii=False)
-                
+
                 # Add to content
                 content.generated_documents[doc_id] = doc
-                
+
                 # Add to manifest
                 manifest.content_items.append(ContentItem(
                     id=doc_id,
@@ -2495,12 +2494,12 @@ class ChatbookService:
                     title=doc.get('title', 'Untitled'),
                     file_path=f"content/generated_documents/document_{doc_id}.json"
                 ))
-                
+
             except Exception as e:
                 logger.error(f"Error collecting document {doc_id}: {e}")
-    
+
     # Helper methods for importing content
-    
+
     def _import_conversations(
         self,
         extract_dir: Path,
@@ -2512,10 +2511,10 @@ class ChatbookService:
     ):
         """Import conversations from chatbook."""
         conv_dir = extract_dir / "content" / "conversations"
-        
+
         for conv_id in conversation_ids:
             status.processed_items += 1
-            
+
             try:
                 # Load conversation file
                 conv_file = conv_dir / f"conversation_{conv_id}.json"
@@ -2523,22 +2522,22 @@ class ChatbookService:
                     status.failed_items += 1
                     status.warnings.append(f"Conversation file not found: {conv_file.name}")
                     continue
-                
+
                 with open(conv_file, 'r', encoding='utf-8') as f:
                     conv_data = json.load(f)
-                
+
                 # Check for existing conversation
                 conv_name = conv_data['name']
                 if prefix_imported:
                     conv_name = f"[Imported] {conv_name}"
-                
+
                 existing = self._get_conversation_by_name(conv_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
                     status.skipped_items += 1
                     continue
                 elif existing and conflict_resolution == ConflictResolution.RENAME:
                     conv_name = self._generate_unique_name(conv_name, "conversation")
-                
+
                 # Create conversation
                 conv_dict = {
                     'title': conv_name,
@@ -2546,7 +2545,7 @@ class ChatbookService:
                     'character_id': conv_data.get('character_id')
                 }
                 new_conv_id = self.db.add_conversation(conv_dict)
-                
+
                 if new_conv_id:
                     # Import messages
                     base_path = extract_dir.resolve()
@@ -2592,7 +2591,7 @@ class ChatbookService:
                             msg_dict['images'] = images_payload
 
                         self.db.add_message(msg_dict)
-                    
+
                     status.successful_items += 1
                 else:
                     # If add failed, it might be a duplicate not caught by search
@@ -2601,11 +2600,11 @@ class ChatbookService:
                         status.skipped_items += 1
                     else:
                         status.failed_items += 1
-                    
+
             except Exception as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing conversation {conv_id}: {str(e)}")
-    
+
     def _import_notes(
         self,
         extract_dir: Path,
@@ -2617,10 +2616,10 @@ class ChatbookService:
     ):
         """Import notes from chatbook."""
         notes_dir = extract_dir / "content" / "notes"
-        
+
         for note_id in note_ids:
             status.processed_items += 1
-            
+
             try:
                 # Find note file
                 note_file = notes_dir / f"note_{note_id}.md"
@@ -2628,15 +2627,15 @@ class ChatbookService:
                     status.failed_items += 1
                     status.warnings.append(f"Note file not found: {note_file.name}")
                     continue
-                
+
                 # Parse markdown with frontmatter
                 with open(note_file, 'r', encoding='utf-8') as f:
                     content = f.read()
-                
+
                 # Extract frontmatter
                 note_content = content
                 note_title = f"Imported Note {note_id}"
-                
+
                 if content.startswith('---'):
                     parts = content.split('---', 2)
                     if len(parts) >= 3:
@@ -2646,10 +2645,10 @@ class ChatbookService:
                             if line.startswith('title:'):
                                 note_title = line.replace('title:', '').strip()
                         note_content = parts[2].strip()
-                
+
                 if prefix_imported:
                     note_title = f"[Imported] {note_title}"
-                
+
                 # Check for existing note
                 existing = self._get_note_by_title(note_title)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
@@ -2657,10 +2656,10 @@ class ChatbookService:
                     continue
                 elif existing and conflict_resolution == ConflictResolution.RENAME:
                     note_title = self._generate_unique_name(note_title, "note")
-                
+
                 # Create note
                 new_note_id = self.db.add_note(title=note_title, content=note_content)
-                
+
                 if new_note_id:
                     status.successful_items += 1
                 else:
@@ -2670,11 +2669,11 @@ class ChatbookService:
                         status.skipped_items += 1
                     else:
                         status.failed_items += 1
-                    
+
             except Exception as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing note {note_id}: {str(e)}")
-    
+
     def _import_characters(
         self,
         extract_dir: Path,
@@ -2686,10 +2685,10 @@ class ChatbookService:
     ):
         """Import character cards from chatbook."""
         chars_dir = extract_dir / "content" / "characters"
-        
+
         for char_id in character_ids:
             status.processed_items += 1
-            
+
             try:
                 # Load character file
                 char_file = chars_dir / f"character_{char_id}.json"
@@ -2697,16 +2696,16 @@ class ChatbookService:
                     status.failed_items += 1
                     status.warnings.append(f"Character file not found: {char_file.name}")
                     continue
-                
+
                 with open(char_file, 'r', encoding='utf-8') as f:
                     char_data = json.load(f)
-                
+
                 # Check for existing character
                 char_name = char_data.get('name', 'Unnamed')
                 if prefix_imported:
                     char_name = f"[Imported] {char_name}"
                     char_data['name'] = char_name
-                
+
                 existing = self.db.get_character_card_by_name(char_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
                     status.skipped_items += 1
@@ -2714,10 +2713,10 @@ class ChatbookService:
                 elif existing and conflict_resolution == ConflictResolution.RENAME:
                     char_name = self._generate_unique_name(char_name, "character")
                     char_data['name'] = char_name
-                
+
                 # Create character
                 new_char_id = self.db.add_character_card(char_data)
-                
+
                 if new_char_id:
                     status.successful_items += 1
                 else:
@@ -2727,11 +2726,11 @@ class ChatbookService:
                         status.skipped_items += 1
                     else:
                         status.failed_items += 1
-                    
+
             except Exception as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing character {char_id}: {str(e)}")
-    
+
     def _import_world_books(
         self,
         extract_dir: Path,
@@ -2743,14 +2742,14 @@ class ChatbookService:
     ):
         """Import world books from chatbook."""
         wb_dir = extract_dir / "content" / "world_books"
-        
+
         # Import the world book service
         from ..Character_Chat.world_book_manager import WorldBookService
         wb_service = WorldBookService(self.db)
-        
+
         for wb_id in world_book_ids:
             status.processed_items += 1
-            
+
             try:
                 # Load world book file
                 wb_file = wb_dir / f"world_book_{wb_id}.json"
@@ -2758,16 +2757,16 @@ class ChatbookService:
                     status.failed_items += 1
                     status.warnings.append(f"World book file not found: {wb_file.name}")
                     continue
-                
+
                 with open(wb_file, 'r', encoding='utf-8') as f:
                     wb_data = json.load(f)
-                
+
                 # Handle import with conflict resolution
                 wb_name = wb_data.get('name', 'Unnamed')
                 if prefix_imported:
                     wb_name = f"[Imported] {wb_name}"
                     wb_data['name'] = wb_name
-                
+
                 # Check for existing world book
                 existing = wb_service.get_world_book_by_name(wb_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
@@ -2776,19 +2775,19 @@ class ChatbookService:
                 elif existing and conflict_resolution == ConflictResolution.RENAME:
                     wb_name = self._generate_unique_name(wb_name, "world_book")
                     wb_data['name'] = wb_name
-                
+
                 # Import world book
                 success = wb_service.import_world_book(wb_data)
-                
+
                 if success:
                     status.successful_items += 1
                 else:
                     status.failed_items += 1
-                    
+
             except Exception as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing world book {wb_id}: {str(e)}")
-    
+
     def _import_dictionaries(
         self,
         extract_dir: Path,
@@ -2800,14 +2799,14 @@ class ChatbookService:
     ):
         """Import chat dictionaries from chatbook."""
         dict_dir = extract_dir / "content" / "dictionaries"
-        
+
         # Import the dictionary service
         from ..Character_Chat.chat_dictionary import ChatDictionaryService
         dict_service = ChatDictionaryService(self.db)
-        
+
         for dict_id in dictionary_ids:
             status.processed_items += 1
-            
+
             try:
                 # Load dictionary file
                 dict_file = dict_dir / f"dictionary_{dict_id}.json"
@@ -2815,16 +2814,16 @@ class ChatbookService:
                     status.failed_items += 1
                     status.warnings.append(f"Dictionary file not found: {dict_file.name}")
                     continue
-                
+
                 with open(dict_file, 'r', encoding='utf-8') as f:
                     dict_data = json.load(f)
-                
+
                 # Handle import with conflict resolution
                 dict_name = dict_data.get('name', 'Unnamed')
                 if prefix_imported:
                     dict_name = f"[Imported] {dict_name}"
                     dict_data['name'] = dict_name
-                
+
                 # Check for existing dictionary
                 existing = dict_service.get_dictionary_by_name(dict_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
@@ -2833,14 +2832,14 @@ class ChatbookService:
                 elif existing and conflict_resolution == ConflictResolution.RENAME:
                     dict_name = self._generate_unique_name(dict_name, "dictionary")
                     dict_data['name'] = dict_name
-                
+
                 # Create dictionary
                 new_dict_id = dict_service.create_dictionary(
                     dict_name,
                     dict_data.get('description', ''),
                     dict_data.get('is_active', True)
                 )
-                
+
                 if new_dict_id:
                     # Import entries
                     for entry in dict_data.get('entries', []):
@@ -2855,13 +2854,13 @@ class ChatbookService:
                     status.successful_items += 1
                 else:
                     status.failed_items += 1
-                    
+
             except Exception as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing dictionary {dict_id}: {str(e)}")
-    
+
     # Database helper methods
-    
+
     def _save_export_job(self, job: ExportJob):
         """Save export job to database with transaction."""
         def _save():
@@ -2874,7 +2873,7 @@ class ChatbookService:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job.job_id, job.user_id, job.status.value, job.chatbook_name,
-                job.output_path, 
+                job.output_path,
                 job.created_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.created_at else None,
                 job.started_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.started_at else None,
                 job.completed_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.completed_at else None,
@@ -2882,13 +2881,13 @@ class ChatbookService:
                 job.processed_items, job.file_size_bytes, job.download_url,
                 job.expires_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.expires_at else None
             ), commit=True)
-        
+
         try:
             self._with_transaction(_save)
         except Exception as e:
             logger.error(f"Error saving export job: {e}")
             raise
-    
+
     def _get_export_job(self, job_id: str) -> Optional[ExportJob]:
         """Get export job from database."""
         try:
@@ -2896,16 +2895,16 @@ class ChatbookService:
                 "SELECT * FROM export_jobs WHERE job_id = ? AND user_id = ?",
                 (job_id, self.user_id)
             )
-            
+
             # Fetch results from cursor
             results = self._fetch_results(cursor)
-            
+
             if not results:
                 return None
-            
+
             row = results[0]
             logger.debug(f"Retrieved row type: {type(row)}, content: {row}")
-            
+
             # Handle both dict (from real DB) and tuple (from mocked tests)
             if isinstance(row, tuple):
                 # Convert tuple to dict using expected field order.
@@ -2930,7 +2929,7 @@ class ChatbookService:
                     'metadata': col13 if is_json_like else None,
                     'expires_at': row[14] if len(row) > 14 else None
                 }
-            
+
             # Parse metadata if it's a JSON string
             metadata = {}
             if 'metadata' in row and row['metadata']:
@@ -2941,7 +2940,7 @@ class ChatbookService:
                         logger.warning(f"Failed to parse metadata JSON: {row['metadata']}")
                 elif isinstance(row['metadata'], dict):
                     metadata = row['metadata']
-            
+
             return ExportJob(
                 job_id=row['job_id'],
                 user_id=row['user_id'],
@@ -2965,7 +2964,7 @@ class ChatbookService:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
-    
+
     def _save_import_job(self, job: ImportJob):
         """Save import job to database with transaction."""
         def _save():
@@ -2986,13 +2985,13 @@ class ChatbookService:
                 job.processed_items, job.successful_items, job.failed_items,
                 job.skipped_items, json.dumps(job.conflicts), json.dumps(job.warnings)
             ), commit=True)
-        
+
         try:
             self._with_transaction(_save)
         except Exception as e:
             logger.error(f"Error saving import job: {e}")
             raise
-    
+
     def _get_import_job(self, job_id: str) -> Optional[ImportJob]:
         """Get import job from database."""
         try:
@@ -3000,15 +2999,15 @@ class ChatbookService:
                 "SELECT * FROM import_jobs WHERE job_id = ? AND user_id = ?",
                 (job_id, self.user_id)
             )
-            
+
             # Fetch results from cursor
             results = self._fetch_results(cursor)
-            
+
             if not results:
                 return None
-            
+
             row = results[0]
-            
+
             # Handle both dict (from real DB) and tuple (from mocked tests)
             if isinstance(row, tuple):
                 # Convert tuple to dict using expected field order
@@ -3030,7 +3029,7 @@ class ChatbookService:
                     'conflicts': row[14] if len(row) > 14 else '[]',
                     'warnings': row[15] if len(row) > 15 else '[]'
                 }
-            
+
             return ImportJob(
                 job_id=row['job_id'],
                 user_id=row['user_id'],
@@ -3052,13 +3051,13 @@ class ChatbookService:
         except Exception as e:
             logger.error(f"Error getting import job: {e}")
             return None
-    
+
     def _generate_unique_name(self, base_name: str, item_type: str) -> str:
         """Generate a unique name for an item."""
         counter = 1
         while True:
             new_name = f"{base_name} ({counter})"
-            
+
             # Check if name exists based on item type
             if item_type == "conversation":
                 if not self.db.get_conversation_by_name(new_name):
@@ -3087,20 +3086,20 @@ class ChatbookService:
                 rows = self._fetch_results(result) if result is not None else []
                 if not rows:
                     return new_name
-            
+
             counter += 1
-    
+
     # Additional methods for test compatibility
-    
+
     def create_export_job(self, name: str, description: str, content_types: List[str]) -> Dict[str, Any]:
         """
         Create an export job (synchronous wrapper for tests).
-        
+
         Args:
             name: Export name
-            description: Export description  
+            description: Export description
             content_types: Content types to export
-            
+
         Returns:
             Job information dictionary
         """
@@ -3113,11 +3112,11 @@ class ChatbookService:
                 chatbook_name=name,
                 created_at=datetime.utcnow()
             )
-            
+
             self._save_export_job(job)
-            
+
             # Audit is performed at the API layer.
-            
+
             return {
                 "job_id": job_id,
                 "status": "pending",
@@ -3126,22 +3125,22 @@ class ChatbookService:
             }
         except Exception as e:
             raise JobError(f"Failed to create export job: {e}", job_type="export", cause=e)
-    
+
     def get_export_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get export job status."""
         job = self._get_export_job(job_id)
         if not job:
             raise JobError(f"Export job {job_id} not found", job_id=job_id)
-        
+
         result = job.to_dict()
         # Ensure status is a string value
         if hasattr(job.status, 'value'):
             result["status"] = job.status.value
-        
+
         # Add computed fields
         result["file_path"] = job.output_path
         result["chatbook_name"] = job.chatbook_name
-        
+
         # Add content summary if available
         if job.metadata:
             result["content_summary"] = job.metadata.get("content_summary", {})
@@ -3154,18 +3153,18 @@ class ChatbookService:
                 result["content_summary"]["characters"] = job.metadata.get("character_count", 0)
         else:
             result["content_summary"] = {}
-        
+
         return result
-    
+
     def cancel_export_job(self, job_id: str) -> bool:
         """Cancel an export job."""
         job = self._get_export_job(job_id)
         if not job:
             raise JobError(f"Export job {job_id} not found", job_id=job_id)
-        
+
         if job.status in [ExportStatus.COMPLETED, ExportStatus.FAILED]:
             return False
-        
+
         job.status = ExportStatus.CANCELLED
         self._save_export_job(job)
         # Best-effort cancel of in-process task
@@ -3198,9 +3197,9 @@ class ChatbookService:
                             pass
             except Exception:
                 pass
-        
+
         # Audit is performed at the API layer.
-        
+
         return True
 
     def cancel_import_job(self, job_id: str) -> bool:
@@ -3239,15 +3238,15 @@ class ChatbookService:
             except Exception:
                 pass
         return True
-    
+
     def create_import_job(self, file_path: str, conflict_strategy: str = "skip") -> Dict[str, Any]:
         """
         Create an import job (synchronous wrapper for tests).
-        
+
         Args:
             file_path: Path to import file
             conflict_strategy: How to handle conflicts
-            
+
         Returns:
             Job information dictionary
         """
@@ -3260,9 +3259,9 @@ class ChatbookService:
                 chatbook_path=file_path,
                 created_at=datetime.utcnow()
             )
-            
+
             self._save_import_job(job)
-            
+
             return {
                 "job_id": job_id,
                 "status": "pending",
@@ -3270,18 +3269,18 @@ class ChatbookService:
             }
         except Exception as e:
             raise JobError(f"Failed to create import job: {e}", job_type="import", cause=e)
-    
+
     def get_import_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get import job status."""
         job = self._get_import_job(job_id)
         if not job:
             raise JobError(f"Import job {job_id} not found", job_id=job_id)
-        
+
         result = job.to_dict()
         # Ensure status is a string value
         if hasattr(job.status, 'value'):
             result["status"] = job.status.value
-        
+
         # Add compatibility fields
         result["items_imported"] = job.successful_items
         result["error"] = job.error_message
@@ -3292,26 +3291,26 @@ class ChatbookService:
             "replaced": 0,
             "renamed": 0
         }
-        
+
         return result
-    
+
     def preview_export(self, content_types: List[str]) -> Dict[str, Any]:
         """
         Preview what would be exported.
-        
+
         Args:
             content_types: Types of content to preview
-            
+
         Returns:
             Preview information with counts
         """
         try:
             result = {}
-            
+
             # Initialize all content types to 0
             for ct in ["conversations", "characters", "world_books", "dictionaries", "notes", "prompts"]:
                 result[ct] = 0
-            
+
             # Get actual counts for requested types
             for content_type in content_types:
                 try:
@@ -3331,7 +3330,7 @@ class ChatbookService:
                         result["characters"] = len(items) if items else 0
                     elif content_type == "notes":
                         cursor = self.db.execute_query(
-                            "SELECT id FROM notes WHERE deleted = 0", 
+                            "SELECT id FROM notes WHERE deleted = 0",
                             ()
                         )
                         items = self._fetch_results(cursor)
@@ -3379,34 +3378,34 @@ class ChatbookService:
                     # If query fails for any type, just set to 0
                     logger.debug(f"Query failed for {content_type}: {e}")
                     result[content_type] = 0
-            
+
             return result
         except Exception as e:
             raise DatabaseError(f"Failed to preview export: {e}", cause=e)
-    
+
     def clean_old_exports(self, days_old: int = 7) -> int:
         """
         Clean up old export files.
-        
+
         Args:
             days_old: Delete exports older than this many days
-            
+
         Returns:
             Number of files deleted
         """
         try:
             deleted_count = 0
             cutoff_date = datetime.now() - timedelta(days=days_old)
-            
+
             # Query database for old exports
             cursor = self.db.execute_query(
                 "SELECT job_id, output_path FROM export_jobs WHERE user_id = ? AND created_at < ?",
                 (self.user_id, cutoff_date.isoformat())
             )
-            
+
             # Fetch results from cursor
             results = self._fetch_results(cursor)
-            
+
             if results:
                 for row in results:
                     # Handle both tuple and dict formats
@@ -3416,7 +3415,7 @@ class ChatbookService:
                     else:
                         job_id = row[0] if len(row) > 0 else None
                         output_path = row[1] if len(row) > 1 else None
-                    
+
                     if output_path and os.path.exists(output_path):
                         try:
                             os.unlink(output_path)
@@ -3424,7 +3423,7 @@ class ChatbookService:
                             logger.info(f"Deleted old export: {output_path}")
                         except Exception as e:
                             logger.error(f"Failed to delete {output_path}: {e}")
-                    
+
                     # Delete from database
                     try:
                         self.db.execute_query(
@@ -3433,20 +3432,20 @@ class ChatbookService:
                         )
                     except Exception as e:
                         logger.error(f"Failed to delete job record {job_id}: {e}")
-            
+
             # Audit is performed at the API layer.
-            
+
             return deleted_count
         except Exception as e:
             raise FileOperationError(f"Failed to clean old exports: {e}", operation="cleanup", cause=e)
-    
+
     def validate_chatbook(self, file_path: str) -> bool:
         """
         Validate a chatbook file.
-        
+
         Args:
             file_path: Path to chatbook file
-            
+
         Returns:
             True if valid
         """
@@ -3455,17 +3454,17 @@ class ChatbookService:
                 # Check for manifest
                 if 'manifest.json' not in zf.namelist():
                     raise ValidationError("Missing manifest.json", field="manifest")
-                
+
                 # Validate manifest structure
                 manifest_data = zf.read('manifest.json')
                 manifest = json.loads(manifest_data)
-                
+
                 # Check required fields
                 required_fields = ['version', 'name', 'description']
                 for field in required_fields:
                     if field not in manifest:
                         raise ValidationError(f"Missing required field: {field}", field=field)
-                
+
                 return True
         except zipfile.BadZipFile:
             raise ArchiveError("Invalid ZIP file", archive_path=file_path)
@@ -3473,21 +3472,21 @@ class ChatbookService:
             if isinstance(e, (ValidationError, ArchiveError)):
                 raise
             raise ValidationError(f"Validation failed: {e}", cause=e)
-    
+
     def validate_chatbook_file(self, file_path: str) -> Dict[str, Any]:
         """
         Validate a chatbook file (test compatibility method).
-        
+
         Args:
             file_path: Path to chatbook file
-            
+
         Returns:
             Dict with validation results
         """
         try:
             # Try to validate using the main method
             is_valid = self.validate_chatbook(file_path)
-            
+
             # If valid, try to get manifest
             manifest = None
             if is_valid:
@@ -3497,7 +3496,7 @@ class ChatbookService:
                         manifest = json.loads(manifest_data)
                 except Exception as mf_err:
                     logger.debug(f"Failed to read chatbook manifest.json: path={file_path}, error={mf_err}")
-            
+
             return {
                 "is_valid": is_valid,
                 "manifest": manifest,
@@ -3509,7 +3508,7 @@ class ChatbookService:
                 "manifest": None,
                 "error": str(e)
             }
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get import/export statistics."""
         try:
@@ -3519,14 +3518,14 @@ class ChatbookService:
                 (self.user_id,)
             )
             export_results = self._fetch_results(export_cursor)
-            
+
             # Get import stats
             import_cursor = self.db.execute_query(
                 "SELECT status, COUNT(*) as count FROM import_jobs WHERE user_id = ? GROUP BY status",
                 (self.user_id,)
             )
             import_results = self._fetch_results(import_cursor)
-            
+
             # Build stats dict - handle both dict and tuple formats
             export_stats = {}
             for row in (export_results or []):
@@ -3535,7 +3534,7 @@ class ChatbookService:
                 else:
                     # Tuple format (status, count)
                     export_stats[row[0]] = row[1]
-            
+
             import_stats = {}
             for row in (import_results or []):
                 if isinstance(row, dict):
@@ -3543,7 +3542,7 @@ class ChatbookService:
                 else:
                     # Tuple format (status, count)
                     import_stats[row[0]] = row[1]
-            
+
             return {
                 "exports": export_stats,
                 "imports": import_stats,
@@ -3558,9 +3557,9 @@ class ChatbookService:
                 "total_exports": 0,
                 "total_imports": 0
             }
-    
+
     # Removed legacy JobQueueShim handlers; Chatbooks uses in-process tasks (core) or PS adapter (prompt_studio).
-    
+
     def _create_chatbook_archive(self, work_dir: Path, output_path: Path) -> bool:
         """Create ZIP archive from work directory."""
         try:
@@ -3573,26 +3572,26 @@ class ChatbookService:
         except Exception as e:
             logger.error(f"Failed to create archive: {e}")
             return False
-    
+
     def _write_content_to_archive(self, zf: zipfile.ZipFile, content_items: List[ContentItem], base_dir: str = "content"):
         """Write content items to archive."""
         for item in content_items:
             # Create item directory
             item_dir = f"{base_dir}/{item.type.value}/{item.id}"
-            
+
             # Write item metadata
             metadata = item.to_dict()
             zf.writestr(f"{item_dir}/metadata.json", json.dumps(metadata, indent=2))
-            
+
             # Write content if available
             if item.metadata:
                 zf.writestr(f"{item_dir}/content.json", json.dumps(item.metadata, indent=2))
-    
+
     def _process_import_items(self, items: List[ContentItem], conflict_resolution: str = "skip") -> ImportStatusData:
         """Process import items with conflict resolution."""
         status = ImportStatusData()
         status.total_items = len(items)
-        
+
         for item in items:
             try:
                 # Check for conflicts
@@ -3602,7 +3601,7 @@ class ChatbookService:
                         "SELECT * FROM conversations WHERE id = ? AND user_id = ?",
                         (item.id, self.user_id)
                     )
-                
+
                 if existing and conflict_resolution == "skip":
                     status.skipped_items += 1
                     status.conflicts.append({"item_id": item.id, "action": "skipped"})
@@ -3616,23 +3615,23 @@ class ChatbookService:
             except Exception as e:
                 status.failed_items += 1
                 status.warnings.append(f"Failed to import {item.id}: {str(e)}")
-        
+
         return status
-    
+
     async def _create_readme_async(self, work_dir: Path, manifest: ChatbookManifest):
         """Create README file for the chatbook asynchronously."""
         readme_path = work_dir / "README.md"
-        
+
         content = []
         content.append(f"# {manifest.name}\n\n")
         content.append(f"{manifest.description}\n\n")
-        
+
         if manifest.author:
             content.append(f"**Author:** {manifest.author}\n\n")
-        
+
         content.append(f"**Created:** {manifest.created_at.strftime('%Y-%m-%d %H:%M')}\n\n")
         content.append("## Contents\n\n")
-        
+
         if manifest.total_conversations > 0:
             content.append(f"- **Conversations:** {manifest.total_conversations}\n")
         if manifest.total_notes > 0:
@@ -3645,31 +3644,31 @@ class ChatbookService:
             content.append(f"- **Dictionaries:** {manifest.total_dictionaries}\n")
         if manifest.total_documents > 0:
             content.append(f"- **Generated Documents:** {manifest.total_documents}\n")
-        
+
         if manifest.tags:
             content.append(f"\n## Tags\n\n{', '.join(manifest.tags)}\n")
-        
+
         content.append("\n## License\n\n")
         content.append(manifest.license or "See individual content files for licensing information.")
-        
+
         async with aiofiles.open(readme_path, 'w', encoding='utf-8') as f:
             await f.write(''.join(content))
-    
+
     def _create_readme(self, work_dir: Path, manifest: ChatbookManifest):
         """Create README file for the chatbook (sync version for backwards compatibility)."""
         readme_path = work_dir / "README.md"
-        
+
         with open(readme_path, 'w', encoding='utf-8') as f:
             f.write(f"# {manifest.name}\n\n")
             f.write(f"{manifest.description}\n\n")
-            
+
             if manifest.author:
                 f.write(f"**Author:** {manifest.author}\n\n")
-            
+
             f.write(f"**Created:** {manifest.created_at.strftime('%Y-%m-%d %H:%M')}\n\n")
-            
+
             f.write("## Contents\n\n")
-            
+
             if manifest.total_conversations > 0:
                 f.write(f"- **Conversations:** {manifest.total_conversations}\n")
             if manifest.total_notes > 0:
@@ -3682,13 +3681,13 @@ class ChatbookService:
                 f.write(f"- **Dictionaries:** {manifest.total_dictionaries}\n")
             if manifest.total_documents > 0:
                 f.write(f"- **Generated Documents:** {manifest.total_documents}\n")
-            
+
             if manifest.tags:
                 f.write(f"\n## Tags\n\n{', '.join(manifest.tags)}\n")
-            
+
             f.write("\n## License\n\n")
             f.write(manifest.license or "See individual content files for licensing information.")
-    
+
     def _validate_zip_file(self, file_path: str) -> bool:
         """Delegate to ChatbookValidator for ZIP validation (compatibility shim)."""
         try:
@@ -3697,7 +3696,7 @@ class ChatbookService:
             return bool(ok)
         except Exception:
             return False
-    
+
     async def _create_zip_archive_async(self, work_dir: Path, output_path: Path):
         """Create ZIP archive of the chatbook asynchronously with compression limits."""
         def _create_archive():
@@ -3710,17 +3709,17 @@ class ChatbookService:
                         if file_size > 50 * 1024 * 1024:  # 50MB per file limit
                             logger.warning(f"Skipping large file: {file_path} ({file_size} bytes)")
                             continue
-                        
+
                         total_size += file_size
                         if total_size > 500 * 1024 * 1024:  # 500MB total limit
                             raise ValueError("Archive size exceeds 500MB limit")
-                        
+
                         arcname = file_path.relative_to(work_dir)
                         zf.write(file_path, arcname)
-        
+
         # Run in thread pool to avoid blocking
         await asyncio.to_thread(_create_archive)
-    
+
     def _create_zip_archive(self, work_dir: Path, output_path: Path):
         """Create ZIP archive of the chatbook with compression limits (sync version)."""
         with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -3732,10 +3731,10 @@ class ChatbookService:
                     if file_size > 50 * 1024 * 1024:  # 50MB per file limit
                         logger.warning(f"Skipping large file: {file_path} ({file_size} bytes)")
                         continue
-                    
+
                     total_size += file_size
                     if total_size > 500 * 1024 * 1024:  # 500MB total limit
                         raise ValueError("Archive size exceeds 500MB limit")
-                    
+
                     arcname = file_path.relative_to(work_dir)
                     zf.write(file_path, arcname)

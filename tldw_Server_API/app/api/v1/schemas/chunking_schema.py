@@ -50,9 +50,9 @@ class LLMOptionsForChunkerInternalSteps(BaseModel):
 
 class ChunkingOptionsRequest(BaseModel):
     # Template-based chunking (takes precedence over other options if specified)
-    template_name: Optional[str] = Field(None, 
+    template_name: Optional[str] = Field(None,
                                         description="Name of a chunking template to use. If specified, template settings override individual parameters.")
-    
+
     # Core Chunking Method & Basic Parameters
     method: Optional[str] = Field(default_chunk_options_from_lib.get('method'),
                                   description="Chunking method (e.g., 'words', 'sentences', 'propositions', 'json', 'semantic', 'xml', 'ebook_chapters', 'rolling_summarize').")
@@ -129,21 +129,21 @@ class ChunkingOptionsRequest(BaseModel):
         except (ValueError, TypeError): raise ValueError(f"Field '{info.field_name}' must be a float. Got: '{v}'")
 
     @model_validator(mode='after')
-    def check_overlap_less_than_max_size(cls, values: 'ChunkingOptionsRequest') -> 'ChunkingOptionsRequest':
-        max_size, overlap = values.max_size, values.overlap
-        current_method = values.method or default_chunk_options_from_lib.get('method')
+    def check_overlap_less_than_max_size(self) -> 'ChunkingOptionsRequest':
+        max_size, overlap = self.max_size, self.overlap
+        current_method = self.method or default_chunk_options_from_lib.get('method')
         if max_size is not None and overlap is not None:
             if current_method in ['words', 'sentences', 'tokens', 'paragraphs', 'propositions', 'json_list']:
                 if overlap >= max_size:
                     raise ValueError(f"Overlap ({overlap}) must be less than max_size ({max_size}) for method '{current_method}'.")
         # Validate code_mode if provided
-        cm = values.code_mode
+        cm = self.code_mode
         if cm is not None:
             low = str(cm).lower()
             if low not in ('auto', 'ast', 'heuristic'):
                 raise ValueError("code_mode must be one of: 'auto', 'ast', 'heuristic'")
-            values.code_mode = low
-        return values
+            self.code_mode = low
+        return self
 
 class ChunkingTextRequest(BaseModel):
     text_content: str = Field(..., description="Text content to be chunked.")

@@ -40,10 +40,9 @@ def test_pg_forward_migration_adds_missing_columns_and_partial_indexes():
             assert row is not None
             # idx_jobs_acquire_order partial index exists and is queued-only
             cur.execute("""
-                SELECT indexname, indexdef FROM pg_indexes 
+                SELECT indexname, indexdef FROM pg_indexes
                 WHERE schemaname = current_schema() AND tablename = 'jobs' AND indexname = 'idx_jobs_acquire_order'
             """)
             row2 = cur.fetchone()
             assert row2 is not None
             assert "status = 'queued'" in (row2[1] or "")
-

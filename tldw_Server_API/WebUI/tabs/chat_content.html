@@ -3,7 +3,7 @@
     <div class="endpoint-section">
         <h2>POST /api/v1/chat/completions - Chat Completions</h2>
         <p>OpenAI-compatible chat completions endpoint for interactive conversations with full parameter control.</p>
-        
+
         <!-- Basic Parameters -->
         <div class="basic-params">
             <h3>Basic Parameters</h3>
@@ -11,7 +11,7 @@
                 <span title="Tip: You can either select a provider or prefix the model as provider/model (e.g., anthropic/claude-3-5-sonnet). The server parses prefixed models automatically if api_provider is not set. See the Providers tab for configured providers/models. Useful endpoints: /api/v1/llm/providers, /api/v1/llm/models.">ⓘ Provider/Model help</span>
                 <a href="/docs" target="_blank" style="margin-left:8px;">Open API Docs</a>
             </div>
-            
+
             <div class="form-group">
                 <label for="chatCompletions_provider">API Provider:</label>
                 <select id="chatCompletions_provider">
@@ -35,14 +35,14 @@
                     <option value="custom-openai-api">Custom OpenAI API</option>
                 </select>
             </div>
-            
+
             <div class="form-group">
                 <label for="chatCompletions_model">Model:</label>
                 <select id="chatCompletions_model" class="llm-model-select">
                     <option value="">Loading models...</option>
                 </select>
             </div>
-            
+
             <div class="form-group">
                 <label for="chatCompletions_messages">Messages (JSON array):</label>
                 <textarea id="chatCompletions_messages" style="min-height: 200px;">[
@@ -50,17 +50,17 @@
     {"role": "user", "content": "Hello! How are you today?"}
 ]</textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="chatCompletions_temperature">Temperature:</label>
                 <input type="number" id="chatCompletions_temperature" min="0" max="2" step="0.1" value="0.7">
             </div>
-            
+
             <div class="form-group">
                 <label for="chatCompletions_max_tokens">Max Tokens:</label>
                 <input type="number" id="chatCompletions_max_tokens" value="1000">
             </div>
-            
+
             <div class="form-group">
                 <label>
                     <input type="checkbox" id="chatCompletions_stream"> Stream Response
@@ -73,55 +73,55 @@
                 </label>
             </div>
         </div>
-        
+
         <!-- Advanced Parameters -->
         <details class="advanced-params" style="margin-top: 20px; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
             <summary style="cursor: pointer; font-weight: bold; padding: 5px;">⚙️ Advanced Options</summary>
-            
+
             <!-- Sampling Parameters -->
             <fieldset style="margin-top: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
                 <legend>Sampling Parameters</legend>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_frequency_penalty">Frequency Penalty (-2.0 to 2.0):</label>
                     <input type="number" id="chatCompletions_frequency_penalty" min="-2" max="2" step="0.1" placeholder="0">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_presence_penalty">Presence Penalty (-2.0 to 2.0):</label>
                     <input type="number" id="chatCompletions_presence_penalty" min="-2" max="2" step="0.1" placeholder="0">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_top_p">Top P (0.0 to 1.0):</label>
                     <input type="number" id="chatCompletions_top_p" min="0" max="1" step="0.01" placeholder="1">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_top_k">Top K (integer):</label>
                     <input type="number" id="chatCompletions_top_k" min="1" step="1" placeholder="Not set">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_min_p">Min P (float):</label>
                     <input type="number" id="chatCompletions_min_p" min="0" max="1" step="0.01" placeholder="Not set">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_seed">Seed (for deterministic sampling):</label>
                     <input type="number" id="chatCompletions_seed" step="1" placeholder="Random">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_n">Number of Completions (1-128):</label>
                     <input type="number" id="chatCompletions_n" min="1" max="128" value="1">
                 </div>
             </fieldset>
-            
+
             <!-- Response Control -->
             <fieldset style="margin-top: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
                 <legend>Response Control</legend>
-                
+
                 <div class="form-group">
                     <label>Response Format:</label>
                     <div>
@@ -129,63 +129,63 @@
                         <label style="margin-left: 20px;"><input type="radio" name="chatCompletions_response_format" value="json_object"> JSON Object</label>
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_stop">Stop Sequences (comma-separated):</label>
                     <input type="text" id="chatCompletions_stop" placeholder='e.g., "\n\n", "END", "STOP"'>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_user">User Identifier:</label>
                     <input type="text" id="chatCompletions_user" placeholder="Optional user ID for monitoring">
                 </div>
-                
+
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="chatCompletions_logprobs" onchange="toggleLogprobs()"> Return Log Probabilities
                     </label>
                 </div>
-                
+
                 <div class="form-group" id="top_logprobs_group" style="display: none;">
                     <label for="chatCompletions_top_logprobs">Top Log Probabilities (0-20):</label>
                     <input type="number" id="chatCompletions_top_logprobs" min="0" max="20" value="5">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_logit_bias">Logit Bias (JSON object):</label>
                     <textarea id="chatCompletions_logit_bias" rows="3" placeholder='e.g., {"50256": -100}'>{}</textarea>
                 </div>
             </fieldset>
-            
+
             <!-- Context & Templates -->
             <fieldset style="margin-top: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
                 <legend>Context & Templates</legend>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_prompt_template">Prompt Template Name:</label>
                     <input type="text" id="chatCompletions_prompt_template" placeholder="Optional template name">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_character_id">Character ID:</label>
                     <input type="number" id="chatCompletions_character_id" placeholder="Optional character ID">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_conversation_id">Conversation ID:</label>
                     <input type="text" id="chatCompletions_conversation_id" placeholder="Optional conversation ID">
                 </div>
             </fieldset>
-            
+
             <!-- Function Calling -->
             <fieldset style="margin-top: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
                 <legend>Function Calling / Tools</legend>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_tools">Tools Definition (JSON array):</label>
                     <textarea id="chatCompletions_tools" rows="5" placeholder='[{"type": "function", "function": {"name": "get_weather", "description": "Get weather", "parameters": {}}}]'>[]</textarea>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="chatCompletions_tool_choice">Tool Choice:</label>
                     <select id="chatCompletions_tool_choice" onchange="toggleToolChoiceJSON()">
@@ -195,20 +195,20 @@
                         <option value="specific">Specific Tool (JSON)</option>
                     </select>
                 </div>
-                
+
                 <div class="form-group" id="tool_choice_json_group" style="display: none;">
                     <label for="chatCompletions_tool_choice_json">Specific Tool (JSON):</label>
                     <textarea id="chatCompletions_tool_choice_json" rows="3" placeholder='{"type": "function", "function": {"name": "function_name"}}'>{}</textarea>
                 </div>
             </fieldset>
         </details>
-        
+
         <button class="api-button" onclick="makeChatCompletionsRequest()" style="margin-top: 20px;">Send Request</button>
-        
+
         <h3>Response:</h3>
         <pre id="chatCompletions_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section">
         <h2>Interactive Chat Interface</h2>
         <div class="chat-interface">
@@ -218,11 +218,11 @@
                 <textarea id="chat-system-prompt" placeholder="Enter system prompt..." style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">You are a helpful assistant.</textarea>
                 <button class="btn btn-sm" onclick="updateSystemPrompt()" style="margin-top: 5px;">Update System Prompt</button>
             </div>
-            
+
             <div id="chat-messages" class="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; background: #f9f9f9;">
                 <div class="chat-message system">System: You are a helpful assistant.</div>
             </div>
-            
+
             <div class="chat-input-group">
                 <textarea id="chat-input" placeholder="Type your message..." style="width: 100%; min-height: 60px; margin-bottom: 10px;"></textarea>
 
@@ -688,18 +688,18 @@ function toggleToolChoiceJSON() {
 // Chat Completions functionality - Now collects ALL parameters
 async function makeChatCompletionsRequest() {
     const responseEl = document.getElementById('chatCompletions_response');
-    
+
     try {
         // Build the payload with all parameters
         const payload = {};
-        
+
         // Basic Parameters
         const provider = document.getElementById('chatCompletions_provider').value;
         if (provider) payload.api_provider = provider;
-        
+
         const model = document.getElementById('chatCompletions_model').value;
         if (model) payload.model = model;
-        
+
         const messagesText = document.getElementById('chatCompletions_messages').value;
         try {
             const parsedMessages = JSON.parse(messagesText);
@@ -710,59 +710,59 @@ async function makeChatCompletionsRequest() {
         } catch (e) {
             throw new Error('Invalid messages JSON format: ' + e.message);
         }
-        
+
         const temperature = parseFloat(document.getElementById('chatCompletions_temperature').value);
         if (!isNaN(temperature)) payload.temperature = temperature;
-        
+
         const maxTokens = parseInt(document.getElementById('chatCompletions_max_tokens').value);
         if (!isNaN(maxTokens)) payload.max_tokens = maxTokens;
-        
+
         payload.stream = document.getElementById('chatCompletions_stream').checked;
-        
+
         // Sampling Parameters
         const frequencyPenalty = parseFloat(document.getElementById('chatCompletions_frequency_penalty').value);
         if (!isNaN(frequencyPenalty)) payload.frequency_penalty = frequencyPenalty;
-        
+
         const presencePenalty = parseFloat(document.getElementById('chatCompletions_presence_penalty').value);
         if (!isNaN(presencePenalty)) payload.presence_penalty = presencePenalty;
-        
+
         const topP = parseFloat(document.getElementById('chatCompletions_top_p').value);
         if (!isNaN(topP)) payload.top_p = topP;
-        
+
         const topK = parseInt(document.getElementById('chatCompletions_top_k').value);
         if (!isNaN(topK)) payload.topk = topK;
-        
+
         const minP = parseFloat(document.getElementById('chatCompletions_min_p').value);
         if (!isNaN(minP)) payload.minp = minP;
-        
+
         const seed = parseInt(document.getElementById('chatCompletions_seed').value);
         if (!isNaN(seed)) payload.seed = seed;
-        
+
         const n = parseInt(document.getElementById('chatCompletions_n').value);
         if (!isNaN(n)) payload.n = n;
-        
+
         // Response Control
         const responseFormat = document.querySelector('input[name="chatCompletions_response_format"]:checked').value;
         if (responseFormat === 'json_object') {
             payload.response_format = { type: 'json_object' };
         }
-        
+
         const stopSequences = document.getElementById('chatCompletions_stop').value;
         if (stopSequences) {
             // Parse comma-separated values
             payload.stop = stopSequences.split(',').map(s => s.trim()).filter(s => s);
         }
-        
+
         const user = document.getElementById('chatCompletions_user').value;
         if (user) payload.user = user;
-        
+
         const logprobs = document.getElementById('chatCompletions_logprobs').checked;
         if (logprobs) {
             payload.logprobs = true;
             const topLogprobs = parseInt(document.getElementById('chatCompletions_top_logprobs').value);
             if (!isNaN(topLogprobs)) payload.top_logprobs = topLogprobs;
         }
-        
+
         const logitBiasText = document.getElementById('chatCompletions_logit_bias').value;
         if (logitBiasText && logitBiasText !== '{}') {
             try {
@@ -778,11 +778,11 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid logit bias JSON:', e);
             }
         }
-        
+
         // Context & Templates
         const promptTemplate = document.getElementById('chatCompletions_prompt_template').value;
         if (promptTemplate) payload.prompt_template_name = promptTemplate;
-        
+
         const characterIdStr = document.getElementById('chatCompletions_character_id').value;
         if (characterIdStr) {
             const characterId = parseInt(characterIdStr);
@@ -792,7 +792,7 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid character ID:', characterIdStr);
             }
         }
-        
+
         const conversationId = document.getElementById('chatCompletions_conversation_id').value;
         if (conversationId) {
             // Basic validation for conversation ID
@@ -802,7 +802,7 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid conversation ID format:', conversationId);
             }
         }
-        
+
         // Function Calling
         const toolsText = document.getElementById('chatCompletions_tools').value;
         if (toolsText && toolsText !== '[]') {
@@ -819,7 +819,7 @@ async function makeChatCompletionsRequest() {
                 console.warn('Invalid tools JSON:', e);
             }
         }
-        
+
         const toolChoice = document.getElementById('chatCompletions_tool_choice').value;
         if (toolChoice === 'specific') {
             const toolChoiceJSON = document.getElementById('chatCompletions_tool_choice_json').value;
@@ -840,11 +840,11 @@ async function makeChatCompletionsRequest() {
         } else if (toolChoice !== 'auto') {
             payload.tool_choice = toolChoice;
         }
-        
+
         // Display the request payload for debugging
         console.log('Request payload:', payload);
         responseEl.textContent = 'Sending request with parameters:\n' + JSON.stringify(payload, null, 2) + '\n\n';
-        
+
         if (payload.stream) {
             // Handle streaming response
             responseEl.textContent += 'Streaming response:\n';
@@ -878,12 +878,12 @@ async function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const messagesDiv = document.getElementById('chat-messages');
     const model = document.getElementById('chat-model').value;
-    
+
     if (!input.value.trim()) return;
-    
+
     const userMessage = input.value;
     input.value = '';
-    
+
     // Add user message to display
     const userDiv = document.createElement('div');
     userDiv.className = 'chat-message user';
@@ -896,10 +896,10 @@ async function sendChatMessage() {
     userDiv.appendChild(document.createTextNode(' '));
     userDiv.appendChild(userContent);
     messagesDiv.appendChild(userDiv);
-    
+
     // Add to messages array
     chatMessages.push({role: 'user', content: userMessage});
-    
+
     // Create assistant message placeholder
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'chat-message assistant';
@@ -912,12 +912,12 @@ async function sendChatMessage() {
     assistantDiv.appendChild(document.createTextNode(' '));
     assistantDiv.appendChild(assistantContent);
     messagesDiv.appendChild(assistantDiv);
-    
+
     // Use requestAnimationFrame for smooth scrolling
     requestAnimationFrame(() => {
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     });
-    
+
     try {
         const response = await apiClient.post('/api/v1/chat/completions', {
             model: model,
@@ -925,7 +925,7 @@ async function sendChatMessage() {
             temperature: 0.7,
             max_tokens: 1000
         });
-        
+
         if (response.choices && response.choices[0] && response.choices[0].message) {
             const assistantMessage = response.choices[0].message.content;
             chatMessages.push({role: 'assistant', content: assistantMessage});
@@ -958,7 +958,7 @@ async function sendChatMessage() {
         assistantDiv.appendChild(errorMsg);
         console.error('Chat error:', error);
     }
-    
+
     // Use requestAnimationFrame for smooth scrolling
     requestAnimationFrame(() => {
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -982,14 +982,14 @@ async function exportCharacter() {
     const characterId = document.getElementById('exportCharacter_character_id').value;
     const format = document.getElementById('exportCharacter_format').value;
     const responseEl = document.getElementById('exportCharacter_response');
-    
+
     try {
         responseEl.textContent = 'Exporting...';
-        
+
         const response = await apiClient.get(`/api/v1/characters/${characterId}/export`, {
             format: format
         });
-        
+
         if (format === 'json' || format === 'markdown') {
             responseEl.textContent = typeof response === 'string' ? response : JSON.stringify(response, null, 2);
         } else {
@@ -1010,7 +1010,7 @@ async function exportCharacter() {
         window.sendChatMessage = sendChatMessage;
         window.clearChat = clearChat;
         window.exportCharacter = exportCharacter;
-        
+
         // Also ensure they're available on the global object
         if (!window.makeChatCompletionsRequest) {
             console.error('Failed to attach makeChatCompletionsRequest to window');
@@ -1045,7 +1045,7 @@ async function populateModelDropdowns() {
     try {
         // Get available providers from API
         const providersInfo = await apiClient.getAvailableProviders();
-        
+
         if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
             console.warn('No LLM providers configured');
             // Update dropdowns to show no providers available
@@ -1059,57 +1059,57 @@ async function populateModelDropdowns() {
             });
             return;
         }
-        
+
         // Build options HTML grouped by provider (escaped)
         let optionsHtml = '';
         const defaultProvider = providersInfo.default_provider;
         let defaultModel = null;
-        
+
         // Sort providers by type (commercial first, then local)
         const sortedProviders = providersInfo.providers.sort((a, b) => {
             if (a.type === 'commercial' && b.type === 'local') return -1;
             if (a.type === 'local' && b.type === 'commercial') return 1;
             return a.display_name.localeCompare(b.display_name);
         });
-        
+
         // Group models by provider
         sortedProviders.forEach(provider => {
             if (provider.models && provider.models.length > 0) {
                 const safeGroup = Utils.escapeHtml(String(provider.display_name || provider.name || 'Provider'));
                 optionsHtml += `<optgroup label="${safeGroup}">`;
-                
+
                 provider.models.forEach(model => {
                     const value = `${provider.name}/${model}`;
                     const displayName = Utils.escapeHtml(String(model));
                     const safeValue = Utils.escapeHtml(String(value));
                     const isDefault = provider.name === defaultProvider && provider.default_model === model;
-                    
+
                     if (isDefault) {
                         defaultModel = value;
                     }
-                    
+
                     optionsHtml += `<option value="${safeValue}"${isDefault ? ' data-default="true"' : ''}>${displayName}${isDefault ? ' (default)' : ''}</option>`;
                 });
-                
+
                 optionsHtml += '</optgroup>';
             }
         });
-        
+
         // Update all model select dropdowns
         document.querySelectorAll('.llm-model-select').forEach(select => {
             const currentValue = select.value;
             const hasUseDefault = select.querySelector('option[value=""]');
-            
+
             // Build the complete HTML
             let html = '';
             if (hasUseDefault && hasUseDefault.textContent.includes('Use default')) {
                 html = '<option value="">Use default</option>';
             }
             html += optionsHtml;
-            
+
             // Safe replace of options
             select.innerHTML = html;
-            
+
             // Restore previous selection or set default
             if (currentValue) {
                 select.value = currentValue;
@@ -1117,9 +1117,9 @@ async function populateModelDropdowns() {
                 select.value = defaultModel;
             }
         });
-        
+
         console.log(`Populated model dropdowns with ${providersInfo.total_configured} providers`);
-        
+
     } catch (error) {
         console.error('Failed to populate model dropdowns:', error);
         // Show error in dropdowns
@@ -1148,7 +1148,7 @@ async function populateModelDropdowns() {
         window.updateConversation = updateConversation;
         window.deleteConversation = deleteConversation;
         window.exportConversation = exportConversation;
-        
+
         console.log('Character/conversation functions attached to window');
     }
 })();
@@ -1160,16 +1160,16 @@ let globalProvidersInfo = null;
 function filterModelsByProvider(providerSelectId, modelSelectId) {
     const providerSelect = document.getElementById(providerSelectId);
     const modelSelect = document.getElementById(modelSelectId);
-    
+
     if (!providerSelect || !modelSelect || !globalProvidersInfo) {
         return;
     }
-    
+
     const selectedProvider = providerSelect.value;
-    
+
     // Clear current options
     modelSelect.innerHTML = '';
-    
+
     if (!selectedProvider) {
         // If no provider selected, show all models grouped by provider
         populateModelDropdown(modelSelect, globalProvidersInfo);
@@ -1184,7 +1184,7 @@ function filterModelsByProvider(providerSelectId, modelSelectId) {
                 option.textContent = model;
                 modelSelect.appendChild(option);
             });
-            
+
             // Select first model by default
             if (provider.models.length > 0) {
                 modelSelect.value = `${provider.name}/${provider.models[0]}`;
@@ -1242,10 +1242,10 @@ async function populateModelDropdownsOriginal() {
     try {
         // Get available providers from API
         const providersInfo = await apiClient.getAvailableProviders();
-        
+
         // Store globally for filtering
         globalProvidersInfo = providersInfo;
-        
+
         if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
             console.warn('No LLM providers configured');
             // Update dropdowns to show no providers available
@@ -1254,12 +1254,12 @@ async function populateModelDropdownsOriginal() {
             });
             return;
         }
-        
+
         // Update all model select dropdowns
         document.querySelectorAll('.llm-model-select').forEach(select => {
             const currentValue = select.value;
             const hasUseDefault = select.querySelector('option[value=""]');
-            
+
             if (hasUseDefault && hasUseDefault.textContent.includes('Use default')) {
                 // Keep the "Use default" option
                 const defaultOption = document.createElement('option');
@@ -1270,18 +1270,18 @@ async function populateModelDropdownsOriginal() {
             } else {
                 select.innerHTML = '';
             }
-            
+
             // Populate with all models
             populateModelDropdown(select, providersInfo);
-            
+
             // Restore previous selection if valid
             if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
                 select.value = currentValue;
             }
         });
-        
+
         console.log(`Populated model dropdowns with ${providersInfo.total_configured} providers`);
-        
+
     } catch (error) {
         console.error('Failed to populate model dropdowns:', error);
         // Show error in dropdowns
@@ -1301,7 +1301,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Wait a bit for API client to initialize
         setTimeout(populateModelDropdowns, 500);
     }
-    
+
     // Add event listener for provider dropdown changes
     const chatCompletionsProvider = document.getElementById('chatCompletions_provider');
     if (chatCompletionsProvider) {
@@ -1309,7 +1309,7 @@ document.addEventListener('DOMContentLoaded', () => {
             filterModelsByProvider('chatCompletions_provider', 'chatCompletions_model');
         });
     }
-    
+
     // Add event listener for main chat provider dropdown
     const chatProvider = document.getElementById('chat-provider');
     if (chatProvider) {
@@ -1353,44 +1353,44 @@ document.addEventListener('DOMContentLoaded', () => {
         margin-right: 0;
         max-width: 100%;
     }
-    
+
     .chat-messages {
         height: 300px !important;
     }
-    
+
     .endpoint-section {
         padding: 10px;
     }
-    
+
     .form-group {
         margin-bottom: 15px;
     }
-    
+
     textarea {
         font-size: 16px; /* Prevent zoom on iOS */
     }
-    
+
     .btn-group {
         flex-wrap: wrap;
         gap: 5px;
     }
-    
+
     .btn {
         min-width: 80px;
         padding: 10px 16px;
         font-size: 16px;
     }
-    
+
     select.llm-model-select {
         width: 100%;
         margin-left: 0 !important;
         margin-top: 10px;
     }
-    
+
     fieldset {
         padding: 5px;
     }
-    
+
     /* Make advanced options more accessible on mobile */
     details.advanced-params summary {
         padding: 10px;
@@ -1404,11 +1404,11 @@ document.addEventListener('DOMContentLoaded', () => {
     .chat-messages {
         height: 250px !important;
     }
-    
+
     .endpoint-section h2 {
         font-size: 1.2rem;
     }
-    
+
     .api-button {
         width: 100%;
         padding: 12px;
@@ -1470,152 +1470,152 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="endpoint-path">/api/v1/characters - Create Character</span>
         </h2>
         <p>Create a new character for roleplay or conversation with ALL available fields.</p>
-        
+
         <!-- Basic Character Information -->
         <fieldset style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
             <legend>Basic Information</legend>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_name">Character Name <span class="required">*</span>:</label>
                 <input type="text" id="charactersCreate_name" placeholder="e.g., Assistant, Teacher, Expert">
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_description">Description:</label>
                 <textarea id="charactersCreate_description" rows="3" placeholder="Brief character description..."></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_personality">Personality:</label>
                 <textarea id="charactersCreate_personality" rows="3" placeholder="Character personality traits..."></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_scenario">Scenario:</label>
                 <textarea id="charactersCreate_scenario" rows="3" placeholder="The setting or context where the character exists..."></textarea>
             </div>
         </fieldset>
-        
+
         <!-- Conversation Settings -->
         <fieldset style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
             <legend>Conversation Settings</legend>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_system_prompt">System Prompt:</label>
                 <textarea id="charactersCreate_system_prompt" rows="5" placeholder="System instructions for the character...">You are a helpful AI assistant.</textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_post_history_instructions">Post-History Instructions:</label>
                 <textarea id="charactersCreate_post_history_instructions" rows="3" placeholder="Instructions that come after conversation history (optional)..."></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_first_message">First Message:</label>
                 <textarea id="charactersCreate_first_message" rows="3" placeholder="Character's greeting or first message...">Hello! How can I assist you today?</textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_message_example">Message Example:</label>
                 <textarea id="charactersCreate_message_example" rows="5" placeholder="Example conversation format (optional)..."></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_alternate_greetings">Alternate Greetings (JSON array or comma-separated):</label>
                 <textarea id="charactersCreate_alternate_greetings" rows="3" placeholder='["Hello!", "Hi there!", "Greetings!"] or comma-separated list'></textarea>
             </div>
         </fieldset>
-        
+
         <!-- Metadata -->
         <fieldset style="margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 3px;">
             <legend>Metadata</legend>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_creator">Creator:</label>
                 <input type="text" id="charactersCreate_creator" placeholder="Creator name (optional)">
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_creator_notes">Creator Notes:</label>
                 <textarea id="charactersCreate_creator_notes" rows="3" placeholder="Notes from the creator (optional)..."></textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_character_version">Character Version:</label>
                 <input type="text" id="charactersCreate_character_version" placeholder="e.g., 1.0.0">
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_tags">Tags (comma-separated):</label>
                 <input type="text" id="charactersCreate_tags" placeholder="e.g., helpful, technical, friendly">
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_extensions">Extensions (JSON object):</label>
                 <textarea id="charactersCreate_extensions" rows="3" placeholder='{"custom_field": "value", "another_field": 123}'>{}</textarea>
             </div>
-            
+
             <div class="form-group">
                 <label for="charactersCreate_image_base64">Character Image (Base64):</label>
                 <textarea id="charactersCreate_image_base64" rows="2" placeholder="Base64 encoded image (optional, without data:image prefix)..."></textarea>
             </div>
         </fieldset>
-        
+
         <button class="api-button" onclick="createCharacter()">
             Create Character
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="charactersCreate_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="charactersList">
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/characters - List Characters</span>
         </h2>
         <p>List all available characters.</p>
-        
+
         <button class="api-button" onclick="listCharacters()">
             List Characters
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="charactersList_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="charactersGet">
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/characters/{character_id} - Get Character</span>
         </h2>
         <p>Get details of a specific character.</p>
-        
+
         <div class="form-group">
             <label for="charactersGet_id">Character ID <span class="required">*</span>:</label>
             <input type="text" id="charactersGet_id" placeholder="Enter character ID">
         </div>
-        
+
         <button class="api-button" onclick="getCharacter()">
             Get Character
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="charactersGet_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="charactersUpdate">
         <h2>
             <span class="endpoint-method put">PUT</span>
             <span class="endpoint-path">/api/v1/characters/{character_id} - Update Character</span>
         </h2>
         <p>Update an existing character.</p>
-        
+
         <div class="form-group">
             <label for="charactersUpdate_id">Character ID <span class="required">*</span>:</label>
             <input type="text" id="charactersUpdate_id" placeholder="Enter character ID">
         </div>
-        
+
         <div class="form-group">
             <label for="charactersUpdate_payload">Update Data (JSON):</label>
             <textarea id="charactersUpdate_payload" class="code-input" rows="15">{
@@ -1627,31 +1627,31 @@ document.addEventListener('DOMContentLoaded', () => {
   "tags": ["tag1", "tag2"]
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="updateCharacter()">
             Update Character
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="charactersUpdate_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="charactersDelete">
         <h2>
             <span class="endpoint-method delete">DELETE</span>
             <span class="endpoint-path">/api/v1/characters/{character_id} - Delete Character</span>
         </h2>
         <p>Delete a character.</p>
-        
+
         <div class="form-group">
             <label for="charactersDelete_id">Character ID <span class="required">*</span>:</label>
             <input type="text" id="charactersDelete_id" placeholder="Enter character ID">
         </div>
-        
+
         <button class="api-button btn-danger" onclick="if(confirm('Delete this character?')) deleteCharacter()">
             Delete Character
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="charactersDelete_response">---</pre>
     </div>
@@ -1665,47 +1665,47 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="endpoint-path">/api/v1/chats - Create Chat Session</span>
         </h2>
         <p>Start a new conversation with a character or assistant.</p>
-        
+
         <div class="form-group">
             <label for="conversationsCreate_title">Conversation Title:</label>
             <input type="text" id="conversationsCreate_title" placeholder="e.g., Technical Discussion, Project Planning">
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsCreate_character_id">Character ID (optional):</label>
             <input type="text" id="conversationsCreate_character_id" placeholder="Character ID to use for this conversation">
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsCreate_system_prompt">System Prompt (optional):</label>
             <textarea id="conversationsCreate_system_prompt" rows="3" placeholder="Override character's system prompt for this conversation"></textarea>
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsCreate_initial_message">Initial Message:</label>
             <textarea id="conversationsCreate_initial_message" rows="3" placeholder="Your first message in the conversation"></textarea>
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsCreate_metadata">Metadata (JSON):</label>
             <textarea id="conversationsCreate_metadata" class="code-input" rows="3">{}</textarea>
         </div>
-        
+
         <button class="api-button" onclick="createConversation()">
             Create Conversation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsCreate_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="conversationsList">
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/chats - List Chat Sessions</span>
         </h2>
         <p>List all conversations with optional filtering.</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -1713,7 +1713,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <input type="text" id="conversationsList_character_id" placeholder="Filter by character">
                 </div>
             </div>
-            
+
             <div class="column">
                 <div class="form-group">
                     <label for="conversationsList_limit">Limit:</label>
@@ -1721,59 +1721,59 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" onclick="listConversations()">
             List Conversations
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsList_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="conversationsGet">
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/chats/{chat_id} - Get Chat Session</span>
         </h2>
         <p>Get details and messages of a specific conversation.</p>
-        
+
         <div class="form-group">
             <label for="conversationsGet_id">Conversation ID <span class="required">*</span>:</label>
             <input type="text" id="conversationsGet_id" placeholder="Enter conversation ID">
         </div>
-        
+
         <div class="form-group">
             <label>
                 <input type="checkbox" id="conversationsGet_include_messages" checked>
                 Include Messages
             </label>
         </div>
-        
+
         <button class="api-button" onclick="getConversationDetails()">
             Get Conversation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsGet_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="conversationsChat">
         <h2>
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/chats/{chat_id}/messages - Send Message</span>
         </h2>
         <p>Send a message to a conversation and get a response.</p>
-        
+
         <div class="form-group">
             <label for="conversationsChat_id">Conversation ID <span class="required">*</span>:</label>
             <input type="text" id="conversationsChat_id" placeholder="Enter conversation ID">
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsChat_message">Message <span class="required">*</span>:</label>
             <textarea id="conversationsChat_message" rows="4" placeholder="Your message..."></textarea>
         </div>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -1783,7 +1783,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </select>
                 </div>
             </div>
-            
+
             <div class="column">
                 <div class="form-group">
                     <label for="conversationsChat_temperature">Temperature:</label>
@@ -1791,34 +1791,34 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>
         </div>
-        
+
         <div class="form-group">
             <label>
                 <input type="checkbox" id="conversationsChat_stream">
                 Stream Response
             </label>
         </div>
-        
+
         <button class="api-button" onclick="sendConversationMessage()">
             Send Message
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsChat_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="conversationsUpdate">
         <h2>
             <span class="endpoint-method put">PUT</span>
             <span class="endpoint-path">/api/v1/chats/{chat_id} - Update Chat Session</span>
         </h2>
         <p>Update conversation metadata or settings.</p>
-        
+
         <div class="form-group">
             <label for="conversationsUpdate_id">Conversation ID <span class="required">*</span>:</label>
             <input type="text" id="conversationsUpdate_id" placeholder="Enter conversation ID">
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsUpdate_payload">Update Data (JSON):</label>
             <textarea id="conversationsUpdate_payload" class="code-input" rows="10">{
@@ -1829,47 +1829,47 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="updateConversation()">
             Update Conversation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsUpdate_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="conversationsDelete">
         <h2>
             <span class="endpoint-method delete">DELETE</span>
             <span class="endpoint-path">/api/v1/chats/{chat_id} - Delete Chat Session</span>
         </h2>
         <p>Delete a conversation and all its messages.</p>
-        
+
         <div class="form-group">
             <label for="conversationsDelete_id">Conversation ID <span class="required">*</span>:</label>
             <input type="text" id="conversationsDelete_id" placeholder="Enter conversation ID">
         </div>
-        
+
         <button class="api-button btn-danger" onclick="if(confirm('Delete this conversation and all its messages?')) deleteConversation()">
             Delete Conversation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsDelete_response">---</pre>
     </div>
-    
+
     <div class="endpoint-section" id="conversationsExport">
         <h2>
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/chats/{chat_id}/export - Export Chat Session</span>
         </h2>
         <p>Export a conversation in various formats.</p>
-        
+
         <div class="form-group">
             <label for="conversationsExport_id">Conversation ID <span class="required">*</span>:</label>
             <input type="text" id="conversationsExport_id" placeholder="Enter conversation ID">
         </div>
-        
+
         <div class="form-group">
             <label for="conversationsExport_format">Format:</label>
             <select id="conversationsExport_format">
@@ -1878,11 +1878,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 <option value="txt">Plain Text</option>
             </select>
         </div>
-        
+
         <button class="api-button" onclick="exportConversation()">
             Export Conversation
         </button>
-        
+
         <h3>Response:</h3>
         <pre id="conversationsExport_response">---</pre>
     </div>
@@ -1895,40 +1895,40 @@ async function createCharacter() {
     const responseEl = document.getElementById('charactersCreate_response');
     try {
         responseEl.textContent = 'Creating character...';
-        
+
         // Collect all form values
         const body = {};
-        
+
         // Required field
         const name = document.getElementById('charactersCreate_name').value;
         if (!name) {
             throw new Error('Character name is required');
         }
         body.name = name;
-        
+
         // Basic Information
         const description = document.getElementById('charactersCreate_description').value;
         if (description) body.description = description;
-        
+
         const personality = document.getElementById('charactersCreate_personality').value;
         if (personality) body.personality = personality;
-        
+
         const scenario = document.getElementById('charactersCreate_scenario').value;
         if (scenario) body.scenario = scenario;
-        
+
         // Conversation Settings
         const systemPrompt = document.getElementById('charactersCreate_system_prompt').value;
         if (systemPrompt) body.system_prompt = systemPrompt;
-        
+
         const postHistoryInstructions = document.getElementById('charactersCreate_post_history_instructions').value;
         if (postHistoryInstructions) body.post_history_instructions = postHistoryInstructions;
-        
+
         const firstMessage = document.getElementById('charactersCreate_first_message').value;
         if (firstMessage) body.first_message = firstMessage;
-        
+
         const messageExample = document.getElementById('charactersCreate_message_example').value;
         if (messageExample) body.message_example = messageExample;
-        
+
         // Handle alternate_greetings - can be JSON array or comma-separated
         const alternateGreetingsValue = document.getElementById('charactersCreate_alternate_greetings').value;
         if (alternateGreetingsValue) {
@@ -1940,23 +1940,23 @@ async function createCharacter() {
                 body.alternate_greetings = alternateGreetingsValue.split(',').map(g => g.trim()).filter(g => g);
             }
         }
-        
+
         // Metadata
         const creator = document.getElementById('charactersCreate_creator').value;
         if (creator) body.creator = creator;
-        
+
         const creatorNotes = document.getElementById('charactersCreate_creator_notes').value;
         if (creatorNotes) body.creator_notes = creatorNotes;
-        
+
         const characterVersion = document.getElementById('charactersCreate_character_version').value;
         if (characterVersion) body.character_version = characterVersion;
-        
+
         // Handle tags - comma-separated
         const tags = document.getElementById('charactersCreate_tags').value;
         if (tags) {
             body.tags = tags.split(',').map(t => t.trim()).filter(t => t);
         }
-        
+
         // Handle extensions - should be JSON object
         const extensionsValue = document.getElementById('charactersCreate_extensions').value;
         if (extensionsValue && extensionsValue !== '{}') {
@@ -1966,11 +1966,11 @@ async function createCharacter() {
                 throw new Error('Extensions must be valid JSON');
             }
         }
-        
+
         // Handle image_base64
         const imageBase64 = document.getElementById('charactersCreate_image_base64').value;
         if (imageBase64) body.image_base64 = imageBase64;
-        
+
         const response = await apiClient.makeRequest('POST', '/api/v1/characters', { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Character created successfully');
@@ -1999,7 +1999,7 @@ async function getCharacter() {
         if (!characterId) {
             throw new Error('Character ID is required');
         }
-        
+
         responseEl.textContent = 'Loading character...';
         const response = await apiClient.makeRequest('GET', `/api/v1/characters/${characterId}`);
         responseEl.textContent = JSON.stringify(response, null, 2);
@@ -2016,10 +2016,10 @@ async function updateCharacter() {
         if (!characterId) {
             throw new Error('Character ID is required');
         }
-        
+
         const payload = document.getElementById('charactersUpdate_payload').value;
         const body = JSON.parse(payload);
-        
+
         responseEl.textContent = 'Updating character...';
         const response = await apiClient.makeRequest('PUT', `/api/v1/characters/${characterId}`, { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
@@ -2037,7 +2037,7 @@ async function deleteCharacter() {
         if (!characterId) {
             throw new Error('Character ID is required');
         }
-        
+
         responseEl.textContent = 'Deleting character...';
         const response = await apiClient.makeRequest('DELETE', `/api/v1/characters/${characterId}`);
         responseEl.textContent = response ? JSON.stringify(response, null, 2) : 'Character deleted successfully';
@@ -2053,25 +2053,25 @@ async function createConversation() {
     const responseEl = document.getElementById('conversationsCreate_response');
     try {
         responseEl.textContent = 'Creating conversation...';
-        
+
         const metadata = document.getElementById('conversationsCreate_metadata').value;
-        
+
         const body = {
             title: document.getElementById('conversationsCreate_title').value,
             initial_message: document.getElementById('conversationsCreate_initial_message').value
         };
-        
+
         // Add optional fields if provided
         const characterId = document.getElementById('conversationsCreate_character_id').value;
         if (characterId) body.character_id = characterId;
-        
+
         const systemPrompt = document.getElementById('conversationsCreate_system_prompt').value;
         if (systemPrompt) body.system_prompt = systemPrompt;
-        
+
         if (metadata && metadata.trim() !== '{}') {
             body.metadata = JSON.parse(metadata);
         }
-        
+
         const response = await apiClient.makeRequest('POST', '/api/v1/chats', { body });
         responseEl.textContent = JSON.stringify(response, null, 2);
         Toast.success('Conversation created successfully');
@@ -2085,17 +2085,17 @@ async function listConversations() {
     const responseEl = document.getElementById('conversationsList_response');
     try {
         responseEl.textContent = 'Loading conversations...';
-        
+
         const params = new URLSearchParams();
         const characterId = document.getElementById('conversationsList_character_id').value;
         if (characterId) params.append('character_id', characterId);
-        
+
         const limit = document.getElementById('conversationsList_limit').value;
         if (limit) params.append('limit', limit);
-        
+
         const queryString = params.toString();
         const url = queryString ? `/api/v1/chats?${queryString}` : '/api/v1/chats';
-        
+
         const response = await apiClient.makeRequest('GET', url);
         responseEl.textContent = JSON.stringify(response, null, 2);
     } catch (error) {
@@ -2111,12 +2111,12 @@ async function getConversationDetails() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         responseEl.textContent = 'Loading conversation...';
-        
+
         const includeMessages = document.getElementById('conversationsGet_include_messages').checked;
         const params = includeMessages ? '?include_messages=true' : '';
-        
+
         const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = JSON.stringify(response, null, 2);
     } catch (error) {
@@ -2132,26 +2132,26 @@ async function sendConversationMessage() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         const message = document.getElementById('conversationsChat_message').value;
         if (!message) {
             throw new Error('Message is required');
         }
-        
+
         responseEl.textContent = 'Sending message...';
-        
+
         const body = { message };
-        
+
         // Add optional fields
         const model = document.getElementById('conversationsChat_model').value;
         if (model) body.model = model;
-        
+
         const temperature = document.getElementById('conversationsChat_temperature').value;
         if (temperature) body.temperature = parseFloat(temperature);
-        
+
         const stream = document.getElementById('conversationsChat_stream').checked;
         body.stream = stream;
-        
+
         if (stream) {
             // Handle streaming response
             responseEl.textContent = 'Streaming response...\n';
@@ -2170,26 +2170,26 @@ async function sendConversationMessage() {
                 headers,
                 body: JSON.stringify({ role: 'user', content: body.message || '' })
             });
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-            
+
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-            
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                
+
                 const chunk = decoder.decode(value);
                 const lines = chunk.split('\n');
-                
+
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6);
                         if (data === '[DONE]') continue;
-                        
+
                         try {
                             const parsed = JSON.parse(data);
                             if (parsed.choices?.[0]?.delta?.content) {
@@ -2206,7 +2206,7 @@ async function sendConversationMessage() {
             const response = await apiClient.makeRequest('POST', `/api/v1/chats/${conversationId}/messages`, { body: { role: 'user', content: body.message || '' } });
             responseEl.textContent = JSON.stringify(response, null, 2);
         }
-        
+
         Toast.success('Message sent successfully');
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
@@ -2221,10 +2221,10 @@ async function updateConversation() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         const payload = document.getElementById('conversationsUpdate_payload').value;
         const body = JSON.parse(payload);
-        
+
         responseEl.textContent = 'Updating conversation...';
         const filtered = {};
         if (body.title) filtered.title = body.title;
@@ -2245,7 +2245,7 @@ async function deleteConversation() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         responseEl.textContent = 'Deleting conversation...';
         const response = await apiClient.makeRequest('DELETE', `/api/v1/chats/${conversationId}`);
         responseEl.textContent = response ? JSON.stringify(response, null, 2) : 'Conversation deleted successfully';
@@ -2263,19 +2263,19 @@ async function exportConversation() {
         if (!conversationId) {
             throw new Error('Conversation ID is required');
         }
-        
+
         const format = document.getElementById('conversationsExport_format').value;
-        
+
         responseEl.textContent = 'Exporting conversation...';
         const response = await apiClient.makeRequest('GET', `/api/v1/chats/${conversationId}/export?format=${format}`);
-        
+
         // Handle different formats
         if (format === 'json') {
             responseEl.textContent = JSON.stringify(response, null, 2);
         } else {
             responseEl.textContent = response;
         }
-        
+
         Toast.success('Conversation exported successfully');
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;

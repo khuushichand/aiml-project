@@ -91,4 +91,3 @@ def test_renew_with_clock_skew_does_not_shrink_lease_sqlite(monkeypatch, tmp_pat
     row2 = jm.get_job(int(acq["id"]))
     after = _parse_sqlite_ts(row2["leased_until"]) if isinstance(row2["leased_until"], str) else row2["leased_until"]
     assert after >= before
-

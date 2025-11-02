@@ -102,7 +102,7 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
     while True:
         try:
             touched = await compact_once(user_id)
-            logger.debug(f"Compactor pass complete at {datetime.utcnow().isoformat()} — touched={touched}")
+            logger.debug(f"Compactor pass complete at {datetime.utcnow().isoformat()} - touched={touched}")
         except Exception as e:
             logger.error(f"Compactor pass error: {e}")
 

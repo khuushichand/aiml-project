@@ -18,34 +18,34 @@ field_mappings:
 evaluation_params:
   # Scoring method: exact_match, contains, semantic, llm_judge
   scoring_method: llm_judge
-  
+
   # For exact_match scoring
   case_sensitive: false
   normalize_whitespace: true
-  
+
   # For contains scoring
   required_keywords: []  # List of keywords that must appear
-  
+
   # For semantic scoring (requires embeddings)
   similarity_threshold: 0.85
-  
+
   # For LLM judge scoring
   judge_model: openai  # Model to use for judging answers
   judge_prompt_template: |
     Question: {question}
     Expected Answer: {expected_answer}
     Model Answer: {model_answer}
-    
+
     Evaluate if the model answer is correct and complete.
     Consider factual accuracy and coverage of key points.
-    
+
     Score from 0.0 to 1.0 where:
     - 1.0 = Perfectly correct and complete
     - 0.75 = Mostly correct with minor issues
     - 0.5 = Partially correct
     - 0.25 = Mostly incorrect but has some correct elements
     - 0.0 = Completely incorrect
-    
+
     Respond with: SCORE: X.X EXPLANATION: [brief explanation]
 
 # Categories to evaluate (optional - leave empty to test all)
@@ -68,11 +68,11 @@ difficulty_levels: []
 sampling:
   # Maximum number of questions to evaluate (null for all)
   max_questions: null
-  
+
   # Random sampling
   random_sample: false
   random_seed: 42
-  
+
   # Stratified sampling by category
   stratified: false
   questions_per_category: 10
@@ -83,11 +83,11 @@ generation_params:
   temperature: 0.7
   top_p: 0.9
   stop_sequences: []
-  
+
   # System prompt for the model (optional)
   system_prompt: |
     You are a helpful assistant. Answer the following question accurately and concisely.
-  
+
   # Prompt template - how to format questions for the model
   prompt_template: |
     Question: {question}
@@ -97,10 +97,10 @@ generation_params:
 output:
   # Save individual results
   save_responses: true
-  
+
   # Include model metadata
   include_metadata: true
-  
+
   # Fields to include in output
   output_fields:
     - question
@@ -116,25 +116,25 @@ metadata:
   created_date: "2024-01-01"
   author: "Your Name"
   contact: "your.email@example.com"
-  
+
   description: |
     This is a template for creating your own QA benchmark.
     Customize the questions, scoring method, and evaluation parameters.
-  
+
   usage_notes: |
     1. Create your questions file (JSON format)
     2. Update the dataset_source path
     3. Adjust field_mappings to match your data structure
     4. Choose appropriate scoring method
     5. Run with: tldw-evals run my_qa_benchmark
-  
+
   question_format_example:
     question: "What is the capital of France?"
     answer: "Paris"
     category: "geography"
     difficulty: "easy"
     context: "Optional additional context"
-    
+
   tips:
     - "Keep questions clear and unambiguous"
     - "Provide complete expected answers for better scoring"

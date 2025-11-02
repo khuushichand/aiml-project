@@ -11,7 +11,7 @@ This script tests the chat endpoint under various load conditions to ensure:
 
 Usage:
     python load_test_chat_endpoint.py [options]
-    
+
 Options:
     --url URL           API endpoint URL (default: http://localhost:8000)
     --users N           Number of concurrent users (default: 10)
@@ -77,7 +77,7 @@ class LoadTestResults:
 
 class ChatEndpointLoadTester:
     """Load tester for chat endpoint."""
-    
+
     def __init__(
         self,
         base_url: str = "http://localhost:8000",
@@ -92,7 +92,7 @@ class ChatEndpointLoadTester:
         self.metrics: List[RequestMetrics] = []
         self.start_time: Optional[float] = None
         self.end_time: Optional[float] = None
-        
+
         # Sample data for requests
         self.sample_messages = [
             "Hello, how are you today?",
@@ -106,7 +106,7 @@ class ChatEndpointLoadTester:
             "How do I debug Python code?",
             "What are best practices for API design?"
         ]
-        
+
         self.sample_characters = [
             "Assistant",
             "Teacher",
@@ -114,18 +114,18 @@ class ChatEndpointLoadTester:
             "Scientist",
             None  # No character specified
         ]
-        
+
         # Small 1x1 pixel images for testing (red, green, blue)
         self.sample_images = [
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg=="
         ]
-    
+
     def generate_request_payload(self, streaming: bool = False) -> Dict[str, Any]:
         """Generate a random request payload."""
         message_content = random.choice(self.sample_messages)
-        
+
         # Build message content
         if self.with_images and random.random() < 0.3:  # 30% chance of including image
             content = [
@@ -134,7 +134,7 @@ class ChatEndpointLoadTester:
             ]
         else:
             content = message_content
-        
+
         payload = {
             "messages": [
                 {"role": "user", "content": content}
@@ -145,25 +145,25 @@ class ChatEndpointLoadTester:
             "max_tokens": random.randint(100, 500),
             "stream": streaming
         }
-        
+
         # Optionally add character
         character = random.choice(self.sample_characters)
         if character:
             payload["character_id"] = character
-        
+
         # Optionally use transactions
         if self.with_transactions:
             payload["use_transaction"] = True
-        
+
         # Sometimes include conversation history
         if random.random() < 0.2:  # 20% chance
             payload["messages"].insert(0, {
                 "role": "system",
                 "content": "You are a helpful assistant."
             })
-        
+
         return payload
-    
+
     async def make_request(
         self,
         session: aiohttp.ClientSession,
@@ -175,14 +175,14 @@ class ChatEndpointLoadTester:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
+
         payload = self.generate_request_payload(streaming)
         start_time = time.time()
-        
+
         try:
             async with session.post(url, json=payload, headers=headers) as response:
                 status_code = response.status
-                
+
                 if streaming and status_code == 200:
                     # Read streaming response
                     chunks = []
@@ -195,16 +195,16 @@ class ChatEndpointLoadTester:
                     # Read non-streaming response
                     content = await response.read()
                     response_size = len(content)
-                    
+
                     if status_code == 200:
                         data = json.loads(content)
                         conversation_id = data.get("conversation_id")
                     else:
                         conversation_id = None
-                
+
                 end_time = time.time()
                 duration = end_time - start_time
-                
+
                 return RequestMetrics(
                     start_time=start_time,
                     end_time=end_time,
@@ -214,7 +214,7 @@ class ChatEndpointLoadTester:
                     streaming=streaming,
                     conversation_id=conversation_id
                 )
-                
+
         except asyncio.TimeoutError:
             end_time = time.time()
             return RequestMetrics(
@@ -233,7 +233,7 @@ class ChatEndpointLoadTester:
                 status_code=0,
                 error=str(e)
             )
-    
+
     async def run_user_simulation(
         self,
         session: aiohttp.ClientSession,
@@ -244,18 +244,18 @@ class ChatEndpointLoadTester:
         """Simulate a single user making requests."""
         end_time = time.time() + duration
         request_interval = 1.0 / requests_per_second if requests_per_second > 0 else 1.0
-        
+
         while time.time() < end_time:
             # Decide if this request should be streaming
             streaming = random.random() < streaming_ratio
-            
+
             # Make request
             metric = await self.make_request(session, streaming)
             self.metrics.append(metric)
-            
+
             # Wait before next request
             await asyncio.sleep(request_interval)
-    
+
     async def run_load_test(
         self,
         num_users: int = 10,
@@ -267,18 +267,18 @@ class ChatEndpointLoadTester:
         print(f"Starting load test with {num_users} users for {duration} seconds...")
         print(f"Target rate: {requests_per_second} requests/second/user")
         print(f"Features: images={self.with_images}, transactions={self.with_transactions}, streaming={streaming}")
-        
+
         self.metrics = []
         self.start_time = time.time()
-        
+
         # Get initial system metrics
         process = psutil.Process(os.getpid())
         initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-        
+
         # Create session with connection pooling
         connector = aiohttp.TCPConnector(limit=num_users * 2)
         timeout = aiohttp.ClientTimeout(total=30)
-        
+
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             # Create user tasks
             streaming_ratio = 0.5 if streaming else 0.0
@@ -286,19 +286,19 @@ class ChatEndpointLoadTester:
                 self.run_user_simulation(session, duration, requests_per_second, streaming_ratio)
                 for _ in range(num_users)
             ]
-            
+
             # Run all users concurrently
             await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         self.end_time = time.time()
-        
+
         # Get final system metrics
         final_memory = process.memory_info().rss / 1024 / 1024  # MB
         cpu_percent = process.cpu_percent()
-        
+
         # Calculate results
         return self.calculate_results(initial_memory, final_memory, cpu_percent)
-    
+
     def calculate_results(
         self,
         initial_memory: float,
@@ -308,30 +308,30 @@ class ChatEndpointLoadTester:
         """Calculate aggregated results from metrics."""
         if not self.metrics:
             return LoadTestResults()
-        
+
         total_duration = self.end_time - self.start_time
         successful = [m for m in self.metrics if 200 <= m.status_code < 300]
         failed = [m for m in self.metrics if m.status_code == 0 or m.status_code >= 400]
-        
+
         response_times = [m.duration for m in self.metrics if m.status_code > 0]
-        
+
         # Count status codes
         status_codes = defaultdict(int)
         for metric in self.metrics:
             status_codes[metric.status_code] += 1
-        
+
         # Count errors
         errors = defaultdict(int)
         for metric in self.metrics:
             if metric.error:
                 errors[metric.error] += 1
-        
+
         # Calculate percentiles
         if response_times:
             response_times.sort()
             p95_index = int(len(response_times) * 0.95)
             p99_index = int(len(response_times) * 0.99)
-            
+
             results = LoadTestResults(
                 total_requests=len(self.metrics),
                 successful_requests=len(successful),
@@ -361,22 +361,22 @@ class ChatEndpointLoadTester:
                 error_rate=100.0,
                 errors=dict(errors)
             )
-        
+
         return results
-    
+
     def print_results(self, results: LoadTestResults):
         """Print load test results to console."""
         print("\n" + "="*60)
         print("LOAD TEST RESULTS")
         print("="*60)
-        
+
         print(f"\nTotal Requests: {results.total_requests}")
         print(f"Successful: {results.successful_requests}")
         print(f"Failed: {results.failed_requests}")
         print(f"Error Rate: {results.error_rate:.2f}%")
         print(f"Duration: {results.total_duration:.2f} seconds")
         print(f"Requests/Second: {results.requests_per_second:.2f}")
-        
+
         if results.successful_requests > 0:
             print(f"\nResponse Times (seconds):")
             print(f"  Average: {results.average_response_time:.3f}")
@@ -385,26 +385,26 @@ class ChatEndpointLoadTester:
             print(f"  Max: {results.max_response_time:.3f}")
             print(f"  95th percentile: {results.p95_response_time:.3f}")
             print(f"  99th percentile: {results.p99_response_time:.3f}")
-        
+
         if results.status_codes:
             print(f"\nStatus Codes:")
             for code, count in sorted(results.status_codes.items()):
                 print(f"  {code}: {count}")
-        
+
         if results.errors:
             print(f"\nErrors:")
             for error, count in sorted(results.errors.items()):
                 print(f"  {error}: {count}")
-        
+
         if results.memory_usage_mb:
             print(f"\nMemory Usage:")
             print(f"  Initial: {results.memory_usage_mb['initial']:.2f} MB")
             print(f"  Final: {results.memory_usage_mb['final']:.2f} MB")
             print(f"  Increase: {results.memory_usage_mb['increase']:.2f} MB")
-        
+
         print(f"\nCPU Usage: {results.cpu_usage_percent:.2f}%")
         print("="*60)
-    
+
     def save_report(self, results: LoadTestResults, filename: str):
         """Save results to JSON file."""
         report = {
@@ -417,10 +417,10 @@ class ChatEndpointLoadTester:
             "results": asdict(results),
             "detailed_metrics": [asdict(m) for m in self.metrics[:100]]  # First 100 for detail
         }
-        
+
         with open(filename, 'w') as f:
             json.dump(report, f, indent=2)
-        
+
         print(f"\nDetailed report saved to: {filename}")
 
 
@@ -436,9 +436,9 @@ async def main():
     parser.add_argument("--with-images", action="store_true", help="Include image inputs")
     parser.add_argument("--with-transactions", action="store_true", help="Use database transactions")
     parser.add_argument("--report", default="load_test_report.json", help="Report file name")
-    
+
     args = parser.parse_args()
-    
+
     # Create tester
     tester = ChatEndpointLoadTester(
         base_url=args.url,
@@ -446,7 +446,7 @@ async def main():
         with_images=args.with_images,
         with_transactions=args.with_transactions
     )
-    
+
     # Run load test
     results = await tester.run_load_test(
         num_users=args.users,
@@ -454,11 +454,11 @@ async def main():
         requests_per_second=args.rate,
         streaming=args.streaming
     )
-    
+
     # Print and save results
     tester.print_results(results)
     tester.save_report(results, args.report)
-    
+
     # Return exit code based on error rate
     if results.error_rate > 10:
         print("\n⚠️  High error rate detected!")

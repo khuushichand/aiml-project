@@ -48,4 +48,3 @@ def test_tools_execute_dry_run_when_available(client_user_only):
         assert payload.get("ok") is True
         assert isinstance(payload.get("result"), dict)
         assert payload["result"].get("validated") is True
-

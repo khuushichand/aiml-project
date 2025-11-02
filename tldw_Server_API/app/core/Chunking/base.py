@@ -44,42 +44,42 @@ class ChunkMetadata:
     sentence_count: Optional[int] = None  # Add for compatibility
     method: Optional[str] = None  # Add chunking method used
     options: Optional[Dict[str, Any]] = field(default=None)  # Add options used
-    
+
     def __post_init__(self):
         """Calculate derived fields if not provided."""
         if self.char_count is None and self.end_char is not None and self.start_char is not None:
             self.char_count = self.end_char - self.start_char
-    
+
 
 @dataclass
 class ChunkResult:
     """Result of a chunking operation."""
     text: str
     metadata: ChunkMetadata
-    
+
 
 class ChunkingStrategy(Protocol):
     """Protocol for chunking strategies."""
-    
-    def chunk(self, 
-              text: str, 
+
+    def chunk(self,
+              text: str,
               max_size: int,
               overlap: int = 0,
               **options) -> List[str]:
         """
         Chunk text according to the strategy.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum size of each chunk
             overlap: Overlap between chunks
             **options: Strategy-specific options
-            
+
         Returns:
             List of text chunks
         """
         ...
-    
+
     def chunk_with_metadata(self,
                            text: str,
                            max_size: int,
@@ -87,13 +87,13 @@ class ChunkingStrategy(Protocol):
                            **options) -> List[ChunkResult]:
         """
         Chunk text and return with metadata.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum size of each chunk
             overlap: Overlap between chunks
             **options: Strategy-specific options
-            
+
         Returns:
             List of ChunkResult objects
         """
@@ -102,11 +102,11 @@ class ChunkingStrategy(Protocol):
 
 class BaseChunkingStrategy(ABC):
     """Base class for chunking strategies."""
-    
+
     def __init__(self, language: str = 'en'):
         """
         Initialize the chunking strategy.
-        
+
         Args:
             language: Language code for text processing
         """
@@ -199,27 +199,27 @@ class BaseChunkingStrategy(ABC):
                 continue
             break
         return i
-    
+
     @abstractmethod
-    def chunk(self, 
-              text: str, 
+    def chunk(self,
+              text: str,
               max_size: int,
               overlap: int = 0,
               **options) -> List[str]:
         """
         Chunk text according to the strategy.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum size of each chunk
             overlap: Overlap between chunks
             **options: Strategy-specific options
-            
+
         Returns:
             List of text chunks
         """
         pass
-    
+
     def chunk_with_metadata(self,
                            text: str,
                            max_size: int,
@@ -227,20 +227,20 @@ class BaseChunkingStrategy(ABC):
                            **options) -> List[ChunkResult]:
         """
         Chunk text and return with metadata.
-        
+
         Args:
             text: Text to chunk
-            max_size: Maximum size of each chunk  
+            max_size: Maximum size of each chunk
             overlap: Overlap between chunks
             **options: Strategy-specific options
-            
+
         Returns:
             List of ChunkResult objects
         """
         chunks = self.chunk(text, max_size, overlap, **options)
         results = []
         current_pos = 0
-        
+
         for i, chunk in enumerate(chunks):
             # Find chunk position in original text
             chunk_start = text.find(chunk, current_pos)
@@ -252,7 +252,7 @@ class BaseChunkingStrategy(ABC):
                 chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end, options=options)
             except Exception:
                 pass
-            
+
             metadata = ChunkMetadata(
                 index=i,
                 start_char=chunk_start,
@@ -262,49 +262,49 @@ class BaseChunkingStrategy(ABC):
                 overlap_with_previous=overlap if i > 0 else 0,
                 overlap_with_next=overlap if i < len(chunks) - 1 else 0
             )
-            
+
             results.append(ChunkResult(text=chunk, metadata=metadata))
             current_pos = chunk_end - overlap if overlap > 0 else chunk_end
-        
+
         return results
-    
+
     def validate_parameters(self, text: str, max_size: int, overlap: int):
         """
         Validate chunking parameters.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum size of each chunk
             overlap: Overlap between chunks
-            
+
         Raises:
             ValueError: If parameters are invalid
-        
+
         Notes:
-            This method performs validation only. Implementations must re‑clamp
+            This method performs validation only. Implementations must re-clamp
             `overlap` at the strategy level to ensure forward progress, i.e.,
             when `overlap >= max_size` set `overlap = max_size - 1` before
             windowing. Do not rely on this helper to mutate caller state.
         """
         if not isinstance(text, str):
             raise ValueError(f"Text must be a string, got {type(text).__name__}")
-        
+
         if not text.strip():
             logger.debug("Empty text provided for chunking")
             return False
-            
+
         if max_size <= 0:
             raise ValueError(f"max_size must be positive, got {max_size}")
-            
+
         if overlap < 0:
             raise ValueError(f"overlap cannot be negative, got {overlap}")
-            
+
         if overlap >= max_size:
             logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}), adjusting to max_size - 1")
             overlap = max_size - 1
-            
+
         return True
-    
+
     def chunk_generator(self,
                        text: str,
                        max_size: int,
@@ -312,13 +312,13 @@ class BaseChunkingStrategy(ABC):
                        **options) -> Generator[str, None, None]:
         """
         Generator version of chunk for memory efficiency.
-        
+
         Args:
             text: Text to chunk
             max_size: Maximum size of each chunk
             overlap: Overlap between chunks
             **options: Strategy-specific options
-            
+
         Yields:
             Individual text chunks
         """
@@ -329,7 +329,7 @@ class BaseChunkingStrategy(ABC):
 
 class ChunkerConfig:
     """Configuration for the chunking system."""
-    
+
     def __init__(self,
                  default_method: ChunkingMethod = ChunkingMethod.WORDS,
                  default_max_size: int = 400,
@@ -349,7 +349,7 @@ class ChunkerConfig:
                  max_concurrent: int = 10):
         """
         Initialize chunker configuration.
-        
+
         Args:
             default_method: Default chunking method
             default_max_size: Default maximum chunk size
@@ -369,7 +369,7 @@ class ChunkerConfig:
             except ValueError:
                 logger.warning(f"Unknown chunking method '{default_method}', using default")
                 default_method = ChunkingMethod.WORDS
-        
+
         # Basic validations
         if not isinstance(default_max_size, int) or default_max_size <= 0:
             raise ValueError(f"default_max_size must be a positive integer, got {default_max_size}")
@@ -407,7 +407,7 @@ class ChunkerConfig:
         # Execution/concurrency knobs (used by AsyncChunker)
         self.max_workers = max_workers
         self.max_concurrent = max_concurrent
-        
+
         # Allow config.txt overrides for selected settings (no ENV toggles)
         try:
             from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -432,7 +432,7 @@ class ChunkerConfig:
         logger.info(f"ChunkerConfig initialized with method={self.default_method.value if hasattr(self.default_method, 'value') else self.default_method}, "
                    f"max_size={default_max_size}, overlap={default_overlap}")
 
-    
+
     # Note: Exceptions for the chunking module live in
     # tldw_Server_API.app.core.Chunking.exceptions. This file intentionally
     # avoids duplicating those definitions.

@@ -121,7 +121,7 @@ class ArticleExtractionBenchmarkEvaluator:
         metrics = evaluate_metrics(ground_truth, predictions, self.n_bootstrap)
         logger.info(
             (
-                "Benchmark complete — F1: {f1:.3f} (± {f1_std:.3f}), "
+                "Benchmark complete - F1: {f1:.3f} (± {f1_std:.3f}), "
                 "Precision: {precision:.3f} (± {precision_std:.3f}), "
                 "Recall: {recall:.3f} (± {recall_std:.3f}), "
                 "Accuracy: {accuracy:.3f} (± {accuracy_std:.3f})"

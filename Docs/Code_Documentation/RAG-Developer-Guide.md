@@ -39,7 +39,7 @@ graph LR
     E --> F[rerank_documents]
     F --> G[store_in_cache]
     G --> H[Return Results]
-    
+
     subgraph Optional Features
         I[process_tables]
         J[optimize_chromadb]
@@ -121,7 +121,7 @@ Core functions that compose into pipelines:
 ```python
 @timer("query_expansion")
 @with_resilience("query_expansion", expand_query_fallback)
-async def expand_query(context: RAGPipelineContext, 
+async def expand_query(context: RAGPipelineContext,
                        strategies: List[str] = None) -> RAGPipelineContext:
     """Expand query with synonyms, acronyms, entities"""
     # Applies multiple expansion strategies
@@ -153,7 +153,7 @@ async def rerank_documents(context: RAGPipelineContext) -> RAGPipelineContext:
     strategy = context.config.get("reranking_strategy", "hybrid")
     reranker = get_reranker(strategy)
     context.documents = await reranker.rerank(
-        context.documents, 
+        context.documents,
         context.query
     )
     return context
@@ -307,10 +307,10 @@ from tldw_Server_API.app.core.RAG.ARCHIVE.functional_pipeline import (
 async def custom_processing(context: RAGPipelineContext) -> RAGPipelineContext:
     """
     Custom processing function for the pipeline.
-    
+
     Args:
         context: The pipeline context containing query, documents, config
-        
+
     Returns:
         Modified context with processed documents
     """
@@ -362,16 +362,16 @@ class CustomRetriever(BaseRetriever):
     def __init__(self, connection_string: str):
         self.connection = connection_string
         self.source = DataSource.CUSTOM  # Add to enum
-    
+
     async def retrieve(
-        self, 
-        query: str, 
+        self,
+        query: str,
         limit: int = 10,
         **kwargs
     ) -> List[Document]:
         # Your retrieval logic
         raw_results = await self._query_database(query, limit)
-        
+
         # Convert to Document objects
         return [
             Document(
@@ -452,7 +452,7 @@ async def test_custom_pipeline_function():
         original_query="test query",
         config={"enable_custom": True}
     )
-    
+
     # Add test documents
     context.documents = [
         Document(
@@ -463,14 +463,14 @@ async def test_custom_pipeline_function():
             score=0.5
         )
     ]
-    
+
     # Test function
     result = await custom_processing(context)
-    
+
     # Assertions
     assert result.documents[0].metadata.get("custom_score") is not None
     assert len(result.documents) == 1
-    
+
 @pytest.mark.asyncio
 async def test_custom_pipeline_integration():
     """Test custom pipeline end-to-end"""
@@ -480,7 +480,7 @@ async def test_custom_pipeline_integration():
         custom_processing,
         rerank_documents
     )
-    
+
     # Create context
     context = RAGPipelineContext(
         query="machine learning",
@@ -491,13 +491,13 @@ async def test_custom_pipeline_integration():
             "top_k": 5
         }
     )
-    
+
     # Execute pipeline
     result = await pipeline(context)
-    
+
     # Verify custom processing was applied
     assert all(
-        "custom_score" in doc.metadata 
+        "custom_score" in doc.metadata
         for doc in result.documents
     )
 ```
@@ -685,8 +685,8 @@ Use asyncio for parallel operations:
 ```python
 async def parallel_search(query: str, sources: List[DataSource]):
     tasks = [
-        retriever.retrieve(query) 
-        for retriever in retrievers 
+        retriever.retrieve(query)
+        for retriever in retrievers
         if retriever.source in sources
     ]
     results = await asyncio.gather(*tasks)
@@ -704,7 +704,7 @@ class DatabasePool:
     def __init__(self, max_connections: int = 10):
         self._pool = []
         self._max = max_connections
-    
+
     @asynccontextmanager
     async def get_connection(self):
         conn = await self._acquire()
@@ -949,16 +949,16 @@ Document your custom pipeline functions:
 async def custom_processing(context: RAGPipelineContext) -> RAGPipelineContext:
     """
     Apply custom scoring based on domain-specific rules.
-    
+
     This function adds a custom score to each document based on
     business logic and reorders documents accordingly.
-    
+
     Args:
         context: Pipeline context with documents to process
-        
+
     Returns:
         Context with documents sorted by custom score
-        
+
     Example:
         >>> pipeline = build_pipeline(
         ...     retrieve_documents,

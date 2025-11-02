@@ -51,4 +51,3 @@ def test_agentic_cache_backend_and_ttl(monkeypatch):
     # Bad TTL returns default
     monkeypatch.setattr(cfg, 'load_comprehensive_config', lambda: _make_cfg(agentic_cache_ttl_sec='nan'))
     assert cfg.rag_agentic_cache_ttl_sec(default=42) == 42
-

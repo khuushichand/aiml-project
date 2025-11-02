@@ -60,4 +60,3 @@ def test_tts_usage_event_logged(client_with_overrides):
     assert r.status_code == 200, r.text
     # Ensure a usage event was logged
     assert any(e[0] == "audio.tts" for e in dummy.events)
-

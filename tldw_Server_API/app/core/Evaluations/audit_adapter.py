@@ -118,4 +118,3 @@ def log_webhook_unregistration(*, user_id: str, webhook_id: Optional[str], url: 
     event = UEvent.SECURITY_SCAN if success else UEvent.SECURITY_VIOLATION
     res = "success" if success else "failure"
     _schedule(_emit(user_id=user_id, event_type=event, action="webhook_unregister", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error}))
-

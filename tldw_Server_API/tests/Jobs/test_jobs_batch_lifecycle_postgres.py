@@ -52,4 +52,3 @@ def test_batch_renew_complete_fail_postgres(monkeypatch):
     # Idempotency
     again = jm.batch_complete_jobs(complete_items)
     assert again == 0
-

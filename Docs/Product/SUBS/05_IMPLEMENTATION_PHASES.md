@@ -19,11 +19,11 @@ This document outlines a phased approach to implementing the Subscriptions featu
 
 class SubscriptionsDatabase:
     """Manages all subscription-related database operations"""
-    
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_database()
-    
+
     def _init_database(self):
         """Create subscription tables if they don't exist"""
         # Implementation of schema from 03_DATABASE_SCHEMA.md
@@ -59,7 +59,7 @@ class SubscriptionCreate(BaseModel):
     check_interval: int = 3600
     auto_import: bool = False
     tags: List[str] = []
-    
+
     @validator('check_interval')
     def validate_interval(cls, v):
         if v < 300:  # 5 minutes minimum
@@ -91,7 +91,7 @@ async def create_subscription(
 ):
     """Create a new subscription"""
     # Basic implementation
-    
+
 @router.get("/", response_model=List[schemas.SubscriptionResponse])
 async def list_subscriptions(
     skip: int = 0,
@@ -152,12 +152,12 @@ class ContentItem:
 
 class BaseParser(ABC):
     """Abstract base class for content parsers"""
-    
+
     @abstractmethod
     async def parse(self, url: str) -> List[ContentItem]:
         """Parse content from URL and return list of items"""
         pass
-    
+
     @abstractmethod
     async def validate_url(self, url: str) -> bool:
         """Check if this parser can handle the given URL"""
@@ -181,15 +181,15 @@ from typing import List
 
 class RSSParser(BaseParser):
     """Parser for RSS and Atom feeds"""
-    
+
     async def parse(self, url: str) -> List[ContentItem]:
         async with httpx.AsyncClient() as client:
             response = await client.get(url)
             response.raise_for_status()
-            
+
         feed = feedparser.parse(response.text)
         items = []
-        
+
         for entry in feed.entries:
             item = ContentItem(
                 url=entry.get('link', ''),
@@ -199,7 +199,7 @@ class RSSParser(BaseParser):
                 published_date=self._parse_date(entry.get('published'))
             )
             items.append(item)
-            
+
         return items
 ```
 
@@ -219,7 +219,7 @@ from typing import List
 
 class YouTubeParser(BaseParser):
     """Parser for YouTube channels and playlists"""
-    
+
     def __init__(self):
         self.ydl_opts = {
             'extract_flat': True,
@@ -227,14 +227,14 @@ class YouTubeParser(BaseParser):
             'quiet': True,
             'no_warnings': True
         }
-    
+
     async def parse(self, url: str) -> List[ContentItem]:
         with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            
+
         items = []
         entries = info.get('entries', [])
-        
+
         for entry in entries[:50]:  # Limit to recent 50
             item = ContentItem(
                 url=f"https://youtube.com/watch?v={entry['id']}",
@@ -246,7 +246,7 @@ class YouTubeParser(BaseParser):
                 view_count=entry.get('view_count')
             )
             items.append(item)
-            
+
         return items
 ```
 
@@ -279,40 +279,40 @@ class YouTubeParser(BaseParser):
 
 class SubscriptionService:
     """Core service for subscription operations"""
-    
+
     def __init__(self, db: SubscriptionsDatabase):
         self.db = db
         self.parser_factory = ParserFactory()
-        
+
     async def check_subscription(self, subscription_id: int) -> CheckResult:
         """Check a subscription for new content"""
         subscription = await self.db.get_subscription(subscription_id)
         if not subscription:
             raise SubscriptionNotFoundError(subscription_id)
-            
+
         # Create check record
         check_id = await self.db.create_check(subscription_id)
-        
+
         try:
             # Get appropriate parser
             parser = self.parser_factory.get_parser(subscription.url)
-            
+
             # Parse content
             items = await parser.parse(subscription.url)
-            
+
             # Process items
             new_items = await self._process_items(subscription_id, items)
-            
+
             # Update check record
             await self.db.complete_check(check_id, len(items), len(new_items))
-            
+
             return CheckResult(
                 subscription_id=subscription_id,
                 total_items=len(items),
                 new_items=len(new_items),
                 status='success'
             )
-            
+
         except Exception as e:
             await self.db.fail_check(check_id, str(e))
             raise
@@ -334,30 +334,30 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 class SubscriptionScheduler:
     """Manages periodic subscription checks"""
-    
+
     def __init__(self, subscription_service: SubscriptionService):
         self.service = subscription_service
         self.scheduler = AsyncIOScheduler()
         self.jobs = {}
-        
+
     async def start(self):
         """Start the scheduler"""
         # Load active subscriptions
         subscriptions = await self.service.get_active_subscriptions()
-        
+
         for sub in subscriptions:
             await self.schedule_subscription(sub)
-            
+
         self.scheduler.start()
-        
+
     async def schedule_subscription(self, subscription):
         """Schedule checks for a subscription"""
         job_id = f"sub_{subscription.id}"
-        
+
         # Remove existing job if any
         if job_id in self.jobs:
             self.scheduler.remove_job(job_id)
-            
+
         # Create new job
         trigger = IntervalTrigger(seconds=subscription.check_interval)
         job = self.scheduler.add_job(
@@ -399,19 +399,19 @@ class SubscriptionScheduler:
 
 class ImportService:
     """Handles importing subscription items to media library"""
-    
+
     def __init__(self, media_processor):
         self.media_processor = media_processor
-        
+
     async def import_items(self, item_ids: List[int], options: ImportOptions):
         """Import selected items into media library"""
         results = []
-        
+
         for item_id in item_ids:
             try:
                 # Get item details
                 item = await self.db.get_subscription_item(item_id)
-                
+
                 # Process through media pipeline
                 media_id = await self.media_processor.process_url(
                     url=item.url,
@@ -423,23 +423,23 @@ class ImportService:
                     },
                     options=options
                 )
-                
+
                 # Update item status
                 await self.db.mark_item_imported(item_id, media_id)
-                
+
                 results.append({
                     'item_id': item_id,
                     'media_id': media_id,
                     'status': 'success'
                 })
-                
+
             except Exception as e:
                 results.append({
                     'item_id': item_id,
                     'status': 'failed',
                     'error': str(e)
                 })
-                
+
         return results
 ```
 
@@ -456,22 +456,22 @@ class ImportService:
 
 class RulesEngine:
     """Evaluates import rules against content items"""
-    
+
     def evaluate_item(self, item: ContentItem, rules: List[ImportRule]) -> bool:
         """Check if item matches any import rules"""
         for rule in rules:
             if rule.type == 'keyword':
                 if self._check_keywords(item, rule.value):
                     return rule.action == 'import'
-                    
+
             elif rule.type == 'author':
                 if item.author == rule.value.get('author'):
                     return rule.action == 'import'
-                    
+
             elif rule.type == 'date_range':
                 if self._check_date_range(item, rule.value):
                     return rule.action == 'import'
-                    
+
         return False  # No rules matched
 ```
 

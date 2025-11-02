@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 @pytest.mark.integration
 class TestChromaDBSetup:
     """Test ChromaDB setup and initialization."""
-    
+
     def test_chromadb_client_creation(self, temp_chroma_path):
         """Test creating a ChromaDB client."""
         settings = Settings(
@@ -34,7 +34,7 @@ class TestChromaDBSetup:
             anonymized_telemetry=False,
             allow_reset=True
         )
-        
+
         client = chromadb.PersistentClient(
             path=temp_chroma_path,
             settings=settings
@@ -56,7 +56,7 @@ class TestChromaDBSetup:
                         stop_fn()
             except Exception:
                 pass
-    
+
     def test_chromadb_persistence(self, temp_chroma_path):
         """Test ChromaDB data persistence."""
         # Create client and add data
@@ -106,7 +106,7 @@ class TestChromaDBSetup:
                         stop2()
             except Exception:
                 pass
-    
+
     def test_multiple_collections(self, chroma_client):
         """Test creating and managing multiple collections."""
         # Create multiple collections
@@ -114,11 +114,11 @@ class TestChromaDBSetup:
         for i in range(5):
             col = chroma_client.create_collection(f"collection_{i}")
             collections.append(col)
-        
+
         # Verify all collections exist
         all_collections = chroma_client.list_collections()
         assert len(all_collections) == 5
-        
+
         # Add data to each collection
         for i, col in enumerate(collections):
             col.add(
@@ -126,12 +126,12 @@ class TestChromaDBSetup:
                 embeddings=[[float(i), 0.1, 0.2]],
                 ids=[f"id_{i}"]
             )
-        
+
         # Verify data isolation between collections
         for i, col in enumerate(collections):
             result = col.get(ids=[f"id_{i}"])
             assert result["documents"][0] == f"doc_{i}"
-            
+
             # Should not find other collections' data
             wrong_result = col.get(ids=[f"id_{(i+1)%5}"])
             assert len(wrong_result["documents"]) == 0
@@ -140,26 +140,26 @@ class TestChromaDBSetup:
 @pytest.mark.integration
 class TestChromaDBManagerIntegration:
     """Integration tests for ChromaDBManager with real components."""
-    
+
     def test_manager_initialization_with_real_chromadb(self, real_chromadb_manager):
         """Test ChromaDBManager basic initialization with real client."""
         assert real_chromadb_manager.client is not None
         collection = real_chromadb_manager.get_or_create_collection("test_collection")
         assert collection is not None
-    
+
     def test_end_to_end_storage_and_retrieval(self, real_chromadb_manager, sample_texts):
         """Test complete storage and retrieval pipeline."""
         collection_name = "test_e2e"
-        
+
         # Generate simple fixed-dimension embeddings (no external model)
         dim = 8
         rng = np.random.default_rng(0)
         embeddings = rng.normal(size=(len(sample_texts), dim)).tolist()
-        
+
         # Store in ChromaDB
         ids = [f"doc_{i}" for i in range(len(sample_texts))]
         metadata = [{"index": i, "source": "test"} for i in range(len(sample_texts))]
-        
+
         real_chromadb_manager.store_in_chroma(
             collection_name=collection_name,
             texts=sample_texts,
@@ -167,11 +167,11 @@ class TestChromaDBManagerIntegration:
             ids=ids,
             metadatas=metadata
         )
-        
+
         # Verify storage
         count = real_chromadb_manager.count_items_in_collection(collection_name)
         assert count == len(sample_texts)
-        
+
         # Test retrieval with precomputed embeddings
         query_embedding = embeddings[0:1]  # Use first embedding as query
         results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
@@ -179,14 +179,14 @@ class TestChromaDBManagerIntegration:
             query_embeddings=query_embedding,
             n_results=3
         )
-        
+
         assert len(results["ids"][0]) <= 3
         assert results["ids"][0][0] == "doc_0"  # Should find itself as most similar
-    
+
     def test_vector_search_with_real_embeddings(self, real_chromadb_manager, hf_or_deterministic_embeddings):
         """Test vector search, preferring HF embeddings when online."""
         collection_name = "search_test"
-        
+
         # Add test documents
         documents = [
             "The weather is sunny today",
@@ -198,7 +198,7 @@ class TestChromaDBManagerIntegration:
         # Choose embedding path: HF model if available; otherwise deterministic
         embed_func, used_real_model, dim = hf_or_deterministic_embeddings
         embeddings = embed_func(documents)
-        
+
         # Store documents
         ids = [f"doc_{i}" for i in range(len(documents))]
         real_chromadb_manager.store_in_chroma(
@@ -208,30 +208,30 @@ class TestChromaDBManagerIntegration:
             ids=ids,
             metadatas=[{"i": i} for i in range(len(documents))]
         )
-        
+
         # Use one of the stored vectors as query
         query_embedding = embeddings[0]
-        
+
         results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
             collection_name=collection_name,
             query_embeddings=[query_embedding],
             n_results=3
         )
-        
+
         # Should return up to 3 documents
         found_docs = results["documents"][0]
         assert len(found_docs) == 3
-    
+
     def test_metadata_filtering(self, real_chromadb_manager):
         """Test metadata filtering in searches."""
         collection_name = "metadata_test"
-        
+
         # Create documents with different categories
         documents = []
         embeddings_list = []
         ids = []
         metadatas = []
-        
+
         categories = ["science", "sports", "science", "sports", "science"]
         texts = [
             "Quantum physics discoveries",
@@ -240,17 +240,17 @@ class TestChromaDBManagerIntegration:
             "Basketball tournament",
             "Astronomy observations"
         ]
-        
-        
+
+
         for i, (text, category) in enumerate(zip(texts, categories)):
             documents.append(text)
             ids.append(f"doc_{i}")
             metadatas.append({"category": category, "index": i})
-        
+
         dim = 8
         rng = np.random.default_rng(123)
         embeddings_list = rng.normal(size=(len(documents), dim)).tolist()
-        
+
         # Store documents
         real_chromadb_manager.store_in_chroma(
             collection_name=collection_name,
@@ -259,7 +259,7 @@ class TestChromaDBManagerIntegration:
             ids=ids,
             metadatas=metadatas
         )
-        
+
         # Search only in science category
         collection = real_chromadb_manager.get_or_create_collection(collection_name)
         results = collection.query(
@@ -267,16 +267,16 @@ class TestChromaDBManagerIntegration:
             n_results=5,
             where={"category": "science"}
         )
-        
+
         # Should only return science documents
         assert len(results["ids"][0]) == 3
         for metadata in results["metadatas"][0]:
             assert metadata["category"] == "science"
-    
+
     def test_collection_deletion_and_recreation(self, real_chromadb_manager):
         """Test deleting and recreating collections."""
         collection_name = "delete_test"
-        
+
         # Create and populate collection
         real_chromadb_manager.store_in_chroma(
             collection_name=collection_name,
@@ -285,36 +285,36 @@ class TestChromaDBManagerIntegration:
             ids=["id1", "id2"],
             metadatas=[{"i": 0}, {"i": 1}]
         )
-        
+
         # Verify data exists
         count = real_chromadb_manager.count_items_in_collection(collection_name)
         assert count == 2
-        
+
         # Delete collection (no return in current API)
         real_chromadb_manager.delete_collection(collection_name)
-        
+
         # Recreate collection
         collection = real_chromadb_manager.get_or_create_collection(collection_name)
         assert collection is not None
-        
+
         # Should be empty
         new_count = real_chromadb_manager.count_items_in_collection(collection_name)
         assert new_count == 0
-    
+
     def test_large_batch_processing(self, real_chromadb_manager):
         """Test processing large batches of documents."""
         collection_name = "large_batch_test"
         num_documents = 100
-        
+
         # Generate large dataset
-        texts = [f"Document {i}: This is test content for document number {i}" 
+        texts = [f"Document {i}: This is test content for document number {i}"
                  for i in range(num_documents)]
         ids = [f"doc_{i}" for i in range(num_documents)]
-        
+
         # Generate simple embeddings (normally would use real embedder)
         np.random.seed(42)
         embeddings = np.random.randn(num_documents, 384).tolist()
-        
+
         # Store in batches
         batch_size = 20
         for i in range(0, num_documents, batch_size):
@@ -326,18 +326,18 @@ class TestChromaDBManagerIntegration:
                 ids=ids[i:batch_end],
                 metadatas=[{"i": j} for j in range(i, batch_end)]
             )
-        
+
         # Verify all documents stored
         count = real_chromadb_manager.count_items_in_collection(collection_name)
         assert count == num_documents
-        
+
         # Test searching in large collection
         results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
             collection_name=collection_name,
             query_embeddings=[embeddings[50]],
             n_results=10
         )
-        
+
         assert len(results["ids"][0]) == 10
         assert "doc_50" in results["ids"][0]  # Should find itself
 
@@ -382,7 +382,7 @@ class TestEmbeddingGeneration:
 @pytest.mark.integration
 class TestDatabaseIntegration:
     """Test integration with MediaDatabase."""
-    
+
     def test_media_db_with_chromadb(self, media_database, real_chromadb_manager, monkeypatch):
         """Test ChromaDB integration with MediaDatabase."""
         # Add media entry
@@ -395,7 +395,7 @@ class TestDatabaseIntegration:
             author="Test Suite",
             keywords=["chromadb", "integration"],
         )
-        
+
         # Process and store in ChromaDB
         # Directly process known content
         # Patch embedding creation to avoid external models
@@ -411,15 +411,15 @@ class TestDatabaseIntegration:
             file_name="test.txt",
             collection_name="media_collection"
         )
-        
+
         # Verify in ChromaDB
         count = real_chromadb_manager.count_items_in_collection("media_collection")
         assert count > 0
-    
+
     def test_chunk_storage_with_db_references(self, media_database, real_chromadb_manager):
         """Test storing chunks with database references."""
         media_id = str(uuid.uuid4())
-        
+
         # Add media
         media_database.add_media_with_keywords(
             title="Chunked Document",
@@ -427,25 +427,25 @@ class TestDatabaseIntegration:
             media_type="document",
             keywords=["test"],
         )
-        
+
         # Manually chunk and store
         chunks = [
             "First chunk content.",
             "Second chunk content.",
             "Third chunk content."
         ]
-        
+
         # Generate embeddings
         rng = np.random.default_rng(7)
         embeddings = rng.normal(size=(len(chunks), 8)).tolist()
-        
+
         # Store with chunk metadata
         ids = [f"{media_id}_chunk_{i}" for i in range(len(chunks))]
         metadata = [
             {"media_id": media_id, "chunk_index": i, "chunk_text": chunk}
             for i, chunk in enumerate(chunks)
         ]
-        
+
         real_chromadb_manager.store_in_chroma(
             collection_name="chunked_media",
             texts=chunks,
@@ -453,15 +453,15 @@ class TestDatabaseIntegration:
             ids=ids,
             metadatas=metadata
         )
-        
-        
+
+
         # Search and verify metadata
         results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
             collection_name="chunked_media",
             query_embeddings=[embeddings[0]],
             n_results=1
         )
-        
+
         assert results["metadatas"][0][0]["media_id"] == media_id
         assert results["metadatas"][0][0]["chunk_index"] == 0
 
@@ -469,26 +469,26 @@ class TestDatabaseIntegration:
 @pytest.mark.integration
 class TestConcurrentOperations:
     """Test concurrent ChromaDB operations."""
-    
+
     @pytest.mark.concurrent
     def test_concurrent_writes(self, real_chromadb_manager):
         """Test concurrent write operations."""
         import threading
         import concurrent.futures
-        
+
         collection_name = "concurrent_test"
         num_threads = 5
         docs_per_thread = 10
-        
+
         def write_documents(thread_id):
             """Write documents from a thread."""
             texts = [f"Thread {thread_id} doc {i}" for i in range(docs_per_thread)]
             ids = [f"t{thread_id}_d{i}" for i in range(docs_per_thread)]
-            
+
             # Simple embeddings for testing
-            embeddings = [[float(thread_id), float(i), 0.1] 
+            embeddings = [[float(thread_id), float(i), 0.1]
                          for i in range(docs_per_thread)]
-            
+
             return real_chromadb_manager.store_in_chroma(
                 collection_name=collection_name,
                 texts=texts,
@@ -496,31 +496,31 @@ class TestConcurrentOperations:
                 ids=ids,
                 metadatas=[{"t": thread_id}] * len(ids)
             )
-        
+
         # Execute concurrent writes
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures = [executor.submit(write_documents, i) for i in range(num_threads)]
             results = [f.result() for f in concurrent.futures.as_completed(futures)]
-        
+
         # All writes should succeed
         assert all(results)
-        
+
         # Verify all documents written
         count = real_chromadb_manager.count_items_in_collection(collection_name)
         assert count == num_threads * docs_per_thread
-    
+
     @pytest.mark.concurrent
     def test_concurrent_reads(self, real_chromadb_manager):
         """Test concurrent read operations."""
         import concurrent.futures
-        
+
         collection_name = "read_test"
-        
+
         # Populate collection
         texts = [f"Document {i}" for i in range(20)]
         embeddings = [[float(i), 0.1, 0.2] for i in range(20)]
         ids = [f"doc_{i}" for i in range(20)]
-        
+
         real_chromadb_manager.store_in_chroma(
             collection_name=collection_name,
             texts=texts,
@@ -528,7 +528,7 @@ class TestConcurrentOperations:
             ids=ids,
             metadatas=[{"i": i} for i in range(20)]
         )
-        
+
         def search_documents(query_id):
             """Search documents from a thread."""
             query_embedding = [[float(query_id), 0.1, 0.2]]
@@ -538,12 +538,12 @@ class TestConcurrentOperations:
                 n_results=5
             )
             return len(results["ids"][0])
-        
+
         # Execute concurrent reads
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(search_documents, i) for i in range(10)]
             results = [f.result() for f in concurrent.futures.as_completed(futures)]
-        
+
         # All searches should return results
         assert all(r == 5 for r in results)
 
@@ -551,11 +551,11 @@ class TestConcurrentOperations:
 @pytest.mark.integration
 class TestErrorRecovery:
     """Test error recovery in real scenarios."""
-    
+
     def test_recovery_from_corrupted_collection(self, real_chromadb_manager):
         """Test recovery from corrupted collection."""
         collection_name = "recovery_test"
-        
+
         # Create and populate collection
         real_chromadb_manager.store_in_chroma(
             collection_name=collection_name,
@@ -564,11 +564,11 @@ class TestErrorRecovery:
             ids=["id1"],
             metadatas=[{"i": 0}]
         )
-        
+
         # Simulate corruption by directly manipulating ChromaDB
         # This is implementation-specific and might need adjustment
         collection = real_chromadb_manager.get_or_create_collection(collection_name)
-        
+
         # Try to add invalid data
         with pytest.raises(Exception):
             collection.add(
@@ -576,16 +576,16 @@ class TestErrorRecovery:
                 embeddings=[[0.1]],  # Wrong dimension
                 ids=["id2"]
             )
-        
+
         # Should still be able to query existing data
         results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
             collection_name=collection_name,
             query_embeddings=[[0.1, 0.2]],
             n_results=1
         )
-        
+
         assert len(results["ids"][0]) == 1
-    
+
     def test_recovery_from_connection_loss(self, temp_chroma_path):
         """Test recovery from temporary connection loss."""
         manager = ChromaDBManager(
@@ -597,9 +597,9 @@ class TestErrorRecovery:
             },
         )
         manager.persist_directory = temp_chroma_path
-        
+
         # Connection already initialized in constructor
-        
+
         try:
             # Simulate connection loss by setting client to None
             original_client = manager.client

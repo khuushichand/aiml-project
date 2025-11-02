@@ -3,7 +3,7 @@ Health check module for RAG service components.
 
 Provides health status monitoring for:
 - Vector store connectivity
-- Database connectivity  
+- Database connectivity
 - Embedding service availability
 - Search index status
 """
@@ -35,7 +35,7 @@ class ComponentHealth:
     response_time: Optional[float] = None
     metadata: Optional[Dict[str, Any]] = None
     last_check: float = 0.0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         result = asdict(self)
@@ -45,7 +45,7 @@ class ComponentHealth:
 
 class RAGHealthChecker:
     """Health checker for RAG service components."""
-    
+
     def __init__(
         self,
         vector_store: Optional[VectorStoreAdapter] = None,
@@ -53,7 +53,7 @@ class RAGHealthChecker:
     ):
         """
         Initialize health checker.
-        
+
         Args:
             vector_store: Vector store adapter to check
             check_interval: Interval between health checks in seconds
@@ -63,16 +63,16 @@ class RAGHealthChecker:
         self._health_cache: Dict[str, ComponentHealth] = {}
         self._running = False
         self._check_task: Optional[asyncio.Task] = None
-        
+
     async def start(self):
         """Start periodic health checks."""
         if self._running:
             return
-            
+
         self._running = True
         self._check_task = asyncio.create_task(self._periodic_check())
         logger.info("RAG health checker started")
-        
+
     async def stop(self):
         """Stop periodic health checks."""
         self._running = False
@@ -83,7 +83,7 @@ class RAGHealthChecker:
             except asyncio.CancelledError:
                 pass
         logger.info("RAG health checker stopped")
-        
+
     async def _periodic_check(self):
         """Perform periodic health checks."""
         while self._running:
@@ -95,38 +95,38 @@ class RAGHealthChecker:
             except Exception as e:
                 logger.error(f"Error in periodic health check: {e}")
                 await asyncio.sleep(self.check_interval)
-                
+
     async def check_all(self) -> Dict[str, ComponentHealth]:
         """
         Check health of all components.
-        
+
         Returns:
             Dictionary of component health statuses
         """
         results = {}
-        
+
         # Check vector store
         if self.vector_store:
             results["vector_store"] = await self.check_vector_store()
-            
+
         # Check database (using SQLite)
         results["database"] = await self.check_database()
-        
+
         # Check embedding service
         results["embeddings"] = await self.check_embedding_service()
-        
+
         # Check search index
         results["search_index"] = await self.check_search_index()
-        
+
         # Update cache
         self._health_cache.update(results)
-        
+
         return results
-        
+
     async def check_vector_store(self) -> ComponentHealth:
         """Check vector store connectivity."""
         start = time.time()
-        
+
         try:
             if not self.vector_store:
                 return ComponentHealth(
@@ -135,12 +135,12 @@ class RAGHealthChecker:
                     message="Vector store not configured",
                     last_check=time.time()
                 )
-                
+
             # Try to perform a simple operation
             # This assumes the vector store has a health check method
             collections = await self.vector_store.list_collections()
             response_time = time.time() - start
-            
+
             return ComponentHealth(
                 name="vector_store",
                 status=HealthStatus.HEALTHY,
@@ -149,11 +149,11 @@ class RAGHealthChecker:
                 metadata={"collections": collections},
                 last_check=time.time()
             )
-            
+
         except Exception as e:
             response_time = time.time() - start
             logger.error(f"Vector store health check failed: {e}")
-            
+
             return ComponentHealth(
                 name="vector_store",
                 status=HealthStatus.UNHEALTHY,
@@ -161,24 +161,24 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
     async def check_database(self) -> ComponentHealth:
         """Check database connectivity."""
         start = time.time()
-        
+
         try:
             import sqlite3
             from ....core.config import db_config
-            
+
             # Quick SQLite connectivity test
             conn = sqlite3.connect(db_config.get("db_path", ":memory:"), timeout=1.0)
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             cursor.close()
             conn.close()
-            
+
             response_time = time.time() - start
-            
+
             return ComponentHealth(
                 name="database",
                 status=HealthStatus.HEALTHY,
@@ -186,11 +186,11 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
         except Exception as e:
             response_time = time.time() - start
             logger.error(f"Database health check failed: {e}")
-            
+
             return ComponentHealth(
                 name="database",
                 status=HealthStatus.UNHEALTHY,
@@ -198,19 +198,19 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
     async def check_embedding_service(self) -> ComponentHealth:
         """Check embedding service availability."""
         start = time.time()
-        
+
         try:
             # Check if embedding worker is available
             from ...Embeddings.workers.embedding_worker import EmbeddingWorker
-            
+
             # This is a simple availability check
             # In production, you'd check if the service can actually generate embeddings
             response_time = time.time() - start
-            
+
             return ComponentHealth(
                 name="embeddings",
                 status=HealthStatus.HEALTHY,
@@ -218,10 +218,10 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
         except ImportError:
             response_time = time.time() - start
-            
+
             return ComponentHealth(
                 name="embeddings",
                 status=HealthStatus.DEGRADED,
@@ -229,11 +229,11 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
         except Exception as e:
             response_time = time.time() - start
             logger.error(f"Embedding service health check failed: {e}")
-            
+
             return ComponentHealth(
                 name="embeddings",
                 status=HealthStatus.UNHEALTHY,
@@ -241,31 +241,31 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
     async def check_search_index(self) -> ComponentHealth:
         """Check search index status."""
         start = time.time()
-        
+
         try:
             import sqlite3
             from ....core.config import db_config
-            
+
             # Check FTS5 index
             conn = sqlite3.connect(db_config.get("db_path", ":memory:"), timeout=1.0)
             cursor = conn.cursor()
-            
+
             # Check if FTS table exists and is accessible
             cursor.execute("""
-                SELECT COUNT(*) FROM sqlite_master 
+                SELECT COUNT(*) FROM sqlite_master
                 WHERE type='table' AND name LIKE '%fts%'
             """)
             fts_tables = cursor.fetchone()[0]
-            
+
             cursor.close()
             conn.close()
-            
+
             response_time = time.time() - start
-            
+
             if fts_tables > 0:
                 return ComponentHealth(
                     name="search_index",
@@ -283,11 +283,11 @@ class RAGHealthChecker:
                     response_time=response_time,
                     last_check=time.time()
                 )
-                
+
         except Exception as e:
             response_time = time.time() - start
             logger.error(f"Search index health check failed: {e}")
-            
+
             return ComponentHealth(
                 name="search_index",
                 status=HealthStatus.UNHEALTHY,
@@ -295,19 +295,19 @@ class RAGHealthChecker:
                 response_time=response_time,
                 last_check=time.time()
             )
-            
+
     def get_overall_health(self) -> HealthStatus:
         """
         Get overall system health based on component statuses.
-        
+
         Returns:
             Overall health status
         """
         if not self._health_cache:
             return HealthStatus.UNKNOWN
-            
+
         statuses = [c.status for c in self._health_cache.values()]
-        
+
         if all(s == HealthStatus.HEALTHY for s in statuses):
             return HealthStatus.HEALTHY
         elif any(s == HealthStatus.UNHEALTHY for s in statuses):
@@ -316,11 +316,11 @@ class RAGHealthChecker:
             return HealthStatus.DEGRADED
         else:
             return HealthStatus.UNKNOWN
-            
+
     def get_health_summary(self) -> Dict[str, Any]:
         """
         Get health summary for all components.
-        
+
         Returns:
             Health summary dictionary
         """

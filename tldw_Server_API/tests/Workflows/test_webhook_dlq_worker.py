@@ -93,4 +93,3 @@ async def test_dlq_worker_backoff_and_delivery(monkeypatch, tmp_path):
     # Ensure DLQ is drained after successful retry
     rows2 = db.list_webhook_dlq_due(limit=10)
     assert not rows2, f"Expected DLQ to be empty, found: {rows2}"
-

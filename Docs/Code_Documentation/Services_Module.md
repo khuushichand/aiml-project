@@ -1,4 +1,4 @@
-# Services Module — Overview and Operational Guide
+# Services Module - Overview and Operational Guide
 
 This document summarizes the background services in `tldw_server`, their responsibilities, configuration, and production hardening notes. It reflects the code in `tldw_Server_API/app/services` as of v0.1.0.
 
@@ -26,11 +26,11 @@ Each loop supports graceful stop via an `asyncio.Event` and is gated by env flag
 - File: `tldw_Server_API/app/services/storage_quota_service.py`
 - Purpose: Tracks per-user storage (`USER_DATA_BASE_PATH` and optionally per-user ChromaDB). Updates usage in `users` table. Provides quota checks, recalculation, temp cleanup, and breakdown.
 - Key methods:
-  - `calculate_user_storage(user_id)` — scans disk, updates DB (async + threadpool)
-  - `check_quota(user_id, new_bytes)` — cached, emits gauges
-  - `update_usage(user_id, bytes_delta, operation)` — safe increments with floor at 0
+  - `calculate_user_storage(user_id)` - scans disk, updates DB (async + threadpool)
+  - `check_quota(user_id, new_bytes)` - cached, emits gauges
+  - `update_usage(user_id, bytes_delta, operation)` - safe increments with floor at 0
   - `cleanup_temp_files(user_id?, older_than_hours=24)`
-- Caching: `TTLCache` for quota and storage results (5–10 minutes)
+- Caching: `TTLCache` for quota and storage results (5-10 minutes)
 - Backend: Works with SQLite and PostgreSQL via `DatabasePool`
 - Notes: All heavy filesystem ops run in a small threadpool. Methods self-init on first use.
 
@@ -72,7 +72,7 @@ Each loop supports graceful stop via an `asyncio.Event` and is gated by env flag
 ## Known Gaps and Recommendations
 
 - Placeholders not production-ready:
-  - `document_processing_service.py`, `ebook_processing_service.py`, `podcast_processing_service.py`, `xml_processing_service.py` — keep out of critical paths until completed and tested.
+  - `document_processing_service.py`, `ebook_processing_service.py`, `podcast_processing_service.py`, `xml_processing_service.py` - keep out of critical paths until completed and tested.
   - `ephemeral_store.py` is in-memory, non-thread-safe, and has no TTL. Replace with a bounded, TTL-backed store (e.g., Redis or a small SQLite table) for production.
   - Feature flag: set `PLACEHOLDER_SERVICES_ENABLED=1` (env) to enable these placeholders; otherwise they return 503 to prevent accidental use.
 

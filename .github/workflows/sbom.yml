@@ -13,10 +13,16 @@ jobs:
   build-sbom:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Populated in "Gather SBOM files" step
+      SBOM_FILES: ""
+      SBOM_COUNT: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
 
+
+      # No registry login required for public Docker Hub images used below
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
@@ -28,56 +34,27 @@ jobs:
             npx @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
           fi
 
-      - name: Generate Node SBOM (cyclonedx-npm)
-        run: |
-          if [ -f tldw-frontend/package.json ]; then \
-            (cd tldw-frontend && npx @cyclonedx/cyclonedx-npm --output-file ../sbom-frontend.cdx.json) || true; \
-          elif [ -f package.json ]; then \
-            npx @cyclonedx/cyclonedx-npm --output-file sbom-frontend.cdx.json || true; \
-          else \
-            echo "No package.json found for Node SBOM generation"; \
-          fi
-
-      - name: Generate Source SBOM with Syft (CycloneDX JSON)
-        uses: anchore/sbom-action@v0
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@8e94d75ddd33f69f691467e42275782e4bfefe84 # v0.20.9
         with:
           path: .
           format: cyclonedx-json
-          output-file: sbom-syft.cdx.json
-          upload-artifact: false
+          output-file: sbom.cdx.json
+          upload-artifact: true
+          artifact-name: sbom-cyclonedx
 
-      - name: Setup Python (for merge/validate)
-        uses: actions/setup-python@v5
+      - name: Validate SBOM (CycloneDX CLI - pinned)
+        id: validate_cli_pinned
+        if: ${{ hashFiles('sbom.cdx.json') != '' }}
+        continue-on-error: true
+        uses: docker://cyclonedx/cyclonedx-cli:0.30.0
         with:
-          python-version: '3.11'
+          args: >-
+            validate --input-file sbom.cdx.json
 
-      - name: Install cyclonedx-cli
-        run: python -m pip install cyclonedx-cli
-
-      - name: Merge SBOMs
-        run: |
-          FILES=""
-          [ -f sbom-python.cdx.json ] && FILES="$FILES sbom-python.cdx.json"
-          [ -f sbom-frontend.cdx.json ] && FILES="$FILES sbom-frontend.cdx.json"
-          [ -f sbom-syft.cdx.json ] && FILES="$FILES sbom-syft.cdx.json"
-          if [ -n "$FILES" ]; then \
-            cyclonedx-cli merge --input-files $FILES --output-file sbom.cdx.json; \
-          else \
-            echo "No component SBOMs to merge"; \
-          fi
-
-      - name: Validate merged SBOM
-        run: |
-          if [ -f sbom.cdx.json ]; then \
-            python -m cyclonedx_cli validate --input-file sbom.cdx.json; \
-          fi
-
-      - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
+      - name: Validate SBOM (CycloneDX CLI - pinned fallback)
+        if: ${{ hashFiles('sbom.cdx.json') != '' && steps.validate_cli_pinned.outcome == 'failure' }}
+        uses: docker://cyclonedx/cyclonedx-cli:0.29.1
         with:
-          name: sbom
-          path: |
-            sbom-python.cdx.json
-            sbom-frontend.cdx.json
-            sbom-syft.cdx.json
-            sbom.cdx.json
+          args: >-
+            validate --input-file sbom.cdx.json

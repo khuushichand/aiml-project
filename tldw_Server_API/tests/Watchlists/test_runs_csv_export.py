@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import json
 
@@ -20,6 +21,15 @@ def client_with_user(monkeypatch):
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("TEST_MODE", "1")
+    # Ensure a clean per-user DB for user 909, resolving base dir from env
+    try:
+        base_env = os.environ.get("USER_DB_BASE_DIR")
+        user_db_base = Path(base_env) if base_env else (Path.cwd() / "Databases" / "user_databases")
+        user_db_path = user_db_base / "909" / "Media_DB_v2.db"
+        if user_db_path.exists():
+            user_db_path.unlink()
+    except Exception as e:
+        print(f"[WARN] Failed to remove test user DB at {user_db_path}: {e}")
 
     from fastapi import FastAPI
     from tldw_Server_API.app.core.config import API_V1_PREFIX

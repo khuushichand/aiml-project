@@ -178,6 +178,3 @@ backstory: |
 # Timed Effect
 warning: System critical! | timed_effects={"cooldown":120}
 ```
-
-
-

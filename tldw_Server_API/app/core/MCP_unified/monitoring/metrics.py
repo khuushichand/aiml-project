@@ -52,30 +52,30 @@ class MetricData:
 class MetricsCollector:
     """
     Centralized metrics collection for MCP.
-    
+
     Supports both Prometheus and internal metrics collection.
     """
-    
+
     def __init__(self, enable_prometheus: bool = True):
         self.enable_prometheus = enable_prometheus and PROMETHEUS_AVAILABLE
-        
+
         # Internal metrics storage
         self._metrics: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self._metric_definitions: Dict[str, MetricData] = {}
-        
+
         # Prometheus metrics (if available)
         if self.enable_prometheus:
             self.registry = CollectorRegistry()
             self._init_prometheus_metrics()
         else:
             self.registry = None
-        
+
         # Start collection tasks
         self._collection_task = None
         self._aggregation_interval = 60  # seconds
-        
+
         logger.info(f"Metrics collector initialized (Prometheus: {self.enable_prometheus})")
-    
+
     def _init_prometheus_metrics(self):
         """Initialize Prometheus metrics"""
         # Request metrics
@@ -85,7 +85,7 @@ class MetricsCollector:
             ['method', 'status'],
             registry=self.registry
         )
-        
+
         self.request_duration = Histogram(
             'mcp_request_duration_seconds',
             'Request duration in seconds',
@@ -93,7 +93,7 @@ class MetricsCollector:
             buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
             registry=self.registry
         )
-        
+
         # Module metrics
         self.module_health = Gauge(
             'mcp_module_health',
@@ -101,14 +101,14 @@ class MetricsCollector:
             ['module'],
             registry=self.registry
         )
-        
+
         self.module_operations = Counter(
             'mcp_module_operations_total',
             'Total module operations',
             ['module', 'operation', 'status'],
             registry=self.registry
         )
-        
+
         # Connection metrics
         self.active_connections = Gauge(
             'mcp_active_connections',
@@ -116,7 +116,7 @@ class MetricsCollector:
             ['type'],
             registry=self.registry
         )
-        
+
         self.connection_errors = Counter(
             'mcp_connection_errors_total',
             'Total connection errors',
@@ -130,7 +130,7 @@ class MetricsCollector:
             ['reason'],
             registry=self.registry
         )
-        
+
         # WebSocket rejection metrics (e.g., per-IP caps)
         self.ws_rejections = Counter(
             'mcp_ws_rejections_total',
@@ -138,7 +138,7 @@ class MetricsCollector:
             ['reason', 'ip_bucket'],
             registry=self.registry
         )
-        
+
         # Rate limiting metrics
         self.rate_limit_hits = Counter(
             'mcp_rate_limit_hits_total',
@@ -153,7 +153,7 @@ class MetricsCollector:
             ['backend'],
             registry=self.registry
         )
-        
+
         # Cache metrics
         self.cache_hits = Counter(
             'mcp_cache_hits_total',
@@ -161,21 +161,21 @@ class MetricsCollector:
             ['cache_name'],
             registry=self.registry
         )
-        
+
         self.cache_misses = Counter(
             'mcp_cache_misses_total',
             'Cache miss count',
             ['cache_name'],
             registry=self.registry
         )
-        
+
         # System metrics
         self.memory_usage = Gauge(
             'mcp_memory_usage_bytes',
             'Memory usage in bytes',
             registry=self.registry
         )
-        
+
         self.cpu_usage = Gauge(
             'mcp_cpu_usage_percent',
             'CPU usage percentage',
@@ -209,19 +209,19 @@ class MetricsCollector:
             ['module', 'tool'],
             registry=self.registry
         )
-        
+
         # Server info
         self.server_info = Info(
             'mcp_server',
             'MCP server information',
             registry=self.registry
         )
-        
+
         self.server_info.info({
             'version': '3.0.0',
             'protocol_version': '2024-11-05'
         })
-    
+
     def record_request(
         self,
         method: str,
@@ -242,12 +242,12 @@ class MetricsCollector:
             description=f"Request to {method}"
         )
         self._metrics[f"request_{method}"].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.request_counter.labels(method=method, status=status).inc()
             self.request_duration.labels(method=method).observe(duration)
-    
+
     def record_module_operation(
         self,
         module: str,
@@ -257,7 +257,7 @@ class MetricsCollector:
     ):
         """Record a module operation"""
         status = "success" if success else "failure"
-        
+
         # Internal metrics
         metric = MetricData(
             name=f"module_{module}_{operation}",
@@ -266,7 +266,7 @@ class MetricsCollector:
             labels={"module": module, "operation": operation, "status": status}
         )
         self._metrics[f"module_{module}_{operation}"].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.module_operations.labels(
@@ -274,11 +274,11 @@ class MetricsCollector:
                 operation=operation,
                 status=status
             ).inc()
-    
+
     def set_module_health(self, module: str, is_healthy: bool):
         """Set module health status"""
         health_value = 1.0 if is_healthy else 0.0
-        
+
         # Internal metrics
         metric = MetricData(
             name=f"module_health_{module}",
@@ -287,11 +287,11 @@ class MetricsCollector:
             labels={"module": module}
         )
         self._metrics[f"module_health_{module}"].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.module_health.labels(module=module).set(health_value)
-    
+
     def update_connection_count(self, connection_type: str, count: int):
         """Update active connection count"""
         # Internal metrics
@@ -302,11 +302,11 @@ class MetricsCollector:
             labels={"type": connection_type}
         )
         self._metrics[f"connections_{connection_type}"].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.active_connections.labels(type=connection_type).set(count)
-    
+
     def record_connection_error(self, connection_type: str, error: str):
         """Record a connection error"""
         # Internal metrics
@@ -317,7 +317,7 @@ class MetricsCollector:
             labels={"type": connection_type, "error": error}
         )
         self._metrics[f"connection_error_{connection_type}"].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.connection_errors.labels(
@@ -348,7 +348,7 @@ class MetricsCollector:
         self._metrics["ws_rejection"].append(metric)
         if self.enable_prometheus:
             self.ws_rejections.labels(reason=reason, ip_bucket=ip_bucket).inc()
-    
+
     def record_rate_limit_hit(self, key_type: str = "user"):
         """Record a rate limit hit"""
         # Internal metrics
@@ -359,7 +359,7 @@ class MetricsCollector:
             labels={"key_type": key_type}
         )
         self._metrics[f"rate_limit_{key_type}"].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.rate_limit_hits.labels(key_type=key_type).inc()
@@ -399,11 +399,11 @@ class MetricsCollector:
         self._metrics["idempotency_miss"].append(metric)
         if self.enable_prometheus:
             self.idempotency_misses.labels(module=module, tool=tool).inc()
-    
+
     def record_cache_access(self, cache_name: str, hit: bool):
         """Record cache access"""
         metric_name = f"cache_{'hit' if hit else 'miss'}_{cache_name}"
-        
+
         # Internal metrics
         metric = MetricData(
             name=metric_name,
@@ -412,14 +412,14 @@ class MetricsCollector:
             labels={"cache": cache_name, "result": "hit" if hit else "miss"}
         )
         self._metrics[metric_name].append(metric)
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             if hit:
                 self.cache_hits.labels(cache_name=cache_name).inc()
             else:
                 self.cache_misses.labels(cache_name=cache_name).inc()
-    
+
     def update_system_metrics(self, memory_bytes: int, cpu_percent: float):
         """Update system resource metrics"""
         # Internal metrics
@@ -437,17 +437,17 @@ class MetricsCollector:
                 value=cpu_percent
             )
         )
-        
+
         # Prometheus metrics
         if self.enable_prometheus:
             self.memory_usage.set(memory_bytes)
             self.cpu_usage.set(cpu_percent)
-    
+
     def get_prometheus_metrics(self) -> bytes:
         """Get metrics in Prometheus format"""
         if not self.enable_prometheus:
             return b"# Prometheus metrics not enabled\n"
-        
+
         return generate_latest(self.registry)
 
     # Validation metrics helpers
@@ -478,30 +478,30 @@ class MetricsCollector:
                 self.tool_validator_missing.labels(module=module, tool=tool).inc()
             except Exception:
                 pass
-    
+
     def get_internal_metrics(self, period_seconds: int = 300) -> Dict[str, Any]:
         """
         Get internal metrics for the specified period.
-        
+
         Args:
             period_seconds: Time period to aggregate metrics
-        
+
         Returns:
             Aggregated metrics dictionary
         """
         cutoff_time = datetime.utcnow() - timedelta(seconds=period_seconds)
         aggregated = {}
-        
+
         for metric_name, metric_deque in self._metrics.items():
             # Filter metrics by time
             recent_metrics = [
                 m for m in metric_deque
                 if m.timestamp >= cutoff_time
             ]
-            
+
             if not recent_metrics:
                 continue
-            
+
             # Aggregate based on metric type
             first_metric = recent_metrics[0]
 
@@ -510,7 +510,7 @@ class MetricsCollector:
             for metric in recent_metrics:
                 key = tuple(sorted(metric.labels.items()))
                 label_groups[key].append(metric)
-            
+
             if first_metric.type == MetricType.COUNTER:
                 total_value = sum(m.value for m in recent_metrics)
                 aggregated[metric_name] = {
@@ -526,7 +526,7 @@ class MetricsCollector:
                         for label_key, metrics in label_groups.items()
                     ]
                 }
-            
+
             elif first_metric.type == MetricType.GAUGE:
                 latest_metric = recent_metrics[-1]
                 aggregated[metric_name] = {
@@ -542,7 +542,7 @@ class MetricsCollector:
                         for label_key, metrics in label_groups.items()
                     ]
                 }
-            
+
             elif first_metric.type in [MetricType.HISTOGRAM, MetricType.SUMMARY]:
                 values = [m.value for m in recent_metrics]
                 aggregated[metric_name] = {
@@ -573,28 +573,28 @@ class MetricsCollector:
                         )
                     ]
                 }
-        
+
         return aggregated
-    
+
     def _percentile(self, values: List[float], percentile: int) -> float:
         """Calculate percentile of values"""
         if not values:
             return 0
-        
+
         sorted_values = sorted(values)
         index = int(len(sorted_values) * percentile / 100)
-        
+
         if index >= len(sorted_values):
             return sorted_values[-1]
-        
+
         return sorted_values[index]
-    
+
     async def start_collection(self):
         """Start background metrics collection"""
         if self._collection_task is None:
             self._collection_task = asyncio.create_task(self._collection_loop())
             logger.info("Metrics collection started")
-    
+
     async def stop_collection(self):
         """Stop metrics collection"""
         if self._collection_task:
@@ -605,7 +605,7 @@ class MetricsCollector:
                 pass
             self._collection_task = None
             logger.info("Metrics collection stopped")
-    
+
     async def _sample_system_metrics(self):
         """Sample system metrics without blocking the event loop."""
         import psutil
@@ -622,22 +622,22 @@ class MetricsCollector:
 
                 # Clean old metrics
                 self._clean_old_metrics()
-                
+
                 await asyncio.sleep(self._aggregation_interval)
-                
+
             except Exception as e:
                 logger.error(f"Error in metrics collection: {e}")
                 await asyncio.sleep(10)
-    
+
     def _clean_old_metrics(self, max_age_hours: int = 24):
         """Clean metrics older than max_age"""
         cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
-        
+
         for metric_deque in self._metrics.values():
             # deque automatically maintains max size, but we can clean by time
             while metric_deque and metric_deque[0].timestamp < cutoff_time:
                 metric_deque.popleft()
-    
+
     def get_summary(self) -> Dict[str, Any]:
         """Get a summary of current metrics"""
         return {
@@ -673,7 +673,7 @@ def track_request_time(method: str):
         async def wrapper(*args, **kwargs):
             start_time = time.time()
             collector = get_metrics_collector()
-            
+
             try:
                 result = await func(*args, **kwargs)
                 duration = time.time() - start_time
@@ -683,7 +683,7 @@ def track_request_time(method: str):
                 duration = time.time() - start_time
                 collector.record_request(method, duration, "failure")
                 raise
-        
+
         return wrapper
     return decorator
 
@@ -694,7 +694,7 @@ def track_module_operation(module: str, operation: str):
         async def wrapper(*args, **kwargs):
             start_time = time.time()
             collector = get_metrics_collector()
-            
+
             try:
                 result = await func(*args, **kwargs)
                 duration = time.time() - start_time
@@ -704,6 +704,6 @@ def track_module_operation(module: str, operation: str):
                 duration = time.time() - start_time
                 collector.record_module_operation(module, operation, duration, False)
                 raise
-        
+
         return wrapper
     return decorator

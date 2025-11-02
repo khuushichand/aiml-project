@@ -1088,19 +1088,19 @@
     const [category, identifier] = stepName.split(':');
     if (category === 'stt' || category === 'tts') {
       const label = getInstallOptionLabel(category, identifier) || identifier;
-      return `${category.toUpperCase()} – ${label}`;
+      return `${category.toUpperCase()} - ${label}`;
     }
     if (category === 'embeddings') {
       if (identifier === 'huggingface') {
-        return 'Embeddings – Hugging Face presets';
+        return 'Embeddings - Hugging Face presets';
       }
       if (identifier === 'custom') {
-        return 'Embeddings – Custom models';
+        return 'Embeddings - Custom models';
       }
       if (identifier === 'onnx') {
-        return 'Embeddings – ONNX models';
+        return 'Embeddings - ONNX models';
       }
-      return `Embeddings – ${identifier}`;
+      return `Embeddings - ${identifier}`;
     }
     return stepName.replace(/_/g, ' ');
   }
@@ -3078,7 +3078,7 @@ function renderWizardSummary() {
         elements.completeButton.disabled = true;
       }
       if (response.install_plan_submitted) {
-        setMessage('info', 'Setup completed. Installing required Python packages and model files—keep this tab open until the installer finishes.');
+        setMessage('info', 'Setup completed. Installing required Python packages and model files-keep this tab open until the installer finishes.');
         await beginInstallStatusMonitoring();
       } else {
         setMessage('success', `${response.message || 'Setup completed.'} Redirecting to Web UI…`);

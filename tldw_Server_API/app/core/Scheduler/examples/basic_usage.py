@@ -48,7 +48,7 @@ async def analyze_metrics(metrics_data):
 
 async def main():
     """Main example function."""
-    
+
     # Configure scheduler
     config = SchedulerConfig(
         database_url="sqlite:///scheduler_example.db",
@@ -58,11 +58,11 @@ async def main():
         write_buffer_size=100,
         write_buffer_flush_interval=1.0
     )
-    
+
     # Create and start scheduler
     async with Scheduler(config) as scheduler:
         print("Scheduler started!")
-        
+
         # Submit a simple task
         email_task = await scheduler.submit(
             handler="__main__.send_email",
@@ -75,7 +75,7 @@ async def main():
             metadata={"user_id": "demo-user"}
         )
         print(f"Submitted email task: {email_task}")
-        
+
         # Submit a task with dependencies
         video_task = await scheduler.submit(
             handler="__main__.process_video",
@@ -86,7 +86,7 @@ async def main():
             queue_name="heavy",
             metadata={"user_id": "demo-user"}
         )
-        
+
         # Task that depends on video processing
         analytics_task = await scheduler.submit(
             handler="__main__.analyze_metrics",
@@ -98,7 +98,7 @@ async def main():
             depends_on=[video_task],  # Will only run after video_task completes
             metadata={"user_id": "demo-user"}
         )
-        
+
         # Submit with idempotency key (prevents duplicates)
         dedup_task = await scheduler.submit(
             handler="__main__.send_email",
@@ -106,7 +106,7 @@ async def main():
             idempotency_key="daily-report-2024-01-01",
             metadata={"user_id": "demo-user"}
         )
-        
+
         # Try to submit duplicate (will return same task ID)
         duplicate = await scheduler.submit(
             handler="__main__.send_email",
@@ -114,10 +114,10 @@ async def main():
             idempotency_key="daily-report-2024-01-01",  # Same key!
             metadata={"user_id": "demo-user"}
         )
-        
+
         assert dedup_task == duplicate
         print(f"Idempotency works: {dedup_task} == {duplicate}")
-        
+
         # Schedule a task for the future
         future_time = datetime.utcnow() + timedelta(seconds=5)
         scheduled_task = await scheduler.submit(
@@ -125,22 +125,22 @@ async def main():
             payload={"to": "future@example.com", "subject": "Scheduled"},
             metadata={"user_id": "demo-user", "scheduled_at": future_time.isoformat()}
         )
-        
+
         # Wait for a task to complete
         print(f"Waiting for email task {email_task} to complete...")
         result = await scheduler.wait_for_task(email_task, timeout=10)
         if result:
             print(f"Email task completed with status: {result.status}")
             print(f"Result: {result.result}")
-        
+
         # Get queue status
         status = await scheduler.get_queue_status()
         print(f"Queue status: {status}")
-        
+
         # Get scheduler status
         scheduler_status = scheduler.get_status()
         print(f"Scheduler status: {scheduler_status}")
-        
+
         # Scale workers for heavy queue
         if scheduler.worker_pool:
             new_count = await scheduler.scale_workers(5, "heavy")
@@ -149,12 +149,12 @@ async def main():
 
 async def example_with_batch_processing():
     """Example of batch task processing."""
-    
+
     config = SchedulerConfig(
         database_url="sqlite:///batch_example.db",
         base_path=Path("/tmp/batch_example")
     )
-    
+
     async with Scheduler(config) as scheduler:
         # Submit a batch of tasks
         tasks = [
@@ -169,23 +169,23 @@ async def example_with_batch_processing():
             }
             for i in range(10)
         ]
-        
+
         task_ids = await scheduler.submit_batch(tasks)
         print(f"Submitted {len(task_ids)} tasks in batch")
-        
+
         # Wait for all to complete
         results = []
         for task_id in task_ids:
             result = await scheduler.wait_for_task(task_id, timeout=30)
             if result:
                 results.append(result)
-        
+
         print(f"Completed {len(results)} out of {len(task_ids)} tasks")
 
 
 async def example_with_error_handling():
     """Example with error handling and retries."""
-    
+
     # Task that might fail
     @task(max_retries=3, timeout=10)
     async def unreliable_task(data):
@@ -194,12 +194,12 @@ async def example_with_error_handling():
         if random.random() < 0.5:
             raise Exception("Random failure!")
         return {"success": True, "data": data}
-    
+
     config = SchedulerConfig(
         database_url="sqlite:///error_example.db",
         base_path=Path("/tmp/error_example")
     )
-    
+
     async with Scheduler(config) as scheduler:
         # Submit task that might fail
         task_id = await scheduler.submit(
@@ -207,7 +207,7 @@ async def example_with_error_handling():
             payload={"important": "data"},
             metadata={"user_id": "demo-user"}
         )
-        
+
         # Wait and check result
         result = await scheduler.wait_for_task(task_id, timeout=60)
         if result:
@@ -223,20 +223,20 @@ if __name__ == "__main__":
     print("=" * 60)
     print("SCHEDULER EXAMPLE")
     print("=" * 60)
-    
+
     # Run main example
     asyncio.run(main())
-    
+
     print("\n" + "=" * 60)
     print("BATCH PROCESSING EXAMPLE")
     print("=" * 60)
-    
+
     # Run batch example
     asyncio.run(example_with_batch_processing())
-    
+
     print("\n" + "=" * 60)
     print("ERROR HANDLING EXAMPLE")
     print("=" * 60)
-    
+
     # Run error handling example
     asyncio.run(example_with_error_handling())

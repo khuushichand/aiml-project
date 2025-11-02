@@ -25,4 +25,3 @@ def test_normalize_collapse_slashes_and_trailing_slash():
 def test_normalize_removes_default_ports():
     assert normalize_for_crawl("http://example.com:80/a", "http://x") == "http://example.com/a"
     assert normalize_for_crawl("https://example.com:443/a/", "http://x") == "https://example.com/a"
-

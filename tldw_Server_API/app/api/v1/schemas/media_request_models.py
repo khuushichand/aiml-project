@@ -33,11 +33,7 @@ class MediaItemResponse(BaseModel):
     keywords: List[str]
     timestamps: List[str]
 
-    model_config = ConfigDict(
-        json_encoders={
-            datetime: lambda v: v.isoformat()
-        }
-    )
+    model_config = ConfigDict()
 
 class PaginationInfo(BaseModel):
     page: int
@@ -202,21 +198,21 @@ class TranscriptionModel(str, Enum):
     WHISPER_LARGE_V2 = "whisper-large-v2"
     WHISPER_LARGE_V3 = "whisper-large-v3"
     WHISPER_LARGE_V3_TURBO = "whisper-large-v3-turbo"
-    
+
     # Distil-Whisper Models (faster, optimized)
     DISTIL_WHISPER_LARGE_V2 = "distil-whisper-large-v2"
     DISTIL_WHISPER_LARGE_V3 = "distil-whisper-large-v3"
     DISTIL_WHISPER_MEDIUM_EN = "distil-whisper-medium.en"
     DISTIL_WHISPER_SMALL_EN = "distil-whisper-small.en"
-    
+
     # Specific HuggingFace models
     DEEPDML_FASTER_DISTIL_LARGE_V3 = "deepdml/faster-distil-whisper-large-v3.5"
     DEEPDML_FASTER_LARGE_V3_TURBO = "deepdml/faster-whisper-large-v3-turbo-ct2"
-    
+
     # Nemo Models
     NEMO_CANARY_1B = "nemo-canary-1b"
     NEMO_PARAKEET_TDT_1B = "nemo-parakeet-tdt-1.1b"
-    
+
     # Parakeet with backends
     PARAKEET_STANDARD = "parakeet-standard"
     PARAKEET_CUDA = "parakeet-cuda"
@@ -289,7 +285,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     model_name: Optional[str] = Field(None, description="Model name for the selected provider")
     use_cookies: bool = Field(False, description="Whether to attach cookies to URL download requests")
     cookies: Optional[str] = Field(None, description="Cookie string if `use_cookies` is set to True")
-    
+
     # Legacy field for backward compatibility - will be removed
     api_name: Optional[str] = Field(None, description="DEPRECATED - use api_provider instead")
 
@@ -304,7 +300,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
     generate_embeddings: bool = Field(False, description="Generate embeddings after media processing")
     embedding_model: Optional[str] = Field(None, description="Specific embedding model to use (e.g., 'Qwen/Qwen3-Embedding-4B-GGUF')")
     embedding_provider: Optional[str] = Field(None, description="Embedding provider (huggingface, openai, etc)")
-    
+
     # --- Deprecated/Less Common ---
     perform_rolling_summarization: bool = Field(False, description="Perform rolling summarization (legacy?)")
     summarize_recursively: bool = Field(False, description="Perform recursive summarization on chunks (if chunking enabled)")
@@ -317,7 +313,7 @@ class AddMediaForm(ChunkingOptions, AudioVideoOptions, PdfOptions):
         if not self.keywords_str:
             return []
         return [k.strip() for k in self.keywords_str.split(",") if k.strip()]
-    
+
     def model_post_init(self, __context):
         """Handle legacy api_name field by splitting into provider/model."""
         if self.api_name and '/' in self.api_name:
@@ -576,35 +572,35 @@ class MediaWikiDumpOptionsForm(BaseModel):
     chunk_max_size: int = Field(default_factory=lambda: media_wiki_global_config.get('chunking', {}).get('default_size', 1000), description="Maximum chunk size for MediaWiki content processing.")
     api_name_vector_db: Optional[str] = Field(None, description="API name for vector DB/embedding/summary service (e.g., 'openai') used during ingestion.")
     api_key_vector_db: Optional[str] = Field(None, description="API key for the vector DB/embedding/summary service.")
-    
+
     @field_validator('wiki_name')
     @classmethod
     def validate_wiki_name(cls, v: str) -> str:
         """Validate wiki name to prevent path traversal and injection attacks."""
         if not v:
             raise ValueError("Wiki name cannot be empty")
-        
+
         # Only allow alphanumeric, underscore, hyphen, and spaces
         if not re.match(r'^[a-zA-Z0-9_\- ]+$', v):
             raise ValueError("Invalid wiki name: Only alphanumeric characters, underscores, hyphens, and spaces are allowed")
-        
+
         # Additional security checks for path traversal patterns
         if any(pattern in v for pattern in ['..', '/', '\\', '\x00']):
             raise ValueError("Invalid wiki name: Contains forbidden characters")
-        
+
         # Length validation
         if len(v) > 100:
             raise ValueError("Wiki name too long (max 100 characters)")
-        
+
         return v
-    
+
     @field_validator('namespaces_str')
     @classmethod
     def validate_namespaces(cls, v: Optional[str]) -> Optional[str]:
         """Validate namespace string format."""
         if v is None:
             return v
-        
+
         # Check format: should be comma-separated integers
         try:
             namespaces = [int(ns.strip()) for ns in v.split(',')]
@@ -614,7 +610,7 @@ class MediaWikiDumpOptionsForm(BaseModel):
                     raise ValueError(f"Invalid namespace ID: {ns}")
         except ValueError as e:
             raise ValueError(f"Invalid namespace format. Must be comma-separated integers: {e}")
-        
+
         return v
 
 class ProcessedMediaWikiPage(BaseModel):

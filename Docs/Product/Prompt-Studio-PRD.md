@@ -1,7 +1,7 @@
 # Prompt Studio Module PRD
 
-Status: Phase 1 complete; Phase 2 in progress; Phase 3 planned  
-Owner: Prompt Studio maintainers  
+Status: Phase 1 complete; Phase 2 in progress; Phase 3 planned
+Owner: Prompt Studio maintainers
 Audience: Backend contributors, infra/testing owners
 
 ## 1. Summary
@@ -97,21 +97,21 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 - **Fixtures:** PG availability probe ensures Postgres-specific suites are skipped or hard-failed based on env.
 
 ## 12. Roadmap
-### Phase 1 – Reliability & Observability (Completed)
+### Phase 1 - Reliability & Observability (Completed)
 - Idempotency keys across create endpoints.
 - Leasing/heartbeat with env overrides.
 - Strategy knob validation (optional).
 - `/status` endpoint + Prometheus gauges.
 - Test harness adjustments to keep suites stable.
 
-### Phase 2 – Correctness & Concurrency (In Progress)
+### Phase 2 - Correctness & Concurrency (In Progress)
 - ✅ Postgres advisory locks in acquire path + metrics.
 - ✅ Scoped idempotency mapping by user with composite unique index.
 - ✅ Concurrency/heartbeat regression suites.
 - ☐ Expand strategy validation matrix (PS-VALIDATION-EXPAND).
 - Optional follow-up: process-level concurrency stress where safe.
 
-### Phase 3 – Performance & CI (Planned)
+### Phase 3 - Performance & CI (Planned)
 - CI matrix for SQLite/Postgres suites (`TLDW_PS_BACKEND`).
 - Shared DB/session scopes to cut migration churn in tests (where isolation allows).
 - Documentation and tooling for running Prompt Studio suites locally (make targets, Docker instructions).
@@ -119,7 +119,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 ## 13. Risks & Open Questions
 1. Strategy knob validation coverage still lags new features; risk of invalid configs slipping through (mitigation: PS-VALIDATION-EXPAND).
 2. Advisory locks rely on Postgres-specific behavior; ensure fallback logic on SQLite remains correct.
-3. Multi-tenant rate limiting/per-user quotas aren’t fully defined—future product work may require additional schema changes.
+3. Multi-tenant rate limiting/per-user quotas aren’t fully defined-future product work may require additional schema changes.
 4. Need to confirm long-running jobs maintain leases under high latency heartbeat scenarios (potential stress tests).
 
 ## 14. References
@@ -133,7 +133,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 
 ---
 
-Maintainer Checklist  
-- [x] Phase 1 delivered and documented  
-- [~] Phase 2: advisory locks + scoped idempotency done; validation expansion outstanding  
+Maintainer Checklist
+- [x] Phase 1 delivered and documented
+- [~] Phase 2: advisory locks + scoped idempotency done; validation expansion outstanding
 - [ ] Phase 3: CI & performance tuning pending

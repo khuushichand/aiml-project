@@ -15,11 +15,11 @@ from .test_case_manager import TestCaseManager
 
 class TestCaseGenerator:
     """Generates test cases automatically for Prompt Studio projects."""
-    
+
     def __init__(self, test_case_manager: TestCaseManager):
         """
         Initialize TestCaseGenerator.
-        
+
         Args:
             test_case_manager: TestCaseManager instance
         """
@@ -30,28 +30,28 @@ class TestCaseGenerator:
     def _unique_name(base: str) -> str:
         """Attach a short unique suffix so concurrent jobs avoid name collisions."""
         return f"{base} ({uuid.uuid4().hex[:8]})"
-    
+
     ####################################################################################################################
     # Generation Strategies
-    
-    def generate_from_description(self, project_id: int, description: str, 
+
+    def generate_from_description(self, project_id: int, description: str,
                                  num_cases: int = 5, signature_id: Optional[int] = None,
                                  prompt_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Generate test cases from a task description.
-        
+
         Args:
             project_id: Project ID
             description: Task description to base generation on
             num_cases: Number of test cases to generate
             signature_id: Optional signature to follow
             prompt_id: Optional prompt to test against
-            
+
         Returns:
             List of generated test cases
         """
         generated_cases = []
-        
+
         # Get signature schema if provided
         input_schema = None
         output_schema = None
@@ -77,7 +77,7 @@ class TestCaseGenerator:
             test_case = self._generate_single_case_from_description(
                 description, i + 1, input_schema, output_schema
             )
-            
+
             # Create the test case
             created = self.manager.create_test_case(
                 project_id=project_id,
@@ -94,20 +94,20 @@ class TestCaseGenerator:
             self.manager.update_test_case(created["id"], {"is_generated": True})
 
             generated_cases.append(created)
-        
+
         logger.info(f"Generated {len(generated_cases)} test cases from description")
         return generated_cases
-    
+
     def generate_diverse_cases(self, project_id: int, signature_id: int,
                               num_cases: int = 5) -> List[Dict[str, Any]]:
         """
         Generate diverse test cases based on signature schema.
-        
+
         Args:
             project_id: Project ID
             signature_id: Signature ID to follow
             num_cases: Number of test cases to generate
-            
+
         Returns:
             List of generated test cases
         """
@@ -123,19 +123,19 @@ class TestCaseGenerator:
             input_schema = []
         if not isinstance(output_schema, list):
             output_schema = []
-        
+
         generated_cases = []
-        
+
         # Generate diverse cases
         strategies = ["edge_case", "typical", "complex", "minimal", "maximal"]
-        
+
         for i in range(num_cases):
             strategy = strategies[i % len(strategies)]
-            
+
             test_case_data = self._generate_case_by_strategy(
                 input_schema, output_schema, strategy, i + 1
             )
-            
+
             # Create the test case
             created = self.manager.create_test_case(
                 project_id=project_id,
@@ -147,38 +147,38 @@ class TestCaseGenerator:
                 is_golden=False,
                 signature_id=signature_id
             )
-            
+
             # Mark as generated
             self.manager.update_test_case(created["id"], {"is_generated": True})
-            
+
             generated_cases.append(created)
-        
+
         logger.info(f"Generated {len(generated_cases)} diverse test cases")
         return generated_cases
-    
+
     def generate_from_existing_data(self, project_id: int, source_data: List[Dict[str, Any]],
                                    signature_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Generate test cases from existing data samples.
-        
+
         Args:
             project_id: Project ID
             source_data: List of data samples to convert to test cases
             signature_id: Optional signature ID
-            
+
         Returns:
             List of generated test cases
         """
         generated_cases = []
-        
+
         for idx, data in enumerate(source_data):
             # Extract inputs and expected outputs
             inputs = data.get("inputs", data)
             expected_outputs = data.get("outputs") or data.get("expected_outputs")
-            
+
             # Generate name
             name = data.get("name") or f"Test from Data {idx + 1}"
-            
+
             # Create test case
             created = self.manager.create_test_case(
                 project_id=project_id,
@@ -190,36 +190,36 @@ class TestCaseGenerator:
                 is_golden=data.get("is_golden", False),
                 signature_id=signature_id
             )
-            
+
             # Mark as generated using backend-aware update
             self.manager.update_test_case(created["id"], {"is_generated": True})
 
             generated_cases.append(created)
-        
+
         logger.info(f"Generated {len(generated_cases)} test cases from existing data")
         return generated_cases
-    
+
     ####################################################################################################################
     # Helper Methods
-    
+
     def _generate_single_case_from_description(self, description: str, index: int,
                                               input_schema: Optional[List] = None,
                                               output_schema: Optional[List] = None) -> Dict[str, Any]:
         """
         Generate a single test case from description.
-        
+
         Args:
             description: Task description
             index: Test case index
             input_schema: Optional input schema
             output_schema: Optional output schema
-            
+
         Returns:
             Test case data
         """
         # Parse description to identify task type
         description_lower = description.lower()
-        
+
         # Determine task type
         if "summariz" in description_lower:
             return self._generate_summarization_case(index, input_schema, output_schema)
@@ -233,7 +233,7 @@ class TestCaseGenerator:
             return self._generate_qa_case(index, input_schema, output_schema)
         else:
             return self._generate_generic_case(index, input_schema, output_schema)
-    
+
     def _generate_summarization_case(self, index: int, input_schema: Optional[List] = None,
                                     output_schema: Optional[List] = None) -> Dict[str, Any]:
         """Generate a summarization test case."""
@@ -244,9 +244,9 @@ class TestCaseGenerator:
             "The human brain contains approximately 86 billion neurons. These neurons communicate through trillions of synapses.",
             "Space exploration has captivated humanity for decades. Recent advances in technology have made Mars colonization a realistic possibility."
         ]
-        
+
         text = texts[index % len(texts)]
-        
+
         return {
             "name": self._unique_name(f"Summarization Test {index}"),
             "description": "Test case for text summarization",
@@ -254,7 +254,7 @@ class TestCaseGenerator:
             "expected_outputs": {"summary": f"Summary of text about {text.split('.')[0][:20]}..."},
             "tags": ["summarization", "generated"]
         }
-    
+
     def _generate_classification_case(self, index: int, input_schema: Optional[List] = None,
                                      output_schema: Optional[List] = None) -> Dict[str, Any]:
         """Generate a classification test case."""
@@ -265,9 +265,9 @@ class TestCaseGenerator:
             ("Amazing quality and fast shipping!", "positive"),
             ("Disappointed with the results.", "negative")
         ]
-        
+
         text, label = samples[index % len(samples)]
-        
+
         return {
             "name": self._unique_name(f"Classification Test {index}"),
             "description": "Test case for sentiment classification",
@@ -275,7 +275,7 @@ class TestCaseGenerator:
             "expected_outputs": {"sentiment": label, "confidence": 0.85},
             "tags": ["classification", "sentiment", "generated"]
         }
-    
+
     def _generate_extraction_case(self, index: int, input_schema: Optional[List] = None,
                                  output_schema: Optional[List] = None) -> Dict[str, Any]:
         """Generate an extraction test case."""
@@ -286,9 +286,9 @@ class TestCaseGenerator:
             "The product costs $99.99 and ships within 3-5 business days.",
             "Dr. Jane Doe published her research in Nature journal in 2023."
         ]
-        
+
         text = samples[index % len(samples)]
-        
+
         return {
             "name": self._unique_name(f"Extraction Test {index}"),
             "description": "Test case for information extraction",
@@ -296,7 +296,7 @@ class TestCaseGenerator:
             "expected_outputs": {"entities": ["person", "date", "location"]},
             "tags": ["extraction", "NER", "generated"]
         }
-    
+
     def _generate_translation_case(self, index: int, input_schema: Optional[List] = None,
                                   output_schema: Optional[List] = None) -> Dict[str, Any]:
         """Generate a translation test case."""
@@ -307,9 +307,9 @@ class TestCaseGenerator:
             ("See you later.", "À plus tard."),
             ("I love learning languages.", "J'aime apprendre les langues.")
         ]
-        
+
         source, target = samples[index % len(samples)]
-        
+
         return {
             "name": self._unique_name(f"Translation Test {index}"),
             "description": "Test case for language translation",
@@ -317,7 +317,7 @@ class TestCaseGenerator:
             "expected_outputs": {"translation": target},
             "tags": ["translation", "generated"]
         }
-    
+
     def _generate_qa_case(self, index: int, input_schema: Optional[List] = None,
                          output_schema: Optional[List] = None) -> Dict[str, Any]:
         """Generate a Q&A test case."""
@@ -328,9 +328,9 @@ class TestCaseGenerator:
             ("What is the speed of light?", "299,792,458 meters per second"),
             ("When did World War II end?", "1945")
         ]
-        
+
         question, answer = samples[index % len(samples)]
-        
+
         return {
             "name": self._unique_name(f"Q&A Test {index}"),
             "description": "Test case for question answering",
@@ -338,13 +338,13 @@ class TestCaseGenerator:
             "expected_outputs": {"answer": answer},
             "tags": ["qa", "generated"]
         }
-    
+
     def _generate_generic_case(self, index: int, input_schema: Optional[List] = None,
                               output_schema: Optional[List] = None) -> Dict[str, Any]:
         """Generate a generic test case based on schema."""
         inputs = {}
         expected_outputs = {}
-        
+
         # Generate inputs based on schema
         if input_schema:
             for field in input_schema:
@@ -359,7 +359,7 @@ class TestCaseGenerator:
                 "parameter": index,
                 "flag": index % 2 == 0
             }
-        
+
         # Generate outputs based on schema
         if output_schema:
             for field in output_schema:
@@ -373,7 +373,7 @@ class TestCaseGenerator:
                 "result": f"Expected result {index}",
                 "status": "success"
             }
-        
+
         return {
             "name": self._unique_name(f"Generic Test {index}"),
             "description": "Automatically generated generic test case",
@@ -381,30 +381,30 @@ class TestCaseGenerator:
             "expected_outputs": expected_outputs,
             "tags": ["generic", "generated"]
         }
-    
+
     def _generate_case_by_strategy(self, input_schema: List, output_schema: List,
                                   strategy: str, index: int) -> Dict[str, Any]:
         """
         Generate a test case using a specific strategy.
-        
+
         Args:
             input_schema: Input field schema
             output_schema: Output field schema
             strategy: Generation strategy
             index: Test case index
-            
+
         Returns:
             Test case data
         """
         inputs = {}
         expected_outputs = {}
-        
+
         # Generate inputs based on strategy
         for field in input_schema:
             if isinstance(field, dict):
                 field_name = field.get("name", f"field_{len(inputs)}")
                 field_type = field.get("type", "string")
-                
+
                 if strategy == "edge_case":
                     inputs[field_name] = self._generate_edge_case_value(field_type)
                 elif strategy == "minimal":
@@ -415,19 +415,19 @@ class TestCaseGenerator:
                     inputs[field_name] = self._generate_complex_value(field_type)
                 else:  # typical
                     inputs[field_name] = self._generate_typical_value(field_type, index)
-        
+
         # Generate expected outputs
         for field in output_schema:
             if isinstance(field, dict):
                 field_name = field.get("name", f"output_{len(expected_outputs)}")
                 field_type = field.get("type", "string")
                 expected_outputs[field_name] = self._generate_value_for_type(field_type, index)
-        
+
         return {
             "inputs": inputs,
             "expected_outputs": expected_outputs if expected_outputs else None
         }
-    
+
     def _generate_value_for_type(self, field_type: str, index: int) -> Any:
         """Generate a value based on field type."""
         if field_type == "integer":
@@ -442,7 +442,7 @@ class TestCaseGenerator:
             return index * 1.5
         else:  # string or default
             return f"Sample value {index}"
-    
+
     def _generate_edge_case_value(self, field_type: str) -> Any:
         """Generate edge case value for testing."""
         if field_type == "integer":
@@ -457,7 +457,7 @@ class TestCaseGenerator:
             return random.choice([{}, {"": ""}, {"null": None}])
         else:
             return None
-    
+
     def _generate_minimal_value(self, field_type: str) -> Any:
         """Generate minimal valid value."""
         if field_type == "integer":
@@ -472,7 +472,7 @@ class TestCaseGenerator:
             return {}
         else:
             return None
-    
+
     def _generate_maximal_value(self, field_type: str) -> Any:
         """Generate maximal valid value."""
         if field_type == "integer":
@@ -487,7 +487,7 @@ class TestCaseGenerator:
             return {f"key_{i}": f"value_{i}" for i in range(20)}
         else:
             return "maximal"
-    
+
     def _generate_complex_value(self, field_type: str) -> Any:
         """Generate complex realistic value."""
         if field_type == "integer":
@@ -509,7 +509,7 @@ class TestCaseGenerator:
             }
         else:
             return "complex"
-    
+
     def _generate_typical_value(self, field_type: str, index: int) -> Any:
         """Generate typical value for normal testing."""
         if field_type == "integer":

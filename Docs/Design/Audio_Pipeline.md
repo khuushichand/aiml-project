@@ -83,7 +83,7 @@ https://amgadhasan.substack.com/p/sota-asr-tooling-long-form-transcription
     3. `Resource Utilization` - CPU, memory, and disk usage.
     4. `Scalability` - Performance with concurrent tasks or larger datasets.
 - **Benchmark Hooks:**
-    1. Timing - track processing time per function, per audio file. 
+    1. Timing - track processing time per function, per audio file.
     2. Resource Utilization - track CPU, memory, and disk usage.
     3. Accuracy - WER Calculation step
 

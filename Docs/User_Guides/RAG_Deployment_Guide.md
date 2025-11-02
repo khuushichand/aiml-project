@@ -301,14 +301,14 @@ server {
     location / {
         proxy_pass http://tldw_backend;
         proxy_http_version 1.1;
-        
+
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        
+
         # WebSocket support for streaming
         proxy_buffering off;
     }
@@ -489,7 +489,7 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - DATABASE_PATH=/data/databases
     restart: unless-stopped
-    
+
   nginx:
     image: nginx:alpine
     ports:
@@ -670,5 +670,5 @@ python scripts/migrate_to_postgres.py \
 
 ---
 
-*Last Updated: 2025-08-19*  
+*Last Updated: 2025-08-19*
 *Version: 1.0.0*

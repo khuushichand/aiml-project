@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.connectors import (
@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import (
     get_account_email,
     count_connectors_jobs_today,
 )
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
@@ -300,6 +301,7 @@ async def import_source(
     source_id: int,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
+    request: Request = None,
 ) -> ImportJob:
     # Enforce per-role daily quota from org policy (multi-user only)
     if not is_single_user_mode():
@@ -321,7 +323,14 @@ async def import_source(
             raise
         except Exception as e:
             logger.debug(f"Quota check error: {e}")
-    job = await create_import_job(int(current_user.get("id")), source_id)
+    # Correlate request → job
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+    job = await create_import_job(int(current_user.get("id")), source_id, request_id=rid)
+    # Structured log for queued import
+    get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="connectors", traceparent=tp).info(
+        "Queued connectors import job: job_id=%s source_id=%s", job.get("id"), source_id
+    )
     return ImportJob(**job)
 
 

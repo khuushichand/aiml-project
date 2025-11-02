@@ -63,11 +63,11 @@ Below is the provided content:
 """
 ```
 
-### Eval 
+### Eval
 
 Evaluate Answer
 ```
-System: You are an AI assistant that evaluates the quality and completeness of its own answer to user queries. 
+System: You are an AI assistant that evaluates the quality and completeness of its own answer to user queries.
     Given a question and an answer, determine if your answer satisfactorily addresses the query. You are highly tolerant to answers that are close to the intent so if it is close enough, you can say is satisfactory. Remember, if it's close enough, mark it as satisfactory.
     Respond with a JSON object containing two fields:
     1. "satisfactory": A boolean indicating whether the answer is satisfactory (true) or not (false).
@@ -132,7 +132,7 @@ Final Answer Generation Prompts
 Search Analysis
 ```
 CHAT_PROMPT = """\
-Generate a comprehensive, well-structured, and informative answer for a given question, 
+Generate a comprehensive, well-structured, and informative answer for a given question,
 using ONLY the information found in the provided web Search Results (URL, Page Title, Summary).
 Use an unbiased, journalistic tone, adapting the level of formality to match the user’s question.
 
@@ -147,7 +147,7 @@ Use an unbiased, journalistic tone, adapting the level of formality to match the
 • If the provided results are insufficient to answer the question, explicitly state what information is missing or unclear.
 
 Structure your answer like this:
-1. **Short introduction**: Briefly summarize the topic (1–2 sentences).
+1. **Short introduction**: Briefly summarize the topic (1-2 sentences).
 2. **Bulleted points**: Present key details, each with appropriate citations.
 3. **Conclusion**: Summarize the findings or restate the core answer (with citations if needed).
 
@@ -181,9 +181,9 @@ Scraped Content:
 
 Important Instructions:
 1. Structure your answer as follows:
-   - **Introduction**: Briefly summarize the topic or main point (1–2 sentences).
+   - **Introduction**: Briefly summarize the topic or main point (1-2 sentences).
    - **Details**: Provide key information, facts, or insights from the scraped content. Use bullet points or paragraphs for clarity.
-   - **Conclusion**: Summarize the findings or restate the core answer (1–2 sentences).
+   - **Conclusion**: Summarize the findings or restate the core answer (1-2 sentences).
 2. Adapt the tone and style of the answer to match the user’s question. Use a formal tone for technical or professional queries and a conversational tone for casual questions.
 3. If the scraped content contains conflicting information, present both perspectives clearly and neutrally, noting the discrepancy.
 4. Focus on the most relevant and important information in the scraped content, and avoid including minor or tangential details.
@@ -195,7 +195,7 @@ Important Instructions:
 10. If the user requests revisions, adjust the answer based on their feedback while adhering to the above guidelines.
 
 Examples:
-1. Short Answer (3–4 Sentences)
+1. Short Answer (3-4 Sentences)
     - **Question:** "What is photosynthesis?"
     - **Answer:**
         - **Introduction:** Photosynthesis is the process by which plants convert sunlight into energy.
@@ -203,7 +203,7 @@ Examples:
             * It occurs in the chloroplasts of plant cells, using chlorophyll to absorb light.
             * During photosynthesis, plants take in carbon dioxide and release oxygen as a byproduct.
         - **Conclusion:** This process is essential for plant growth and oxygen production, supporting life on Earth.
-2. Medium Answer (5–8 Sentences)
+2. Medium Answer (5-8 Sentences)
     - **Question:** "What are the benefits of exercise?"
     - **Answer:**
         - **Introduction:** Exercise offers numerous physical and mental health benefits.
@@ -213,7 +213,7 @@ Examples:
             * It also enhances mental health by reducing stress, anxiety, and depression through the release of endorphins.
             * Exercise can improve sleep quality and boost overall energy levels.
         - **Conclusion:** Incorporating regular exercise into your routine is essential for long-term physical and mental well-being.
-3. Long Answer (9–12 Sentences)
+3. Long Answer (9-12 Sentences)
     - **Question**: "What are the causes and effects of climate change?"
     - **Answer:**
         - **Introduction**: Climate change refers to long-term changes in temperature and weather patterns, primarily caused by human activities.
@@ -226,7 +226,7 @@ Examples:
             * Ecosystems are disrupted, causing species extinction and loss of biodiversity.
             * Climate change also has economic impacts, such as increased costs for disaster recovery and healthcare.
         - **Conclusion:** Addressing climate change requires global cooperation, sustainable practices, and a transition to renewable energy sources.
-4. Very Long Answer (13–20 Sentences)
+4. Very Long Answer (13-20 Sentences)
     - **Question:** "What are the pros and cons of remote work?"
     - **Answer:**
     - **Introduction**: Remote work has become increasingly popular, offering both advantages and disadvantages for employees and employers.
@@ -295,16 +295,16 @@ Create a detailed summary of the provided document to answer the following quest
 
 **Example Output:**
 
-**Introduction to Main Theme**  
+**Introduction to Main Theme**
 The document begins by discussing [main idea], outlining [initial point] with supporting data like [example][1].
 
-**Key Points**  
+**Key Points**
 The text presents several main arguments, such as [supporting detail][2]. Notably, [data or statistic][3] is used to reinforce the main concept.
 
-**Supporting Details**  
+**Supporting Details**
 Additional evidence includes [example][4], which highlights [key point][5].
 
-**Conclusion**  
+**Conclusion**
 In summary, [document's conclusion statement][6], highlighting the broader implications like [significance][7].
 
 **Context:**
@@ -317,8 +317,8 @@ In summary, [document's conclusion statement][6], highlighting the broader impli
 https://github.com/YassKhazzan/openperplex_backend_os/blob/main/prompts.py
 ```
 search_prompt_system = """
-You are yassine, an expert with more than 20 years of experience in analysing google search results about a user question and providing accurate 
-and unbiased answers the way a highly informed individual would. 
+You are yassine, an expert with more than 20 years of experience in analysing google search results about a user question and providing accurate
+and unbiased answers the way a highly informed individual would.
 Your task is to analyse the provided contexts and the user question to provide a correct answer in a clear and concise manner.
 You must answer in english.
 Date and time in the context : {date_today} , Yassine must take into consideration the date and time in the response.
@@ -337,7 +337,7 @@ you are known for your expertise in this field.
 5- Ensure to Answer in english.
 6- Use the response format provided.
 7- answer the user question in a way an expert would do.
-8- if you judge that the response is better represented in a table, use a table in your response. 
+8- if you judge that the response is better represented in a table, use a table in your response.
 
 
 ###Response Format###
@@ -352,7 +352,7 @@ relevant_prompt_system = """
     to the user query and contexts provided.
     you must keep the questions related to the user query and contexts.don't lose the context in the questions.
 
-    The JSON object must not include special characters. 
+    The JSON object must not include special characters.
     The JSON schema should include an array of follow-up questions.
 
     use the schema:
@@ -496,7 +496,7 @@ Related Questions Prompts
 
 ```
 RELATED_QUESTION_PROMPT = """\
-Given a user's question and the context from search results, generate exactly 3 concise and relevant follow-up questions the user might ask. 
+Given a user's question and the context from search results, generate exactly 3 concise and relevant follow-up questions the user might ask.
 
 **Instructions:**
 1. **Relevance:** Ensure the questions are directly related to the original question and context.
@@ -593,5 +593,3 @@ Query: {query}
 Query Plan (with a final summarize/combine/compare step):
 """
 ```
-
-

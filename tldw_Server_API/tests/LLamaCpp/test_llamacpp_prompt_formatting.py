@@ -58,4 +58,3 @@ def test_bge_prefix_applied(monkeypatch, client: TestClient):
     flat = " ".join(map(str, args or []))
     assert "query: What do llamas eat?" in flat
     assert "passage: Llamas eat bananas" in flat
-

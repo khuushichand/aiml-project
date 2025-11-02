@@ -24,4 +24,3 @@ class OCRBackend(ABC):
     def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
         """Run OCR on an image (bytes) and return extracted text (UTF-8)."""
         raise NotImplementedError
-

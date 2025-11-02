@@ -32,4 +32,3 @@ def test_acquire_ordering_priority_desc_postgres(monkeypatch):
     jm.complete_job(int(acq2["id"]), worker_id="w", lease_id=str(acq2.get("lease_id")), completion_token=str(acq2.get("lease_id")))
     acq3 = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="w")
     assert acq3 and acq3.get("id") == j1["id"]
-

@@ -1,14 +1,14 @@
 /**
  * Auto-configuration script for tldw_server documentation
- * 
+ *
  * This script automatically fetches configuration from the running server
  * and populates documentation examples with the correct values.
- * 
+ *
  * Usage:
  * 1. Include this script in your HTML documentation
  * 2. Add class="auto-config" to elements that should be auto-populated
  * 3. Use data-config attributes to specify what to populate
- * 
+ *
  * Example:
  * <span class="auto-config" data-config="api_key">loading...</span>
  * <pre class="auto-config" data-config="python_example">loading...</pre>
@@ -16,7 +16,7 @@
 
 (function() {
     'use strict';
-    
+
     // Default configuration (fallback values)
     const DEFAULT_CONFIG = {
         api_key: 'YOUR_API_KEY',
@@ -25,30 +25,30 @@
         auth_mode: 'single_user',
         configured_providers: []
     };
-    
+
     // Try to detect the server URL from the current page
     function detectServerUrl() {
         // If running from file:// protocol, use localhost
         if (window.location.protocol === 'file:') {
             return 'http://localhost:8000';
         }
-        
+
         // If running from a server, use the same host
         const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
-        
+
         // Check if we're on the docs server (usually port 8000)
         if (port === 8000 || port === 8080) {
             return `${window.location.protocol}//${window.location.hostname}:8000`;
         }
-        
+
         // Default to localhost
         return 'http://localhost:8000';
     }
-    
+
     // Fetch configuration from the server
     async function fetchConfig() {
         const serverUrl = detectServerUrl();
-        
+
         try {
             const response = await fetch(`${serverUrl}/api/v1/config/docs-info`, {
                 method: 'GET',
@@ -56,12 +56,12 @@
                     'Accept': 'application/json'
                 }
             });
-            
+
             if (!response.ok) {
                 console.warn('Could not fetch configuration from server:', response.status);
                 return DEFAULT_CONFIG;
             }
-            
+
             const config = await response.json();
             return config;
         } catch (error) {
@@ -69,11 +69,11 @@
             return DEFAULT_CONFIG;
         }
     }
-    
+
     // Generate example code with the configuration
     function generateExamples(config) {
         const examples = {};
-        
+
         // Python example
         examples.python = `import requests
 
@@ -97,7 +97,7 @@ response = requests.post(
 )
 
 print(f"Created evaluation: {response.json()['id']}")`;
-        
+
         // cURL example
 examples.curl = `curl -X POST ${config.base_url}/api/v1/evaluations \\
   -H "Authorization: Bearer ${config.api_key}" \\
@@ -110,7 +110,7 @@ examples.curl = `curl -X POST ${config.base_url}/api/v1/evaluations \\
       {"input": {"output": "test"}, "expected": {"output": "test"}}
     ]
   }'`;
-        
+
         // JavaScript example
         examples.javascript = `const API_KEY = '${config.api_key}';
 const BASE_URL = '${config.base_url}';
@@ -135,18 +135,18 @@ const response = await fetch(\`\${BASE_URL}/api/v1/evaluations\`, {
 
 const data = await response.json();
 console.log('Created evaluation:', data.id);`;
-        
+
         return examples;
     }
-    
+
     // Update all elements with the auto-config class
     function updateElements(config) {
         const elements = document.querySelectorAll('.auto-config');
         const examples = config.examples || generateExamples(config);
-        
+
         elements.forEach(element => {
             const configKey = element.getAttribute('data-config');
-            
+
             switch(configKey) {
                 case 'api_key':
                     element.textContent = config.api_key;
@@ -158,7 +158,7 @@ console.log('Created evaluation:', data.id);`;
                     element.textContent = config.auth_mode;
                     break;
                 case 'providers':
-                    element.textContent = config.configured_providers.length > 0 
+                    element.textContent = config.configured_providers.length > 0
                         ? config.configured_providers.join(', ')
                         : 'No LLM providers configured';
                     break;
@@ -187,14 +187,14 @@ console.log('Created evaluation:', data.id);`;
                         element.textContent = config[configKey];
                     }
             }
-            
+
             // Add a copy button if the element has data-copyable="true"
             if (element.getAttribute('data-copyable') === 'true') {
                 addCopyButton(element);
             }
         });
     }
-    
+
     // Add a copy button next to an element
     function addCopyButton(element) {
         const button = document.createElement('button');
@@ -203,7 +203,7 @@ console.log('Created evaluation:', data.id);`;
         button.style.padding = '2px 8px';
         button.style.fontSize = '12px';
         button.style.cursor = 'pointer';
-        
+
         button.onclick = function() {
             const text = element.textContent;
             navigator.clipboard.writeText(text).then(() => {
@@ -215,49 +215,49 @@ console.log('Created evaluation:', data.id);`;
                 console.error('Failed to copy:', err);
             });
         };
-        
+
         // Insert the button after the element
         element.parentNode.insertBefore(button, element.nextSibling);
     }
-    
+
     // Initialize when DOM is ready
     function init() {
         // Check if we're in a documentation environment
-        const isDocumentation = 
+        const isDocumentation =
             document.querySelector('.auto-config') !== null ||
             window.location.pathname.includes('/docs') ||
             window.location.pathname.includes('/Docs');
-        
+
         if (!isDocumentation) {
             return; // Don't run if not in documentation
         }
-        
+
         // Add loading indicators
         document.querySelectorAll('.auto-config').forEach(element => {
             if (element.textContent === '') {
                 element.textContent = 'Loading configuration...';
             }
         });
-        
+
         // Fetch and apply configuration
         fetchConfig().then(config => {
             updateElements(config);
-            
+
             // Store in global for debugging
             window.tldwConfig = config;
-            
+
             // Dispatch event for other scripts
             window.dispatchEvent(new CustomEvent('tldw-config-loaded', { detail: config }));
         });
     }
-    
+
     // Run initialization
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
         init();
     }
-    
+
     // Export for use in other scripts
     window.TldwAutoConfig = {
         fetchConfig,

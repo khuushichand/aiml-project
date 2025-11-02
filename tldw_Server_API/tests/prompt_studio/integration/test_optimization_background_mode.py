@@ -73,7 +73,7 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
             assert prompt.status_code in (200, 201), prompt.text
             prompt_id = prompt.json()["data"]["id"]
 
-            # Create optimization — should schedule background task that uses our stub
+            # Create optimization - should schedule background task that uses our stub
             opt = client.post(
                 "/api/v1/prompt-studio/optimizations/create",
                 json={
@@ -98,4 +98,3 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
             assert status_val == "completed"
     finally:
         _app.dependency_overrides.clear()
-

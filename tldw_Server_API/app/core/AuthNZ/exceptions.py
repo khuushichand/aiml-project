@@ -34,7 +34,7 @@ class AccountLockedException(AuthenticationError):
     def __init__(self, locked_until: datetime, username: Optional[str] = None):
         self.locked_until = locked_until
         self.username = username
-        
+
         # Calculate remaining lock time
         remaining = (locked_until - datetime.utcnow()).total_seconds()
         if remaining > 0:
@@ -42,7 +42,7 @@ class AccountLockedException(AuthenticationError):
             message = f"Account locked for {minutes} more minutes"
         else:
             message = "Account lock expired, please try again"
-        
+
         super().__init__(message)
 
 
@@ -217,6 +217,41 @@ class TransactionError(DatabaseError):
         if detail:
             message = f"{message} - {detail}"
         super().__init__(message)
+
+
+#######################################################################################################################
+#
+# Organization/Team Exceptions
+
+class DuplicateOrganizationError(DatabaseError):
+    """Raised when attempting to create an organization that already exists."""
+    def __init__(self, field: str, value: str):
+        self.field = field
+        self.value = value
+        super().__init__(f"Organization with {field} '{value}' already exists")
+
+
+class DuplicateTeamError(DatabaseError):
+    """Raised when attempting to create a team that already exists within an org."""
+    def __init__(self, org_id: int, field: str, value: str):
+        self.org_id = org_id
+        self.field = field
+        self.value = value
+        super().__init__(f"Team with {field} '{value}' already exists in org {org_id}")
+
+
+class DuplicateRoleError(DatabaseError):
+    """Raised when attempting to create a role with a duplicate unique name."""
+    def __init__(self, name: str):
+        self.name = name
+        super().__init__(f"Role '{name}' already exists")
+
+
+class DuplicatePermissionError(DatabaseError):
+    """Raised when attempting to create a permission with a duplicate unique name."""
+    def __init__(self, name: str):
+        self.name = name
+        super().__init__(f"Permission '{name}' already exists")
 
 
 class DatabaseLockError(DatabaseError):

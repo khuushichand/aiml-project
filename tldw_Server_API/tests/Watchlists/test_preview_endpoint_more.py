@@ -98,4 +98,3 @@ def test_preview_invalid_regex_filter_is_safe_and_gates_when_required(client_wit
     assert data["total"] >= 1
     assert data["ingestable"] == 0
     assert data["filtered"] >= 1
-

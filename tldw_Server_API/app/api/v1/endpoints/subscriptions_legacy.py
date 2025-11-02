@@ -59,4 +59,3 @@ async def subscriptions_deprecated(request: Request, full_path: Optional[str] = 
     from fastapi.responses import JSONResponse
 
     return JSONResponse(content=payload, status_code=status.HTTP_410_GONE, headers=headers)
-

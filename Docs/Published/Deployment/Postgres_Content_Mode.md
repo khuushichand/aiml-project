@@ -1,4 +1,4 @@
-# PostgreSQL Content Mode — Quick Start
+# PostgreSQL Content Mode - Quick Start
 
 Run the content databases (Media, ChaChaNotes, Workflows, etc.) on PostgreSQL instead of SQLite.
 
@@ -63,4 +63,3 @@ python Helper_Scripts/pg_backup_restore.py backup \
 PGPASSWORD=... pg_dump -h $TLDW_PG_HOST -p $TLDW_PG_PORT -U $TLDW_PG_USER \
   -F c --no-owner --no-privileges -f content_$(date +%Y%m%d_%H%M%S).dump $TLDW_PG_DATABASE
 ```
-

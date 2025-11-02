@@ -12,15 +12,15 @@ from pathlib import Path
 
 def run_tests_with_coverage():
     """Run all evaluation tests with coverage reporting."""
-    
+
     # Get the test directory
     test_dir = Path(__file__).parent
     project_root = test_dir.parent.parent
-    
+
     print("=" * 60)
     print("Running Comprehensive Evaluation Module Tests")
     print("=" * 60)
-    
+
     # Test files to run
     test_files = [
         "test_rag_evaluator_embeddings.py",
@@ -29,7 +29,7 @@ def run_tests_with_coverage():
         "test_circuit_breaker.py",
         # legacy test_evals_openai removed; unified endpoints cover functionality
     ]
-    
+
     # Build pytest command
     cmd = [
         sys.executable, "-m", "pytest",
@@ -42,22 +42,22 @@ def run_tests_with_coverage():
         "--cov-report=xml",  # Generate XML report for CI
         "--cov-fail-under=80",  # Fail if coverage < 80%
     ]
-    
+
     # Add test files
     for test_file in test_files:
         test_path = test_dir / test_file
         if test_path.exists():
             cmd.append(str(test_path))
-    
+
     print(f"Running command: {' '.join(cmd)}")
     print()
-    
+
     # Run tests
     result = subprocess.run(cmd, cwd=project_root)
-    
+
     print()
     print("=" * 60)
-    
+
     if result.returncode == 0:
         print("✅ All tests passed with >80% coverage!")
         print()
@@ -67,15 +67,15 @@ def run_tests_with_coverage():
     else:
         print("❌ Tests failed or coverage < 80%")
         print("   Please review the output above for details")
-    
+
     print("=" * 60)
-    
+
     return result.returncode
 
 
 def run_specific_test_suite(suite_name):
     """Run a specific test suite."""
-    
+
     suites = {
         "unit": [
             "test_rag_evaluator_embeddings.py::TestRAGEvaluatorEmbeddings",
@@ -94,26 +94,26 @@ def run_specific_test_suite(suite_name):
             "test_evaluation_integration.py::TestRateLimiting",
         ]
     }
-    
+
     if suite_name not in suites:
         print(f"Unknown suite: {suite_name}")
         print(f"Available suites: {', '.join(suites.keys())}")
         return 1
-    
+
     test_dir = Path(__file__).parent
     project_root = test_dir.parent.parent
-    
+
     print(f"Running {suite_name} test suite...")
-    
+
     cmd = [
         sys.executable, "-m", "pytest",
         "-v",
         "--tb=short",
     ]
-    
+
     for test_spec in suites[suite_name]:
         cmd.append(str(test_dir / test_spec))
-    
+
     result = subprocess.run(cmd, cwd=project_root)
     return result.returncode
 
@@ -121,7 +121,7 @@ def run_specific_test_suite(suite_name):
 def main():
     """Main entry point."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description="Run comprehensive tests for evaluations module"
     )
@@ -136,9 +136,9 @@ def main():
         action="store_true",
         help="Skip coverage reporting"
     )
-    
+
     args = parser.parse_args()
-    
+
     if args.suite == "all" and not args.no_coverage:
         return run_tests_with_coverage()
     elif args.suite == "all":

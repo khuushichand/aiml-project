@@ -10,9 +10,9 @@ Generate locally
 - Run: make sbom
 
 Artifacts:
-- sbom-python.cdx.json — Python deps from pyproject.toml (cdxgen) or requirements.txt fallback
-- sbom-frontend.cdx.json — Node deps (if package-lock.json present)
-- sbom.cdx.json — merged SBOM (if both present)
+- sbom-python.cdx.json - Python deps from pyproject.toml (cdxgen) or requirements.txt fallback
+- sbom-frontend.cdx.json - Node deps (if package-lock.json present)
+- sbom.cdx.json - merged SBOM (if both present)
 
 Validate and scan:
 - make sbom-validate
@@ -27,4 +27,3 @@ Notes
 - For container/OS-level SBOMs, consider using syft:
   - syft dir:. -o cyclonedx-json=sbom/sbom-syft.cdx.json
   - syft <image> -o cyclonedx-json=sbom/sbom-image.cdx.json
-

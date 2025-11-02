@@ -1,4 +1,4 @@
-# Prompt Studio — Program Evaluator (Feature Flag)
+# Prompt Studio - Program Evaluator (Feature Flag)
 
 The Program Evaluator executes Python code produced by the LLM and scores outputs against objectives and constraints. It is disabled by default.
 
@@ -39,4 +39,3 @@ Both must pass; if either disables, the evaluator falls back to a heuristic text
 - Do not enable in untrusted multi-tenant contexts.
 - Limit iterations and token budgets to control cost.
 - Always validate code extraction heuristics for your domain.
-

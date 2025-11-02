@@ -1,18 +1,18 @@
-# Persona Role‑Play Stack (MVP) — PRD
+# Persona Role-Play Stack (MVP) - PRD
 
 ## 1) Summary
-Enable persona‑consistent chat responses by curating persona‑only exemplars, labeling them (emotion, scenario, rhetorical function), retrieving a dynamic, budget‑aware subset per turn, and composing prompts with policy‑first boundaries. Ship light telemetry (IOO/IOR) to measure demo utilization and detect retrieval drift or prompt injection.
+Enable persona-consistent chat responses by curating persona-only exemplars, labeling them (emotion, scenario, rhetorical function), retrieving a dynamic, budget-aware subset per turn, and composing prompts with policy-first boundaries. Ship light telemetry (IOO/IOR) to measure demo utilization and detect retrieval drift or prompt injection.
 
 Primary goals:
 - Lift persona adherence with curated, labeled exemplars and dynamic selection.
-- Keep refusals in‑character while honoring platform safety and capabilities.
-- Add diagnostics (IOO/IOR/LCS) without incentivizing over‑copying.
+- Keep refusals in-character while honoring platform safety and capabilities.
+- Add diagnostics (IOO/IOR/LCS) without incentivizing over-copying.
 
-Out of scope (MVP): fine‑tuning/training; user‑content harvesting; new safety frameworks.
+Out of scope (MVP): fine-tuning/training; user-content harvesting; new safety frameworks.
 
 
 ## 2) User Stories (MVP)
-- As a user, I can choose a persona and receive in‑character responses that stay policy‑compliant.
+- As a user, I can choose a persona and receive in-character responses that stay policy-compliant.
 - As a curator, I can import, label, and search persona exemplars.
 - As a developer, I can debug which demos were selected and why.
 - As an operator, I can monitor demo utilization and safety adherence.
@@ -31,13 +31,13 @@ Components and repo paths:
 Flow per chat turn (persona path):
 1) Classify user turn (intent/topic, scenario, emotion heuristic).
 2) Hybrid retrieve candidates (BM25 + embeddings), filter by persona and safety.
-3) Score, diversify (MMR), greedy‑pack to demo token budget with rhetorical coverage.
+3) Score, diversify (MMR), greedy-pack to demo token budget with rhetorical coverage.
 4) Compile prompt: System (policy), Developer (persona + boundaries), Demos, User K turns.
 5) Compute telemetry (IOO/IOR/LCS), attach to logs/metrics and optional debug response field.
 
 
 ## 4) Data Model (Minimal)
-SQLite DB: `Databases/persona_exemplars.db` (global, read‑only at inference; CRUD via API).
+SQLite DB: `Databases/persona_exemplars.db` (global, read-only at inference; CRUD via API).
 
 Tables:
 - personas
@@ -56,7 +56,7 @@ Tables:
   - novelty_hint TEXT CHECK(novelty_hint IN ('post_cutoff','unknown','pre_cutoff'))
   - emotion TEXT CHECK(emotion IN ('angry','neutral','happy','other'))
   - scenario TEXT CHECK(scenario IN ('press_challenge','fan_banter','debate','boardroom','small_talk','other'))
-  - rhetorical JSON TEXT  -- JSON array: ["opener","emphasis","ender",...] 
+  - rhetorical JSON TEXT  -- JSON array: ["opener","emphasis","ender",...]
   - register TEXT  -- optional (formal, informal)
   - safety_allowed JSON TEXT  -- JSON array of allowed categories
   - safety_blocked JSON TEXT  -- JSON array of blocked categories
@@ -108,7 +108,7 @@ Chat Integration (extend existing Chat API):
   - New optional fields in request: `{persona_id?: str, demo_budget_tokens?: int, demo_strategy?: str}`
   - Response: include `meta.persona.telemetry?: Telemetry` and `meta.persona.debug_id?` (for server logs correlation)
 
-AuthNZ & Rate Limits: reuse existing dependencies in `API_Deps`; scope write ops to admin roles when multi‑user.
+AuthNZ & Rate Limits: reuse existing dependencies in `API_Deps`; scope write ops to admin roles when multi-user.
 
 
 ## 6) Selection Algorithm (Default)
@@ -116,35 +116,35 @@ Inputs: user_turn, persona_id, SelectionConfig.
 
 Steps:
 1) Classify user_turn → {intent/topic, scenario heuristic, emotion heuristic}. Heuristic classifier first (embedding neighbors + regex for tone); ML classifier optional later.
-2) Candidate set → top‑N by hybrid retrieval (BM25 via FTS5 + Chroma cosine). Filters: persona_id match; exclude exemplars with safety_blocked that conflict with detected request category.
+2) Candidate set → top-N by hybrid retrieval (BM25 via FTS5 + Chroma cosine). Filters: persona_id match; exclude exemplars with safety_blocked that conflict with detected request category.
 3) Score each exemplar:
    - score = 0.45*intent_sim + 0.25*scenario_match + 0.20*emotion_match + 0.10*novelty_weight
    - novelty_weight = 1.0 for `post_cutoff`, 0.5 unknown, 0.0 pre_cutoff (tunable per persona)
 4) Diversify with MMR (λ ≈ 0.7).
 5) Greedy pack into budget_tokens, enforcing soft coverage targets:
    - ≤ max_exemplar_tokens per exemplar (default 120)
-   - Prefer many short snippets; cap catchphrase frequency (≤1–2 per 200 tokens)
-   - Coverage: try for 2–3 openers, 2–3 emphasis, 1–2 enders, plus 1–2 longer snippets
-6) Sanity pass: dedupe near‑duplicates; strip non‑persona lines if any; finalize pack.
+   - Prefer many short snippets; cap catchphrase frequency (≤1-2 per 200 tokens)
+   - Coverage: try for 2-3 openers, 2-3 emphasis, 1-2 enders, plus 1-2 longer snippets
+6) Sanity pass: dedupe near-duplicates; strip non-persona lines if any; finalize pack.
 
 
 ## 7) Prompt Composition (Hardened)
 - System: platform policies; refuse unsafe requests; do not reveal system/dev prompts; stay in character while refusing.
 - Developer: persona description + capability boundaries (e.g., “as {CHAR}, I comment on code, I don’t write it”). No “restrictions lifted”.
-- Demos: persona‑only snippets grouped by rhetorical function; no interviewer text.
+- Demos: persona-only snippets grouped by rhetorical function; no interviewer text.
 - User: current turn (+ last K turns as needed).
 
 Refusal responses remain in character; offer alternative help paths.
 
 
 ## 8) Telemetry & Evaluation
-- IOO (Input‑Over‑Output): share of output tokens overlapping demos (stopword‑reduced; exclude approved catchphrase lexicon). Flag if >30–40% on outputs >150 tokens.
-- IOR (Input‑Over‑Retrieved): share of retrieved demo tokens actually used. Too low → retrieval miss; too high → potential over‑copying.
+- IOO (Input-Over-Output): share of output tokens overlapping demos (stopword-reduced; exclude approved catchphrase lexicon). Flag if >30-40% on outputs >150 tokens.
+- IOR (Input-Over-Retrieved): share of retrieved demo tokens actually used. Too low → retrieval miss; too high → potential over-copying.
 - LCS: longest common subsequence vs demos (normalized).
 - Safety: count violations/refusals using existing safety hooks; log per request.
 
 Surfacing:
-- Attach to logs (PII‑safe); expose aggregates via `app/core/Evaluations/persona_eval.py` and existing evaluations endpoints.
+- Attach to logs (PII-safe); expose aggregates via `app/core/Evaluations/persona_eval.py` and existing evaluations endpoints.
 - Optional: include telemetry snippet in chat response `meta.persona.telemetry` when `debug=true`.
 
 
@@ -163,29 +163,29 @@ Surfacing:
 - Sprint 3: Prompt Compiler + Chat Integration
   - Compiler assembly; chat request params; refusal templates; E2E tests with mock LLM provider.
 - Sprint 4: Telemetry + Evals
-  - IOO/IOR/LCS; metrics surfacing; red‑team prompts; alerts when IOO collapses under hostile prompts.
+  - IOO/IOR/LCS; metrics surfacing; red-team prompts; alerts when IOO collapses under hostile prompts.
 
 
 ## 11) Acceptance Criteria (MVP)
 Functional
 - CRUD: Can create, update, delete, and search exemplars for a persona via API.
-- Selection: Given `persona_id` and `user_turn`, system returns a packed demo set within `≤800` tokens that includes coverage across opener/emphasis/ender and caps per‑exemplar length at `≤120` tokens.
-- Chat: `POST /api/v1/chat/completions` with `persona_id` yields in‑character outputs and policy‑compliant refusals.
+- Selection: Given `persona_id` and `user_turn`, system returns a packed demo set within `≤800` tokens that includes coverage across opener/emphasis/ender and caps per-exemplar length at `≤120` tokens.
+- Chat: `POST /api/v1/chat/completions` with `persona_id` yields in-character outputs and policy-compliant refusals.
 - Telemetry: IOO/IOR/LCS computed and logged per response; optional debug field in response when requested.
 
 Quality / Metrics
-- Persona adherence (heuristic): ≥80% of sampled responses judged in‑character by internal rubric; no fabricated quotes.
-- Safety: No increase in violation rate vs baseline; refusals sound in‑character.
+- Persona adherence (heuristic): ≥80% of sampled responses judged in-character by internal rubric; no fabricated quotes.
+- Safety: No increase in violation rate vs baseline; refusals sound in-character.
 - IOO: ≤30% for outputs >150 tokens (excluding approved catchphrases); alert on sustained exceedance.
-- IOR: 10–60% typical range, monitored to detect retrieval miss (too low) or over‑copying (too high).
+- IOR: 10-60% typical range, monitored to detect retrieval miss (too low) or over-copying (too high).
 
 Operational
-- Works in both AuthNZ modes; write endpoints gated to admin in multi‑user.
+- Works in both AuthNZ modes; write endpoints gated to admin in multi-user.
 - Performance: Selection+compile adds ≤120ms p95 on local persona with ≤10k exemplars; scales with indexing.
 
 
 ## 12) Open Questions
-- Do we need per‑tenant persona overlays, or is a shared global store sufficient in v0?
+- Do we need per-tenant persona overlays, or is a shared global store sufficient in v0?
 - Should we expose persona boundary presets via API, or keep inline in developer prompt for now?
 - What threshold and actions for IOO alerts (log only vs. degrade demo budget dynamically)?
 

@@ -57,11 +57,11 @@ def _is_unique_violation(error: Exception) -> bool:
 class WorldBookEntry:
     """
     Individual world book entry with keyword matching capabilities.
-    
+
     This is a stateless data class that handles keyword matching and content.
     No global state or thread-local storage is used.
     """
-    
+
     def __init__(
         self,
         entry_id: Optional[int] = None,
@@ -77,7 +77,7 @@ class WorldBookEntry:
     ):
         """
         Initialize a world book entry.
-        
+
         Args:
             entry_id: Database ID
             world_book_id: Parent world book ID
@@ -100,14 +100,14 @@ class WorldBookEntry:
         self.regex_match = regex_match
         self.whole_word_match = whole_word_match
         self.metadata = metadata or {}
-        
+
         # Compile patterns for efficient matching
         self._patterns = self._compile_patterns()
-    
+
     def _compile_patterns(self) -> List[re.Pattern]:
         """Compile keyword patterns for matching."""
         patterns = []
-        
+
         for keyword in self.keywords:
             if self.regex_match:
                 # Use keyword as regex directly
@@ -124,51 +124,51 @@ class WorldBookEntry:
                     pattern_str = r'\b' + escaped + r'\b'
                 else:
                     pattern_str = escaped
-                
+
                 flags = 0 if self.case_sensitive else re.IGNORECASE
                 patterns.append(re.compile(pattern_str, flags))
-        
+
         return patterns
-    
+
     def matches(self, text: str) -> bool:
         """
         Check if any keyword matches the given text.
-        
+
         Args:
             text: Text to search for keywords
-            
+
         Returns:
             True if any keyword matches
         """
         if not self.enabled or not self._patterns:
             return False
-        
+
         for pattern in self._patterns:
             if pattern.search(text):
                 return True
-        
+
         return False
-    
+
     def get_match_count(self, text: str) -> int:
         """
         Count how many keywords match in the text.
-        
+
         Args:
             text: Text to search
-            
+
         Returns:
             Number of matching keywords
         """
         if not self.enabled or not self._patterns:
             return 0
-        
+
         count = 0
         for pattern in self._patterns:
             if pattern.search(text):
                 count += 1
-        
+
         return count
-    
+
     def to_storage_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for database storage (normalized types)."""
         return {
@@ -274,28 +274,28 @@ class OpResult:
 class WorldBookService:
     """
     Service class for managing world books in a multi-user environment.
-    
+
     This is a request-scoped service that is instantiated per API request.
     It works with the per-user database model where each user has their own
     separate database instance.
     """
-    
+
     def __init__(self, db: CharactersRAGDB):
         """
         Initialize the service with a user-specific database connection.
-        
+
         Args:
             db: User-specific database instance from dependency injection
         """
         self.db = db
         self._init_tables()
-        
+
         # Request-scoped cache
         self._entry_cache: Optional[Dict[int, List[WorldBookEntry]]] = {}
         self._book_cache: Optional[Dict[int, Dict[str, Any]]] = {}
         self._activation_counts: Dict[int, int] = {}
         self._last_activated_at: Dict[int, datetime] = {}
-    
+
     def _init_tables(self):
         """Initialize world book tables in the user's database if they don't exist."""
         backend_type = getattr(self.db, "backend_type", BackendType.SQLITE)
@@ -397,21 +397,21 @@ class WorldBookService:
                             FOREIGN KEY (world_book_id) REFERENCES world_books(id) ON DELETE CASCADE
                         )
                     """)
-                
+
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_wb_entries_book_id ON world_book_entries(world_book_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_wb_entries_priority ON world_book_entries(priority DESC)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_char_wb_char_id ON character_world_books(character_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_char_wb_book_id ON character_world_books(world_book_id)")
-                
+
                 conn.commit()
                 logger.info("World book tables initialized")
         except Exception as e:
             logger.error(f"Failed to initialize world book tables: {e}")
             raise CharactersRAGDBError(f"Failed to initialize world book tables: {e}")
-    
+
     # --- World Book CRUD Operations ---
-    
+
     def create_world_book(
         self,
         name: str,
@@ -423,7 +423,7 @@ class WorldBookService:
     ) -> int:
         """
         Create a new world book.
-        
+
         Args:
             name: Unique name for the world book
             description: Optional description
@@ -431,21 +431,21 @@ class WorldBookService:
             token_budget: Maximum tokens to use for world info
             recursive_scanning: Whether to scan matched entries for more keywords
             enabled: Whether the world book is active
-            
+
         Returns:
             The ID of the created world book
-            
+
         Raises:
             InputError: If name is empty or invalid
             ConflictError: If a world book with this name already exists
         """
         if not name or not name.strip():
             raise InputError("World book name cannot be empty")
-        
+
         try:
             with self.db.get_connection() as conn:
                 insert_sql = """
-                    INSERT INTO world_books 
+                    INSERT INTO world_books
                     (name, description, scan_depth, token_budget, recursive_scanning, enabled)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """
@@ -472,11 +472,11 @@ class WorldBookService:
                     raise CharactersRAGDBError("Database did not return a world book id.")
 
                 conn.commit()
-                
+
                 logger.info(f"Created world book '{name}' with ID {world_book_id}")
                 self._invalidate_cache()
                 return int(world_book_id)
-                
+
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
                 raise ConflictError(f"World book with name '{name}' already exists", "world_books", name)
@@ -488,28 +488,28 @@ class WorldBookService:
         except Exception as e:
             logger.error(f"Database error creating world book: {e}")
             raise CharactersRAGDBError(f"Database error creating world book: {e}") from e
-    
+
     def get_world_book(self, world_book_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get a world book by ID or name.
-        
+
         Args:
             world_book_id: Optional world book ID
             name: Optional world book name
-            
+
         Returns:
             Dictionary with world book data or None if not found
         """
         # Check cache first
         if world_book_id and world_book_id in self._book_cache:
             return self._book_cache[world_book_id]
-        
+
         try:
             with self.db.get_connection() as conn:
                 if world_book_id:
                     cursor = conn.execute(
                         """
-                        SELECT * FROM world_books 
+                        SELECT * FROM world_books
                         WHERE id = ? AND deleted = ?
                         """,
                         (world_book_id, False)
@@ -517,14 +517,14 @@ class WorldBookService:
                 elif name:
                     cursor = conn.execute(
                         """
-                        SELECT * FROM world_books 
+                        SELECT * FROM world_books
                         WHERE name = ? AND deleted = ?
                         """,
                         (name, False)
                     )
                 else:
                     return None
-                
+
                 row = cursor.fetchone()
                 if row:
                     book_data = dict(row)
@@ -532,18 +532,18 @@ class WorldBookService:
                         self._book_cache[world_book_id] = book_data
                     return book_data
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error fetching world book: {e}")
             raise CharactersRAGDBError(f"Error fetching world book: {e}")
-    
+
     def list_world_books(self, include_disabled: bool = False) -> List[Dict[str, Any]]:
         """
         List all world books for the user.
-        
+
         Args:
             include_disabled: Whether to include disabled world books
-            
+
         Returns:
             List of world book data dictionaries
         """
@@ -555,20 +555,20 @@ class WorldBookService:
                     query += " AND enabled = ?"
                     params.append(True)
                 query += " ORDER BY name"
-                
+
                 cursor = conn.execute(query, tuple(params))
                 books = [dict(row) for row in cursor.fetchall()]
-                
+
                 # Cache the books
                 for book in books:
                     self._book_cache[book['id']] = book
-                
+
                 return books
-                
+
         except Exception as e:
             logger.error(f"Error listing world books: {e}")
             raise CharactersRAGDBError(f"Error listing world books: {e}")
-    
+
     def update_world_book(
         self,
         world_book_id: int,
@@ -581,21 +581,21 @@ class WorldBookService:
     ) -> bool:
         """
         Update a world book's settings.
-        
+
         Args:
             world_book_id: World book ID
             Various optional fields to update
-            
+
         Returns:
             True if updated successfully
-            
+
         Raises:
             ConflictError: If the new name conflicts with an existing world book
         """
         try:
             updates = []
             params = []
-            
+
             if name is not None:
                 updates.append("name = ?")
                 params.append(name.strip())
@@ -614,27 +614,27 @@ class WorldBookService:
             if enabled is not None:
                 updates.append("enabled = ?")
                 params.append(bool(enabled))
-            
+
             if not updates:
                 return True
-            
+
             updates.append("last_modified = CURRENT_TIMESTAMP")
             updates.append("version = version + 1")
             params.extend([world_book_id, False])
-            
+
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
                     f"UPDATE world_books SET {', '.join(updates)} WHERE id = ? AND deleted = ?",
                     tuple(params)
                 )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"Updated world book {world_book_id}")
                     self._invalidate_cache()
                     return True
                 return False
-                
+
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
                 raise ConflictError(f"World book name '{name}' already exists", "world_books", name)
@@ -643,15 +643,15 @@ class WorldBookService:
             if _is_unique_violation(e):
                 raise ConflictError(f"World book name '{name}' already exists", "world_books", name)
             raise
-    
+
     def delete_world_book(self, world_book_id: int, hard_delete: bool = False, **kwargs) -> bool:
         """
         Delete a world book (soft delete by default).
-        
+
         Args:
             world_book_id: World book ID
             hard_delete: If True, permanently delete; otherwise soft delete
-            
+
         Returns:
             True if deleted successfully
         """
@@ -671,19 +671,19 @@ class WorldBookService:
                         (True, world_book_id)
                     )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"{'Hard' if hard_delete else 'Soft'} deleted world book {world_book_id}")
                     self._invalidate_cache()
                     return True
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error deleting world book: {e}")
             raise CharactersRAGDBError(f"Error deleting world book: {e}")
-    
+
     # --- Entry CRUD Operations ---
-    
+
     def add_entry(
         self,
         world_book_id: int,
@@ -699,7 +699,7 @@ class WorldBookService:
     ) -> int:
         """
         Add an entry to a world book.
-        
+
         Args:
             world_book_id: World book ID
             keywords: List of keywords to match
@@ -710,7 +710,7 @@ class WorldBookService:
             regex_match: Whether keywords are regex patterns
             whole_word_match: Whether to match whole words only
             metadata: Additional metadata
-            
+
         Returns:
             The ID of the created entry
         """
@@ -740,15 +740,15 @@ class WorldBookService:
                     re.compile(keyword)
                 except re.error as e:
                     raise InputError(f"Invalid regex pattern '{keyword}': {e}")
-        
+
         keywords_json = json.dumps(keywords)
         metadata_json = json.dumps(metadata or {})
-        
+
         try:
             with self.db.get_connection() as conn:
                 insert_sql = """
-                    INSERT INTO world_book_entries 
-                    (world_book_id, keywords, content, priority, enabled, 
+                    INSERT INTO world_book_entries
+                    (world_book_id, keywords, content, priority, enabled,
                      case_sensitive, regex_match, whole_word_match, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
@@ -778,11 +778,11 @@ class WorldBookService:
                     raise CharactersRAGDBError("Database did not return a world book entry id.")
 
                 conn.commit()
-                
+
                 logger.info(f"Added entry {entry_id} to world book {world_book_id}")
                 self._invalidate_cache()
                 return int(entry_id)
-                
+
         except Exception as e:
             logger.error(f"Error adding world book entry: {e}")
             raise CharactersRAGDBError(f"Error adding world book entry: {e}")
@@ -815,7 +815,7 @@ class WorldBookService:
             metadata=metadata,
             **kwargs,
         )
-    
+
     def get_entries(
         self,
         world_book_id: Optional[int] = None,
@@ -823,11 +823,11 @@ class WorldBookService:
     ) -> List[Dict[str, Any]]:
         """
         Get world book entries.
-        
+
         Args:
             world_book_id: Optional specific world book ID
             enabled_only: Only return enabled entries
-            
+
         Returns:
             List of WorldBookEntry instances
         """
@@ -837,7 +837,7 @@ class WorldBookService:
             if enabled_only:
                 entries = [e for e in entries if e.enabled]
             return [e.to_api_dict() for e in entries]
-        
+
         try:
             with self.db.get_connection() as conn:
                 query = """
@@ -847,35 +847,35 @@ class WorldBookService:
                     WHERE wb.deleted = ?
                 """
                 params: List[Any] = [False]
-                
+
                 if world_book_id:
                     query += " AND e.world_book_id = ?"
                     params.append(world_book_id)
                 if enabled_only:
                     query += " AND e.enabled = ? AND wb.enabled = ?"
                     params.extend([True, True])
-                
+
                 query += " ORDER BY e.priority DESC, e.id"
-                
+
                 cursor = conn.execute(query, tuple(params))
                 entries: List[WorldBookEntry] = []
-                
+
                 for row in cursor.fetchall():
                     entry_data = dict(row)
                     entry = WorldBookEntry.from_dict(entry_data)
                     entries.append(entry)
-                
+
                 # Cache if fetching for specific book
                 if world_book_id:
                     self._entry_cache[world_book_id] = entries
-                
+
                 # Return hybrid views for legacy/new compatibility
                 return [WorldBookEntryView(e.to_api_dict()) for e in entries]
-                
+
         except Exception as e:
             logger.error(f"Error fetching world book entries: {e}")
             raise CharactersRAGDBError(f"Error fetching world book entries: {e}")
-    
+
     def update_entry(
         self,
         entry_id: int,
@@ -890,18 +890,18 @@ class WorldBookService:
     ) -> bool:
         """
         Update a world book entry.
-        
+
         Args:
             entry_id: Entry ID
             Various optional fields to update
-            
+
         Returns:
             True if updated successfully
         """
         try:
             updates = []
             params = []
-            
+
             if keywords is not None:
                 if not keywords:
                     raise InputError("Entry must have at least one keyword")
@@ -913,13 +913,13 @@ class WorldBookService:
                             raise InputError(f"Invalid regex pattern '{keyword}': {e}")
                 updates.append("keywords = ?")
                 params.append(json.dumps(keywords))
-                
+
             if content is not None:
                 if not content:
                     raise InputError("Entry content cannot be empty")
                 updates.append("content = ?")
                 params.append(content)
-                
+
             if priority is not None:
                 try:
                     p = int(priority)
@@ -928,59 +928,59 @@ class WorldBookService:
                 p = max(0, min(100, p))
                 updates.append("priority = ?")
                 params.append(p)
-                
+
             if enabled is not None:
                 updates.append("enabled = ?")
                 params.append(bool(enabled))
-            
+
             if case_sensitive is not None:
                 updates.append("case_sensitive = ?")
                 params.append(bool(case_sensitive))
-            
+
             if regex_match is not None:
                 updates.append("regex_match = ?")
                 params.append(bool(regex_match))
-            
+
             if whole_word_match is not None:
                 updates.append("whole_word_match = ?")
                 params.append(bool(whole_word_match))
-                
+
             if metadata is not None:
                 updates.append("metadata = ?")
                 params.append(json.dumps(metadata))
-            
+
             if not updates:
                 return True
-            
+
             updates.append("last_modified = CURRENT_TIMESTAMP")
             params.append(entry_id)
-            
+
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
                     f"UPDATE world_book_entries SET {', '.join(updates)} WHERE id = ?",
                     tuple(params)
                 )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"Updated world book entry {entry_id}")
                     self._invalidate_cache()
                     return True
                 return False
-                
+
         except InputError:
             raise
         except Exception as e:
             logger.error(f"Error updating world book entry: {e}")
             raise CharactersRAGDBError(f"Error updating world book entry: {e}")
-    
+
     def delete_entry(self, entry_id: int) -> bool:
         """
         Delete a world book entry.
-        
+
         Args:
             entry_id: Entry ID
-            
+
         Returns:
             True if deleted successfully
         """
@@ -991,19 +991,19 @@ class WorldBookService:
                     (entry_id,)
                 )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"Deleted world book entry {entry_id}")
                     self._invalidate_cache()
                     return True
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error deleting world book entry: {e}")
             raise CharactersRAGDBError(f"Error deleting world book entry: {e}")
-    
+
     # --- Character Association ---
-    
+
     def attach_to_character(
         self,
         world_book_id: int,
@@ -1019,7 +1019,7 @@ class WorldBookService:
             character_id: Character ID
             enabled: Whether the attachment is active
             priority: Priority for this character (higher = more important)
-            
+
         Returns:
             OpResult with 'success' indicating attachment status
         """
@@ -1068,19 +1068,19 @@ class WorldBookService:
                         )
                         return OpResult(False)
                     raise
-                
+
         except Exception as e:
             logger.error(f"Error attaching world book to character: {e}")
             raise CharactersRAGDBError(f"Error attaching world book to character: {e}")
-    
+
     def detach_from_character(self, world_book_id: int, character_id: int) -> Dict[str, Any]:
         """
         Detach a world book from a character.
-        
+
         Args:
             character_id: Character ID
             world_book_id: World book ID
-            
+
         Returns:
             True if detached successfully
         """
@@ -1088,30 +1088,30 @@ class WorldBookService:
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
                     """
-                    DELETE FROM character_world_books 
+                    DELETE FROM character_world_books
                     WHERE character_id = ? AND world_book_id = ?
                     """,
                     (character_id, world_book_id)
                 )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"Detached world book {world_book_id} from character {character_id}")
                     return OpResult(True)
                 return OpResult(False)
-                
+
         except Exception as e:
             logger.error(f"Error detaching world book from character: {e}")
             raise CharactersRAGDBError(f"Error detaching world book from character: {e}")
-    
+
     def get_character_world_books(self, character_id: int, enabled_only: bool = True) -> List[Dict[str, Any]]:
         """
         Get all world books attached to a character.
-        
+
         Args:
             character_id: Character ID
             enabled_only: Only return enabled attachments
-            
+
         Returns:
             List of world book data with attachment info
         """
@@ -1124,22 +1124,22 @@ class WorldBookService:
                     WHERE cwb.character_id = ? AND wb.deleted = ?
                 """
                 params: List[Any] = [character_id, False]
-                
+
                 if enabled_only:
                     query += " AND cwb.enabled = ? AND wb.enabled = ?"
                     params.extend([True, True])
-                
+
                 query += " ORDER BY cwb.priority DESC, wb.name"
-                
+
                 cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
-                
+
         except Exception as e:
             logger.error(f"Error fetching character world books: {e}")
             raise CharactersRAGDBError(f"Error fetching character world books: {e}")
-    
+
     # --- Content Processing ---
-    
+
     def process_context(
         self,
         text: str,
@@ -1152,7 +1152,7 @@ class WorldBookService:
     ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """
         Process text to find and inject relevant world info.
-        
+
         Args:
             text: Text to scan for keywords (usually recent messages)
             world_book_ids: Specific world books to use (optional)
@@ -1160,7 +1160,7 @@ class WorldBookService:
             scan_depth: Override for scan depth
             token_budget: Maximum tokens to inject
             recursive_scanning: Whether to scan matched entries for more keywords
-            
+
         Returns:
             Dictionary with processed_context and statistics
         """
@@ -1177,13 +1177,13 @@ class WorldBookService:
         if isinstance(world_book_ids, int):
             world_book_ids = [world_book_ids]
             compact_return = True
-        
+
         if world_book_ids:
             for book_id in world_book_ids:
                 book = self.get_world_book(book_id)
                 if book and book.get('enabled', True):
                     books_to_use.append(book)
-        
+
         if character_id:
             char_books = self.get_character_world_books(character_id, enabled_only=True)
             books_to_use.extend(char_books)
@@ -1196,7 +1196,7 @@ class WorldBookService:
                     continue
                 unique_books[book_id] = book
             books_to_use = list(unique_books.values())
-        
+
         if not books_to_use:
             empty = {
                 "processed_context": "",
@@ -1205,7 +1205,7 @@ class WorldBookService:
                 "books_used": 0
             }
             return [] if compact_return else empty
-        
+
         def _normalize_depth(value: Any) -> Optional[int]:
             try:
                 depth_val = int(value)
@@ -1236,15 +1236,15 @@ class WorldBookService:
             else:
                 limit = book_depth
             book_entry_limits[book_id] = limit
-        
+
         # Sort by priority (highest first)
         all_entries.sort(key=lambda e: e.priority, reverse=True)
-        
+
         # Find matching entries
         matched_entries = []
         tokens_used = 0
         per_book_match_count: Dict[int, int] = {}
-        
+
         for entry in all_entries:
             if not entry.matches(text):
                 continue
@@ -1290,7 +1290,7 @@ class WorldBookService:
                 matched_entries.extend(additional_entries)
                 combined_content = " ".join(e.content for e in matched_entries)
                 current_depth -= 1
-        
+
         # Build injected content
         if matched_entries:
             # Sort by priority for final output
@@ -1298,7 +1298,7 @@ class WorldBookService:
             injected_content = "\n\n".join(e.content for e in matched_entries)
         else:
             injected_content = ""
-        
+
         # Track activation counts
         try:
             if matched_entries:
@@ -1323,23 +1323,23 @@ class WorldBookService:
             "books_used": len(set(e.world_book_id for e in matched_entries)) if matched_entries else 0,
             "entry_ids": [e.entry_id for e in matched_entries]
         }
-    
+
     # --- Import/Export ---
-    
+
     def export_world_book(self, world_book_id: int) -> Dict[str, Any]:
         """
         Export a world book to a dictionary format.
-        
+
         Args:
             world_book_id: World book ID
-            
+
         Returns:
             Dictionary with world book data and entries
         """
         book = self.get_world_book(world_book_id)
         if not book:
             raise InputError(f"World book {world_book_id} not found")
-        
+
         entries = self.get_entries(world_book_id, enabled_only=False)
         top = {
             "name": book.get('name'),
@@ -1361,15 +1361,15 @@ class WorldBookService:
             "enabled": bool(book.get('enabled', 1)),
         }
         return top
-    
+
     def import_world_book(self, data: Dict[str, Any], merge_on_conflict: bool = False) -> int:
         """
         Import a world book from dictionary format.
-        
+
         Args:
             data: Dictionary with world book data and entries
             merge_on_conflict: If True, merge with existing book of same name
-            
+
         Returns:
             ID of the imported/merged world book
         """
@@ -1380,13 +1380,13 @@ class WorldBookService:
         else:
             book_data = {k: v for k, v in data.items() if k != 'entries'}
             entries_data = data.get('entries', [])
-        
+
         if not book_data.get("name"):
             raise InputError("World book must have a name")
-        
+
         # Check for existing book
         existing = self.get_world_book(name=book_data["name"])
-        
+
         if existing:
             if not merge_on_conflict:
                 raise ConflictError(f"World book '{book_data['name']}' already exists")
@@ -1402,7 +1402,7 @@ class WorldBookService:
                 recursive_scanning=book_data.get("recursive_scanning", False),
                 enabled=book_data.get("enabled", True)
             )
-        
+
         # Import entries
         for entry_data in entries_data:
             self.add_entry(
@@ -1417,29 +1417,29 @@ class WorldBookService:
                 metadata=entry_data.get("metadata", {}),
                 recursive_scanning=bool(entry_data.get('recursive_scanning', False)),
             )
-        
+
         logger.info(f"Imported world book with {len(entries_data)} entries")
         return world_book_id
-    
+
     # --- Helper Methods ---
-    
+
     def _invalidate_cache(self):
         """Invalidate the request-scoped cache."""
         self._entry_cache = {}
         self._book_cache = {}
-    
+
     def _estimate_tokens(self, text: str) -> int:
         """
         Estimate token count for text.
-        
+
         Simple approximation: 1 token ≈ 4 characters or 0.75 words
         """
         return max(len(text) // 4, len(text.split()) * 3 // 4)
-    
+
     def get_statistics(self, world_book_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Get world book usage statistics.
-        
+
         Returns:
             Dictionary containing statistics
         """
@@ -1481,16 +1481,16 @@ class WorldBookService:
                 # Get world book counts
                 cursor = conn.execute(
                     """
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_world_books,
                         SUM(CASE WHEN enabled THEN 1 ELSE 0 END) as enabled_world_books
-                    FROM world_books 
+                    FROM world_books
                     WHERE deleted = ?
                     """,
                     (False,),
                 )
                 book_stats = dict(cursor.fetchone())
-                
+
                 # Get entry counts
                 cursor = conn.execute(
                     """
@@ -1502,7 +1502,7 @@ class WorldBookService:
                     (False,),
                 )
                 entry_stats = dict(cursor.fetchone())
-                
+
                 # Get character attachment counts
                 cursor = conn.execute(
                     """
@@ -1514,12 +1514,12 @@ class WorldBookService:
                     (False,),
                 )
                 attachment_stats = dict(cursor.fetchone())
-                
+
                 # Calculate average entries per world book
                 avg_entries = 0
                 if book_stats['total_world_books'] > 0:
                     avg_entries = entry_stats['total_entries'] / book_stats['total_world_books']
-                
+
                 return {
                     "total_world_books": book_stats['total_world_books'],
                     "enabled_world_books": book_stats['enabled_world_books'],
@@ -1527,18 +1527,18 @@ class WorldBookService:
                     "total_character_attachments": attachment_stats['total_attachments'],
                     "average_entries_per_world_book": avg_entries
                 }
-                
+
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")
             raise CharactersRAGDBError(f"Error getting statistics: {e}")
-    
+
     def search_entries(self, world_book_id: Optional[int] = None, query: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Search for entries by keyword or content.
-        
+
         Args:
             search_term: Search term to look for
-            
+
         Returns:
             List of matching entries with world book info
         """
@@ -1577,11 +1577,11 @@ class WorldBookService:
                     rd['recursive_scanning'] = bool(md.get('recursive_scanning', False))
                     results.append(rd)
                 return results
-                
+
         except Exception as e:
             logger.error(f"Error searching entries: {e}")
             raise CharactersRAGDBError(f"Error searching entries: {e}")
-    
+
     def bulk_update_entries(
         self,
         world_book_id: int,
@@ -1591,45 +1591,45 @@ class WorldBookService:
     ) -> int:
         """
         Bulk update entries.
-        
+
         Args:
             world_book_id: World book ID
             entry_ids: List of entry IDs to update
             enabled: New enabled status (optional)
             priority: New priority (optional)
-            
+
         Returns:
             Number of entries updated
         """
         try:
             if not entry_ids:
                 return 0
-            
+
             updates = []
             params = []
-            
+
             if enabled is not None:
                 updates.append("enabled = ?")
                 params.append(int(enabled))
-            
+
             if priority is not None:
                 updates.append("priority = ?")
                 params.append(priority)
-            
+
             if not updates:
                 return 0
-            
+
             updates.append("updated_at = CURRENT_TIMESTAMP")
-            
+
             with self.db.get_connection() as conn:
                 # Build the IN clause for entry IDs
                 placeholders = ','.join('?' * len(entry_ids))
                 params.extend(entry_ids)
                 params.append(world_book_id)
-                
+
                 cursor = conn.execute(
                     f"""
-                    UPDATE world_book_entries 
+                    UPDATE world_book_entries
                     SET {', '.join(updates)}
                     WHERE id IN ({placeholders})
                     AND world_book_id = ?
@@ -1637,24 +1637,24 @@ class WorldBookService:
                     params
                 )
                 conn.commit()
-                
+
                 updated_count = cursor.rowcount
                 logger.info(f"Updated {updated_count} entries in world book {world_book_id}")
                 self._invalidate_cache()
                 return updated_count
-                
+
         except Exception as e:
             logger.error(f"Error bulk updating entries: {e}")
             raise CharactersRAGDBError(f"Error bulk updating entries: {e}")
-    
+
     def clone_world_book(self, source_wb_id: int, new_name: str) -> int:
         """
         Create a copy of a world book with all its entries.
-        
+
         Args:
             source_wb_id: Source world book ID
             new_name: Name for the cloned world book
-            
+
         Returns:
             ID of the new world book
         """
@@ -1663,7 +1663,7 @@ class WorldBookService:
             source_wb = self.get_world_book(source_wb_id)
             if not source_wb:
                 raise InputError(f"Source world book {source_wb_id} not found")
-            
+
             # Create new world book
             new_wb_id = self.create_world_book(
                 name=new_name,
@@ -1673,20 +1673,20 @@ class WorldBookService:
                 recursive_scanning=source_wb.get('recursive_scanning', False),
                 enabled=source_wb.get('enabled', True)
             )
-            
+
             # Get all entries from source world book
             entries = self.get_entries(source_wb_id, enabled_only=False)
-            
+
             # Add entries to new world book
             if entries:
                 with self.db.get_connection() as conn:
                     for entry in entries:
                         metadata_json = json.dumps(entry.get('metadata') or {})
-                        
+
                         conn.execute(
                             """
-                            INSERT INTO world_book_entries 
-                            (world_book_id, keywords, content, priority, enabled, 
+                            INSERT INTO world_book_entries
+                            (world_book_id, keywords, content, priority, enabled,
                              case_sensitive, regex_match, whole_word_match, metadata)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
@@ -1703,21 +1703,21 @@ class WorldBookService:
                             ),
                         )
                     conn.commit()
-            
+
             logger.info(f"Cloned world book {source_wb_id} to new world book {new_wb_id} with {len(entries)} entries")
             self._invalidate_cache()
             return new_wb_id
-            
+
         except ConflictError:
             raise
         except Exception as e:
             logger.error(f"Error cloning world book: {e}")
             raise CharactersRAGDBError(f"Error cloning world book: {e}")
-    
+
     def close(self):
         """
         Close the service and clean up resources.
-        
+
         This method is provided for compatibility with test fixtures
         that expect a close method. Since the database connection is
         managed by CharactersRAGDB, this is a no-op.

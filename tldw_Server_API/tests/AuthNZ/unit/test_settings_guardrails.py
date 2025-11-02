@@ -29,4 +29,3 @@ def test_single_user_production_rejects_weak_key(monkeypatch):
             API_PREFIX="/api/v1",
         )
     monkeypatch.delenv("tldw_production", raising=False)
-

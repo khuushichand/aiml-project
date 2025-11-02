@@ -1,6 +1,6 @@
 # Getting Started with VibeVoice (TTS)
 
-This guide walks you through installing, configuring, and using the VibeVoice text‑to‑speech provider inside tldw_server. You’ll generate speech, stream audio, use voice cloning, and map multiple speakers to specific voices.
+This guide walks you through installing, configuring, and using the VibeVoice text-to-speech provider inside tldw_server. You’ll generate speech, stream audio, use voice cloning, and map multiple speakers to specific voices.
 
 ## 1) Prerequisites
 
@@ -106,12 +106,12 @@ curl -X POST http://127.0.0.1:8000/api/v1/audio/speech \
   }'
 ```
 
-- `input`: Use the "Speaker N:" format for multi‑speaker dialogue.
+- `input`: Use the "Speaker N:" format for multi-speaker dialogue.
 - `stream`: When `true`, the server streams audio chunks to the client.
 
 ## 6) Voice Cloning Options
 
-- Zero‑shot reference (3–10 seconds recommended):
+- Zero-shot reference (3-10 seconds recommended):
   - Send `voice_reference` as base64-encoded audio in the request body. The adapter validates duration, truncates to 10s, and resamples to 24kHz.
 
 - Uploaded voices:
@@ -130,7 +130,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/audio/voices/upload \
 - Voices folder (`./voices`):
   - Drop files (e.g., `en-Alice_woman.wav`) in the folder. The adapter auto-detects and maps them as available voices.
 
-## 7) Explicit Speaker‑to‑Voice Mapping
+## 7) Explicit Speaker-to-Voice Mapping
 
 You can explicitly map speakers in a script to voice IDs (from `./voices` or uploaded) or direct file paths. Pass mapping via request `extra_params` or set a default in config.
 
@@ -153,7 +153,7 @@ Request example:
 ```
 
 Notes:
-- Speaker IDs can be 0‑ or 1‑based; the adapter normalizes them.
+- Speaker IDs can be 0- or 1-based; the adapter normalizes them.
 - If not enough voice samples exist for all speakers, the adapter disables cloning gracefully (still generates speech).
 
 ## 8) Python Client (httpx)
@@ -183,8 +183,8 @@ with httpx.Client(timeout=None) as client:
 
 ## 9) Tips for Quality & Performance
 
-- Reference length: 3–10 seconds is ideal.
-- Punctuation matters for clarity. Break long text into turns (multi‑speaker) for more natural output.
+- Reference length: 3-10 seconds is ideal.
+- Punctuation matters for clarity. Break long text into turns (multi-speaker) for more natural output.
 - CUDA + FlashAttention + 4-bit quantization offers best throughput with moderate VRAM.
 - Apple Silicon (MPS): works; quantization is disabled; uses SDPA attention fallback.
 
@@ -201,7 +201,7 @@ with httpx.Client(timeout=None) as client:
   - Ensure `vibevoice_auto_download = true`, or pre-download with `huggingface-cli download` and point `vibevoice_model_dir`.
 
 - Streaming starts late:
-  - Current adapter streams chunks after generation; for true model‑level streaming (immediate playback), ask us to enable VibeVoice `AudioStreamer` integration in the adapter.
+  - Current adapter streams chunks after generation; for true model-level streaming (immediate playback), ask us to enable VibeVoice `AudioStreamer` integration in the adapter.
 
 ## 11) References
 
@@ -214,13 +214,13 @@ with httpx.Client(timeout=None) as client:
 
 ## 12) Web UI Vignette (Click-Through)
 
-Use the built‑in Web UI to try VibeVoice quickly without writing code:
+Use the built-in Web UI to try VibeVoice quickly without writing code:
 
 1. Start the API server and Web UI
    - API: `python -m uvicorn tldw_Server_API.app.main:app --reload`
    - Web UI: `http://localhost:8000/webui/` (or use `tldw_Server_API/WebUI/Start-WebUI.sh` on port 8080)
 
-2. Open Audio → Text‑to‑Speech
+2. Open Audio → Text-to-Speech
    - In the Web UI top tabs, click “Audio” and find the TTS request form for `POST /api/v1/audio/speech`.
 
 3. Fill the request
@@ -235,7 +235,7 @@ Use the built‑in Web UI to try VibeVoice quickly without writing code:
    - Stream: checked (to receive audio as it’s generated)
 
 4. Optional: Voice cloning
-   - Provide a short reference clip (3–10s) in the “voice_reference” field (base64) or use the “Voices” section to upload a sample; then set `voice` to `custom:<voice_id>`.
+   - Provide a short reference clip (3-10s) in the “voice_reference” field (base64) or use the “Voices” section to upload a sample; then set `voice` to `custom:<voice_id>`.
    - Alternatively, drop files into `./voices` and reference those IDs in `speakers_to_voices`.
 
 5. Optional: Speaker mapping (Advanced)
@@ -252,7 +252,7 @@ Use the built‑in Web UI to try VibeVoice quickly without writing code:
 
 6. Send the request
    - Click “Send Request”. Audio should begin downloading/streaming.
-   - Check the Response panel for headers and content‑type.
+   - Check the Response panel for headers and content-type.
 
 Tips
 - If VibeVoice isn’t listed or errors on init, confirm installation steps and that models can download (or are pre-cached under `./models/vibevoice`).

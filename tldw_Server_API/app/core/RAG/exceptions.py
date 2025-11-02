@@ -24,19 +24,19 @@ from typing import Optional, Any, Dict, List
 class RAGError(Exception):
     """
     Base exception for all RAG-related errors.
-    
+
     Provides common functionality for all RAG exceptions including
     error context, operation tracking, and structured error information.
-    
+
     Attributes:
         operation: The RAG operation that failed (e.g., "vector_search", "generate_answer")
         context: Additional context about the error (IDs, parameters, etc.)
         original_error: The original exception that caused this error (if any)
     """
-    
+
     def __init__(
-        self, 
-        message: str, 
+        self,
+        message: str,
         operation: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
         original_error: Optional[Exception] = None
@@ -45,23 +45,23 @@ class RAGError(Exception):
         self.operation = operation
         self.context = context or {}
         self.original_error = original_error
-    
+
     def __str__(self) -> str:
         base_message = super().__str__()
         parts = [base_message]
-        
+
         if self.operation:
             parts.append(f"Operation: {self.operation}")
-        
+
         if self.context:
             context_str = ", ".join(f"{k}={v}" for k, v in self.context.items())
             parts.append(f"Context: {context_str}")
-            
+
         if self.original_error:
             parts.append(f"Caused by: {type(self.original_error).__name__}: {self.original_error}")
-        
+
         return " | ".join(parts)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for logging/serialization."""
         return {
@@ -76,14 +76,14 @@ class RAGError(Exception):
 class RAGSearchError(RAGError):
     """
     Exception for search and retrieval operation failures.
-    
+
     This covers errors in:
     - Vector search operations
     - Full-text search failures
     - Embedding retrieval issues
     - Search result processing errors
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -99,21 +99,21 @@ class RAGSearchError(RAGError):
             context['query'] = query[:100] + "..." if len(query) > 100 else query  # Truncate long queries
         if database_type:
             context['database_type'] = database_type
-        
+
         super().__init__(message, operation="search", context=context, **kwargs)
 
 
 class RAGConfigurationError(RAGError):
     """
     Exception for configuration and setup issues.
-    
+
     This covers errors in:
     - Missing or invalid configuration values
     - API key validation failures
     - Model configuration issues
     - Environment setup problems
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -126,21 +126,21 @@ class RAGConfigurationError(RAGError):
             context['config_section'] = config_section
         if config_key:
             context['config_key'] = config_key
-        
+
         super().__init__(message, operation="configuration", context=context, **kwargs)
 
 
 class RAGDatabaseError(RAGError):
     """
     Exception for database connection and query failures.
-    
+
     This covers errors in:
     - Database connection issues
     - SQL query execution failures
     - Transaction failures
     - Database schema issues
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -159,21 +159,21 @@ class RAGDatabaseError(RAGError):
             context['entity_type'] = entity_type
         if entity_id is not None:
             context['entity_id'] = str(entity_id)
-        
+
         super().__init__(message, operation="database", context=context, **kwargs)
 
 
 class RAGEmbeddingError(RAGError):
     """
     Exception for embedding generation and storage failures.
-    
+
     This covers errors in:
     - Embedding API calls
     - Vector storage operations
     - ChromaDB operations
     - Embedding model issues
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -189,21 +189,21 @@ class RAGEmbeddingError(RAGError):
             context['model_name'] = model_name
         if collection_name:
             context['collection_name'] = collection_name
-        
+
         super().__init__(message, operation="embedding", context=context, **kwargs)
 
 
 class RAGGenerationError(RAGError):
     """
     Exception for LLM response generation failures.
-    
+
     This covers errors in:
     - LLM API calls
     - Response parsing issues
     - Token limit exceeded
     - Model availability issues
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -219,21 +219,21 @@ class RAGGenerationError(RAGError):
             context['model_name'] = model_name
         if context_length is not None:
             context['context_length'] = context_length
-        
+
         super().__init__(message, operation="generation", context=context, **kwargs)
 
 
 class RAGValidationError(RAGError):
     """
     Exception for input validation failures.
-    
+
     This covers errors in:
     - Invalid query parameters
     - Malformed input data
     - Missing required fields
     - Type validation failures
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -249,21 +249,21 @@ class RAGValidationError(RAGError):
             context['field_value'] = str(field_value)[:200]  # Truncate long values
         if validation_rule:
             context['validation_rule'] = validation_rule
-        
+
         super().__init__(message, operation="validation", context=context, **kwargs)
 
 
 class RAGTimeoutError(RAGError):
     """
     Exception for operation timeout failures.
-    
+
     This covers errors in:
     - API request timeouts
     - Database query timeouts
     - Embedding generation timeouts
     - Search operation timeouts
     """
-    
+
     def __init__(
         self,
         message: str,
@@ -276,7 +276,7 @@ class RAGTimeoutError(RAGError):
             context['timeout_seconds'] = timeout_seconds
         if operation_type:
             context['operation_type'] = operation_type
-        
+
         super().__init__(message, operation="timeout", context=context, **kwargs)
 
 
@@ -289,12 +289,12 @@ def wrap_database_error(
 ) -> RAGDatabaseError:
     """
     Convert a generic database error to a RAGDatabaseError with context.
-    
+
     Args:
         original_error: The original exception
         operation: The database operation that failed
         **context_kwargs: Additional context for the error
-    
+
     Returns:
         RAGDatabaseError with proper context
     """
@@ -314,13 +314,13 @@ def wrap_search_error(
 ) -> RAGSearchError:
     """
     Convert a generic search error to a RAGSearchError with context.
-    
+
     Args:
         original_error: The original exception
         search_type: The type of search that failed
         query: The search query
         **context_kwargs: Additional context for the error
-    
+
     Returns:
         RAGSearchError with proper context
     """
@@ -341,13 +341,13 @@ def handle_rag_error(
 ) -> Any:
     """
     Standard error handling pattern for RAG operations.
-    
+
     Args:
         error: The exception that occurred
         operation: The operation that failed
         fallback_result: Value to return on error (default: None)
         log_function: Optional logging function to call
-    
+
     Returns:
         fallback_result
     """

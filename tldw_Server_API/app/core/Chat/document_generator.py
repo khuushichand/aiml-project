@@ -63,12 +63,12 @@ class GenerationStatus(Enum):
 class DocumentGeneratorService:
     """
     Service class for generating documents from conversations in a multi-user environment.
-    
+
     This is a request-scoped service that is instantiated per API request.
     It works with the per-user database model where each user has their own
     separate conversation history.
     """
-    
+
     # Default prompt configurations (can be overridden per user)
     DEFAULT_PROMPTS = {
         DocumentType.TIMELINE: {
@@ -108,11 +108,11 @@ class DocumentGeneratorService:
             "max_tokens": 2000
         }
     }
-    
+
     def __init__(self, db: CharactersRAGDB, user_id: Optional[str] = None):
         """
         Initialize the service with a user-specific database connection.
-        
+
         Args:
             db: User-specific database instance from dependency injection
             user_id: Optional user identifier for logging and tracking
@@ -138,10 +138,10 @@ class DocumentGeneratorService:
             pass
         self.user_id = user_id or "unknown"
         self._init_tables()
-        
+
         # Request-scoped cache for prompts
         self._prompt_cache: Dict[DocumentType, Dict[str, Any]] = {}
-        
+
         # No longer need provider mapping - using chat_api_call abstraction
     @staticmethod
     def _normalize_conversation_id(conversation_id: Optional[Union[str, int]]) -> Optional[str]:
@@ -182,7 +182,7 @@ class DocumentGeneratorService:
                         metadata TEXT DEFAULT '{}'
                     )
                 """)
-                
+
                 # Create user_prompts table for custom prompts
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS user_prompts (
@@ -198,7 +198,7 @@ class DocumentGeneratorService:
                         UNIQUE(document_type, is_active)
                     )
                 """)
-                
+
                 # Create generated_documents table for storing results
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS generated_documents (
@@ -215,19 +215,19 @@ class DocumentGeneratorService:
                         metadata TEXT DEFAULT '{}'
                     )
                 """)
-                
+
                 # Create indexes
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_gen_jobs_status ON generation_jobs(status)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_gen_jobs_job_id ON generation_jobs(job_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_gen_docs_conv_id ON generated_documents(conversation_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_gen_docs_type ON generated_documents(document_type)")
-                
+
                 conn.commit()
                 logger.info("Document generator tables initialized")
         except Exception as e:
             logger.error(f"Failed to initialize document generator tables: {e}")
             raise CharactersRAGDBError(f"Failed to initialize document generator tables: {e}")
-    
+
     def get_conversation_context(
         self,
         conversation_id: str,
@@ -332,32 +332,32 @@ class DocumentGeneratorService:
             messages.append(message_entry)
 
         return messages
-    
+
     def format_context_for_llm(
-        self, 
-        messages: List[Dict[str, Any]], 
+        self,
+        messages: List[Dict[str, Any]],
         specific_message: Optional[str] = None,
         max_context_length: int = 8000
     ) -> str:
         """
         Format conversation context for LLM processing.
-        
+
         Args:
             messages: List of message dictionaries
             specific_message: Optional specific message to highlight
             max_context_length: Maximum context length in characters
-            
+
         Returns:
             Formatted context string
         """
         context_parts = []
-        
+
         # Add conversation history
         for msg in messages:
             role = msg.get('role', 'unknown')
             content = msg.get('content', '')
             timestamp = msg.get('timestamp', '')
-            
+
             # Format timestamp if present
             if timestamp:
                 try:
@@ -365,37 +365,37 @@ class DocumentGeneratorService:
                     timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
                 except Exception as e:
                     logger.debug(f"Timestamp parse failed in chat context: value={timestamp}, error={e}")
-            
+
             context_parts.append(f"[{timestamp}] {role.upper()}: {content}")
-        
+
         # Add specific message if provided
         if specific_message:
             context_parts.append("\n--- SPECIFIC MESSAGE TO FOCUS ON ---")
             context_parts.append(specific_message)
             context_parts.append("--- END SPECIFIC MESSAGE ---\n")
-        
+
         # Join and truncate if necessary
         context = "\n".join(context_parts)
         if len(context) > max_context_length:
             # Truncate from the beginning, keeping recent messages
             context = "...[truncated]\n" + context[-max_context_length:]
-        
+
         return context
-    
+
     def get_user_prompt_config(self, document_type: DocumentType) -> Dict[str, Any]:
         """
         Get user-specific prompt configuration or default.
-        
+
         Args:
             document_type: Type of document to generate
-            
+
         Returns:
             Prompt configuration dictionary
         """
         # Check cache first
         if document_type in self._prompt_cache:
             return self._prompt_cache[document_type]
-        
+
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
@@ -407,7 +407,7 @@ class DocumentGeneratorService:
                     (document_type.value,)
                 )
                 row = cursor.fetchone()
-                
+
                 if row:
                     config = {
                         "system": row[0],
@@ -417,15 +417,15 @@ class DocumentGeneratorService:
                     }
                     self._prompt_cache[document_type] = config
                     return config
-                    
+
         except Exception as e:
             logger.warning(f"Failed to get user prompt config: {e}")
-        
+
         # Return default
         default_config = self.DEFAULT_PROMPTS.get(document_type, self.DEFAULT_PROMPTS[DocumentType.SUMMARY])
         self._prompt_cache[document_type] = default_config
         return default_config
-    
+
     def save_user_prompt_config(
         self,
         document_type: DocumentType,
@@ -436,14 +436,14 @@ class DocumentGeneratorService:
     ) -> bool:
         """
         Save user-specific prompt configuration.
-        
+
         Args:
             document_type: Type of document
             system_prompt: System prompt
             user_prompt: User prompt template
             temperature: Generation temperature
             max_tokens: Maximum tokens
-            
+
         Returns:
             True if saved successfully
         """
@@ -454,29 +454,29 @@ class DocumentGeneratorService:
                     "UPDATE user_prompts SET is_active = 0 WHERE document_type = ? AND is_active = 1",
                     (document_type.value,)
                 )
-                
+
                 # Insert new prompt
                 conn.execute(
                     """
-                    INSERT INTO user_prompts 
+                    INSERT INTO user_prompts
                     (document_type, system_prompt, user_prompt, temperature, max_tokens, is_active)
                     VALUES (?, ?, ?, ?, ?, 1)
                     """,
                     (document_type.value, system_prompt, user_prompt, temperature, max_tokens)
                 )
                 conn.commit()
-                
+
                 # Clear cache
                 if document_type in self._prompt_cache:
                     del self._prompt_cache[document_type]
-                
+
                 logger.info(f"Saved user prompt config for {document_type.value}")
                 return True
-                
+
         except Exception as e:
             logger.error(f"Failed to save user prompt config: {e}")
             return False
-    
+
     def generate_document(
         self,
         conversation_id: Union[str, int],
@@ -490,7 +490,7 @@ class DocumentGeneratorService:
     ) -> Union[str, Dict[str, Any]]:
         """
         Generate a document from conversation.
-        
+
         Args:
             conversation_id: ID of the conversation
             document_type: Type of document to generate
@@ -500,7 +500,7 @@ class DocumentGeneratorService:
             specific_message: Optional specific message to focus on
             custom_prompt: Optional custom prompt override
             stream: Whether to stream the response
-            
+
         Returns:
             Generated document content or job info for async generation
         """
@@ -521,7 +521,7 @@ class DocumentGeneratorService:
             normalized_conversation_id,
             self.user_id,
         )
-        
+
         # Get conversation context
         try:
             messages = self.get_conversation_context(normalized_conversation_id)
@@ -541,19 +541,19 @@ class DocumentGeneratorService:
                 "document_type": document_type.value,
                 "conversation_id": conversation_id
             }
-        
+
         context = self.format_context_for_llm(messages, specific_message)
-        
+
         # Get prompt configuration
         prompt_config = self.get_user_prompt_config(document_type)
-        
+
         # Build prompts
         system_prompt = prompt_config["system"]
         if custom_prompt:
             user_prompt = f"{custom_prompt}\n\nConversation Context:\n{context}"
         else:
             user_prompt = f"{prompt_config['user']}\n\nConversation Context:\n{context}"
-        
+
         # Call LLM
         try:
             result = self._call_llm(
@@ -566,7 +566,7 @@ class DocumentGeneratorService:
                 max_tokens=prompt_config.get('max_tokens', 2000),
                 stream=stream
             )
-            
+
             if not stream:
                 # Save the generated document
                 generation_time_ms = int((time.time() - start_time) * 1000)
@@ -579,15 +579,15 @@ class DocumentGeneratorService:
                     model=model,
                     generation_time_ms=generation_time_ms
                 )
-                
+
                 logger.info(f"Generated {document_type.value} in {generation_time_ms}ms")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Failed to generate {document_type.value}: {e}")
             raise ChatAPIError(f"Failed to generate document: {str(e)}")
-    
+
     def _call_llm(
         self,
         provider: str,
@@ -601,7 +601,7 @@ class DocumentGeneratorService:
     ) -> Union[str, Any]:
         """
         Call the appropriate LLM provider using the chat abstraction layer.
-        
+
         Args:
             provider: Provider name
             model: Model name
@@ -611,7 +611,7 @@ class DocumentGeneratorService:
             temperature: Generation temperature
             max_tokens: Maximum tokens
             stream: Whether to stream
-            
+
         Returns:
             Generated content or stream generator
         """
@@ -620,7 +620,7 @@ class DocumentGeneratorService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
+
         # Use the chat_api_call abstraction layer
         response = chat_api_call(
             api_endpoint=provider.lower(),
@@ -632,9 +632,9 @@ class DocumentGeneratorService:
             streaming=stream,
             system_message=system_prompt
         )
-        
+
         return response
-    
+
     def _save_generated_document(
         self,
         conversation_id: Optional[Union[str, int]],
@@ -648,7 +648,7 @@ class DocumentGeneratorService:
     ) -> int:
         """
         Save a generated document to the database.
-        
+
         Args:
             conversation_id: Conversation ID
             document_type: Type of document
@@ -658,7 +658,7 @@ class DocumentGeneratorService:
             model: Model used
             generation_time_ms: Generation time in milliseconds
             token_count: Optional token count
-            
+
         Returns:
             Document ID
         """
@@ -669,7 +669,7 @@ class DocumentGeneratorService:
                 cursor = conn.execute(
                     """
                     INSERT INTO generated_documents
-                    (conversation_id, document_type, title, content, provider, model, 
+                    (conversation_id, document_type, title, content, provider, model,
                      generation_time_ms, token_count)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -678,14 +678,14 @@ class DocumentGeneratorService:
                 )
                 document_id = cursor.lastrowid
                 conn.commit()
-                
+
                 logger.info(f"Saved generated document {document_id}")
                 return document_id
-                
+
         except Exception as e:
             logger.error(f"Failed to save generated document: {e}")
             raise CharactersRAGDBError(f"Failed to save document: {e}")
-    
+
     def record_streamed_document(
         self,
         *,
@@ -715,7 +715,7 @@ class DocumentGeneratorService:
         if not content or not content.strip():
             logger.info("Skipping persistence for streamed document with empty content (conversation_id=%s)", conversation_id)
             return None
-        
+
         try:
             document_id = self._save_generated_document(
                 conversation_id=conversation_id,
@@ -772,7 +772,7 @@ class DocumentGeneratorService:
             except Exception as exc:
                 logger.warning(f"Failed to store metadata for generated document {doc_id}: {exc}")
         return doc_id
-    
+
     def get_generated_documents(
         self,
         conversation_id: Optional[Union[str, int]] = None,
@@ -781,12 +781,12 @@ class DocumentGeneratorService:
     ) -> List[Dict[str, Any]]:
         """
         Get previously generated documents.
-        
+
         Args:
             conversation_id: Optional conversation ID filter
             document_type: Optional document type filter
             limit: Maximum number of documents to return
-            
+
         Returns:
             List of document dictionaries
         """
@@ -794,22 +794,22 @@ class DocumentGeneratorService:
             with self.db.get_connection() as conn:
                 query = "SELECT * FROM generated_documents WHERE 1=1"
                 params = []
-                
+
                 normalized_conversation_id = self._normalize_conversation_id(conversation_id)
                 if normalized_conversation_id:
                     query += " AND conversation_id = ?"
                     params.append(normalized_conversation_id)
-                
+
                 if document_type:
                     query += " AND document_type = ?"
                     params.append(document_type.value)
-                
+
                 query += " ORDER BY created_at DESC LIMIT ?"
                 params.append(limit)
-                
+
                 cursor = conn.execute(query, params)
                 documents = []
-                
+
                 for row in cursor.fetchall():
                     conv_id = row[1]
                     conv_id_str = str(conv_id) if conv_id is not None else ""
@@ -826,20 +826,20 @@ class DocumentGeneratorService:
                         'created_at': row[9],
                         'metadata': json.loads(row[10]) if row[10] else {}
                     })
-                
+
                 return documents
-                
+
         except Exception as e:
             logger.error(f"Failed to get generated documents: {e}")
             return []
-    
+
     def get_generated_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
         """
         Retrieve a single generated document by its identifier.
-        
+
         Args:
             document_id: Document ID
-            
+
         Returns:
             Document dictionary if found, otherwise None
         """
@@ -850,10 +850,10 @@ class DocumentGeneratorService:
                     (document_id,)
                 )
                 row = cursor.fetchone()
-                
+
                 if not row:
                     return None
-                
+
                 conv_id = row[1]
                 conv_id_str = str(conv_id) if conv_id is not None else ""
                 return {
@@ -872,14 +872,14 @@ class DocumentGeneratorService:
         except Exception as e:
             logger.error(f"Failed to get generated document {document_id}: {e}")
             return None
-    
+
     def delete_generated_document(self, document_id: int) -> bool:
         """
         Delete a generated document.
-        
+
         Args:
             document_id: Document ID
-            
+
         Returns:
             True if deleted successfully
         """
@@ -890,18 +890,18 @@ class DocumentGeneratorService:
                     (document_id,)
                 )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"Deleted generated document {document_id}")
                     return True
                 return False
-                
+
         except Exception as e:
             logger.error(f"Failed to delete generated document: {e}")
             return False
-    
+
     # --- Job Management for Async Generation ---
-    
+
     def create_generation_job(
         self,
         conversation_id: Union[str, int],
@@ -912,21 +912,21 @@ class DocumentGeneratorService:
     ) -> str:
         """
         Create a job for async document generation.
-        
+
         Args:
             conversation_id: Conversation ID
             document_type: Type of document
             provider: LLM provider
             model: Model name
             prompt_config: Prompt configuration
-            
+
         Returns:
             Job ID
         """
         import uuid
         job_id = str(uuid.uuid4())
         normalized_conversation_id = self._normalize_conversation_id(conversation_id)
-        
+
         try:
             with self.db.get_connection() as conn:
                 conn.execute(
@@ -939,21 +939,21 @@ class DocumentGeneratorService:
                      provider, model, json.dumps(prompt_config))
                 )
                 conn.commit()
-                
+
                 logger.info(f"Created generation job {job_id}")
                 return job_id
-                
+
         except Exception as e:
             logger.error(f"Failed to create generation job: {e}")
             raise CharactersRAGDBError(f"Failed to create job: {e}")
-    
+
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the status of a generation job.
-        
+
         Args:
             job_id: Job ID
-            
+
         Returns:
             Job status dictionary or None if not found
         """
@@ -969,7 +969,7 @@ class DocumentGeneratorService:
                     (job_id,)
                 )
                 row = cursor.fetchone()
-                
+
                 if row:
                     conv_id = row[1]
                     conv_id_str = str(conv_id) if conv_id is not None else ""
@@ -987,11 +987,11 @@ class DocumentGeneratorService:
                         'completed_at': row[10]
                     }
                 return None
-                
+
         except Exception as e:
             logger.error(f"Failed to get job status: {e}")
             return None
-    
+
     def update_job_status(
         self,
         job_id: str,
@@ -1001,13 +1001,13 @@ class DocumentGeneratorService:
     ) -> bool:
         """
         Update the status of a generation job.
-        
+
         Args:
             job_id: Job ID
             status: New status
             result_content: Optional result content
             error_message: Optional error message
-            
+
         Returns:
             True if updated successfully
         """
@@ -1015,44 +1015,44 @@ class DocumentGeneratorService:
             with self.db.get_connection() as conn:
                 updates = ["status = ?"]
                 params = [status.value]
-                
+
                 if status == GenerationStatus.IN_PROGRESS:
                     updates.append("started_at = CURRENT_TIMESTAMP")
                 elif status in [GenerationStatus.COMPLETED, GenerationStatus.FAILED, GenerationStatus.CANCELLED]:
                     updates.append("completed_at = CURRENT_TIMESTAMP")
-                
+
                 if result_content:
                     updates.append("result_content = ?")
                     params.append(result_content)
-                
+
                 if error_message:
                     updates.append("error_message = ?")
                     params.append(error_message)
-                
+
                 params.append(job_id)
-                
+
                 cursor = conn.execute(
                     f"UPDATE generation_jobs SET {', '.join(updates)} WHERE job_id = ?",
                     params
                 )
                 conn.commit()
-                
+
                 if cursor.rowcount > 0:
                     logger.info(f"Updated job {job_id} status to {status.value}")
                     return True
                 return False
-                
+
         except Exception as e:
             logger.error(f"Failed to update job status: {e}")
             return False
-    
+
     def cancel_job(self, job_id: str) -> bool:
         """
         Cancel a generation job.
-        
+
         Args:
             job_id: Job ID to cancel
-            
+
         Returns:
             True if cancelled successfully
         """
@@ -1060,7 +1060,7 @@ class DocumentGeneratorService:
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
                     """
-                    UPDATE generation_jobs 
+                    UPDATE generation_jobs
                     SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP
                     WHERE job_id = ? AND status IN ('pending', 'in_progress')
                     """,
@@ -1068,18 +1068,18 @@ class DocumentGeneratorService:
                 )
                 conn.commit()
                 return cursor.rowcount > 0
-                
+
         except Exception as e:
             logger.error(f"Error cancelling job: {e}")
             return False
-    
+
     def get_document(self, document_id: str) -> Optional[Dict[str, Any]]:
         """
         Get a generated document.
-        
+
         Args:
             document_id: Document ID
-            
+
         Returns:
             Document data or None if not found
         """
@@ -1100,11 +1100,11 @@ class DocumentGeneratorService:
                             logger.debug(f"Failed to parse document metadata JSON: id={document_id}, error={e}")
                     return result
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error getting document: {e}")
             return None
-    
+
     def list_documents(
         self,
         conversation_id: Optional[str] = None,
@@ -1112,11 +1112,11 @@ class DocumentGeneratorService:
     ) -> List[Dict[str, Any]]:
         """
         List generated documents.
-        
+
         Args:
             conversation_id: Optional conversation filter
             document_type: Optional type filter
-            
+
         Returns:
             List of document summaries
         """
@@ -1124,43 +1124,43 @@ class DocumentGeneratorService:
             with self.db.get_connection() as conn:
                 query = "SELECT * FROM generated_documents WHERE 1=1"
                 params = []
-                
+
                 if conversation_id:
                     query += " AND conversation_id = ?"
                     params.append(conversation_id)
-                
+
                 if document_type:
                     query += " AND document_type = ?"
                     params.append(document_type.value if isinstance(document_type, DocumentType) else document_type)
-                
+
                 query += " ORDER BY created_at DESC"
-                
+
                 cursor = conn.execute(query, params)
                 return [dict(row) for row in cursor.fetchall()]
-                
+
         except Exception as e:
             logger.error(f"Error listing documents: {e}")
             return []
-    
+
     def delete_document(self, document_id: str) -> bool:
         """
         Delete a generated document.
-        
+
         Args:
             document_id: Document ID
-            
+
         Returns:
             True if deleted successfully
         """
         return self.delete_generated_document(document_id)
-    
+
     def save_prompt_config(self, config: Dict[DocumentType, str]) -> bool:
         """
         Save custom prompt configuration.
-        
+
         Args:
             config: Dictionary mapping document types to custom prompts
-            
+
         Returns:
             True if saved successfully
         """
@@ -1169,7 +1169,7 @@ class DocumentGeneratorService:
                 for doc_type, prompt in config.items():
                     conn.execute(
                         """
-                        INSERT OR REPLACE INTO user_prompt_configs 
+                        INSERT OR REPLACE INTO user_prompt_configs
                         (user_id, document_type, custom_prompt, updated_at)
                         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                         """,
@@ -1177,18 +1177,18 @@ class DocumentGeneratorService:
                     )
                 conn.commit()
                 return True
-                
+
         except Exception as e:
             logger.error(f"Error saving prompt config: {e}")
             return False
-    
+
     def get_prompt_config(self, document_type: DocumentType) -> Optional[str]:
         """
         Get custom prompt configuration for a document type.
-        
+
         Args:
             document_type: Document type
-            
+
         Returns:
             Custom prompt or None if not configured
         """
@@ -1196,7 +1196,7 @@ class DocumentGeneratorService:
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
                     """
-                    SELECT custom_prompt FROM user_prompt_configs 
+                    SELECT custom_prompt FROM user_prompt_configs
                     WHERE user_id = ? AND document_type = ?
                     """,
                     (self.user_id, document_type.value)
@@ -1205,11 +1205,11 @@ class DocumentGeneratorService:
                 if row:
                     return row['custom_prompt']
                 return None
-                
+
         except Exception as e:
             logger.error(f"Error getting prompt config: {e}")
             return None
-    
+
     async def bulk_generate(
         self,
         conversation_id: str,
@@ -1217,29 +1217,29 @@ class DocumentGeneratorService:
     ) -> List[Dict[str, Any]]:
         """
         Generate multiple document types at once.
-        
+
         Args:
             conversation_id: Conversation ID
             document_types: List of document types to generate
-            
+
         Returns:
             List of generation results
         """
         results = []
         for doc_type in document_types:
             result = self.generate_document(
-                conversation_id, 
+                conversation_id,
                 doc_type,
                 self.llm_config['provider'],
                 self.llm_config['model']
             )
             results.append(result)
         return results
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         """
         Get document generation statistics.
-        
+
         Returns:
             Statistics dictionary
         """
@@ -1250,21 +1250,21 @@ class DocumentGeneratorService:
                     "SELECT COUNT(*) as total_documents FROM generated_documents"
                 )
                 total_docs = cursor.fetchone()['total_documents']
-                
+
                 # Get documents by type
                 cursor = conn.execute(
                     """
-                    SELECT document_type, COUNT(*) as count 
-                    FROM generated_documents 
+                    SELECT document_type, COUNT(*) as count
+                    FROM generated_documents
                     GROUP BY document_type
                     """
                 )
                 docs_by_type = {row['document_type']: row['count'] for row in cursor.fetchall()}
-                
+
                 # Get job statistics
                 cursor = conn.execute(
                     """
-                    SELECT 
+                    SELECT
                         COUNT(*) as total_jobs,
                         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
                         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_jobs
@@ -1272,11 +1272,11 @@ class DocumentGeneratorService:
                     """
                 )
                 job_stats = dict(cursor.fetchone())
-                
+
                 success_rate = 0
                 if job_stats['total_jobs'] > 0:
                     success_rate = job_stats['completed_jobs'] / job_stats['total_jobs']
-                
+
                 return {
                     "total_documents": total_docs,
                     "documents_by_type": docs_by_type,
@@ -1285,7 +1285,7 @@ class DocumentGeneratorService:
                     "failed_jobs": job_stats['failed_jobs'],
                     "success_rate": success_rate
                 }
-                
+
         except Exception as e:
             logger.error(f"Error getting statistics: {e}")
             return {

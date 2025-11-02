@@ -17,7 +17,8 @@ from .models import (
     Session,
     SessionSpec,
 )
-from .policy import SandboxPolicy, SandboxPolicyConfig
+from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
+from .store import get_store_mode
 from .orchestrator import SandboxOrchestrator, IdempotencyConflict
 from .runners.docker_runner import docker_available
 from .runners.firecracker_runner import firecracker_available
@@ -68,6 +69,66 @@ class SandboxService:
             "python:3.11-slim",
             "node:20-alpine",
             # generic shell base left for future: e.g., "ubuntu:24.04"
+        ]
+        # Defaults pulled from policy cfg (wired to env/config)
+        max_cpu = self.policy.cfg.max_cpu
+        max_mem_mb = self.policy.cfg.max_mem_mb
+        max_upload_mb = self.policy.cfg.max_upload_mb
+        max_log_bytes = self.policy.cfg.max_log_bytes
+        workspace_cap_mb = self.policy.cfg.workspace_cap_mb
+        artifact_ttl_hours = self.policy.cfg.artifact_ttl_hours
+        supported_spec_versions = list(self.policy.cfg.supported_spec_versions or ["1.0"])
+        # Queue/backpressure defaults from app settings
+        try:
+            queue_max_length = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+        except Exception:
+            queue_max_length = 100
+        try:
+            queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
+        except Exception:
+            queue_ttl_sec = 120
+        # Store mode advertised to clients (e.g., memory|sqlite|cluster)
+        try:
+            store_mode = str(get_store_mode())
+        except Exception:
+            store_mode = "unknown"
+        return [
+            {
+                "name": "docker",
+                "available": bool(docker_available()),
+                "default_images": images,
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": None,
+            },
+            {
+                "name": "firecracker",
+                "available": bool(firecracker_available()),
+                "default_images": images,  # firecracker images will differ; placeholder for UX
+                "max_cpu": max_cpu,
+                "max_mem_mb": max_mem_mb,
+                "max_upload_mb": max_upload_mb,
+                "max_log_bytes": max_log_bytes,
+                "queue_max_length": queue_max_length,
+                "queue_ttl_sec": queue_ttl_sec,
+                "workspace_cap_mb": workspace_cap_mb,
+                "artifact_ttl_hours": artifact_ttl_hours,
+                "supported_spec_versions": supported_spec_versions,
+                "interactive_supported": False,
+                "egress_allowlist_supported": False,
+                "store_mode": store_mode,
+                "notes": "Direct integration preferred; ignite is EOL",
+            },
         ]
 
     def _audit_run_completion(self, *, user_id: str | int | None, run_id: str, status: RunStatus, spec_version: str, session_id: str | None) -> None:
@@ -144,55 +205,7 @@ class SandboxService:
                 loop.create_task(_alog())
         except Exception as e:
             logger.debug(f"audit(run.completion) failed: {e}")
-        # Defaults pulled from policy cfg (wired to env/config)
-        max_cpu = self.policy.cfg.max_cpu
-        max_mem_mb = self.policy.cfg.max_mem_mb
-        max_upload_mb = self.policy.cfg.max_upload_mb
-        max_log_bytes = self.policy.cfg.max_log_bytes
-        workspace_cap_mb = self.policy.cfg.workspace_cap_mb
-        artifact_ttl_hours = self.policy.cfg.artifact_ttl_hours
-        supported_spec_versions = list(self.policy.cfg.supported_spec_versions or ["1.0"])
-        # Queue/backpressure defaults from app settings
-        try:
-            queue_max_length = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
-        except Exception:
-            queue_max_length = 100
-        try:
-            queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
-        except Exception:
-            queue_ttl_sec = 120
-        return [
-            {
-                "name": "docker",
-                "available": bool(docker_available()),
-                "default_images": images,
-                "max_cpu": max_cpu,
-                "max_mem_mb": max_mem_mb,
-                "max_upload_mb": max_upload_mb,
-                "max_log_bytes": max_log_bytes,
-                "queue_max_length": queue_max_length,
-                "queue_ttl_sec": queue_ttl_sec,
-                "workspace_cap_mb": workspace_cap_mb,
-                "artifact_ttl_hours": artifact_ttl_hours,
-                "supported_spec_versions": supported_spec_versions,
-                "notes": None,
-            },
-            {
-                "name": "firecracker",
-                "available": bool(firecracker_available()),
-                "default_images": images,  # firecracker images will differ; placeholder for UX
-                "max_cpu": max_cpu,
-                "max_mem_mb": max_mem_mb,
-                "max_upload_mb": max_upload_mb,
-                "max_log_bytes": max_log_bytes,
-                "queue_max_length": queue_max_length,
-                "queue_ttl_sec": queue_ttl_sec,
-                "workspace_cap_mb": workspace_cap_mb,
-                "artifact_ttl_hours": artifact_ttl_hours,
-                "supported_spec_versions": supported_spec_versions,
-                "notes": "Direct integration preferred; ignite is EOL",
-            },
-        ]
+        # (rest of method continues)
 
     def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> Session:
         # Validate requested spec version
@@ -229,6 +242,16 @@ class SandboxService:
         fc_ok = firecracker_available()
         spec = self.policy.apply_to_run(spec, firecracker_available=fc_ok)
         status = self._orch.enqueue_run(user_id=user_id, spec=spec, spec_version=spec_version, idem_key=idem_key, body=raw_body)
+        # Emit queue-wait metric as soon as we move out of queued (or immediately after enqueue)
+        # so tests that disable execution still observe this metric.
+        try:
+            ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
+            if ts:
+                import time as _time
+                qwait = max(0.0, _time.time() - float(ts))
+                observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": str(spec.runtime.value if spec.runtime else "unknown")})
+        except Exception:
+            pass
         # Optional: Execute via Docker runner if enabled and requested
         # Allow per-test overrides via env even if settings were loaded earlier
         try:
@@ -249,7 +272,11 @@ class SandboxService:
                 if background:
                     # Return early and execute in background
                     status.phase = RunPhase.starting
-                    self._orch.update_run(status.id, status)
+                    # Best-effort status update; do not abort if orchestrator lacks method
+                    try:
+                        self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
+                    except Exception as _e:
+                        logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
                     # Proactively publish a 'start' event so WS subscribers connecting
                     # immediately after POST observe at least one event.
                     try:
@@ -278,9 +305,18 @@ class SandboxService:
                             status.finished_at = real.finished_at
                             status.message = real.message
                             status.image_digest = real.image_digest
+                            # Attach resource usage if produced by runner
+                            try:
+                                if getattr(real, "resource_usage", None):
+                                    status.resource_usage = real.resource_usage  # type: ignore[assignment]
+                            except Exception:
+                                pass
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
-                            self._orch.update_run(status.id, status)
+                            try:
+                                self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
+                            except Exception as _e:
+                                logger.debug(f"sandbox: update_run(completed) skipped: {_e}")
                             # Ensure an 'end' event is published even if the runner didn't
                             try:
                                 get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code})
@@ -288,8 +324,7 @@ class SandboxService:
                                 pass
                             # Ensure policy hash is present (compute if missing)
                             if not status.policy_hash:
-                                policy_material = f"{self.policy.cfg.default_runtime}|{self.policy.cfg.network_default}|{self.policy.cfg.artifact_ttl_hours}|{self.policy.cfg.max_upload_mb}"
-                                status.policy_hash = hashlib.sha256(policy_material.encode()).hexdigest()[:16]
+                                status.policy_hash = compute_policy_hash(self.policy.cfg)
                             # Audit completion
                             self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
                         except Exception as e:
@@ -315,6 +350,11 @@ class SandboxService:
                     status.finished_at = real.finished_at
                     status.message = real.message
                     status.image_digest = real.image_digest
+                    try:
+                        if getattr(real, "resource_usage", None):
+                            status.resource_usage = real.resource_usage  # type: ignore[assignment]
+                    except Exception:
+                        pass
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
@@ -332,10 +372,11 @@ class SandboxService:
                 artifacts[pattern] = b""
             if artifacts:
                 self._orch.store_artifacts(status.id, artifacts)
-        # Attach a pseudo policy hash for metadata consistency
-        policy_material = f"{self.policy.cfg.default_runtime}|{self.policy.cfg.network_default}|{self.policy.cfg.artifact_ttl_hours}|{self.policy.cfg.max_upload_mb}"
-        ph = hashlib.sha256(policy_material.encode()).hexdigest()[:16]
-        status.policy_hash = ph
+        # Attach canonical policy hash for metadata consistency
+        try:
+            status.policy_hash = compute_policy_hash(self.policy.cfg)
+        except Exception:
+            status.policy_hash = None  # type: ignore[assignment]
         # Timestamps in scaffold
         now = datetime.utcnow()
         if not status.started_at:
@@ -375,6 +416,8 @@ class SandboxService:
             st.finished_at = datetime.utcnow()
             st.exit_code = None
             self._orch.update_run(run_id, st)
+            # Consider the operation successful if we set killed state
+            cancelled = True
         except Exception:
             pass
         # Ensure WS end event is sent even if runner didn't publish

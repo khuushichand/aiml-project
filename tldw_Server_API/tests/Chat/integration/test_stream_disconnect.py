@@ -47,4 +47,3 @@ async def test_chat_stream_disconnect_no_generatorexit(async_client, auth_header
             assert received_some_data is True
         # Exiting the context closes the connection. The absence of exceptions here
         # indicates generators handled GeneratorExit correctly.
-

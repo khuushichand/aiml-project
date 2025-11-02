@@ -31,4 +31,3 @@ def test_dual_key_decode_fallback_hs256():
 
     assert payload["sub"] == "1"
     assert payload["type"] == "access"
-

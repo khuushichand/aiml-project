@@ -32,30 +32,30 @@ def health_group():
 def health_check(ctx, components, output_format):
     """
     Check overall system health.
-    
+
     Performs comprehensive health checks on all evaluation system components
     including database connections, configuration validity, and service status.
-    
+
     Examples:
         tldw-evals health check                    # Basic health check
         tldw-evals health check --components       # Detailed component status
         tldw-evals health check --format json     # JSON output
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
         health_data = _perform_health_check(cli_context.config, detailed=components)
-        
+
         if output_format == 'json':
             print_json(health_data, "System Health Status")
         else:
             print_health_status(health_data)
-        
+
         # Exit with error code if unhealthy
         if health_data.get('status') == 'unhealthy':
             sys.exit(1)
-            
+
     except Exception as e:
         logger.exception("Health check failed")
         print_error(f"Health check failed: {e}")
@@ -68,24 +68,24 @@ def health_check(ctx, components, output_format):
 def status(ctx, output_format):
     """
     Show current system status and basic metrics.
-    
+
     Displays system uptime, recent activity, and key performance indicators.
-    
+
     Examples:
         tldw-evals health status              # Show system status
         tldw-evals health status --format json    # JSON output
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
         status_data = _get_system_status(cli_context.config)
-        
+
         if output_format == 'json':
             print_json(status_data, "System Status")
         else:
             _display_status_table(status_data)
-            
+
     except Exception as e:
         logger.exception("Status check failed")
         print_error(f"Status check failed: {e}")
@@ -99,25 +99,25 @@ def status(ctx, output_format):
 def metrics(ctx, component, output_format):
     """
     Display system metrics and performance data.
-    
+
     Shows detailed metrics including request counts, response times,
     error rates, and resource utilization.
-    
+
     Examples:
         tldw-evals health metrics                    # All metrics
         tldw-evals health metrics --component database    # Database metrics only
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
         metrics_data = _get_system_metrics(cli_context.config, component)
-        
+
         if output_format == 'json':
             print_json(metrics_data, "System Metrics")
         else:
             print_metrics_summary(metrics_data)
-            
+
     except Exception as e:
         logger.exception("Metrics collection failed")
         print_error(f"Metrics collection failed: {e}")
@@ -131,16 +131,16 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
         'timestamp': format_timestamp(None),
         'components': {}
     }
-    
+
     # Database health check
     try:
         from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_health
         db_health = get_connection_health()
         health_data['components']['database'] = db_health
-        
+
         if db_health['status'] in ['unhealthy', 'degraded']:
             health_data['status'] = 'degraded'
-            
+
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         health_data['components']['database'] = {
@@ -148,12 +148,12 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'error': str(e)
         }
         health_data['status'] = 'unhealthy'
-    
+
     # Configuration validation
     try:
         from tldw_Server_API.app.core.Evaluations.config_manager import validate_config
         config_errors = validate_config()
-        
+
         if config_errors:
             health_data['components']['configuration'] = {
                 'status': 'error',
@@ -165,7 +165,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
                 'status': 'ok',
                 'message': 'Configuration is valid'
             }
-            
+
     except Exception as e:
         logger.error(f"Configuration validation failed: {e}")
         health_data['components']['configuration'] = {
@@ -173,7 +173,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'error': str(e)
         }
         health_data['status'] = 'degraded'
-    
+
     # Rate limiting service health
     try:
         from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
@@ -187,7 +187,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'status': 'ok',
             'message': 'Rate limiting service operational'
         }
-        
+
     except Exception as e:
         logger.error(f"Rate limiting health check failed: {e}")
         health_data['components']['rate_limiting'] = {
@@ -195,7 +195,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'error': str(e)
         }
         health_data['status'] = 'degraded'
-    
+
     # Webhook service health
     try:
         from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager
@@ -204,7 +204,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'message': 'Webhook service operational'
         }
         health_data['components']['webhooks'] = webhook_health
-        
+
     except Exception as e:
         logger.error(f"Webhook service health check failed: {e}")
         health_data['components']['webhooks'] = {
@@ -212,7 +212,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'error': str(e)
         }
         health_data['status'] = 'degraded'
-    
+
     # Metrics collection health
     try:
         from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
@@ -222,7 +222,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'status': 'ok',
             'enabled': metrics_health.get('metrics_enabled', False)
         }
-        
+
     except Exception as e:
         logger.error(f"Metrics health check failed: {e}")
         health_data['components']['metrics'] = {
@@ -230,7 +230,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'error': str(e)
         }
         # Metrics failure is not critical
-    
+
     # Audit logging health (unified)
     try:
         from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
@@ -255,7 +255,7 @@ def _perform_health_check(config: Dict[str, Any], detailed: bool = False) -> Dic
             'status': 'error',
             'error': str(e)
         }
-    
+
     return health_data
 
 
@@ -269,7 +269,7 @@ def _get_system_status(config: Dict[str, Any]) -> Dict[str, Any]:
             'log_level': config.get('monitoring', {}).get('logging', {}).get('level', 'INFO')
         }
     }
-    
+
     # Database statistics
     try:
         from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_stats
@@ -281,11 +281,11 @@ def _get_system_status(config: Dict[str, Any]) -> Dict[str, Any]:
             'checkout_count': db_stats.checkout_count,
             'avg_checkout_time': f"{db_stats.avg_checkout_time:.3f}s"
         }
-        
+
     except Exception as e:
         logger.warning(f"Could not get database stats: {e}")
         status_data['database'] = {'error': str(e)}
-    
+
     # Evaluation statistics
     try:
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
@@ -312,18 +312,18 @@ def _get_system_status(config: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Could not get evaluation stats: {e}")
         status_data['evaluations'] = {'error': str(e)}
-    
+
     return status_data
 
 
 def _get_system_metrics(config: Dict[str, Any], component: str = None) -> Dict[str, Any]:
     """Get system metrics."""
     metrics_data = {}
-    
+
     try:
         from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
         metrics = get_metrics()
-        
+
         if metrics.enabled:
             # Get Prometheus metrics
             metrics_bytes = metrics.get_metrics()
@@ -332,21 +332,21 @@ def _get_system_metrics(config: Dict[str, Any], component: str = None) -> Dict[s
         else:
             metrics_data['prometheus_enabled'] = False
             metrics_data['message'] = 'Prometheus client not available'
-        
+
         # Add health metrics
         health_metrics = metrics.get_health_metrics()
         metrics_data.update(health_metrics)
-        
+
     except Exception as e:
         logger.warning(f"Could not collect metrics: {e}")
         metrics_data['error'] = str(e)
-    
+
     # Database metrics
     if not component or component == 'database':
         try:
             from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_stats
             db_stats = get_connection_stats()
-            
+
             metrics_data['database'] = {
                 'total_connections': db_stats.total_connections,
                 'active_connections': db_stats.active_connections,
@@ -359,13 +359,13 @@ def _get_system_metrics(config: Dict[str, Any], component: str = None) -> Dict[s
                 'connection_errors': db_stats.connection_errors,
                 'pool_exhausted_count': db_stats.pool_exhausted_count
             }
-            
+
         except Exception as e:
             logger.warning(f"Could not get database metrics: {e}")
             if 'database' not in metrics_data:
                 metrics_data['database'] = {}
             metrics_data['database']['error'] = str(e)
-    
+
     return metrics_data
 
 
@@ -373,39 +373,39 @@ def _display_status_table(status_data: Dict[str, Any]):
     """Display status data in table format."""
     from rich.table import Table
     from tldw_Server_API.cli.utils.output import console
-    
+
     # Configuration table
     if 'configuration' in status_data:
         config_table = Table(title="Configuration Status", show_header=True, header_style="bold cyan")
         config_table.add_column("Setting")
         config_table.add_column("Value")
-        
+
         for key, value in status_data['configuration'].items():
             config_table.add_row(key.replace('_', ' ').title(), str(value))
-        
+
         console.print(config_table)
-    
+
     # Database table
     if 'database' in status_data and 'error' not in status_data['database']:
         db_table = Table(title="Database Status", show_header=True, header_style="bold green")
         db_table.add_column("Metric")
         db_table.add_column("Value")
-        
+
         for key, value in status_data['database'].items():
             db_table.add_row(key.replace('_', ' ').title(), str(value))
-        
+
         console.print(db_table)
-    
+
     # Evaluations table
     if 'evaluations' in status_data and 'error' not in status_data['evaluations']:
         eval_table = Table(title="Evaluation Status", show_header=True, header_style="bold magenta")
         eval_table.add_column("Metric")
         eval_table.add_column("Value")
-        
+
         for key, value in status_data['evaluations'].items():
             eval_table.add_row(key.replace('_', ' ').title(), str(value))
-        
+
         console.print(eval_table)
-    
+
     # Show timestamp
     print_info(f"Status checked at: {status_data['timestamp']}")

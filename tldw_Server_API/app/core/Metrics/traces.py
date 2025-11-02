@@ -36,32 +36,32 @@ class TraceContext:
     span_id: str
     parent_span_id: Optional[str] = None
     baggage: Dict[str, str] = None
-    
+
     def to_headers(self) -> Dict[str, str]:
         """Convert trace context to HTTP headers."""
         headers = {
             "traceparent": f"00-{self.trace_id}-{self.span_id}-01"
         }
-        
+
         if self.baggage:
             baggage_items = [f"{k}={v}" for k, v in self.baggage.items()]
             headers["baggage"] = ",".join(baggage_items)
-        
+
         return headers
-    
+
     @classmethod
     def from_headers(cls, headers: Dict[str, str]) -> Optional['TraceContext']:
         """Extract trace context from HTTP headers."""
         traceparent = headers.get("traceparent")
         if not traceparent:
             return None
-        
+
         try:
             parts = traceparent.split("-")
             if len(parts) >= 4:
                 trace_id = parts[1]
                 span_id = parts[2]
-                
+
                 # Parse baggage if present
                 baggage_str = headers.get("baggage", "")
                 baggage_dict = {}
@@ -70,7 +70,7 @@ class TraceContext:
                         if "=" in item:
                             k, v = item.split("=", 1)
                             baggage_dict[k.strip()] = v.strip()
-                
+
                 return cls(
                     trace_id=trace_id,
                     span_id=span_id,
@@ -78,19 +78,19 @@ class TraceContext:
                 )
         except Exception as e:
             logger.error(f"Failed to parse trace context: {e}")
-        
+
         return None
 
 
 class TracingManager:
     """Manager for distributed tracing operations."""
-    
+
     def __init__(self):
         """Initialize the tracing manager."""
         self.telemetry = get_telemetry_manager()
         self.tracer = self.telemetry.get_tracer("tldw_server.tracing")
         self.active_spans = {}
-    
+
     @contextmanager
     def span(
         self,
@@ -101,20 +101,20 @@ class TracingManager:
     ):
         """
         Create a new span.
-        
+
         Args:
             name: Name of the span
             kind: Type of span (CLIENT, SERVER, INTERNAL, PRODUCER, CONSUMER)
             attributes: Initial attributes for the span
             links: Links to other spans
-            
+
         Yields:
             The span object
         """
         if not OTEL_AVAILABLE:
             yield None
             return
-        
+
         with self.tracer.start_as_current_span(
             name,
             kind=kind,
@@ -125,9 +125,9 @@ class TracingManager:
                 # Track active span
                 span_id = format(span.get_span_context().span_id, '016x')
                 self.active_spans[span_id] = span
-                
+
                 yield span
-                
+
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
@@ -136,7 +136,7 @@ class TracingManager:
                 # Remove from active spans
                 if span_id in self.active_spans:
                     del self.active_spans[span_id]
-    
+
     @asynccontextmanager
     async def async_span(
         self,
@@ -147,20 +147,20 @@ class TracingManager:
     ):
         """
         Create a new span for async operations.
-        
+
         Args:
             name: Name of the span
             kind: Type of span
             attributes: Initial attributes for the span
             links: Links to other spans
-            
+
         Yields:
             The span object
         """
         if not OTEL_AVAILABLE:
             yield None
             return
-        
+
         with self.tracer.start_as_current_span(
             name,
             kind=kind,
@@ -171,9 +171,9 @@ class TracingManager:
                 # Track active span
                 span_id = format(span.get_span_context().span_id, '016x')
                 self.active_spans[span_id] = span
-                
+
                 yield span
-                
+
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, str(e)))
@@ -182,17 +182,17 @@ class TracingManager:
                 # Remove from active spans
                 if span_id in self.active_spans:
                     del self.active_spans[span_id]
-    
+
     def get_current_span(self):
         """Get the current active span."""
         if not OTEL_AVAILABLE:
             return None
         return trace.get_current_span()
-    
+
     def add_event(self, name: str, attributes: Optional[Dict[str, Any]] = None):
         """
         Add an event to the current span.
-        
+
         Args:
             name: Name of the event
             attributes: Event attributes
@@ -200,11 +200,11 @@ class TracingManager:
         span = self.get_current_span()
         if span:
             span.add_event(name, attributes=attributes)
-    
+
     def set_attribute(self, key: str, value: Any):
         """
         Set an attribute on the current span.
-        
+
         Args:
             key: Attribute key
             value: Attribute value
@@ -212,11 +212,11 @@ class TracingManager:
         span = self.get_current_span()
         if span:
             span.set_attribute(key, value)
-    
+
     def set_attributes(self, attributes: Dict[str, Any]):
         """
         Set multiple attributes on the current span.
-        
+
         Args:
             attributes: Dictionary of attributes
         """
@@ -224,11 +224,11 @@ class TracingManager:
         if span:
             for key, value in attributes.items():
                 span.set_attribute(key, value)
-    
+
     def record_exception(self, exception: Exception, escaped: bool = True):
         """
         Record an exception in the current span.
-        
+
         Args:
             exception: The exception to record
             escaped: Whether the exception escaped the span
@@ -238,11 +238,11 @@ class TracingManager:
             span.record_exception(exception, escaped=escaped)
             if escaped:
                 span.set_status(Status(StatusCode.ERROR, str(exception)))
-    
+
     def set_status(self, code: 'StatusCode', description: Optional[str] = None):
         """
         Set the status of the current span.
-        
+
         Args:
             code: Status code
             description: Optional status description
@@ -250,11 +250,11 @@ class TracingManager:
         span = self.get_current_span()
         if span:
             span.set_status(Status(code, description))
-    
+
     def set_baggage(self, key: str, value: str):
         """
         Set a baggage item that propagates to child spans.
-        
+
         Args:
             key: Baggage key
             value: Baggage value
@@ -262,37 +262,37 @@ class TracingManager:
         if OTEL_AVAILABLE:
             ctx = baggage.set_baggage(key, value)
             context.attach(ctx)
-    
+
     def get_baggage(self, key: str) -> Optional[str]:
         """
         Get a baggage item.
-        
+
         Args:
             key: Baggage key
-            
+
         Returns:
             Baggage value or None
         """
         if OTEL_AVAILABLE:
             return baggage.get_baggage(key)
         return None
-    
+
     def extract_context(self, carrier: Dict[str, str]) -> Optional[TraceContext]:
         """
         Extract trace context from a carrier (e.g., HTTP headers).
-        
+
         Args:
             carrier: Dictionary containing trace context
-            
+
         Returns:
             TraceContext or None
         """
         return TraceContext.from_headers(carrier)
-    
+
     def inject_context(self, carrier: Dict[str, str]):
         """
         Inject current trace context into a carrier.
-        
+
         Args:
             carrier: Dictionary to inject context into
         """
@@ -302,16 +302,16 @@ class TracingManager:
             if span_context.is_valid:
                 trace_id = format(span_context.trace_id, '032x')
                 span_id = format(span_context.span_id, '016x')
-                
+
                 carrier["traceparent"] = f"00-{trace_id}-{span_id}-01"
-                
+
                 # Add baggage
                 baggage_items = []
                 for key in ["user_id", "session_id", "request_id"]:
                     value = self.get_baggage(key)
                     if value:
                         baggage_items.append(f"{key}={value}")
-                
+
                 if baggage_items:
                     carrier["baggage"] = ",".join(baggage_items)
 
@@ -323,7 +323,7 @@ _tracing_manager: Optional[TracingManager] = None
 def get_tracing_manager() -> TracingManager:
     """
     Get or create the global tracing manager.
-    
+
     Returns:
         TracingManager instance
     """
@@ -343,30 +343,30 @@ def trace_operation(
 ) -> Callable[[F], F]:
     """
     Decorator to trace a function execution.
-    
+
     Args:
         name: Span name (defaults to function name)
         kind: Type of span
         attributes: Initial span attributes
         record_args: Whether to record function arguments
         record_result: Whether to record function result
-        
+
     Returns:
         Decorated function
     """
     def decorator(func: F) -> F:
         span_name = name or f"{func.__module__}.{func.__name__}"
-        
+
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 manager = get_tracing_manager()
-                
+
                 # Build attributes
                 span_attributes = attributes or {}
                 span_attributes["function"] = func.__name__
                 span_attributes["module"] = func.__module__
-                
+
                 if record_args:
                     # Safely serialize arguments
                     try:
@@ -374,64 +374,64 @@ def trace_operation(
                         span_attributes["kwargs"] = json.dumps(str(kwargs)[:1000])
                     except Exception as e:
                         logger.debug(f"trace_operation arg serialization failed: error={e}")
-                
+
                 async with manager.async_span(span_name, kind=kind, attributes=span_attributes) as span:
                     try:
                         result = await func(*args, **kwargs)
-                        
+
                         if record_result and span:
                             try:
                                 span.set_attribute("result", json.dumps(str(result)[:1000]))
                             except Exception as e:
                                 logger.debug(f"trace_operation result serialization failed: error={e}")
-                        
+
                         return result
-                        
+
                     except Exception as e:
                         if span:
                             span.record_exception(e)
                             span.set_status(Status(StatusCode.ERROR, str(e)))
                         raise
-            
+
             return async_wrapper
-        
+
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
                 manager = get_tracing_manager()
-                
+
                 # Build attributes
                 span_attributes = attributes or {}
                 span_attributes["function"] = func.__name__
                 span_attributes["module"] = func.__module__
-                
+
                 if record_args:
                     try:
                         span_attributes["args"] = json.dumps(str(args)[:1000])
                         span_attributes["kwargs"] = json.dumps(str(kwargs)[:1000])
                     except Exception as e:
                         logger.debug(f"trace_operation arg serialization failed: error={e}")
-                
+
                 with manager.span(span_name, kind=kind, attributes=span_attributes) as span:
                     try:
                         result = func(*args, **kwargs)
-                        
+
                         if record_result and span:
                             try:
                                 span.set_attribute("result", json.dumps(str(result)[:1000]))
                             except Exception as e:
                                 logger.debug(f"trace_operation result serialization failed: error={e}")
-                        
+
                         return result
-                        
+
                     except Exception as e:
                         if span:
                             span.record_exception(e)
                             span.set_status(Status(StatusCode.ERROR, str(e)))
                         raise
-            
+
             return sync_wrapper
-    
+
     return decorator
 
 
@@ -442,19 +442,19 @@ def trace_method(
 ) -> Callable[[F], F]:
     """
     Decorator to trace a class method.
-    
+
     Similar to trace_operation but includes class name in span name.
     """
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             span_name = name or f"{self.__class__.__name__}.{func.__name__}"
-            
+
             manager = get_tracing_manager()
             span_attributes = attributes or {}
             span_attributes["class"] = self.__class__.__name__
             span_attributes["method"] = func.__name__
-            
+
             if asyncio.iscoroutinefunction(func):
                 async def async_execution():
                     async with manager.async_span(span_name, kind=kind, attributes=span_attributes):
@@ -463,9 +463,9 @@ def trace_method(
             else:
                 with manager.span(span_name, kind=kind, attributes=span_attributes):
                     return func(self, *args, **kwargs)
-        
+
         return wrapper
-    
+
     return decorator
 
 

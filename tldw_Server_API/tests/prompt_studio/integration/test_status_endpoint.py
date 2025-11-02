@@ -63,4 +63,3 @@ def test_status_reports_queue_and_leases(prompt_studio_dual_backend_client):
     assert {"active", "expiring_soon", "stale_processing"} <= set(leases.keys())
     for v in leases.values():
         assert isinstance(v, int)
-

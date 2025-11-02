@@ -135,13 +135,13 @@ async def create_prompt(
 ) -> StandardResponse:
     """
     Create a new prompt in a project.
-    
+
     Args:
         prompt_data: Prompt creation data
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         Created prompt details
     """
@@ -271,14 +271,14 @@ async def list_prompts(
 ) -> ListResponse:
     """
     List prompts in a project.
-    
+
     Args:
         project_id: Project ID
         page: Page number
         per_page: Items per page
         include_deleted: Include soft-deleted prompts
         db: Database instance
-        
+
     Returns:
         Paginated list of prompts
     """
@@ -296,7 +296,7 @@ async def list_prompts(
             data=prompts,
             metadata=result.get("pagination", {}),
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error listing prompts: {e}")
         raise HTTPException(
@@ -360,11 +360,11 @@ async def get_prompt(
 ) -> StandardResponse:
     """
     Get a specific prompt by ID.
-    
+
     Args:
         prompt_id: Prompt ID
         db: Database instance
-        
+
     Returns:
         Prompt details
     """
@@ -380,15 +380,15 @@ async def get_prompt(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this prompt"
             )
-        
+
         # Remove the extra field
         prompt.pop("project_user_id", None)
-        
+
         return StandardResponse(
             success=True,
             data=PromptResponse(**prompt)
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error getting prompt: {e}")
         raise HTTPException(
@@ -456,14 +456,14 @@ async def update_prompt(
 ) -> StandardResponse:
     """
     Update a prompt (creates a new version).
-    
+
     Args:
         prompt_id: Prompt ID
         updates: Fields to update
         db: Database instance
         security_config: Security configuration
         user_context: Current user context
-        
+
     Returns:
         New prompt version details
     """
@@ -474,13 +474,13 @@ async def update_prompt(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"System prompt exceeds maximum length of {security_config.max_prompt_length}"
             )
-        
+
         if updates.user_prompt and len(updates.user_prompt) > security_config.max_prompt_length:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"User prompt exceeds maximum length of {security_config.max_prompt_length}"
             )
-        
+
         current_prompt = db.get_prompt_with_project(prompt_id)
         if not current_prompt:
             raise HTTPException(
@@ -524,7 +524,7 @@ async def update_prompt(
             success=True,
             data=PromptResponse(**new_prompt)
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error updating prompt: {e}")
         raise HTTPException(
@@ -547,11 +547,11 @@ async def get_prompt_history(
 ) -> StandardResponse:
     """
     Get version history for a prompt.
-    
+
     Args:
         prompt_id: Prompt ID
         db: Database instance
-        
+
     Returns:
         List of prompt versions
     """
@@ -574,7 +574,7 @@ async def get_prompt_history(
             success=True,
             data=versions
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error getting prompt history: {e}")
         raise HTTPException(
@@ -598,13 +598,13 @@ async def revert_prompt(
 ) -> StandardResponse:
     """
     Revert a prompt to a previous version (creates a new version).
-    
+
     Args:
         prompt_id: Current prompt ID
         version: Version number to revert to
         db: Database instance
         user_context: Current user context
-        
+
     Returns:
         New prompt version details
     """
@@ -635,7 +635,7 @@ async def revert_prompt(
             success=True,
             data=PromptResponse(**new_prompt)
         )
-        
+
     except DatabaseError as e:
         logger.error(f"Database error reverting prompt: {e}")
         raise HTTPException(

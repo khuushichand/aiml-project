@@ -92,6 +92,7 @@ async def test_iterative_refinement_optimizer_smoke(temp_ps_db, monkeypatch):
         test_case_ids=test_case_ids,
         model_config={"model": "dummy"},
         max_iterations=1,
+        optimization_id=123,
     )
 
     assert result["optimized_prompt_id"]

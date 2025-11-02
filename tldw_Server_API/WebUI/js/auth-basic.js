@@ -109,4 +109,3 @@ if (typeof document !== 'undefined') {
 export default {
   performLogin, performRegistration, performLogout, performTokenRefresh, getCurrentUser, initializeAuthTab, bindAuthBasic,
 };
-

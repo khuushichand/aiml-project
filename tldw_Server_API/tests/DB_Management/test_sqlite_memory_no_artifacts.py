@@ -31,4 +31,3 @@ def test_sqlite_in_memory_creates_no_artifacts(tmp_path, monkeypatch):
             assert not (tmp_path / name).exists(), f"Unexpected artifact file: {name}"
     finally:
         db.close_connection()
-

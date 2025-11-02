@@ -210,4 +210,3 @@ class TestMediaUpdatePropagation:
 
         finally:
             cleanup_test_file(path)
-

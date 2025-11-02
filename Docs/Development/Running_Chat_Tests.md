@@ -46,4 +46,3 @@ print({'openai_present': bool(k), 'length': len(k), 'masked': (k[:4]+'...'+k[-4:
 - For deterministic limits during CI, you may set `TEST_MODE=true` when applicable.
 
 See also: `Docs/Development/Chat_Tests_Consolidation.md` for the rationale and what moved.
-

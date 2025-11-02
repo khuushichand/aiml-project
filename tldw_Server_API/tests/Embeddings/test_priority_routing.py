@@ -82,4 +82,3 @@ async def test_embedding_routing_priority(monkeypatch):
     await ew._send_to_next_stage(sm)
     stream, _ = fr.writes[-1]
     assert stream.endswith(":storage:low")
-

@@ -187,7 +187,7 @@ class EvaluationsDatabase:
         else:
             self._initialize_database_postgres()
         self._init_abtest_store()
-    
+
     @contextmanager
     def get_connection(self):
         """Context manager for database connections (backend-aware)."""
@@ -232,12 +232,12 @@ class EvaluationsDatabase:
             apply_default_transform=True,
         )
         return converted_query, converted_params
-    
+
     def _initialize_database(self):
         """Create database tables if they don't exist"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             # Evaluations table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS evaluations (
@@ -254,7 +254,7 @@ class EvaluationsDatabase:
                     deleted_at TEXT NULL
                 )
             """)
-            
+
             # Evaluation runs table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS evaluation_runs (
@@ -274,7 +274,7 @@ class EvaluationsDatabase:
                     FOREIGN KEY (eval_id) REFERENCES evaluations(id)
                 )
             """)
-            
+
             # Datasets table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS datasets (
@@ -288,7 +288,7 @@ class EvaluationsDatabase:
                     metadata TEXT
                 )
             """)
-            
+
             # Internal evaluations table (for tldw-specific evaluations)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS internal_evaluations (
@@ -328,7 +328,7 @@ class EvaluationsDatabase:
                     deleted_at TEXT NULL
                 )
             """)
-            
+
             # Webhook registrations table (match webhook_manager schema)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS webhook_registrations (
@@ -350,7 +350,7 @@ class EvaluationsDatabase:
                     webhook_id TEXT
                 )
             """)
-            
+
             # Create indexes
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_evals_created ON evaluations(created_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id)")
@@ -475,7 +475,7 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_results_test ON embedding_abtest_results(test_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_results_arm ON embedding_abtest_results(arm_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_abtest_results_query ON embedding_abtest_results(query_id)")
-            
+
             conn.commit()
             logger.info("Evaluations database initialized")
 
@@ -652,7 +652,7 @@ class EvaluationsDatabase:
         CREATE INDEX IF NOT EXISTS idx_webhooks_active ON evaluation_runs(status);
         CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC);
-        
+
         -- Idempotency mapping table (generic, scoped by user and entity type)
         CREATE TABLE IF NOT EXISTS idempotency_keys (
             user_id TEXT NOT NULL,
@@ -665,12 +665,12 @@ class EvaluationsDatabase:
         """
         with self.backend.transaction() as conn:
             self.backend.create_tables(ddl, connection=conn)
-    
+
     def _apply_migrations(self):
         """Apply database migrations including the unified schema."""
         try:
             from tldw_Server_API.app.core.DB_Management.migrations_v5_unified_evaluations import migrate_to_unified_evaluations
-            
+
             # Apply the unified evaluations migration
             if migrate_to_unified_evaluations(self.db_path):
                 logger.info("Applied unified evaluations migration successfully")
@@ -680,7 +680,7 @@ class EvaluationsDatabase:
             logger.warning("Unified evaluations migration module not found, skipping")
         except Exception as e:
             logger.error(f"Error applying migrations: {e}")
-    
+
     def _use_unified_table(self) -> bool:
         """Check if the unified table exists and should be used."""
         if self.backend_type == BackendType.SQLITE:
@@ -700,9 +700,9 @@ class EvaluationsDatabase:
             )
         )
         return bool(result.scalar)
-    
+
     # ============= Evaluation CRUD Operations =============
-    
+
     def create_evaluation(
         self,
         name: str,
@@ -715,11 +715,11 @@ class EvaluationsDatabase:
     ) -> str:
         """Create a new evaluation definition"""
         eval_id = f"eval_{uuid.uuid4().hex[:12]}"
-        
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO evaluations (id, name, description, eval_type, eval_spec, 
+                INSERT INTO evaluations (id, name, description, eval_type, eval_spec,
                                        dataset_id, created_by, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
@@ -733,24 +733,24 @@ class EvaluationsDatabase:
                 json.dumps(metadata) if metadata else None
             ))
             conn.commit()
-        
+
         logger.info(f"Created evaluation: {eval_id}")
         return eval_id
-    
+
     def get_evaluation(self, eval_id: str) -> Optional[Dict[str, Any]]:
         """Get evaluation by ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM evaluations 
+                SELECT * FROM evaluations
                 WHERE id = ? AND deleted_at IS NULL
             """, (eval_id,))
-            
+
             row = cursor.fetchone()
             if row:
                 return self._row_to_eval_dict(row)
         return None
-    
+
     def list_evaluations(
         self,
         limit: int = 20,
@@ -779,10 +779,10 @@ class EvaluationsDatabase:
 
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            
+
             has_more = len(rows) > limit
             evaluations = [self._row_to_eval_dict(row) for row in rows[:limit]]
 
@@ -1119,15 +1119,15 @@ class EvaluationsDatabase:
             logger.warning(f"cleanup_idempotency_keys failed: {e}")
             return 0
         return int(deleted)
-    
+
     def update_evaluation(self, eval_id: str, updates: Dict[str, Any]) -> bool:
         """Update evaluation definition"""
         allowed_fields = {"name", "description", "eval_spec", "dataset_id", "metadata"}
         updates = {k: v for k, v in updates.items() if k in allowed_fields}
-        
+
         if not updates:
             return False
-        
+
         # Handle metadata merging
         if "metadata" in updates:
             # Get existing evaluation to merge metadata
@@ -1137,54 +1137,61 @@ class EvaluationsDatabase:
                 merged_metadata = existing["metadata"].copy()
                 merged_metadata.update(updates["metadata"])
                 updates["metadata"] = merged_metadata
-        
+
         # JSON serialize complex fields
         if "eval_spec" in updates:
             updates["eval_spec"] = json.dumps(updates["eval_spec"])
         if "metadata" in updates:
             updates["metadata"] = json.dumps(updates["metadata"])
-        
+
         updates["updated_at"] = datetime.utcnow().isoformat()
-        
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
             values = list(updates.values()) + [eval_id]
-            
+
             cursor.execute(f"""
-                UPDATE evaluations 
+                UPDATE evaluations
                 SET {set_clause}
                 WHERE id = ? AND deleted_at IS NULL
             """, values)
-            
+
             conn.commit()
             return cursor.rowcount > 0
-    
+
     def delete_evaluation(self, eval_id: str) -> bool:
         """Soft delete evaluation"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE evaluations 
+                UPDATE evaluations
                 SET deleted_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND deleted_at IS NULL
             """, (eval_id,))
             conn.commit()
             return cursor.rowcount > 0
-    
+
     # ============= Run CRUD Operations =============
-    
+
     def create_run(
         self,
         eval_id: str,
         target_model: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
-        webhook_url: Optional[str] = None
+        webhook_url: Optional[str] = None,
+        *,
+        run_id: Optional[str] = None,
     ) -> str:
-        """Create a new evaluation run"""
-        run_id = f"run_{uuid.uuid4().hex[:12]}"
-        
+        """Create a new evaluation run.
+
+        Accepts an optional run_id for callers that pre-generate IDs (e.g.,
+        tests or idempotent schedulers). Falls back to an auto-generated ID
+        when not provided.
+        """
+        run_id = run_id or f"run_{uuid.uuid4().hex[:12]}"
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -1199,10 +1206,10 @@ class EvaluationsDatabase:
                 webhook_url
             ))
             conn.commit()
-        
+
         logger.info(f"Created run: {run_id} for evaluation: {eval_id}")
         return run_id
-    
+
     def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get run by ID"""
         with self.get_connection() as conn:
@@ -1212,44 +1219,50 @@ class EvaluationsDatabase:
             if row:
                 return self._row_to_run_dict(row)
         return None
-    
+
     def list_runs(
         self,
         eval_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 20,
-        after: Optional[str] = None
-    ) -> Tuple[List[Dict[str, Any]], bool]:
-        """List runs with optional filtering"""
+        after: Optional[str] = None,
+        return_has_more: bool = False,
+    ) -> Any:
+        """List runs with optional filtering.
+
+        By default returns a list of run dicts for ergonomic use in tests and simple call sites.
+        When return_has_more=True, returns a tuple of (runs, has_more) for pagination-aware callers.
+        """
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             query = "SELECT * FROM evaluation_runs WHERE 1=1"
             params = []
-            
+
             if eval_id:
                 query += " AND eval_id = ?"
                 params.append(eval_id)
-            
+
             if status:
                 query += " AND status = ?"
                 params.append(status)
-            
+
             if after:
                 query += " AND created_at < (SELECT created_at FROM evaluation_runs WHERE id = ?)"
                 params.append(after)
-            
+
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            
+
             has_more = len(rows) > limit
             runs = [self._row_to_run_dict(row) for row in rows[:limit]]
-            
-            return runs, has_more
-    
+            if return_has_more:
+                return runs, has_more
+            return runs
+
     def update_run_status(
         self,
         run_id: str,
@@ -1259,41 +1272,41 @@ class EvaluationsDatabase:
         """Update run status"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             updates = {"status": status}
-            
+
             if status == "running" and "started_at" not in updates:
                 updates["started_at"] = datetime.utcnow().isoformat()
             elif status in ["completed", "failed", "cancelled"]:
                 updates["completed_at"] = datetime.utcnow().isoformat()
-            
+
             if error_message:
                 updates["error_message"] = error_message
-            
+
             set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
             values = list(updates.values()) + [run_id]
-            
+
             cursor.execute(f"""
-                UPDATE evaluation_runs 
+                UPDATE evaluation_runs
                 SET {set_clause}
                 WHERE id = ?
             """, values)
-            
+
             conn.commit()
             return cursor.rowcount > 0
-    
+
     def update_run_progress(self, run_id: str, progress: Dict[str, Any]) -> bool:
         """Update run progress"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE evaluation_runs 
+                UPDATE evaluation_runs
                 SET progress = ?
                 WHERE id = ?
             """, (json.dumps(progress), run_id))
             conn.commit()
             return cursor.rowcount > 0
-    
+
     def store_run_results(
         self,
         run_id: str,
@@ -1304,7 +1317,7 @@ class EvaluationsDatabase:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                UPDATE evaluation_runs 
+                UPDATE evaluation_runs
                 SET results = ?, usage = ?, status = 'completed', completed_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (
@@ -1314,9 +1327,9 @@ class EvaluationsDatabase:
             ))
             conn.commit()
             return cursor.rowcount > 0
-    
+
     # ============= Dataset CRUD Operations =============
-    
+
     def create_dataset(
         self,
         name: str,
@@ -1327,7 +1340,7 @@ class EvaluationsDatabase:
     ) -> str:
         """Create a new dataset"""
         dataset_id = f"dataset_{uuid.uuid4().hex[:12]}"
-        
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -1343,10 +1356,10 @@ class EvaluationsDatabase:
                 json.dumps(metadata) if metadata else None
             ))
             conn.commit()
-        
+
         logger.info(f"Created dataset: {dataset_id} with {len(samples)} samples")
         return dataset_id
-    
+
     def get_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
         """Get dataset by ID"""
         with self.get_connection() as conn:
@@ -1356,7 +1369,7 @@ class EvaluationsDatabase:
             if row:
                 return self._row_to_dataset_dict(row)
         return None
-    
+
     def list_datasets(
         self,
         limit: int = 20,
@@ -1366,29 +1379,29 @@ class EvaluationsDatabase:
         """List datasets with pagination"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             query = "SELECT * FROM datasets WHERE 1=1"
             params = []
-            
+
             if after:
                 query += " AND created_at < (SELECT created_at FROM datasets WHERE id = ?)"
                 params.append(after)
-            
+
             query += " ORDER BY created_at DESC LIMIT ?"
             params.append(limit + 1)
             if offset:
                 query += " OFFSET ?"
                 params.append(offset)
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            
+
             has_more = len(rows) > limit
-            datasets = [self._row_to_dataset_dict(row, include_samples=False) 
+            datasets = [self._row_to_dataset_dict(row, include_samples=False)
                        for row in rows[:limit]]
-            
+
             return datasets, has_more
-    
+
     def delete_dataset(self, dataset_id: str) -> bool:
         """Delete dataset"""
         with self.get_connection() as conn:
@@ -1396,22 +1409,79 @@ class EvaluationsDatabase:
             cursor.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
             conn.commit()
             return cursor.rowcount > 0
-    
+
     # ============= Helper Methods =============
-    
+
+    def _ensure_unix_timestamp(self, value: Any, *, fallback_now: bool = False) -> Optional[int]:
+        """Convert various timestamp representations to a Unix epoch int.
+
+        Supports:
+        - datetime instances (including tz-aware)
+        - numeric (int/float) epoch values
+        - strings in ISO8601 (with optional 'Z') or '%Y-%m-%d %H:%M:%S'
+        Returns None when unparsable unless fallback_now=True, in which case 'now'.
+        """
+        if value is None:
+            return int(datetime.now().timestamp()) if fallback_now else None
+        # Already numeric
+        if isinstance(value, (int, float)):
+            try:
+                return int(value)
+            except Exception:
+                return int(datetime.now().timestamp()) if fallback_now else None
+        # datetime instance
+        if isinstance(value, datetime):
+            try:
+                return int(value.timestamp())
+            except Exception:
+                return int(datetime.now().timestamp()) if fallback_now else None
+        # string inputs
+        if isinstance(value, str):
+            s = value.strip()
+            try:
+                # Fast path: numeric string
+                if s.isdigit():
+                    return int(s)
+                # Try ISO8601, tolerate trailing 'Z'
+                try:
+                    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except ValueError:
+                    # Try legacy SQLite format
+                    dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+                return int(dt.timestamp())
+            except Exception as e:
+                logger.debug(f"Failed to parse timestamp value: value={value!r}, error={e}")
+                return int(datetime.now().timestamp()) if fallback_now else None
+        # Unknown type
+        logger.debug(f"Unsupported timestamp type: {type(value)} value={value!r}")
+        return int(datetime.now().timestamp()) if fallback_now else None
+
+    def _json_maybe(self, value: Any, *, default: Any = None) -> Any:
+        """Return JSON-decoded value.
+
+        - If value is None/falsey: return default.
+        - If value is str: json.loads(value).
+        - If value is already a JSON-compatible object (dict/list/number/bool): return as-is.
+        - Otherwise: return default.
+        """
+        if value is None or value is False or value == "":
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception as e:
+                logger.debug(f"Failed to json.loads value: {value!r}, error={e}")
+                return default
+        # Accept already-parsed JSON-like structures from JSONB (e.g., PostgreSQL)
+        if isinstance(value, (dict, list, int, float, bool)):
+            return value
+        logger.debug(f"Unsupported JSON field type: {type(value)} value={value!r}")
+        return default
+
     def _row_to_eval_dict(self, row) -> Dict[str, Any]:
         """Convert database row to evaluation dictionary"""
-        # Parse created_at timestamp
-        if row["created_at"]:
-            if "T" in row["created_at"]:
-                # ISO format
-                created_timestamp = int(datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp())
-            else:
-                # SQLite timestamp format
-                created_timestamp = int(datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").timestamp())
-        else:
-            created_timestamp = int(datetime.now().timestamp())
-        
+        created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
+
         return {
             "id": row["id"],
             "object": "evaluation",
@@ -1420,42 +1490,20 @@ class EvaluationsDatabase:
             "name": row["name"],
             "description": row["description"],
             "eval_type": row["eval_type"],
-            "eval_spec": json.loads(row["eval_spec"]) if row["eval_spec"] else {},
+            "eval_spec": self._json_maybe(row["eval_spec"], default={}),
             "dataset_id": row["dataset_id"],
             "created_by": row["created_by"] or "unknown",
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
+            "metadata": self._json_maybe(row["metadata"], default={}),
         }
-    
+
     def _row_to_run_dict(self, row) -> Dict[str, Any]:
         """Convert database row to run dictionary"""
-        # Parse created_at timestamp
-        if row["created_at"]:
-            if "T" in row["created_at"]:
-                # ISO format
-                created_timestamp = int(datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp())
-            else:
-                # SQLite timestamp format
-                created_timestamp = int(datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").timestamp())
-        else:
-            created_timestamp = int(datetime.now().timestamp())
-            
+        created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
+
         # Parse optional timestamps
-        started_at = None
-        if row["started_at"]:
-            try:
-                started_at = int(datetime.fromisoformat(row["started_at"].replace("Z", "+00:00")).timestamp())
-            except Exception as e:
-                logger.debug(f"Failed to parse started_at: value={row['started_at']}, error={e}")
-                started_at = None
-                
-        completed_at = None
-        if row["completed_at"]:
-            try:
-                completed_at = int(datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00")).timestamp())
-            except Exception as e:
-                logger.debug(f"Failed to parse completed_at: value={row['completed_at']}, error={e}")
-                completed_at = None
-        
+        started_at = self._ensure_unix_timestamp(row["started_at"], fallback_now=False)
+        completed_at = self._ensure_unix_timestamp(row["completed_at"], fallback_now=False)
+
         return {
             "id": row["id"],
             "object": "run",
@@ -1464,28 +1512,19 @@ class EvaluationsDatabase:
             "eval_id": row["eval_id"],
             "status": row["status"],
             "target_model": row["target_model"] or "",
-            "config": json.loads(row["config"]) if row["config"] else {},
-            "progress": json.loads(row["progress"]) if row["progress"] else None,
-            "results": json.loads(row["results"]) if row["results"] else None,
+            "config": self._json_maybe(row["config"], default={}),
+            "progress": self._json_maybe(row["progress"], default=None),
+            "results": self._json_maybe(row["results"], default=None),
             "error_message": row["error_message"],
             "started_at": started_at,
             "completed_at": completed_at,
-            "usage": json.loads(row["usage"]) if row["usage"] else None
+            "usage": self._json_maybe(row["usage"], default=None),
         }
-    
+
     def _row_to_dataset_dict(self, row, include_samples: bool = True) -> Dict[str, Any]:
         """Convert database row to dataset dictionary"""
-        # Parse created_at timestamp
-        if row["created_at"]:
-            if "T" in row["created_at"]:
-                # ISO format
-                created_timestamp = int(datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")).timestamp())
-            else:
-                # SQLite timestamp format
-                created_timestamp = int(datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S").timestamp())
-        else:
-            created_timestamp = int(datetime.now().timestamp())
-            
+        created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
+
         result = {
             "id": row["id"],
             "object": "dataset",
@@ -1495,16 +1534,16 @@ class EvaluationsDatabase:
             "description": row["description"],
             "sample_count": row["sample_count"] or 0,
             "created_by": row["created_by"] or "unknown",
-            "metadata": json.loads(row["metadata"]) if row["metadata"] else {}
+            "metadata": self._json_maybe(row["metadata"], default={}),
         }
-        
+
         if include_samples:
-            result["samples"] = json.loads(row["samples"]) if row["samples"] else []
-        
+            result["samples"] = self._json_maybe(row["samples"], default=[])
+
         return result
-    
+
     # ============= Unified Evaluation Operations =============
-    
+
     def store_unified_evaluation(
         self,
         evaluation_id: str,
@@ -1561,7 +1600,7 @@ class EvaluationsDatabase:
                     try:
                         cursor.execute("""
                             INSERT OR REPLACE INTO evaluations_unified (
-                                id, evaluation_id, name, evaluation_type, 
+                                id, evaluation_id, name, evaluation_type,
                                 input_data, results, status, user_id,
                                 metadata, embedding_provider, embedding_model,
                                 created_at, completed_at, eval_spec
@@ -1646,38 +1685,38 @@ class EvaluationsDatabase:
                         logger.error(f"Failed to store evaluation: {e}")
                         conn.rollback()
                         return False
-    
+
     def get_unified_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
         """Get evaluation from unified table if it exists, otherwise from legacy tables."""
         if self._use_unified_table():
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT * FROM evaluations_unified 
+                    SELECT * FROM evaluations_unified
                     WHERE evaluation_id = ? OR id = ?
                 """, (evaluation_id, evaluation_id))
-                
+
                 result = cursor.fetchone()
                 if result:
                     return dict(result)
-        
+
         # Fall back to checking internal_evaluations table
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM internal_evaluations 
+                SELECT * FROM internal_evaluations
                 WHERE evaluation_id = ?
             """, (evaluation_id,))
             result = cursor.fetchone()
             if result:
                 return dict(result)
-            
+
             # Also check the evaluations table
             cursor.execute("SELECT * FROM evaluations WHERE id = ?", (evaluation_id,))
             result = cursor.fetchone()
             if result:
                 return dict(result)
-        
+
         return None
 
     # ============= Pipeline Presets Operations =============
@@ -1708,7 +1747,7 @@ class EvaluationsDatabase:
                 return None
             return {
                 "name": row["name"],
-                "config": json.loads(row["config"]) if row["config"] else {},
+                "config": self._json_maybe(row["config"], default={}),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "user_id": row["user_id"],
@@ -1731,7 +1770,7 @@ class EvaluationsDatabase:
             items = [
                 {
                     "name": r["name"],
-                    "config": json.loads(r["config"]) if r["config"] else {},
+                    "config": self._json_maybe(r["config"], default={}),
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"],
                     "user_id": r["user_id"],

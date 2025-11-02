@@ -7,7 +7,7 @@ This guide helps you install and run tldw_server locally with the integrated Web
 - Python 3.10+ (3.11 recommended)
 - FFmpeg installed and on your PATH (required for audio/video)
 - Git (optional but recommended)
-- Optional: CUDA/cuDNN for GPU‑accelerated STT (faster_whisper/NeMo)
+- Optional: CUDA/cuDNN for GPU-accelerated STT (faster_whisper/NeMo)
 
 ## 1) Clone and create a virtual environment
 
@@ -22,7 +22,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 ## 2) Install dependencies
 
-Prefer pyproject‑based installs with extras:
+Prefer pyproject-based installs with extras:
 
 ```bash
 # Core server
@@ -41,8 +41,8 @@ Notes:
 ## 3) Configure authentication
 
 The server supports two modes:
-- Single‑user: API key via `X-API-KEY` header
-- Multi‑user: JWT bearer tokens (login/registration)
+- Single-user: API key via `X-API-KEY` header
+- Multi-user: JWT bearer tokens (login/registration)
 
 Quick setup using the template:
 
@@ -53,7 +53,7 @@ cp .env.authnz.template .env
 #  - OR AUTH_MODE=multi_user and JWT_SECRET_KEY=<secure-32+ chars>
 ```
 
-Initialize AuthNZ (creates DBs, tables, and admin in multi‑user mode):
+Initialize AuthNZ (creates DBs, tables, and admin in multi-user mode):
 
 ```bash
 python -m tldw_Server_API.app.core.AuthNZ.initialize
@@ -61,9 +61,9 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 Environment variables of interest (from `.env`):
 - `AUTH_MODE`: `single_user` or `multi_user`
-- `SINGLE_USER_API_KEY` (single‑user)
-- `JWT_SECRET_KEY` (multi‑user)
-- `DATABASE_URL` (auth DB; defaults to SQLite; use PostgreSQL for multi‑user prod)
+- `SINGLE_USER_API_KEY` (single-user)
+- `JWT_SECRET_KEY` (multi-user)
+- `DATABASE_URL` (auth DB; defaults to SQLite; use PostgreSQL for multi-user prod)
 - `REDIS_URL` (optional; background services)
 
 ## 4) Provider keys (LLMs, embeddings, TTS)
@@ -89,19 +89,17 @@ Tip: You can also use the convenience script from the repo root:
 ## 6) Verify
 
 - Health: `GET http://127.0.0.1:8000/health` should return `{ "status": "healthy" }`
-- On startup, logs display the auth mode and URLs. In single‑user mode the API key may be masked unless explicitly allowed.
+- On startup, logs display the auth mode and URLs. In single-user mode the API key may be masked unless explicitly allowed.
 
 ## Troubleshooting
 
 - “ffmpeg not found”: Ensure FFmpeg is installed and available on PATH.
 - Auth errors: Confirm `.env` is loaded and `AUTH_MODE`/keys are correctly set.
-- SQLite locks: Prefer PostgreSQL for multi‑user production. Ensure proper shutdown before restarting.
+- SQLite locks: Prefer PostgreSQL for multi-user production. Ensure proper shutdown before restarting.
 - Port 8000 in use: Stop the other process or change the port (`--port 8001`).
 
 ## Next Steps
 
 - Read the User Guide for common tasks: `User_Guide.md`
 - Configure providers and test chat/embeddings via the WebUI and `/docs`
-- See Production Hardening and Multi‑User Deployment guides for production use
-
-
+- See Production Hardening and Multi-User Deployment guides for production use

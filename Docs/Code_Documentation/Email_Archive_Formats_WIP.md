@@ -1,4 +1,4 @@
-# Email Archive Formats – WIP Design Notes
+# Email Archive Formats - WIP Design Notes
 
 Status: Draft/WIP
 Owner: Ingestion/Email pipeline
@@ -18,7 +18,7 @@ This note sketches Phase B/C for additional email archive formats: MBOX and PST/
 - Maintain safety and performance guardrails comparable to current archive scanning.
 - Reuse the existing email parsing pipeline so downstream behavior (chunking, analysis, persistence) stays consistent.
 
-## Non‑Goals (for now)
+## Non-Goals (for now)
 
 - Full fidelity export of all proprietary metadata from PST/OST.
 - Arbitrary nested archive formats or multi-level compression.
@@ -118,4 +118,3 @@ PST specifics:
 - Python `mailbox` docs: https://docs.python.org/3/library/mailbox.html
 - libpff / pypff: https://github.com/libyal/libpff
 - readpst: https://www.five-ten-sg.com/libpst/
-

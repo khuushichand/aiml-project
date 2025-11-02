@@ -1,9 +1,9 @@
 <div align="center">
 
 <h1>tldw Server</h1>
-<p>Too Long; Didn't Watch — API‑first media analysis & research platform</p>
+<p>Too Long; Didn't Watch - API-first media analysis & research platform</p>
 
-<a href="https://www.gnu.org/licenses/old-licenses/gpl-3.0.en.html">[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server)   
+<a href="https://www.gnu.org/licenses/old-licenses/gpl-3.0.en.html">[![madewithlove](https://img.shields.io/badge/made_with-%E2%9D%A4-red?style=for-the-badge&labelColor=orange)](https://github.com/rmusser01/tldw_server)
 <img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-blue.svg" />
   </a>
 
@@ -43,9 +43,9 @@
 
 ## Overview
 
-tldw_server (Too Long; Didn’t Watch Server) is an open‑source backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, and document sources. It exposes a FastAPI‑first architecture with OpenAI‑compatible Chat and Audio APIs, a unified RAG pipeline, knowledge management, and integrations with local or hosted LLM providers.
+tldw_server (Too Long; Didn’t Watch Server) is an open-source backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, and document sources. It exposes a FastAPI-first architecture with OpenAI-compatible Chat and Audio APIs, a unified RAG pipeline, knowledge management, and integrations with local or hosted LLM providers.
 
-The long‑term vision is a personal research assistant inspired by The Young Lady’s Illustrated Primer—helping people learn, reason about, and retain what they watch or read.
+The long-term vision is a personal research assistant inspired by The Young Lady’s Illustrated Primer-helping people learn, reason about, and retain what they watch or read.
 
 ## Current Status
 
@@ -69,11 +69,11 @@ This is a major milestone release that transitions tldw from a Gradio-based appl
 
 ## What's New
 
-- FastAPI‑first backend with OpenAI‑compatible Chat and Audio APIs (including streaming STT and TTS)
-- Unified RAG and Evaluations modules (hybrid BM25 + vector with re‑ranking; unified metrics)
+- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
+- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
 - MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
 - Next.js web client (`tldw-frontend`) as the primary UI; integrated WebUI remains for compatibility
-- Strict OpenAI compatibility mode for local/self‑hosted providers
+- Strict OpenAI compatibility mode for local/self-hosted providers
 - PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
 
 See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
@@ -81,11 +81,11 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 ## Highlights
 
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
-- Audio & speech: real‑time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; OpenAI‑compatible TTS and local Kokoro ONNX.
-- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re‑ranking, contextual retrieval, OpenAI‑compatible embeddings.
-- Chat & providers: `/api/v1/chat/completions` (OpenAI‑compatible), 16+ providers (commercial + self‑hosted), character chat, budgets/allowlists.
-- Knowledge management: notes, prompt library, character cards, soft‑delete with recovery, Chatbooks import/export.
-- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G‑Eval, RAG, batch metrics).
+- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; OpenAI-compatible TTS and local Kokoro ONNX.
+- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings.
+- Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists.
+- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export.
+- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, batch metrics).
 - MCP Unified: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints.
 
 ## Feature Status Matrix
@@ -135,10 +135,10 @@ Legend
 
 | Capability | Status | Notes | Links |
 |---|---|---|---|
-| Full‑text search (FTS5) | Working | Fast local search | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
-| Embeddings + ChromaDB | Working | OpenAI‑compatible embeddings | [docs](Docs/API-related/Embeddings_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py) |
+| Full-text search (FTS5) | Working | Fast local search | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
+| Embeddings + ChromaDB | Working | OpenAI-compatible embeddings | [docs](Docs/API-related/Embeddings_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py) |
 | Hybrid BM25 + vector + rerank | Working | Contextual retrieval | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
-| Vector Stores (OpenAI‑compatible) | Working | Chroma/PG adapters | [docs](Docs/API-related/Vector_Stores_Admin_and_Query.md) · [code](tldw_Server_API/app/api/v1/endpoints/vector_stores_openai.py) |
+| Vector Stores (OpenAI-compatible) | Working | Chroma/PG adapters | [docs](Docs/API-related/Vector_Stores_Admin_and_Query.md) · [code](tldw_Server_API/app/api/v1/endpoints/vector_stores_openai.py) |
 | Media embeddings ingestion | Working | Create vectors from media | [code](tldw_Server_API/app/api/v1/endpoints/media_embeddings.py) |
 | pgvector backend | Experimental | Optional backend | [code](tldw_Server_API/app/core/RAG/rag_service/vector_stores/) |
 
@@ -150,7 +150,7 @@ Legend
 | Function calling / tools | Working | Tool schema validation | [docs](Docs/API-related/Chat_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/chat.py) |
 | Provider integrations (16+) | Working | Commercial + local | [docs](Docs/API-related/Providers_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/llm_providers.py) |
 | Local providers | Working | vLLM, llama.cpp, Ollama, etc. | [docs](tldw_Server_API/app/core/LLM_Calls/README.md) · [code](tldw_Server_API/app/core/LLM_Calls/) |
-| Strict OpenAI compat filter | Working | Filter non‑standard keys | [docs](tldw_Server_API/app/core/LLM_Calls/README.md) |
+| Strict OpenAI compat filter | Working | Filter non-standard keys | [docs](tldw_Server_API/app/core/LLM_Calls/README.md) |
 | Providers listing | Working | `GET /api/v1/llm/providers` | [docs](Docs/API-related/Providers_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/llm_providers.py) |
 | Moderation endpoint | Working | Basic wrappers | [code](tldw_Server_API/app/api/v1/endpoints/moderation.py) |
 
@@ -158,11 +158,11 @@ Legend
 
 | Capability | Status | Notes | Links |
 |---|---|---|---|
-| Notes + tagging | Working | Notebook‑style notes | [code](tldw_Server_API/app/api/v1/endpoints/notes.py) |
+| Notes + tagging | Working | Notebook-style notes | [code](tldw_Server_API/app/api/v1/endpoints/notes.py) |
 | Prompt library | Working | Import/export | [code](tldw_Server_API/app/api/v1/endpoints/prompts.py) |
 | Prompt Studio: projects/prompts/tests | Working | Test cases + runs | [docs](Docs/API-related/Prompt_Studio_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/prompt_studio_projects.py) |
 | Prompt Studio: optimization + WS | Working | Live updates | [docs](Docs/API-related/Prompt_Studio_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/prompt_studio_optimization.py) |
-| Character cards & sessions | Working | SillyTavern‑compatible | [docs](Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md) · [code](tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py) |
+| Character cards & sessions | Working | SillyTavern-compatible | [docs](Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md) · [code](tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py) |
 | Chatbooks import/export | Working | Backup/export | [docs](Docs/API-related/Chatbook_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/chatbooks.py) |
 | Flashcards | Working | Decks/cards, APKG export | [code](tldw_Server_API/app/api/v1/endpoints/flashcards.py) |
 | Reading & highlights | Working | Reading items mgmt | [docs](Docs/Product/Content_Collections_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/reading.py) |
@@ -171,7 +171,7 @@ Legend
 
 | Capability | Status | Notes | Links |
 |---|---|---|---|
-| G‑Eval | Working | Unified eval API | [docs](Docs/API-related/Evaluations_API_Unified_Reference.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py) |
+| G-Eval | Working | Unified eval API | [docs](Docs/API-related/Evaluations_API_Unified_Reference.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py) |
 | RAG evaluation | Working | Pipeline presets + metrics | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_rag_pipeline.py) |
 | OCR evaluation (JSON/PDF) | Working | Text + PDF flows | [docs](Docs/API-related/OCR_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py) |
 | Embeddings A/B tests | Working | Provider/model compare | [docs](Docs/API-related/Evaluations_API_Unified_Reference.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_embeddings_abtest.py) |
@@ -181,7 +181,7 @@ Legend
 
 | Capability | Status | Notes | Links |
 |---|---|---|---|
-| Web search (multi‑provider) | Working | Google, DDG, Brave, Kagi, Tavily, Searx | [code](tldw_Server_API/app/api/v1/endpoints/research.py) |
+| Web search (multi-provider) | Working | Google, DDG, Brave, Kagi, Tavily, Searx | [code](tldw_Server_API/app/api/v1/endpoints/research.py) |
 | Aggregation/final answer | Working | Structured answer + evidence | [code](tldw_Server_API/app/api/v1/endpoints/research.py) |
 | Academic paper search | Working | arXiv, BioRxiv/MedRxiv, PubMed/PMC, Semantic Scholar, OSF | [code](tldw_Server_API/app/api/v1/endpoints/paper_search.py) |
 | Web scraping service | Working | Status, jobs, progress, cookies | [docs](Docs/Product/Content_Collections_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
@@ -206,8 +206,8 @@ Legend
 
 | Capability | Status | Notes | Links |
 |---|---|---|---|
-| Single‑user (X‑API‑KEY) | Working | Simple local deployments | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/auth.py) |
-| Multi‑user JWT + RBAC | Working | Users/roles/permissions | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py) |
+| Single-user (X-API-KEY) | Working | Simple local deployments | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/auth.py) |
+| Multi-user JWT + RBAC | Working | Users/roles/permissions | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py) |
 | API keys manager | Working | Create/rotate/audit | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/admin.py) |
 | Egress + SSRF guards | Working | Centralized guards | [code](tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
 | Audit logging & alerts | Working | Unified audit + alerts | [docs](Docs/API-related/Audit_Configuration.md) · [code](tldw_Server_API/app/api/v1/endpoints/admin.py) |
@@ -221,7 +221,7 @@ Legend
 | SQLite defaults | Working | Local dev/small deployments | [code](tldw_Server_API/app/core/DB_Management/) |
 | PostgreSQL (AuthNZ, content) | Working | Postgres content mode | [docs](Docs/Published/Deployment/Postgres_Content_Mode.md) |
 | Outputs: templates | Working | Markdown/HTML/MP3 via TTS | [code](tldw_Server_API/app/api/v1/endpoints/outputs_templates.py) |
-| Outputs: artifacts | Working | Persist/list/soft‑delete/purge | [code](tldw_Server_API/app/api/v1/endpoints/outputs.py) |
+| Outputs: artifacts | Working | Persist/list/soft-delete/purge | [code](tldw_Server_API/app/api/v1/endpoints/outputs.py) |
 | Watchlists: sources/groups/tags | Working | CRUD + bulk import | [docs](Docs/Product/Watchlist_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
 | Watchlists: jobs & runs | Working | Schedule, run, run details | [docs](Docs/Product/Watchlist_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
 | Watchlists: templates & OPML | Working | Template store; OPML import/export | [docs](Docs/Product/Watchlist_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
@@ -229,7 +229,7 @@ Legend
 | Workflows engine & scheduler | WIP | Defs CRUD, runs, scheduler | [docs](Docs/Product/Workflows_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/workflows.py) |
 | VLM backends listing | Experimental | `/api/v1/vlm/backends` | [code](tldw_Server_API/app/api/v1/endpoints/vlm.py) |
 | Next.js WebUI | Working | Primary client | [code](tldw-frontend/) |
-| Legacy WebUI (/webui) | Working | Feature‑frozen legacy | [code](tldw_Server_API/WebUI/) |
+| Legacy WebUI (/webui) | Working | Feature-frozen legacy | [code](tldw_Server_API/WebUI/) |
 
 </details>
 
@@ -411,9 +411,9 @@ Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentic
 
 ## Usage Examples
 
-Use the single‑user API key with the `X-API-KEY` header.
+Use the single-user API key with the `X-API-KEY` header.
 
-Chat (OpenAI‑compatible)
+Chat (OpenAI-compatible)
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/chat/completions \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -425,7 +425,7 @@ curl -s http://127.0.0.1:8000/api/v1/chat/completions \
   }'
 ```
 
-Embeddings (OpenAI‑compatible)
+Embeddings (OpenAI-compatible)
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/embeddings \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
@@ -461,46 +461,46 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 
 ## Key Endpoints
 
-- Media: `POST /api/v1/media/process` — ingest/process media (URLs/files)
-- Media Search: `GET /api/v1/media/search` — search ingested content
-- Chat: `POST /api/v1/chat/completions` — OpenAI‑compatible chat
-- Embeddings: `POST /api/v1/embeddings` — OpenAI‑compatible embeddings
-- RAG: `POST /api/v1/rag/search` — unified RAG search
-- Audio STT: `POST /api/v1/audio/transcriptions` — file‑based transcription
-- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` — real‑time transcription
-- Audio TTS: `POST /api/v1/audio/speech` — text‑to‑speech (streaming and non‑streaming)
-- TTS Voices: `GET /api/v1/audio/voices/catalog` — voice catalog across providers
-- Vector Stores: `POST /api/v1/vector_stores` — create; `POST /api/v1/vector_stores/{id}/query` — query
-- OCR Backends: `GET /api/v1/ocr/backends` — available OCR providers
-- VLM Backends: `GET /api/v1/vlm/backends` — available VLM providers
-- Connectors: `GET /api/v1/connectors/providers` — Drive/Notion providers
-- Outputs: `POST /api/v1/outputs` — generate output artifact (md/html/mp3)
-- Metrics: `GET /api/v1/metrics/text` — Prometheus metrics (text format)
-- Providers: `GET /api/v1/llm/providers` — provider/models list
-- MCP: `GET /api/v1/mcp/status` — MCP server status
+- Media: `POST /api/v1/media/process` - ingest/process media (URLs/files)
+- Media Search: `GET /api/v1/media/search` - search ingested content
+- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
+- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings
+- RAG: `POST /api/v1/rag/search` - unified RAG search
+- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription
+- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription
+- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming)
+- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers
+- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query
+- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers
+- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers
+- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers
+- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3)
+- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format)
+- Providers: `GET /api/v1/llm/providers` - provider/models list
+- MCP: `GET /api/v1/mcp/status` - MCP server status
 
 ## Running Tests
 
-- `python -m pytest -v` — full test suite (skips heavy optional suites by default).
-- `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` — coverage report.
+- `python -m pytest -v` - full test suite (skips heavy optional suites by default).
+- `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
 
 ## Frontend & UI
 
 - The actively developed Next.js client lives in `tldw-frontend` (see its README for setup/build).
-- The FastAPI backend serves a legacy UI at `/webui`; it is stable but feature‑frozen.
+- The FastAPI backend serves a legacy UI at `/webui`; it is stable but feature-frozen.
 
 ## Documentation & Resources
 
-- `Docs/Documentation.md` — documentation index and developer guide links
-- `Docs/About.md` — project background and philosophy
+- `Docs/Documentation.md` - documentation index and developer guide links
+- `Docs/About.md` - project background and philosophy
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
-- Design notes (WIP features): `Docs/Design/` — e.g., `Docs/Design/Custom_Scrapers_Router.md`
+- Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
 
-### OpenAI‑Compatible Strict Mode (Local Providers)
+### OpenAI-Compatible Strict Mode (Local Providers)
 
 Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`). For local providers you can enable a strict mode that filters non-standard keys from chat payloads.
 
@@ -548,8 +548,8 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ## Troubleshooting
 
 - ffmpeg missing: ensure `ffmpeg -version` works; install via your package manager.
-- Torch/CUDA mismatch: install a CUDA‑compatible PyTorch or use CPU wheels.
-- SQLite locks: prefer short‑lived transactions and context managers; consider Postgres for concurrency.
+- Torch/CUDA mismatch: install a CUDA-compatible PyTorch or use CPU wheels.
+- SQLite locks: prefer short-lived transactions and context managers; consider Postgres for concurrency.
 - OpenAI strict mode: enable strict compatibility for local providers that reject unknown fields.
 - Docker: inspect with `docker compose ps` and `docker compose logs -f`.
 
@@ -625,7 +625,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
   - This can result in models that may be better at some tasks but worse at others, so it's important to test and see what works best for you.
 - FIXME (Qwen3-4B-Instruct-2507, Mistral-Nemo-Instruct-2407-GGUF, Qwen3-30B-A3B-Instruct-2507)
 
-For commercial API usage for use with this project: Latest Anthropic/ChatGPT/Gemini Models. 
+For commercial API usage for use with this project: Latest Anthropic/ChatGPT/Gemini Models.
 Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.
 That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.
 You are just a stepping stone to their goals.
@@ -633,15 +633,15 @@ You are just a stepping stone to their goals.
 From @nrose 05/08/2024 on Threads:
 ```
 No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
-  No. For efficiency. 
-Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth. 
-The model declines over time, then the optimization makes it somewhat better, then in a sort of 
-  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then 
+  No. For efficiency.
+Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth.
+The model declines over time, then the optimization makes it somewhat better, then in a sort of
+  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then
   trim down over time, so they can train the next big model… etc etc.
-None of these companies exist to provide AI services in 2024. They’re only doing it to finance the 
+None of these companies exist to provide AI services in 2024. They’re only doing it to finance the
  things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
-  and become a hidden monopoly like the oil and electric companies. 
-2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some 
+  and become a hidden monopoly like the oil and electric companies.
+2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some
   directional income
 ```
 
@@ -677,7 +677,7 @@ As an update to this, looking back a year, it still stands true, and I would onl
   - **Inference Engine** - A software system that is designed to execute a model that has been trained by a machine learning algorithm. Llama.cpp and Kobold.cpp are examples of inference engines.
 - **Papers & Concepts**
   1. Lost in the Middle: How Language Models Use Long Contexts(2023)
-    - https://arxiv.org/abs/2307.03172 
+    - https://arxiv.org/abs/2307.03172
     - `We analyze the performance of language models on two tasks that require identifying relevant information in their input contexts: multi-document question answering and key-value retrieval. We find that performance can degrade significantly when changing the position of relevant information, indicating that current language models do not robustly make use of information in long input contexts. In particular, we observe that performance is often highest when relevant information occurs at the beginning or end of the input context, and significantly degrades when models must access relevant information in the middle of long contexts, even for explicitly long-context models`
   2. [Same Task, More Tokens: the Impact of Input Length on the Reasoning Performance of Large Language Models(2024)](https://arxiv.org/abs/2402.14848)
      - `Our findings show a notable degradation in LLMs' reasoning performance at much shorter input lengths than their technical maximum. We show that the degradation trend appears in every version of our dataset, although at different intensities. Additionally, our study reveals that the traditional metric of next word prediction correlates negatively with performance of LLMs' on our reasoning dataset. We analyse our results and identify failure modes that can serve as useful guides for future research, potentially informing strategies to address the limitations observed in LLMs.`
@@ -699,22 +699,22 @@ As an update to this, looking back a year, it still stands true, and I would onl
      - [ChatGPT Doesn't Trust Chargers Fans: Guardrail Sensitivity in Context](https://arxiv.org/abs/2407.06866)
        - `While the biases of language models in production are extensively documented, the biases of their guardrails have been neglected. This paper studies how contextual information about the user influences the likelihood of an LLM to refuse to execute a request. By generating user biographies that offer ideological and demographic information, we find a number of biases in guardrail sensitivity on GPT-3.5. Younger, female, and Asian-American personas are more likely to trigger a refusal guardrail when requesting censored or illegal information. Guardrails are also sycophantic, refusing to comply with requests for a political position the user is likely to disagree with. We find that certain identity groups and seemingly innocuous information, e.g., sports fandom, can elicit changes in guardrail sensitivity similar to direct statements of political ideology. For each demographic category and even for American football team fandom, we find that ChatGPT appears to infer a likely political ideology and modify guardrail behavior accordingly.`
 - **Tools & Libraries**
-  1. `llama.cpp` - A C++ inference engine. Highly recommend. 
+  1. `llama.cpp` - A C++ inference engine. Highly recommend.
      * https://github.com/ggerganov/llama.cpp
-  2. `kobold.cpp` - A C++ inference engine. GUI wrapper of llama.cpp with some tweaks. 
+  2. `kobold.cpp` - A C++ inference engine. GUI wrapper of llama.cpp with some tweaks.
      * https://github.com/LostRuins/koboldcpp
   3. `sillytavern` - A web-based interface for text generation models. Supports inference engines. Ignore the cat girls and weebness. This software is _powerful_ and _useful_. Also supports just about every API you could want.
      * https://github.com/SillyTavern/SillyTavern
   4. `llamafile` - A wrapper for llama.cpp that allows for easy use of local LLMs.
-     * Uses libcosomopolitan for cross-platform compatibility. 
+     * Uses libcosomopolitan for cross-platform compatibility.
      * Can be used to run LLMs on Windows, Linux, and MacOS with a single binary wrapper around Llama.cpp.
   5. `pytorch` - An open-source machine learning library based on the Torch library.
   6. `ffmpeg` - A free software project consisting of a large suite of libraries and programs for handling video, audio, and other multimedia files and streams.
-  7. `pandoc` - A free and open-source document converter, widely used as a writing tool (especially by scholars) and as a basis for publishing workflows. 
+  7. `pandoc` - A free and open-source document converter, widely used as a writing tool (especially by scholars) and as a basis for publishing workflows.
      * https://pandoc.org/
-  8. `marker` - A tool for converting PDFs(and other document types) to markdown. 
+  8. `marker` - A tool for converting PDFs(and other document types) to markdown.
      * https://github.com/VikParuchuri/marker
-  9. `faster_whisper` - A fast, lightweight, and accurate speech-to-text model. 
+  9. `faster_whisper` - A fast, lightweight, and accurate speech-to-text model.
       * https://github.com/SYSTRAN/faster-whisper
 
 </details>
@@ -726,7 +726,7 @@ See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy an
 
 ## License
 
-GNU General Public License v3.0 — see `LICENSE` for details.
+GNU General Public License v3.0 - see `LICENSE` for details.
 
 ---
 
@@ -774,7 +774,7 @@ Long-term vision: Building towards a personal AI research assistant inspired by 
     * Terry Pratchett
 - `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
   *Richard Feynman
-  
+
 
 ---
 
@@ -786,5 +786,5 @@ Roadmap & WIP
 - Additional research providers, evaluation tooling, and flashcard improvements
 
 Privacy & Security
-- Self‑hosted by design; no telemetry or data collection
+- Self-hosted by design; no telemetry or data collection
 - Users own and control their data; see hardening guide for production

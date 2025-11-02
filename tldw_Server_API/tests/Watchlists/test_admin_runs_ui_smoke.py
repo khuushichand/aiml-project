@@ -16,4 +16,3 @@ def test_admin_runs_ui_includes_include_tallies_param_in_server_csv_links():
     # Expect include_tallies in both global and by-job server CSV link hrefs
     assert "scope=global" in text and "include_tallies=" in text
     assert "scope=job" in text and "include_tallies=" in text
-

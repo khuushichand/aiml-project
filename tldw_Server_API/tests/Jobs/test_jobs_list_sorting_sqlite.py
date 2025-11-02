@@ -48,4 +48,3 @@ def test_jobs_list_sorting_sqlite(monkeypatch, tmp_path):
         assert r3.status_code == 200
         ids_prio = [row["id"] for row in r3.json()]
         assert ids_prio[0] == b["id"]
-

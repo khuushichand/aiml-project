@@ -85,4 +85,3 @@ def test_grid_search_requires_models(prompt_studio_dual_backend_client):
     }
     r_ok = client.post("/api/v1/prompt-studio/optimizations/create", json=good)
     assert r_ok.status_code in (200, 201), r_ok.text
-

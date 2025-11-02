@@ -69,4 +69,3 @@ def test_media_ingest_local_persists_to_db(client_with_wf: TestClient, tmp_path)
     # Should include media_ids when indexing requested
     mids = out.get("media_ids") or []
     assert isinstance(mids, list) and (len(mids) >= 1)
-

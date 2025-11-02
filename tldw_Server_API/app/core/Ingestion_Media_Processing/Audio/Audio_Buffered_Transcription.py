@@ -52,10 +52,10 @@ class BufferedTranscriptionConfig:
 class BufferedTranscriber:
     """
     Base class for buffered transcription of long audio files.
-    
+
     Implements chunking and buffering strategy similar to NVIDIA's approach.
     """
-    
+
     def __init__(self, config: BufferedTranscriptionConfig):
         """Initialize buffered transcriber with strict validation."""
         self.config = config
@@ -81,14 +81,14 @@ class BufferedTranscriber:
         # Calculate chunk parameters
         self.chunk_samples_at_16k = int(config.chunk_duration * 16000)
         self.buffer_samples_at_16k = int(config.total_buffer * 16000)
-        
+
         # Calculate tokens per chunk based on model stride
         self.tokens_per_chunk = math.ceil(config.chunk_duration / config.model_stride)
-        
+
         # Calculate delays for merging
         left_padding = (config.total_buffer - config.chunk_duration) / 2
         self.mid_delay = math.ceil((config.chunk_duration + left_padding) / config.model_stride)
-    
+
     def process_audio(
         self,
         audio_data: np.ndarray,
@@ -98,13 +98,13 @@ class BufferedTranscriber:
     ) -> str:
         """
         Process long audio with chunking and merging.
-        
+
         Args:
             audio_data: Complete audio data
             sample_rate: Sample rate of audio
             transcribe_fn: Function to transcribe a single chunk
             progress_callback: Optional progress callback
-        
+
         Returns:
             Complete transcription
         """
@@ -112,7 +112,7 @@ class BufferedTranscriber:
         if sample_rate != 16000:
             audio_data = self._resample(audio_data, sample_rate, 16000)
             sample_rate = 16000
-        
+
         # Precompute file-specific expected/allowed chunk counts
         padding_samples_pre = self.buffer_samples_at_16k - self.chunk_samples_at_16k
         stride_samples_pre = self.chunk_samples_at_16k - padding_samples_pre // 2
@@ -134,15 +134,15 @@ class BufferedTranscriber:
                 f"Chunking produced {num_chunks} chunks which exceeds the file-specific maximum ({allowed_max_chunks}). "
                 f"Expected around {expected_chunks} based on stride. Adjust chunk_duration/total_buffer."
             )
-        
+
         logger.info(f"Processing {num_chunks} chunks with {self.config.merge_algo.value} algorithm")
-        
+
         # Process each chunk
         chunk_results = []
         for i, chunk in enumerate(chunks):
             # Transcribe chunk
             result = transcribe_fn(chunk['audio'])
-            
+
             # Store result with metadata
             chunk_results.append({
                 'text': result,
@@ -151,25 +151,25 @@ class BufferedTranscriber:
                 'overlap_start': chunk.get('overlap_start', 0),
                 'overlap_end': chunk.get('overlap_end', 0)
             })
-            
+
             # Progress callback
             if progress_callback:
                 progress_callback(i + 1, num_chunks)
-        
+
         # Merge results
         merged_text = self._merge_results(chunk_results)
-        
+
         return merged_text
-    
+
     def _create_chunks(self, audio_data: np.ndarray) -> List[dict]:
         """
         Create overlapping chunks from audio data.
-        
+
         Returns list of chunk dictionaries with audio and metadata.
         """
         chunks = []
         total_samples = len(audio_data)
-        
+
         # Calculate stride (non-overlapping part)
         padding_samples = self.buffer_samples_at_16k - self.chunk_samples_at_16k
         stride_samples = self.chunk_samples_at_16k - padding_samples // 2
@@ -179,17 +179,17 @@ class BufferedTranscriber:
                 f"chunk_samples={self.chunk_samples_at_16k}, buffer_samples={self.buffer_samples_at_16k}, "
                 f"padding_samples={padding_samples}. Ensure total_buffer < 3 * chunk_duration."
             )
-        
+
         # Create chunks
         position = 0
         while position < total_samples:
             # Calculate chunk boundaries
             chunk_start = max(0, position - padding_samples // 2)
             chunk_end = min(total_samples, position + self.chunk_samples_at_16k + padding_samples // 2)
-            
+
             # Extract chunk
             chunk_audio = audio_data[chunk_start:chunk_end]
-            
+
             # Pad if needed
             if len(chunk_audio) < self.buffer_samples_at_16k:
                 chunk_audio = np.pad(
@@ -197,25 +197,25 @@ class BufferedTranscriber:
                     (0, self.buffer_samples_at_16k - len(chunk_audio)),
                     mode='constant'
                 )
-            
+
             chunks.append({
                 'audio': chunk_audio,
                 'start': chunk_start / 16000,  # Convert to seconds
                 'end': chunk_end / 16000,
                 'overlap_start': (position - chunk_start) / 16000 if position > chunk_start else 0,
-                'overlap_end': (chunk_end - (position + self.chunk_samples_at_16k)) / 16000 
+                'overlap_end': (chunk_end - (position + self.chunk_samples_at_16k)) / 16000
                              if chunk_end > position + self.chunk_samples_at_16k else 0
             })
-            
+
             # Move to next position
             position += stride_samples
-        
+
         return chunks
-    
+
     def _merge_results(self, chunk_results: List[dict]) -> str:
         """
         Merge chunk results based on configured algorithm.
-        
+
         Override this in subclasses for specific merge strategies.
         """
         if self.config.merge_algo == MergeAlgorithm.SIMPLE:
@@ -224,41 +224,41 @@ class BufferedTranscriber:
         else:
             # Default to middle merge
             return self._middle_merge(chunk_results)
-    
+
     def _middle_merge(self, chunk_results: List[dict]) -> str:
         """
         Implement middle token merge algorithm.
-        
+
         Removes overlapping portions from chunk boundaries.
         """
         if not chunk_results:
             return ""
-        
+
         merged_texts = []
-        
+
         for i, result in enumerate(chunk_results):
             text = result['text']
             if not text:
                 continue
-            
+
             if i > 0 and result['overlap_start'] > 0:
                 # Remove overlapping start portion
                 words = text.split()
                 overlap_ratio = result['overlap_start'] / self.config.chunk_duration
                 words_to_skip = int(len(words) * overlap_ratio * 0.5)  # Take middle
                 text = ' '.join(words[words_to_skip:]) if words_to_skip < len(words) else text
-            
+
             if i < len(chunk_results) - 1 and result['overlap_end'] > 0:
                 # Remove overlapping end portion
                 words = text.split()
                 overlap_ratio = result['overlap_end'] / self.config.chunk_duration
                 words_to_keep = len(words) - int(len(words) * overlap_ratio * 0.5)
                 text = ' '.join(words[:words_to_keep]) if words_to_keep > 0 else text
-            
+
             merged_texts.append(text)
-        
+
         return ' '.join(merged_texts)
-    
+
     def _resample(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
         """Resample audio to target sample rate."""
         try:
@@ -272,31 +272,31 @@ class BufferedTranscriber:
 class LCSMergeTranscriber(BufferedTranscriber):
     """
     Transcriber using Longest Common Subsequence merge algorithm.
-    
+
     Better handling of overlapping regions by finding common sequences.
     """
-    
+
     def _merge_results(self, chunk_results: List[dict]) -> str:
         """Merge using LCS algorithm."""
         if not chunk_results:
             return ""
-        
+
         if len(chunk_results) == 1:
             return chunk_results[0]['text']
-        
+
         # Start with first chunk
         merged = chunk_results[0]['text']
-        
+
         for i in range(1, len(chunk_results)):
             current = chunk_results[i]['text']
             if not current:
                 continue
-            
+
             # Find LCS between end of merged and start of current
             merged = self._merge_with_lcs(merged, current)
-        
+
         return merged
-    
+
     def _merge_with_lcs(self, text1: str, text2: str) -> str:
         """
         Merge two texts using LCS to find overlap.
@@ -349,14 +349,14 @@ class LCSMergeTranscriber(BufferedTranscriber):
 
         # No overlap found, simple concatenation
         return text1 + ' ' + text2
-    
+
     def _lcs_length(self, X: List[str], Y: List[str]) -> int:
         """
         Calculate length of longest common subsequence.
         """
         m, n = len(X), len(Y)
         L = [[0] * (n + 1) for _ in range(m + 1)]
-        
+
         for i in range(m + 1):
             for j in range(n + 1):
                 if i == 0 or j == 0:
@@ -365,7 +365,7 @@ class LCSMergeTranscriber(BufferedTranscriber):
                     L[i][j] = L[i-1][j-1] + 1
                 else:
                     L[i][j] = max(L[i-1][j], L[i][j-1])
-        
+
         return L[m][n]
 
 
@@ -381,7 +381,7 @@ def transcribe_long_audio(
 ) -> str:
     """
     Transcribe long audio files using buffered/chunked processing.
-    
+
     Args:
         audio_path: Path to audio file or numpy array
         model_name: Model to use ('parakeet', 'canary')
@@ -391,23 +391,23 @@ def transcribe_long_audio(
         merge_algo: Merge algorithm ('middle', 'lcs', 'overlap', 'simple')
         device: Device for processing
         progress_callback: Optional callback for progress
-    
+
     Returns:
         Complete transcription
     """
     import soundfile as sf
-    
+
     # Load audio
     if isinstance(audio_path, (str, Path)):
         audio_data, sample_rate = sf.read(str(audio_path))
     else:
         audio_data = audio_path
         sample_rate = 16000  # Assume 16kHz
-    
+
     # Convert to mono if needed
     if len(audio_data.shape) > 1:
         audio_data = np.mean(audio_data, axis=1)
-    
+
     # Determine default total_buffer if not provided: 1.5x chunk (strictly < 3x)
     if total_buffer is None:
         total_buffer = max(chunk_duration, min(chunk_duration * 1.5, chunk_duration * 2.9))
@@ -419,13 +419,13 @@ def transcribe_long_audio(
         merge_algo=MergeAlgorithm(merge_algo),
         device=device
     )
-    
+
     # Select transcriber based on merge algorithm
     if config.merge_algo == MergeAlgorithm.LCS:
         transcriber = LCSMergeTranscriber(config)
     else:
         transcriber = BufferedTranscriber(config)
-    
+
     # Create transcribe function
     def transcribe_chunk(chunk_audio: np.ndarray) -> str:
         # Import appropriate transcription function
@@ -449,7 +449,7 @@ def transcribe_long_audio(
                 model=model_name,
                 variant=variant
             )
-    
+
     # Process audio
     result = transcriber.process_audio(
         audio_data,
@@ -457,7 +457,7 @@ def transcribe_long_audio(
         transcribe_chunk,
         progress_callback
     )
-    
+
     return result
 
 

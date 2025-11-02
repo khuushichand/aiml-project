@@ -24,7 +24,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateRunRequest, RunResponse, RunResultsResponse,
     CreateDatasetRequest, DatasetResponse,
     EvaluationListResponse, RunListResponse, DatasetListResponse,
-    
+
     # tldw-specific schemas
     GEvalRequest, GEvalResponse,
     RAGEvaluationRequest, RAGEvaluationResponse,
@@ -34,13 +34,13 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CustomMetricRequest, CustomMetricResponse,
     EvaluationComparisonRequest, EvaluationComparisonResponse,
     EvaluationHistoryRequest, EvaluationHistoryResponse,
-    
+
     # Webhook schemas
     WebhookRegistrationRequest, WebhookRegistrationResponse,
     WebhookUpdateRequest, WebhookStatusResponse,
     WebhookTestRequest, WebhookTestResponse,
     RateLimitStatusResponse,
-    
+
     # Common schemas
     ErrorResponse, ErrorDetail, HealthCheckResponse,
     EvaluationMetric,
@@ -650,7 +650,7 @@ async def get_rate_limit_status(
     try:
         limiter = get_user_rate_limiter_for_user(current_user.id)
         summary = await limiter.get_usage_summary(user_id)
-        
+
         # Convert the nested structure to flat structure expected by RateLimitStatusResponse
         from datetime import datetime, timezone, timedelta
         return RateLimitStatusResponse(
@@ -676,7 +676,7 @@ async def get_rate_limit_status(
             },
             reset_at=datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to get rate limit status: {e}")
         raise HTTPException(
@@ -729,21 +729,21 @@ async def create_dataset(
             metadata=model_dump_compat(dataset_request.metadata) if dataset_request.metadata else None,
             created_by=user_id
         )
-        
+
         dataset = await svc.get_dataset(dataset_id)
         if not dataset:
             raise ValueError("Failed to retrieve created dataset")
         dataset = _normalize_dataset_payload(dataset)
-        
+
         # Record idempotency mapping
         try:
             if idempotency_key:
                 svc.db.record_idempotency("dataset", idempotency_key, dataset_id, user_id)
         except Exception:
             pass
-        
+
         return DatasetResponse(**dataset)
-        
+
     except Exception as e:
         logger.exception(f"Failed to create dataset: {e}")
         raise create_error_response(
@@ -769,10 +769,10 @@ async def list_datasets(
             after=after,
             offset=offset
         )
-        
+
         first_id = datasets[0]["id"] if datasets else None
         last_id = datasets[-1]["id"] if datasets else None
-        
+
         normalized = [_normalize_dataset_payload(ds) for ds in datasets]
         return DatasetListResponse(
             object="list",
@@ -782,7 +782,7 @@ async def list_datasets(
             last_id=last_id,
             total=len(normalized)
         )
-        
+
     except Exception as e:
         logger.exception(f"Failed to list datasets: {e}")
         raise create_error_response(
@@ -809,9 +809,9 @@ async def get_dataset(
                 param="dataset_id",
                 status_code=status.HTTP_404_NOT_FOUND
             )
-        
+
         return DatasetResponse(**dataset)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -840,7 +840,7 @@ async def delete_dataset(
                 param="dataset_id",
                 status_code=status.HTTP_404_NOT_FOUND
             )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -883,7 +883,7 @@ async def get_metrics(request: Request):
         uid = _DP.get_single_user_id()
         svc = get_unified_evaluation_service_for_user(uid)
         metrics_summary = await svc.get_metrics_summary()
-        
+
         # Handle failure from service so error message is never exposed
         if "error" in metrics_summary:
             logger.error(f"Metrics endpoint service error: {metrics_summary['error']}")
@@ -899,22 +899,22 @@ async def get_metrics(request: Request):
                 )
             # Return JSON error response
             return {"error": "Metrics are currently unavailable"}
-        
+
         # Format as Prometheus text format if requested
         if "text/plain" in request.headers.get("accept", ""):
             # Convert to Prometheus format (simplified)
             output = "# HELP evaluation_requests_total Total evaluation requests\n"
             output += "# TYPE evaluation_requests_total counter\n"
             output += f"evaluation_requests_total {{}} {metrics_summary.get('total_requests', 0)}\n"
-            
+
             return Response(
                 content=output,
                 media_type="text/plain; version=0.0.4; charset=utf-8"
             )
-        
+
         # Return JSON format
         return metrics_summary
-        
+
     except Exception as e:
         logger.error(f"Failed to get metrics: {e}")
         # Do not expose internal error, return generic error
@@ -941,9 +941,9 @@ async def get_evaluation(
                 param="eval_id",
                 status_code=status.HTTP_404_NOT_FOUND
             )
-        
+
         return EvaluationResponse(**evaluation)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -970,12 +970,12 @@ async def update_evaluation(
                 message="No updates provided",
                 error_type="invalid_request_error"
             )
-        
+
         svc = get_unified_evaluation_service_for_user(current_user.id)
         success = await svc.update_evaluation(
             eval_id, updates, updated_by=user_id
         )
-        
+
         if not success:
             raise create_error_response(
                 message=f"Evaluation {eval_id} not found",
@@ -983,10 +983,10 @@ async def update_evaluation(
                 param="eval_id",
                 status_code=status.HTTP_404_NOT_FOUND
             )
-        
+
         evaluation = await svc.get_evaluation(eval_id)
         return EvaluationResponse(**evaluation)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1015,7 +1015,7 @@ async def delete_evaluation(
                 param="eval_id",
                 status_code=status.HTTP_404_NOT_FOUND
             )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1083,7 +1083,7 @@ async def create_run(
             pass
 
         return RunResponse(**run)
-        
+
     except ValueError as e:
         raise create_error_response(
             message=sanitize_error_message(e, "creating run"),
@@ -1118,10 +1118,10 @@ async def list_runs(
             limit=limit,
             after=after
         )
-        
+
         first_id = runs[0]["id"] if runs else None
         last_id = runs[-1]["id"] if runs else None
-        
+
         return RunListResponse(
             object="list",
             data=[RunResponse(**run) for run in runs],
@@ -1129,7 +1129,7 @@ async def list_runs(
             first_id=first_id,
             last_id=last_id
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to list runs: {e}")
         raise create_error_response(
@@ -1150,7 +1150,7 @@ async def evaluate_geval(
 ):
     """
     Evaluate a summary using G-Eval metrics.
-    
+
     G-Eval evaluates summaries on fluency, consistency, relevance, and coherence.
     """
     try:
@@ -1224,7 +1224,7 @@ async def evaluate_geval(
                 await limiter.record_actual_usage(user_id, "evals:geval", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
         except Exception:
             pass
-        
+
         # Format response - accept either numeric or structured metric dicts
         raw_metrics = result["results"].get("metrics", {})
         formatted_metrics = {}
@@ -1265,7 +1265,7 @@ async def evaluate_geval(
                     raw_score=score_num,
                     explanation=explanations_fallback.get(metric_name, ""),
                 )
-        
+
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
@@ -1311,7 +1311,7 @@ async def evaluate_geval(
         except Exception:
             pass
         return resp_payload
-        
+
     except Exception as e:
         # Log with stack trace for diagnostics
         logger.exception(f"G-Eval evaluation failed: {e}")
@@ -1338,7 +1338,7 @@ async def evaluate_rag(
 ):
     """
     Evaluate RAG system performance.
-    
+
     Evaluates relevance, faithfulness, answer similarity, and context precision.
     """
     try:
@@ -1413,7 +1413,7 @@ async def evaluate_rag(
                 await limiter.record_actual_usage(user_id, "evals:rag", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
         except Exception:
             pass
-        
+
         # Extract and format metrics from results
         raw_metrics = result["results"].get("metrics", {})
         formatted_metrics = {}
@@ -1424,7 +1424,7 @@ async def evaluate_rag(
                 raw_score=score if isinstance(score, (int, float)) else 0.0,
                 explanation=""
             )
-        
+
         # Send webhook: evaluation completed (await in TEST_MODE)
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
             await wm.send_webhook(
@@ -1463,7 +1463,7 @@ async def evaluate_rag(
         except Exception:
             pass
         return resp_payload
-        
+
     except Exception as e:
         logger.error(f"RAG evaluation failed: {e}")
         raise HTTPException(
@@ -1481,7 +1481,7 @@ async def evaluate_response_quality(
 ):
     """
     Evaluate the quality of a generated response.
-    
+
     Checks relevance, completeness, accuracy, and format compliance.
     """
     try:
@@ -1696,7 +1696,7 @@ async def evaluate_propositions_endpoint(
         except Exception:
             pass
         return resp_payload
-    
+
     except Exception as e:
         logger.error(f"Proposition evaluation failed: {e}")
         raise HTTPException(
@@ -1731,9 +1731,9 @@ async def get_run(
                 param="run_id",
                 status_code=status.HTTP_404_NOT_FOUND
             )
-        
+
         return RunResponse(**run)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1755,7 +1755,7 @@ async def cancel_run(
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         success = await svc.cancel_run(run_id, cancelled_by=user_id)
-        
+
         if success:
             return {"status": "cancelled", "id": run_id}
         else:
@@ -1764,7 +1764,7 @@ async def cancel_run(
                 error_type="server_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1787,7 +1787,7 @@ async def batch_evaluate(
 ):
     """
     Run multiple evaluations in batch.
-    
+
     Supports running multiple evaluation types with configurable parallelism.
     """
     try:
@@ -1860,17 +1860,17 @@ async def batch_evaluate(
                 detail=meta.get("error", "Rate limit exceeded"),
                 headers={"Retry-After": str(retry_after)},
             )
-        
+
         results = []
         failed_count = 0
-        
+
         # Process evaluations based on parallel setting (use parallel_workers > 1 as indicator)
         if request.parallel_workers > 1:
             # Run evaluations in parallel
             tasks = []
             for eval_request in request.items:
                 eval_type = request.evaluation_type  # Type is at batch level
-                
+
                 if eval_type == "geval":
                     task = service.evaluate_geval(
                         source_text=eval_request.get("source_text", ""),
@@ -1924,14 +1924,14 @@ async def batch_evaluate(
                     })
                     failed_count += 1
                     continue
-                
+
                 if 'task' in locals():
                     tasks.append(task)
-            
+
             # Wait for all tasks
             if tasks:
                 task_results = await asyncio.gather(*tasks, return_exceptions=True)
-                
+
                 for i, result in enumerate(task_results):
                     if isinstance(result, Exception):
                         results.append({
@@ -1950,7 +1950,7 @@ async def batch_evaluate(
             # Run evaluations sequentially
             for eval_request in request.items:
                 eval_type = request.evaluation_type  # Type is at batch level
-                
+
                 try:
                     if eval_type == "geval":
                         result = await service.evaluate_geval(
@@ -2004,13 +2004,13 @@ async def batch_evaluate(
                         })
                         failed_count += 1
                         continue
-                    
+
                     results.append({
                         "evaluation_id": result.get("evaluation_id"),
                         "status": "completed",
                         "results": result.get("results", {})
                     })
-                    
+
                 except Exception as e:
                     results.append({
                         "evaluation_id": None,
@@ -2018,13 +2018,13 @@ async def batch_evaluate(
                         "error": str(e)
                     })
                     failed_count += 1
-                    
+
                     # Check continue_on_error setting (inverse logic)
                     if not request.continue_on_error:
                         break
-        
+
         processing_time = time.time() - start_time
-        
+
         resp_payload = BatchEvaluationResponse(
             total_items=len(request.items),
             successful=len(results) - failed_count,
@@ -2039,7 +2039,7 @@ async def batch_evaluate(
         except Exception:
             pass
         return resp_payload
-        
+
     except Exception as e:
         logger.error(f"Batch evaluation failed: {e}")
         raise HTTPException(
@@ -2239,12 +2239,12 @@ async def get_evaluation_history(
 ):
     """
     Retrieve evaluation history for a user.
-    
+
     Supports filtering by date range, evaluation type, and pagination.
     """
     try:
         service = get_unified_evaluation_service_for_user(current_user.id)
-        
+
         # Get evaluations from database
         evaluations = await service.get_evaluation_history(
             user_id=request.user_id or user_id,
@@ -2254,7 +2254,7 @@ async def get_evaluation_history(
             limit=request.limit or 100,
             offset=request.offset or 0
         )
-        
+
         # Get total count for pagination
         total_count = await service.count_evaluations(
             user_id=request.user_id or user_id,
@@ -2262,7 +2262,7 @@ async def get_evaluation_history(
             start_date=request.start_date,
             end_date=request.end_date
         )
-        
+
         return EvaluationHistoryResponse(
             items=evaluations,
             total_count=total_count,
@@ -2279,7 +2279,7 @@ async def get_evaluation_history(
                 }
             }
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to retrieve evaluation history: {e}")
         raise HTTPException(

@@ -125,7 +125,7 @@
                 <pre id="vs_media_result">---</pre>
             </div>
         </div>
-        
+
         <hr>
         <h3>Vectors</h3>
         <div class="columns">
@@ -234,7 +234,7 @@ async function vsList(){
   ul.innerHTML = '';
   (res.data || []).forEach(s => {
     const li = document.createElement('li');
-    li.innerHTML = `${s.name} (<code>${s.id}</code>) — dim=${s.dimensions} ` +
+    li.innerHTML = `${s.name} (<code>${s.id}</code>) - dim=${s.dimensions} ` +
                    `<button class="btn-small" onclick="vsRenameQuick('${s.id}')">Rename</button>` +
                    ` <button class="btn-small" onclick="vsSelect('${s.id}','${s.name.replace(/"/g,'&quot;')}')">Select</button>`;
     // Add inline index-type badge and manual refresh button

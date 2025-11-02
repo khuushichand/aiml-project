@@ -18,4 +18,3 @@ async def test_async_template_returns_dict_chunks():
         assert 'text' in chunks[0]
     finally:
         await chunker.close()
-

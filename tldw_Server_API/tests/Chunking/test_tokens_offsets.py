@@ -80,7 +80,7 @@ def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
     )
 
     text = (
-        "Start 😊😊 café café naïve 🚀 — dashes — and 🤝🏽 emoji with skin-tone.\n"
+        "Start 😊😊 café café naïve 🚀 - dashes - and 🤝🏽 emoji with skin-tone.\n"
         "New line, tabs\t\t, and zero-width joiners: 👨‍👩‍👧‍👦 family."
     )
     import unicodedata as _ud

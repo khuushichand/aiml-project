@@ -1,5 +1,5 @@
 """
-hyde.py — HYDE/doc2query helper utilities
+hyde.py - HYDE/doc2query helper utilities
 
 Provides a minimal question generator and normalization/hash helpers for
 Option A HYDE integration (generated inside the embedding worker).
@@ -28,7 +28,7 @@ except Exception:  # pragma: no cover - optional import for environments without
 _DEFAULT_PROMPT = (
     "Generate {n} concise, user-style questions that a researcher might ask "
     "and that can be answered by the following text. Avoid duplicates. "
-    "Keep each question 6–20 words."
+    "Keep each question 6-20 words."
 )
 
 
@@ -134,7 +134,7 @@ def generate_questions(
             except Exception:
                 return []
         lines = _split_lines(out)
-        # Heuristic length bounds: 6–20 words, <= 160 chars (allow headroom)
+        # Heuristic length bounds: 6-20 words, <= 160 chars (allow headroom)
         bounded = [
             q for q in lines
             if 3 <= len(q.strip().split()) <= 24 and len(q.strip()) <= 160
@@ -143,4 +143,3 @@ def generate_questions(
     except Exception as e:
         logger.debug(f"HYDE generate_questions failed (provider={provider}, model={model}): {e}")
         return []
-

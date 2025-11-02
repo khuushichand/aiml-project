@@ -20,40 +20,40 @@ Stores user subscriptions to various content sources.
 CREATE TABLE IF NOT EXISTS Subscriptions (
     -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    
+
     -- Core fields
     url TEXT NOT NULL,
     name TEXT NOT NULL,
     type TEXT NOT NULL CHECK(type IN ('youtube_channel', 'youtube_playlist', 'rss_feed', 'atom_feed', 'podcast', 'other')),
-    
+
     -- Configuration
     check_interval INTEGER NOT NULL DEFAULT 3600, -- seconds between checks
     auto_import BOOLEAN NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT 1,
-    
+
     -- Metadata
     description TEXT,
     thumbnail_url TEXT,
     author TEXT,
     language TEXT,
-    
+
     -- Tracking
     last_checked DATETIME,
     last_successful_check DATETIME,
     consecutive_failures INTEGER DEFAULT 0,
     total_items_found INTEGER DEFAULT 0,
     total_items_imported INTEGER DEFAULT 0,
-    
+
     -- User association (for future multi-user support)
     user_id INTEGER DEFAULT 1,
-    
+
     -- Sync support fields
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
     version INTEGER NOT NULL DEFAULT 1,
     last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     client_id TEXT NOT NULL DEFAULT 'default',
     deleted BOOLEAN NOT NULL DEFAULT 0,
-    
+
     -- Indexes for performance
     CHECK (deleted IN (0, 1))
 );
@@ -92,15 +92,15 @@ Tracks individual content items discovered from subscriptions.
 CREATE TABLE IF NOT EXISTS SubscriptionItems (
     -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    
+
     -- Relationships
     subscription_id INTEGER NOT NULL,
     media_id INTEGER, -- NULL until imported
-    
+
     -- Item identification
     item_url TEXT NOT NULL,
     item_guid TEXT, -- RSS/Atom GUID if available
-    
+
     -- Item metadata
     title TEXT NOT NULL,
     description TEXT,
@@ -109,32 +109,32 @@ CREATE TABLE IF NOT EXISTS SubscriptionItems (
     updated_date DATETIME,
     duration INTEGER, -- seconds, for video/audio
     thumbnail_url TEXT,
-    
+
     -- Processing status
     status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'reviewed', 'importing', 'imported', 'failed', 'skipped')),
     discovered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     reviewed_at DATETIME,
     imported_at DATETIME,
     error_message TEXT,
-    
+
     -- Content type hints
     content_type TEXT, -- video, audio, article, etc.
     estimated_size INTEGER, -- bytes
-    
+
     -- Additional metadata (JSON)
     extra_metadata TEXT, -- JSON field for platform-specific data
-    
+
     -- Sync support fields
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
     version INTEGER NOT NULL DEFAULT 1,
     last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     client_id TEXT NOT NULL DEFAULT 'default',
     deleted BOOLEAN NOT NULL DEFAULT 0,
-    
+
     -- Foreign keys
     FOREIGN KEY (subscription_id) REFERENCES Subscriptions(id) ON DELETE CASCADE,
     FOREIGN KEY (media_id) REFERENCES Media(id) ON DELETE SET NULL,
-    
+
     -- Constraints
     CHECK (deleted IN (0, 1)),
     UNIQUE(subscription_id, item_url) -- Prevent duplicates per subscription
@@ -175,28 +175,28 @@ Logs history of subscription checks for monitoring and debugging.
 CREATE TABLE IF NOT EXISTS SubscriptionChecks (
     -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    
+
     -- Relationship
     subscription_id INTEGER NOT NULL,
-    
+
     -- Check details
     check_start DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     check_end DATETIME,
     check_duration_ms INTEGER,
-    
+
     -- Results
     status TEXT NOT NULL CHECK(status IN ('started', 'success', 'partial', 'failed', 'timeout')),
     items_found INTEGER DEFAULT 0,
     new_items INTEGER DEFAULT 0,
     error_message TEXT,
-    
+
     -- Performance metrics
     bytes_downloaded INTEGER,
     api_calls_made INTEGER,
-    
+
     -- Sync support fields
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
-    
+
     -- Foreign key
     FOREIGN KEY (subscription_id) REFERENCES Subscriptions(id) ON DELETE CASCADE
 );
@@ -215,34 +215,34 @@ Stores automated import rules for subscriptions.
 CREATE TABLE IF NOT EXISTS ImportRules (
     -- Primary key
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    
+
     -- Relationship
     subscription_id INTEGER NOT NULL,
-    
+
     -- Rule definition
     rule_name TEXT NOT NULL,
     rule_type TEXT NOT NULL CHECK(rule_type IN ('keyword', 'author', 'date_range', 'regex', 'all')),
     rule_value TEXT NOT NULL, -- JSON encoded rule parameters
-    
+
     -- Rule configuration
     is_active BOOLEAN NOT NULL DEFAULT 1,
     priority INTEGER NOT NULL DEFAULT 50,
     action TEXT NOT NULL DEFAULT 'import' CHECK(action IN ('import', 'skip', 'flag')),
-    
+
     -- Statistics
     times_matched INTEGER DEFAULT 0,
     last_matched DATETIME,
-    
+
     -- Sync support fields
     uuid TEXT UNIQUE NOT NULL DEFAULT (lower(hex(randomblob(16)))),
     version INTEGER NOT NULL DEFAULT 1,
     last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     client_id TEXT NOT NULL DEFAULT 'default',
     deleted BOOLEAN NOT NULL DEFAULT 0,
-    
+
     -- Foreign key
     FOREIGN KEY (subscription_id) REFERENCES Subscriptions(id) ON DELETE CASCADE,
-    
+
     -- Constraints
     CHECK (deleted IN (0, 1))
 );
@@ -262,14 +262,14 @@ CREATE TABLE IF NOT EXISTS SubscriptionTags (
     -- Composite primary key
     subscription_id INTEGER NOT NULL,
     keyword_id INTEGER NOT NULL,
-    
+
     -- Metadata
     added_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
+
     -- Foreign keys
     FOREIGN KEY (subscription_id) REFERENCES Subscriptions(id) ON DELETE CASCADE,
     FOREIGN KEY (keyword_id) REFERENCES Keywords(id) ON DELETE CASCADE,
-    
+
     -- Constraints
     PRIMARY KEY (subscription_id, keyword_id)
 );
@@ -314,7 +314,7 @@ Subscription → Check → SubscriptionItems → Import → Media
 BEGIN TRANSACTION;
 
 -- Create tables (use SQL from above)
--- ... 
+-- ...
 
 -- Add subscription source to Media table
 ALTER TABLE Media ADD COLUMN subscription_id INTEGER REFERENCES Subscriptions(id);
@@ -326,7 +326,7 @@ CREATE INDEX idx_media_subscription_item ON Media(subscription_item_id) WHERE su
 
 -- Add sync_log entries for new tables
 INSERT INTO sync_log (table_name, operation, uuid, client_id)
-VALUES 
+VALUES
     ('Subscriptions', 'CREATE_TABLE', lower(hex(randomblob(16))), 'migration'),
     ('SubscriptionItems', 'CREATE_TABLE', lower(hex(randomblob(16))), 'migration'),
     ('SubscriptionChecks', 'CREATE_TABLE', lower(hex(randomblob(16))), 'migration'),
@@ -367,9 +367,9 @@ COMMIT;
 ```sql
 SELECT s.*
 FROM Subscriptions s
-WHERE s.deleted = 0 
+WHERE s.deleted = 0
   AND s.is_active = 1
-  AND (s.last_checked IS NULL 
+  AND (s.last_checked IS NULL
        OR datetime('now') >= datetime(s.last_checked, '+' || s.check_interval || ' seconds'))
 ORDER BY s.last_checked ASC NULLS FIRST;
 ```
@@ -380,7 +380,7 @@ ORDER BY s.last_checked ASC NULLS FIRST;
 SELECT si.*, s.name as subscription_name
 FROM SubscriptionItems si
 JOIN Subscriptions s ON si.subscription_id = s.id
-WHERE si.deleted = 0 
+WHERE si.deleted = 0
   AND si.status = 'new'
   AND s.user_id = ?
 ORDER BY si.discovered_at DESC
@@ -390,7 +390,7 @@ LIMIT 100;
 ### Get Subscription Statistics
 
 ```sql
-SELECT 
+SELECT
     s.id,
     s.name,
     s.type,
@@ -410,8 +410,8 @@ GROUP BY s.id, s.name, s.type;
 SELECT ir.*, si.*
 FROM SubscriptionItems si
 JOIN ImportRules ir ON si.subscription_id = ir.subscription_id
-WHERE si.deleted = 0 
-  AND ir.deleted = 0 
+WHERE si.deleted = 0
+  AND ir.deleted = 0
   AND ir.is_active = 1
   AND si.status = 'new'
   AND (

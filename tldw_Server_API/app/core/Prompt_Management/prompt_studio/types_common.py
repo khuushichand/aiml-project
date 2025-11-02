@@ -15,4 +15,3 @@ class MetricType(str, Enum):
     RECALL = "recall"
     EXACT_MATCH = "exact_match"
     SIMILARITY = "similarity"
-

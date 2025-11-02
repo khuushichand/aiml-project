@@ -38,7 +38,7 @@ from ..tts_resource_manager import get_resource_manager
 
 class KokoroAdapter(TTSAdapter):
     """Adapter for Kokoro TTS (ONNX and PyTorch variants)"""
-    
+
     # Kokoro voice definitions
     VOICES = {
         "af_bella": VoiceInfo(
@@ -105,17 +105,17 @@ class KokoroAdapter(TTSAdapter):
             description="Young British male voice"
         )
     }
-    
+
     # Chunking configuration (from Kokoro-FastAPI)
     CHUNK_CONFIG = {
         "target_min_tokens": 30,  # Lowered for testing
         "target_max_tokens": 60,  # Lowered for testing (80 tokens in test > 60)
         "absolute_max_tokens": 150  # Lowered for testing
     }
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        
+
         # Determine backend type (ONNX or PyTorch)
         self.use_onnx = self.config.get("kokoro_use_onnx", True)
         # Device selection with fallback
@@ -139,7 +139,7 @@ class KokoroAdapter(TTSAdapter):
                 self.device = "cuda" if cuda_avail else "cpu"
         else:
             self.device = "cuda" if cuda_avail else "cpu"
-        
+
         # Model paths
         self.model_path = self.config.get("kokoro_model_path", "kokoro-v0_19.onnx")
         # Maintain both attribute names for compatibility with tests and internal code
@@ -160,14 +160,14 @@ class KokoroAdapter(TTSAdapter):
         cfg_auto = self.config.get("kokoro_auto_download")
         env_auto = os.getenv("KOKORO_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
         self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
-        
+
         # Text processing settings
         self.normalize_text = self.config.get("normalize_text", True)
         self.sentence_splitting = self.config.get("sentence_splitting", True)
-        
+
         # Performance settings
         self.sample_rate = self.config.get("sample_rate", 24000)
-        
+
         # Model instances
         self.kokoro_instance = None
         self.model_pt = None
@@ -176,19 +176,19 @@ class KokoroAdapter(TTSAdapter):
         self.tokenizer = None
         self.audio_normalizer = None
         self._dynamic_voices: List[VoiceInfo] = []
-    
+
     async def initialize(self) -> bool:
         """Initialize the Kokoro adapter"""
         try:
             # Import audio normalizer
             from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer
             self.audio_normalizer = AudioNormalizer()
-            
+
             if self.use_onnx:
                 success = await self._load_onnx_model()
             else:
                 success = await self._load_pytorch_model()
-            
+
             # Load dynamic voices if available
             try:
                 self._load_dynamic_voices()
@@ -202,17 +202,17 @@ class KokoroAdapter(TTSAdapter):
             else:
                 self._status = ProviderStatus.ERROR
                 return False
-                
+
         except Exception as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             return False
-    
+
     async def _initialize_onnx(self) -> bool:
         """Initialize ONNX backend"""
         try:
             from kokoro_onnx import Kokoro, EspeakConfig
-            
+
             # Check model files exist
             if not os.path.exists(self.model_path):
                 raise TTSModelNotFoundError(
@@ -220,28 +220,28 @@ class KokoroAdapter(TTSAdapter):
                     provider=self.provider_name,
                     details={"model_path": self.model_path}
                 )
-            
+
             if not os.path.exists(self.voices_json_path):
                 raise TTSModelNotFoundError(
                     f"Kokoro voices.json not found at {self.voices_json_path}",
                     provider=self.provider_name,
                     details={"voices_json": self.voices_json_path}
                 )
-            
+
             # Configure eSpeak
             espeak_lib = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
             espeak_config = EspeakConfig(lib_path=espeak_lib) if espeak_lib else None
-            
+
             # Initialize Kokoro
             self.kokoro_instance = Kokoro(
                 self.model_path,
                 self.voices_json_path,
                 espeak_config=espeak_config
             )
-            
+
             logger.info(f"{self.provider_name}: ONNX model loaded successfully")
             return True
-            
+
         except ImportError as e:
             logger.error(f"{self.provider_name}: kokoro_onnx library not installed")
             raise TTSModelLoadError(
@@ -258,7 +258,7 @@ class KokoroAdapter(TTSAdapter):
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
             )
-    
+
     async def _initialize_pytorch(self) -> bool:
         """Initialize PyTorch backend"""
         try:
@@ -331,7 +331,7 @@ class KokoroAdapter(TTSAdapter):
 
     async def _load_pytorch_model(self) -> bool:
         return await self._initialize_pytorch()
-    
+
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Kokoro TTS capabilities"""
         all_voices = list(self.VOICES.values()) + self._dynamic_voices
@@ -361,7 +361,7 @@ class KokoroAdapter(TTSAdapter):
             sample_rate=self.sample_rate,
             default_format=AudioFormat.WAV
         )
-    
+
     async def generate(self, request: TTSRequest) -> TTSResponse:
         """Generate speech using Kokoro TTS"""
         if not await self.ensure_initialized():
@@ -369,28 +369,28 @@ class KokoroAdapter(TTSAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
-        
+
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_name.lower())
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
-        
+
         # Process voice (support for voice mixing like "af_bella(2)+af_sky(1)")
         voice = self._process_voice(request.voice or "af_bella")
-        
+
         # Preprocess text
         text = self.preprocess_text(request.text)
-        
+
         # Determine language from voice
         lang = self._get_language_from_voice(voice)
-        
+
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "
             f"lang={lang}, format={request.format.value}"
         )
-        
+
         try:
             if request.stream:
                 # Return streaming response
@@ -413,11 +413,11 @@ class KokoroAdapter(TTSAdapter):
                     voice_used=voice,
                     provider=self.provider_name
                 )
-                
+
         except Exception as e:
             logger.error(f"{self.provider_name} generation error: {e}")
             raise
-    
+
     async def _stream_audio_kokoro(
         self,
         text: str,
@@ -432,17 +432,17 @@ class KokoroAdapter(TTSAdapter):
         else:
             if self.kokoro_pt_model is None and self.model_pt is None:
                 raise ValueError("Kokoro PyTorch model not initialized")
-        
+
         # Import StreamingAudioWriter for format conversion
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
-        
+
         # Create audio writer for target format
         writer = StreamingAudioWriter(
             format=request.format.value,
             sample_rate=self.sample_rate,
             channels=1
         )
-        
+
         try:
             chunk_count = 0
             # Stream audio chunks
@@ -499,33 +499,33 @@ class KokoroAdapter(TTSAdapter):
             async for samples_chunk, sr_chunk in stream_iter:
                 if samples_chunk is not None and len(samples_chunk) > 0:
                     chunk_count += 1
-                    
+
                     # Normalize float32 samples to int16
                     normalized_chunk = self.audio_normalizer.normalize(
                         samples_chunk,
                         target_dtype=np.int16
                     )
-                    
+
                     # Write chunk and get encoded bytes
                     encoded_bytes = writer.write_chunk(normalized_chunk)
                     if encoded_bytes:
                         yield encoded_bytes
                         logger.debug(f"{self.provider_name}: Yielded chunk {chunk_count}, {len(encoded_bytes)} bytes")
-            
+
             # Finalize stream
             final_bytes = writer.write_chunk(finalize=True)
             if final_bytes:
                 yield final_bytes
                 logger.debug(f"{self.provider_name}: Yielded final chunk, {len(final_bytes)} bytes")
-            
+
             logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
-            
+
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
         finally:
             writer.close()
-    
+
     async def _generate_complete_kokoro(
         self,
         text: str,
@@ -539,7 +539,7 @@ class KokoroAdapter(TTSAdapter):
         async for chunk in self._stream_audio_kokoro(text, voice, lang, request):
             all_audio += chunk
         return all_audio
-    
+
     def _process_voice(self, voice: str) -> str:
         """
         Process voice string, supporting voice mixing.
@@ -551,12 +551,12 @@ class KokoroAdapter(TTSAdapter):
         if "+" in voice and "(" in voice:
             # This is a mixed voice, return as-is for Kokoro to handle
             return voice
-        
+
         # Map generic voice names to Kokoro voices
         if voice not in self.VOICES:
             # Try to find a suitable voice
             voice = self.map_voice(voice)
-        
+
         return voice
 
     def _load_dynamic_voices(self) -> None:
@@ -597,7 +597,7 @@ class KokoroAdapter(TTSAdapter):
             except Exception:
                 continue
         self._dynamic_voices = dyn
-    
+
     def _get_language_from_voice(self, voice: str) -> str:
         """Get language code from voice ID"""
         # Handle mixed voices
@@ -606,7 +606,7 @@ class KokoroAdapter(TTSAdapter):
             first_voice = voice.split("+")[0].split("(")[0].strip()
         else:
             first_voice = voice
-        
+
         # Determine language from voice prefix
         if first_voice.startswith("a"):
             return "en-us"  # American
@@ -614,13 +614,13 @@ class KokoroAdapter(TTSAdapter):
             return "en-gb"  # British
         else:
             return "en-us"  # Default to American
-    
+
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to Kokoro voice"""
         # Check if it's already a valid Kokoro voice
         if voice_id in self.VOICES:
             return voice_id
-        
+
         # Try common mappings
         voice_mappings = {
             "female": "af_bella",
@@ -634,23 +634,23 @@ class KokoroAdapter(TTSAdapter):
             "warm": "af_heart",
             "child": "af_nicole",
         }
-        
+
         return voice_mappings.get(voice_id.lower(), "af_bella")
-    
+
     def preprocess_text(self, text: str, **kwargs) -> str:
         """Preprocess text for Kokoro"""
         # Strip excess whitespace
         text = text.strip()
-        
+
         # Normalize text if enabled
         if self.normalize_text:
             # Basic normalization (Kokoro handles most of this internally)
             text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
             text = re.sub(r'["""]', '"', text)  # Normalize quotes
             text = re.sub(r'['']', "'", text)  # Normalize apostrophes
-        
+
         return text
-    
+
     def chunk_text(self, text: str) -> List[str]:
         """
         Chunk text for optimal Kokoro processing.
@@ -658,30 +658,30 @@ class KokoroAdapter(TTSAdapter):
         """
         # Simple sentence-based chunking
         import re
-        
+
         # Split on sentence boundaries
         sentences = re.split(r'(?<=[.!?])\s+', text)
-        
+
         chunks = []
         current_chunk = ""
-        
+
         for sentence in sentences:
             # Estimate token count (rough approximation: 1 token ≈ 4 chars)
             current_plus_sentence = current_chunk + (" " + sentence if current_chunk else sentence)
             estimated_tokens = len(current_plus_sentence) / 4
-            
+
             if estimated_tokens < self.CHUNK_CONFIG["target_max_tokens"]:
                 current_chunk = current_plus_sentence
             else:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                 current_chunk = sentence
-        
+
         if current_chunk:
             chunks.append(current_chunk.strip())
-        
+
         return chunks
-    
+
     async def _cleanup_resources(self):
         """Clean up Kokoro adapter resources"""
         try:
@@ -689,16 +689,16 @@ class KokoroAdapter(TTSAdapter):
             if self.kokoro_instance:
                 self.kokoro_instance = None
                 logger.debug(f"{self.provider_name}: ONNX instance cleared")
-            
+
             # Clean up PyTorch model and tokenizer
             if self.model_pt:
                 self.model_pt = None
                 logger.debug(f"{self.provider_name}: PyTorch model cleared")
-            
+
             if self.tokenizer:
                 self.tokenizer = None
                 logger.debug(f"{self.provider_name}: Tokenizer cleared")
-            
+
             # Clear normalizer
             if self.audio_normalizer:
                 self.audio_normalizer = None
@@ -707,7 +707,7 @@ class KokoroAdapter(TTSAdapter):
                 self.model = None
             if hasattr(self, 'phonemizer'):
                 self.phonemizer = None
-            
+
             # Clear CUDA cache if using GPU
             if self.device.startswith("cuda"):
                 try:
@@ -717,7 +717,7 @@ class KokoroAdapter(TTSAdapter):
                         logger.debug(f"{self.provider_name}: CUDA cache cleared")
                 except ImportError:
                     pass
-                    
+
         except Exception as e:
             logger.warning(f"{self.provider_name}: Error during cleanup: {e}")
 

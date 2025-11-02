@@ -39,4 +39,3 @@ def test_flashcards_basic_flow():
         data = db.export_flashcards_csv(deck_id=deck_id)
         text = data.decode("utf-8")
         assert "What is 2+2?" in text
-

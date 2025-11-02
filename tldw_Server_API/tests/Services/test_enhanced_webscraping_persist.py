@@ -58,4 +58,3 @@ async def test_enhanced_webscraping_persist_with_mocked_db_path(tmp_path: Path, 
     assert res["total_articles"] == 2
     assert isinstance(res.get("media_ids"), list)
     assert len(res["media_ids"]) == 2
-

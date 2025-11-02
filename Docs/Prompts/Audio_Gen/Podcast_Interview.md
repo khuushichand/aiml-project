@@ -14,4 +14,4 @@
 
 8. News reader There is only one speaker for this episode, The Host. The Expert is unavailable. The Host will present this episode solo with no interruptions. Only Host voice should make all the points throughout the podcast in complete and correct sentences. Make it a news broadcast not conversational.
 
-9. 18+ This episode will only be available to listeners aged 18 and above. Hosts are encouraged to swear, use slang, and speak freely without the usual restrictions. The episode should feel less formal, more conversational, and raw. No need to censor or limit language. 
+9. 18+ This episode will only be available to listeners aged 18 and above. Hosts are encouraged to swear, use slang, and speak freely without the usual restrictions. The episode should feel less formal, more conversational, and raw. No need to censor or limit language.

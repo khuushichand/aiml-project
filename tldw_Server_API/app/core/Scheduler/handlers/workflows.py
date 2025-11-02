@@ -108,4 +108,3 @@ async def workflow_run(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"run_id": run_id, "status": status or "unknown", "succeeded": succeeded}
 
     return {"run_id": run_id, "status": "queued"}
-

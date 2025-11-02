@@ -1,6 +1,6 @@
 """
 test_rag_deep_checks.py
-Description: Deep RAG configuration checks — hybrid + rerank + tight context.
+Description: Deep RAG configuration checks - hybrid + rerank + tight context.
 
 Uploads a couple of small docs (idempotent), then runs searches with
 different max_context_size and reranking settings and asserts structural
@@ -64,4 +64,3 @@ def test_rag_hybrid_rerank_context_limits(api_client, data_tracker):
             if e.response.status_code in (404, 422, 500):
                 pytest.skip(f"RAG deep options not available: {e}")
             raise
-

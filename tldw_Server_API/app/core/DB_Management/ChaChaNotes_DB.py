@@ -410,7 +410,7 @@ class CharactersRAGDB:
 
     _FULL_SCHEMA_SQL_V4 = """
 /*───────────────────────────────────────────────────────────────
-  RAG Character-Chat Schema  –  Version 4   (2025-05-14)
+  RAG Character-Chat Schema  -  Version 4   (2025-05-14)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -661,7 +661,7 @@ AFTER INSERT ON keywords BEGIN
   WHERE new.deleted = 0;
 END;
 
-/* ───── AFTER UPDATE → conditional delete + add —────────────── */
+/* ───── AFTER UPDATE → conditional delete + add -────────────── */
 CREATE TRIGGER keywords_au
 AFTER UPDATE ON keywords BEGIN
   /* delete the old doc only if it was indexed */
@@ -824,7 +824,7 @@ CREATE TABLE IF NOT EXISTS sync_log(
 CREATE INDEX IF NOT EXISTS idx_sync_log_ts     ON sync_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sync_log_entity ON sync_log(entity,entity_id);
 
-/*—— drop any pre-existing sync triggers ———————————*/
+/*-- drop any pre-existing sync triggers -----------*/
 DROP TRIGGER IF EXISTS messages_sync_create;
 DROP TRIGGER IF EXISTS messages_sync_update;
 DROP TRIGGER IF EXISTS messages_sync_delete;
@@ -855,7 +855,7 @@ DROP TRIGGER IF EXISTS keyword_collections_sync_update;
 DROP TRIGGER IF EXISTS keyword_collections_sync_delete;
 DROP TRIGGER IF EXISTS keyword_collections_sync_undelete;
 
-/*—— sync triggers: messages ———————————————*/
+/*-- sync triggers: messages ---------------*/
 CREATE TRIGGER messages_sync_create
 AFTER INSERT ON messages BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -914,7 +914,7 @@ BEGIN
                      'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: conversations ———————————*/
+/*-- sync triggers: conversations -----------*/
 CREATE TRIGGER conversations_sync_create
 AFTER INSERT ON conversations BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -966,7 +966,7 @@ BEGIN
                      'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: character_cards —————————*/
+/*-- sync triggers: character_cards ---------*/
 CREATE TRIGGER character_cards_sync_create
 AFTER INSERT ON character_cards BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1034,7 +1034,7 @@ BEGIN
                      'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: notes ———————————————*/
+/*-- sync triggers: notes ---------------*/
 CREATE TRIGGER notes_sync_create
 AFTER INSERT ON notes BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1077,7 +1077,7 @@ BEGIN
                      'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
 END;
 
-/*—— sync triggers: keywords ————*/
+/*-- sync triggers: keywords ----*/
 CREATE TRIGGER keywords_sync_create
 AFTER INSERT ON keywords BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1120,7 +1120,7 @@ BEGIN
 END;
 
 
-/*—— sync triggers: keyword_collections ————*/
+/*-- sync triggers: keyword_collections ----*/
 CREATE TRIGGER keyword_collections_sync_create
 AFTER INSERT ON keyword_collections BEGIN
   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
@@ -1175,7 +1175,7 @@ UPDATE db_schema_version
     # --- Migration: V4 -> V5 (Flashcards/Decks/Reviews) ---
     _MIGRATION_SQL_V4_TO_V5 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 5 – Flashcards/Decks/SRS (2025-09-21)
+  Migration to Version 5 - Flashcards/Decks/SRS (2025-09-21)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -1193,7 +1193,7 @@ CREATE TABLE IF NOT EXISTS decks(
 CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks(deleted);
 CREATE INDEX IF NOT EXISTS idx_decks_last_modified ON decks(last_modified);
 
-/* Flashcards table – with integer id for FTS external-content */
+/* Flashcards table - with integer id for FTS external-content */
 CREATE TABLE IF NOT EXISTS flashcards(
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   uuid             TEXT UNIQUE NOT NULL,
@@ -1415,7 +1415,7 @@ UPDATE db_schema_version
     # --- Migration: V5 -> V6 (Flashcard model_type + extra) ---
     _MIGRATION_SQL_V5_TO_V6 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 6 – Flashcard model_type + extra (2025-09-21)
+  Migration to Version 6 - Flashcard model_type + extra (2025-09-21)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -1431,7 +1431,7 @@ UPDATE db_schema_version
     # --- Migration: V6 -> V7 (Flashcard reverse flag) ---
     _MIGRATION_SQL_V6_TO_V7 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 7 – Flashcard reverse flag (2025-09-21)
+  Migration to Version 7 - Flashcard reverse flag (2025-09-21)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -1446,7 +1446,7 @@ UPDATE db_schema_version
     # --- Migration: V7 -> V8 (Message images table) ---
     _MIGRATION_SQL_V7_TO_V8 = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 8 – Message images table (2025-10-14)
+  Migration to Version 8 - Message images table (2025-10-14)
 ───────────────────────────────────────────────────────────────*/
 PRAGMA foreign_keys = ON;
 
@@ -3812,7 +3812,7 @@ UPDATE db_schema_version
     def _check_json_support(self) -> bool:
         """
         Check if the current SQLite version supports JSON functions.
-        
+
         Returns:
             True if JSON functions are available, False otherwise.
         """
@@ -3829,33 +3829,33 @@ UPDATE db_schema_version
     def search_character_cards_by_tags(self, tag_keywords: List[str], limit: int = 10) -> List[Dict[str, Any]]:
         """
         Search character cards efficiently by their tags using database-level filtering.
-        
+
         This method provides significant performance improvements over loading all cards
         into memory by using SQLite JSON functions when available, or falling back
         to a normalized tag approach if JSON functions are not supported.
-        
+
         Args:
             tag_keywords: List of tag strings to search for (case-insensitive).
             limit: Maximum number of results to return. Defaults to 10.
-            
+
         Returns:
             List of character card dictionaries that contain any of the specified tags.
             Results are ordered by name and limited to non-deleted cards.
-            
+
         Raises:
             CharactersRAGDBError: For database errors during the search.
             InputError: If tag_keywords is empty or contains invalid values.
         """
         if not tag_keywords:
             raise InputError("tag_keywords cannot be empty")
-            
+
         # Normalize tag keywords for case-insensitive matching
         normalized_tags = [tag.lower().strip() for tag in tag_keywords if tag.strip()]
         if not normalized_tags:
             raise InputError("No valid tag keywords provided after normalization")
-            
+
         logger.debug(f"Searching character cards by tags: {normalized_tags}")
-        
+
         # Check if SQLite supports JSON functions
         if self._check_json_support():
             return self._search_cards_by_tags_json(normalized_tags, limit)
@@ -3863,36 +3863,36 @@ UPDATE db_schema_version
             # Fallback to loading and filtering in Python (original approach but optimized)
             logger.warning("SQLite JSON functions not available, using fallback tag search method")
             return self._search_cards_by_tags_fallback(normalized_tags, limit)
-    
+
     def _search_cards_by_tags_json(self, normalized_tags: List[str], limit: int) -> List[Dict[str, Any]]:
         """
         Search character cards by tags using SQLite JSON functions.
-        
+
         This is the optimal approach for SQLite versions that support JSON functions.
         """
         try:
             # Build query with JSON_EACH to extract and check tags
             placeholders = ','.join('?' for _ in normalized_tags)
             query = f"""
-                SELECT DISTINCT cc.* 
+                SELECT DISTINCT cc.*
                 FROM character_cards cc,
                      json_each(cc.tags) je
-                WHERE cc.deleted = 0 
-                  AND cc.tags IS NOT NULL 
+                WHERE cc.deleted = 0
+                  AND cc.tags IS NOT NULL
                   AND cc.tags != 'null'
                   AND lower(trim(je.value)) IN ({placeholders})
-                ORDER BY cc.name 
+                ORDER BY cc.name
                 LIMIT ?
             """
-            
+
             params = normalized_tags + [limit]
             cursor = self.execute_query(query, params)
             rows = cursor.fetchall()
-            
+
             result = [self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS) for row in rows if row]
             logger.debug(f"Found {len(result)} character cards matching tags using JSON functions")
             return result
-            
+
         except CharactersRAGDBError as e:
             logger.error(f"Database error in JSON-based tag search: {e}")
             raise
@@ -3900,11 +3900,11 @@ UPDATE db_schema_version
             # JSON function might have failed, log and re-raise as database error
             logger.error(f"Unexpected error in JSON-based tag search: {e}")
             raise CharactersRAGDBError(f"JSON tag search failed: {e}") from e
-    
+
     def _search_cards_by_tags_fallback(self, normalized_tags: List[str], limit: int) -> List[Dict[str, Any]]:
         """
         Fallback tag search that loads cards and filters in Python.
-        
+
         This is used when SQLite doesn't support JSON functions, but is optimized
         to only load necessary data and exit early when limit is reached.
         """
@@ -3914,23 +3914,23 @@ UPDATE db_schema_version
             offset = 0
             results = []
             normalized_tags_set = set(normalized_tags)
-            
+
             while len(results) < limit:
                 # Load cards in batches
                 query = "SELECT * FROM character_cards WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
                 cursor = self.execute_query(query, (batch_size, offset))
                 batch_rows = cursor.fetchall()
-                
+
                 if not batch_rows:
                     break  # No more cards to process
-                
+
                 # Process this batch
                 for row in batch_rows:
                     if len(results) >= limit:
                         break
-                        
+
                     card = self._deserialize_row_fields(row, self._CHARACTER_CARD_JSON_FIELDS)
-                    
+
                     # Check if card has matching tags
                     tags_data = card.get('tags')
                     if tags_data:
@@ -3942,7 +3942,7 @@ UPDATE db_schema_version
                                 tags_list = json.loads(tags_data)  # Parse JSON string
                             else:
                                 tags_list = []  # Fallback for unexpected types
-                                
+
                             if isinstance(tags_list, list):
                                 card_tags_normalized = {str(tag).lower().strip() for tag in tags_list}
                                 # Check for intersection with our target tags
@@ -3951,16 +3951,16 @@ UPDATE db_schema_version
                         except json.JSONDecodeError:
                             logger.warning(f"Invalid JSON in tags for character card ID {card.get('id')}: {tags_data}")
                             continue
-                
+
                 offset += batch_size
-                
+
                 # If we got fewer rows than batch_size, we've reached the end
                 if len(batch_rows) < batch_size:
                     break
-            
+
             logger.debug(f"Found {len(results)} character cards matching tags using fallback method")
             return results
-            
+
         except CharactersRAGDBError as e:
             logger.error(f"Database error in fallback tag search: {e}")
             raise
@@ -4842,15 +4842,15 @@ UPDATE db_schema_version
             delete_clause = "AND m.deleted = 0"
 
         query = f"""
-            SELECT m.id, m.conversation_id, m.parent_message_id, m.sender, m.content, 
-                   m.image_data, m.image_mime_type, m.timestamp, m.ranking, 
-                   m.last_modified, m.version, m.client_id, m.deleted 
+            SELECT m.id, m.conversation_id, m.parent_message_id, m.sender, m.content,
+                   m.image_data, m.image_mime_type, m.timestamp, m.ranking,
+                   m.last_modified, m.version, m.client_id, m.deleted
             FROM messages m
             JOIN conversations c ON m.conversation_id = c.id
-            WHERE m.conversation_id = ? 
+            WHERE m.conversation_id = ?
               {delete_clause}
               AND c.deleted = 0
-            ORDER BY m.timestamp {order_by_timestamp} 
+            ORDER BY m.timestamp {order_by_timestamp}
             LIMIT ? OFFSET ?
         """
         try:

@@ -15,10 +15,10 @@ This document explains how VLM integrates with media ingestion and RAG, and how 
 
 Add these fields to the form data (in addition to existing PDF controls):
 
-- `vlm_enable: bool` — enable VLM (default false)
-- `vlm_backend: str | null` — backend name (see Backends below)
-- `vlm_detect_tables_only: bool` — keep only `table` detections (default true)
-- `vlm_max_pages: int | null` — limit the number of pages analyzed
+- `vlm_enable: bool` - enable VLM (default false)
+- `vlm_backend: str | null` - backend name (see Backends below)
+- `vlm_detect_tables_only: bool` - keep only `table` detections (default true)
+- `vlm_max_pages: int | null` - limit the number of pages analyzed
 
 Example (curl):
 

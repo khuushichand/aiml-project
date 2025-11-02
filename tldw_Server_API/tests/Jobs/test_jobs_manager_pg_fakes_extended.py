@@ -183,4 +183,3 @@ def test_pg_batch_complete_encrypts_results(monkeypatch, tmp_path):
     r2 = jobs[2].get("result_json")
     assert isinstance(r1, dict) and "_encrypted" in r1
     assert isinstance(r2, dict) and "_encrypted" in r2
-

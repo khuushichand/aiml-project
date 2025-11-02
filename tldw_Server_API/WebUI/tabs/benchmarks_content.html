@@ -6,7 +6,7 @@
             <span class="endpoint-path">/api/v1/benchmarks/list - List Available Benchmarks</span>
         </h2>
         <p>Get a list of all available benchmark tests that can be run.</p>
-        
+
         <div class="form-group">
             <label for="benchmarksList_category">Category (Optional):</label>
             <select id="benchmarksList_category">
@@ -18,14 +18,14 @@
                 <option value="memory">Memory Usage</option>
             </select>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('benchmarksList', 'GET', '/api/v1/benchmarks/list', 'query')">
             List Benchmarks
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="benchmarksList_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="benchmarksList_response">---</pre>
     </div>
@@ -36,7 +36,7 @@
             <span class="endpoint-path">/api/v1/benchmarks/{benchmark_name}/run - Run Benchmark</span>
         </h2>
         <p>Execute a benchmark test to measure system performance.</p>
-        
+
         <div class="form-group">
             <label for="benchmarksRun_name">Benchmark Name:</label>
             <input id="benchmarksRun_name" placeholder="e.g., simpleqa">
@@ -95,12 +95,12 @@
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="(function(){ const n=document.getElementById('benchmarksRun_name').value.trim(); if(!n){alert('Enter benchmark name'); return;} makeRequest('benchmarksRun', 'POST', `/api/v1/benchmarks/${n}/run`, 'json') })()">Run Benchmark</button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="benchmarksRun_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="benchmarksRun_response">---</pre>
     </div>
@@ -111,12 +111,12 @@
             <span class="endpoint-path">(Hidden) Results endpoint not available</span>
         </h2>
         <p>Retrieve the results of a completed benchmark test.</p>
-        
+
         <div class="form-group">
             <label for="benchmarksResults_id">Benchmark ID:</label>
             <input type="text" id="benchmarksResults_id" placeholder="benchmark_run_123">
         </div>
-        
+
         <div class="form-group">
             <label for="benchmarksResults_format">Output Format:</label>
             <select id="benchmarksResults_format">
@@ -126,12 +126,12 @@
                 <option value="summary">Summary Only</option>
             </select>
         </div>
-        
+
         <button class="api-button" style="display:none" onclick="void(0)">Get Results</button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="benchmarksResults_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="benchmarksResults_response">---</pre>
     </div>
@@ -142,7 +142,7 @@
             <span class="endpoint-path">(Hidden) Compare endpoint not available</span>
         </h2>
         <p>Compare results from multiple benchmark runs to identify performance changes.</p>
-        
+
         <div class="form-group">
             <label for="benchmarksCompare_payload">Comparison Request (JSON):</label>
             <textarea id="benchmarksCompare_payload" class="code-input" rows="20">{
@@ -176,12 +176,12 @@
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" style="display:none" onclick="void(0)">Compare Results</button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="benchmarksCompare_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="benchmarksCompare_response">---</pre>
     </div>
@@ -192,12 +192,12 @@
             <span class="endpoint-path">(Hidden) Export endpoint not available</span>
         </h2>
         <p>Export benchmark results in various formats for analysis or reporting.</p>
-        
+
         <div class="form-group">
             <label for="benchmarksExport_id">Benchmark ID:</label>
             <input type="text" id="benchmarksExport_id" placeholder="benchmark_run_123">
         </div>
-        
+
         <div class="form-group">
             <label for="benchmarksExport_format">Export Format:</label>
             <select id="benchmarksExport_format">
@@ -208,17 +208,17 @@
                 <option value="prometheus">Prometheus Metrics</option>
             </select>
         </div>
-        
+
         <div class="form-group">
             <label for="benchmarksExport_include_raw">Include Raw Data:</label>
             <input type="checkbox" id="benchmarksExport_include_raw">
         </div>
-        
+
         <button class="api-button" style="display:none" onclick="void(0)">Export Data</button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="benchmarksExport_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="benchmarksExport_response">---</pre>
     </div>
@@ -229,7 +229,7 @@
     <div class="endpoint-section">
         <h2>Benchmark Run History</h2>
         <p>View and manage historical benchmark runs.</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
@@ -251,20 +251,20 @@
                 </div>
             </div>
         </div>
-        
+
         <button class="btn btn-primary" onclick="loadBenchmarkHistory()">
             Load History
         </button>
-        
+
         <div id="benchmarksHistory_table" class="data-table mt-3">
             <!-- History table will be populated here -->
         </div>
     </div>
-    
+
     <div class="endpoint-section mt-4">
         <h2>Scheduled Benchmarks</h2>
         <p>Configure automated benchmark runs.</p>
-        
+
         <div class="form-group">
             <label for="benchmarksSchedule_config">Schedule Configuration (JSON):</label>
             <textarea id="benchmarksSchedule_config" class="code-input" rows="15">{
@@ -285,7 +285,7 @@
   "retention_days": 30
 }</textarea>
         </div>
-        
+
         <button class="btn btn-primary" onclick="scheduleBenchmark()">
             Create Schedule
         </button>
@@ -298,7 +298,7 @@ function loadBenchmarkHistory() {
     const startDate = document.getElementById('benchmarksHistory_start_date').value;
     const endDate = document.getElementById('benchmarksHistory_end_date').value;
     const status = document.getElementById('benchmarksHistory_status').value;
-    
+
     // This would make an API call to fetch history
     const table = document.getElementById('benchmarksHistory_table');
     table.innerHTML = `

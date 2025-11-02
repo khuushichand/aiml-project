@@ -62,4 +62,3 @@ def test_postgres_backend_prepare_query_no_replace_inside_literals():
     assert converted.count("%s") == 1
     assert "'? literal ?'" in converted and "'x?y'" in converted
     assert params == (42,)
-

@@ -10,6 +10,7 @@ from heapq import heappush, heappop
 from typing import Any, Dict, Optional, Callable, Tuple
 from loguru import logger
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 #######################################################################################################################
 #
@@ -48,7 +49,7 @@ class RequestQueue:
     """
     Priority-based request queue with backpressure management.
     """
-    
+
     def __init__(
         self,
         max_queue_size: int = 100,
@@ -57,7 +58,7 @@ class RequestQueue:
     ):
         """
         Initialize the request queue.
-        
+
         Args:
             max_queue_size: Maximum number of queued requests
             max_concurrent: Maximum concurrent processing
@@ -66,48 +67,70 @@ class RequestQueue:
         self.max_queue_size = max_queue_size
         self.max_concurrent = max_concurrent
         self.timeout = timeout
-        
+
         self.queue = []  # Priority queue
         self.processing_count = 0
         self.total_processed = 0
         self.total_rejected = 0
-        
+
         self._lock = asyncio.Lock()
         self._processing_semaphore = asyncio.Semaphore(max_concurrent)
         self._workers = []
         self._running = False
         # Rolling recent activity (last N jobs)
         self._recent_activity = deque(maxlen=200)
-    
+        # Event to wake workers when new items arrive (avoids polling delay)
+        self._has_items = asyncio.Event()
+        # Dedicated thread pool for processor execution to reduce scheduling variance
+        # and guarantee at-most max_concurrent worker threads.
+        self._executor = ThreadPoolExecutor(max_workers=max(1, int(max_concurrent)))
+
     async def start(self, num_workers: int = 4):
         """
         Start the queue workers.
-        
+
         Args:
             num_workers: Number of worker tasks
         """
         if self._running:
             return
-        
+
         self._running = True
+        # Ensure event starts cleared
+        self._has_items.clear()
         for i in range(num_workers):
             worker = asyncio.create_task(self._worker(f"worker-{i}"))
             self._workers.append(worker)
-        
+
+        # Pre-warm the dedicated executor to reduce first-run latency for processors
+        try:
+            warm_n = max(1, min(self.max_concurrent, num_workers))
+            loop = asyncio.get_running_loop()
+            await asyncio.gather(*[
+                loop.run_in_executor(self._executor, lambda: None)
+                for _ in range(warm_n)
+            ])
+        except Exception:
+            pass
+
         logger.info(f"Started {num_workers} queue workers")
-    
+
     async def stop(self):
         """Stop the queue workers."""
         self._running = False
-        
+
         # Cancel all workers
         for worker in self._workers:
             worker.cancel()
-        
+
         # Wait for workers to finish
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
-        
+        try:
+            self._executor.shutdown(wait=True)
+        except Exception:
+            pass
+
         logger.info("Stopped queue workers")
 
     def is_running(self) -> bool:
@@ -126,25 +149,26 @@ class RequestQueue:
         if not alive:
             self._running = False
         return alive
-    
+
     async def _worker(self, worker_id: str):
         """
         Worker task that processes queued requests.
-        
+
         Args:
             worker_id: Worker identifier
         """
         logger.debug(f"Worker {worker_id} started")
-        
+
         while self._running:
             try:
                 # Get next request from queue
                 request = await self._get_next_request()
                 if not request:
-                    # No requests, wait a bit
-                    await asyncio.sleep(0.1)
+                    # No requests; wait until enqueued instead of polling
+                    await self._has_items.wait()
+                    # Loop will attempt to fetch again
                     continue
-                
+
                 # Check if request has timed out
                 if time.time() - request.timestamp > self.timeout:
                     logger.warning(f"Request {request.request_id} timed out in queue")
@@ -152,7 +176,7 @@ class RequestQueue:
                         TimeoutError(f"Request timed out after {self.timeout}s in queue")
                     )
                     continue
-                
+
                 # Process request
                 async with self._processing_semaphore:
                     self.processing_count += 1
@@ -167,29 +191,33 @@ class RequestQueue:
                         request.future.set_exception(e)
                     finally:
                         self.processing_count -= 1
-                        
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
                 await asyncio.sleep(1)
-        
+
         logger.debug(f"Worker {worker_id} stopped")
-    
+
     async def _get_next_request(self) -> Optional[QueuedRequest]:
         """Get the next request from the priority queue."""
         async with self._lock:
             if self.queue:
-                return heappop(self.queue)
+                item = heappop(self.queue)
+                # If queue becomes empty after pop, clear the wake event
+                if not self.queue:
+                    self._has_items.clear()
+                return item
         return None
-    
+
     async def _process_request(self, request: QueuedRequest) -> Any:
         """
         Process a request (placeholder for actual processing).
-        
+
         Args:
             request: The request to process
-            
+
         Returns:
             Processing result
         """
@@ -213,11 +241,11 @@ class RequestQueue:
         logger.debug(f"Processing request {request.request_id} with processor; streaming={request.streaming}")
         loop = asyncio.get_running_loop()
 
-        # Non-streaming: run processor in thread executor to avoid blocking loop
+        # Non-streaming: run processor in dedicated thread executor to avoid blocking loop
         if not request.streaming:
             try:
                 result = await loop.run_in_executor(
-                    None,
+                    self._executor,
                     lambda: request.processor(*request.processor_args, **request.processor_kwargs)
                 )
                 duration = time.time() - start_ts
@@ -282,7 +310,7 @@ class RequestQueue:
         # Run the processor to obtain the stream (potentially blocking)
         try:
             stream = await loop.run_in_executor(
-                None, lambda: request.processor(*request.processor_args, **request.processor_kwargs)
+                self._executor, lambda: request.processor(*request.processor_args, **request.processor_kwargs)
             )
         except Exception as e:
             # Emit SSE-style error payload to channel to gracefully end downstream streaming
@@ -313,7 +341,7 @@ class RequestQueue:
                 await _pump_async_iterator(stream)
             else:
                 # Sync iterator; run pumping in thread
-                await loop.run_in_executor(None, _pump_sync_iterator, stream)
+                await loop.run_in_executor(self._executor, _pump_sync_iterator, stream)
             # For streaming jobs, return a simple status when pumping completes
             duration = time.time() - start_ts
             self._recent_activity.append({
@@ -349,7 +377,7 @@ class RequestQueue:
                 "ts": time.time(),
             })
             raise
-    
+
     async def enqueue(
         self,
         request_id: str,
@@ -366,17 +394,17 @@ class RequestQueue:
     ) -> asyncio.Future:
         """
         Add a request to the queue.
-        
+
         Args:
             request_id: Unique request identifier
             request_data: The request data
             client_id: Client identifier
             priority: Request priority
             estimated_tokens: Estimated token count for the request
-            
+
         Returns:
             Future that will contain the result
-            
+
         Raises:
             ValueError: If queue is full
         """
@@ -385,7 +413,7 @@ class RequestQueue:
             if len(self.queue) >= self.max_queue_size:
                 self.total_rejected += 1
                 raise ValueError(f"Queue full: {len(self.queue)} requests pending")
-            
+
             # Create queued request
             future = asyncio.Future()
             if processor_kwargs is None:
@@ -404,18 +432,20 @@ class RequestQueue:
                 streaming=streaming,
                 stream_channel=stream_channel,
             )
-            
+
             # Add to priority queue
             heappush(self.queue, request)
-            
+            # Signal workers that items are available
+            self._has_items.set()
+
             logger.debug(f"Enqueued request {request_id} with priority {priority.name}")
-            
+
         return future
-    
+
     def get_queue_status(self) -> Dict[str, Any]:
         """
         Get current queue status.
-        
+
         Returns:
             Dictionary with queue statistics
         """
@@ -435,7 +465,7 @@ class RequestQueue:
         if limit is not None:
             items = items[-int(limit):]
         return items
-    
+
     async def clear_queue(self):
         """Clear all pending requests."""
         async with self._lock:
@@ -450,7 +480,7 @@ class RateLimitedQueue(RequestQueue):
     """
     Request queue with rate limiting per client and globally.
     """
-    
+
     def __init__(
         self,
         max_queue_size: int = 100,
@@ -461,7 +491,7 @@ class RateLimitedQueue(RequestQueue):
     ):
         """
         Initialize rate-limited queue.
-        
+
         Args:
             max_queue_size: Maximum queue size
             max_concurrent: Maximum concurrent processing
@@ -470,54 +500,54 @@ class RateLimitedQueue(RequestQueue):
             per_client_rate_limit: Per-client requests per minute
         """
         super().__init__(max_queue_size, max_concurrent, timeout)
-        
+
         self.global_rate_limit = global_rate_limit
         self.per_client_rate_limit = per_client_rate_limit
-        
+
         # Track request times for rate limiting
         self.global_request_times = []
         self.client_request_times = {}
-    
+
     def _check_rate_limit(self, client_id: str) -> bool:
         """
         Check if request is within rate limits.
-        
+
         Args:
             client_id: Client identifier
-            
+
         Returns:
             True if within limits, False otherwise
         """
         current_time = time.time()
         minute_ago = current_time - 60
-        
+
         # Clean old entries
         self.global_request_times = [
             t for t in self.global_request_times if t > minute_ago
         ]
-        
+
         if client_id in self.client_request_times:
             self.client_request_times[client_id] = [
                 t for t in self.client_request_times[client_id] if t > minute_ago
             ]
-        
+
         # Check global rate limit
         if len(self.global_request_times) >= self.global_rate_limit:
             return False
-        
+
         # Check per-client rate limit
         client_requests = self.client_request_times.get(client_id, [])
         if len(client_requests) >= self.per_client_rate_limit:
             return False
-        
+
         # Record request time
         self.global_request_times.append(current_time)
         if client_id not in self.client_request_times:
             self.client_request_times[client_id] = []
         self.client_request_times[client_id].append(current_time)
-        
+
         return True
-    
+
     async def enqueue(
         self,
         request_id: str,
@@ -534,7 +564,7 @@ class RateLimitedQueue(RequestQueue):
     ) -> asyncio.Future:
         """
         Add a request to the queue with rate limiting.
-        
+
         Args:
             request_id: Unique request identifier
             request_data: The request data
@@ -546,17 +576,17 @@ class RateLimitedQueue(RequestQueue):
             processor_kwargs: Keyword args for the processor
             streaming: Whether the request expects streaming output
             stream_channel: Channel used to emit streaming chunks
-            
+
         Returns:
             Future that will contain the result
-            
+
         Raises:
             ValueError: If queue is full or rate limit exceeded
         """
         # Check rate limits
         if not self._check_rate_limit(client_id):
             raise ValueError(f"Rate limit exceeded for client {client_id}")
-        
+
         if processor_kwargs is None:
             processor_kwargs = {}
 
@@ -590,13 +620,13 @@ def initialize_request_queue(
 ) -> RateLimitedQueue:
     """
     Initialize the global request queue.
-    
+
     Args:
         max_queue_size: Maximum queue size
         max_concurrent: Maximum concurrent processing
         global_rate_limit: Global rate limit
         per_client_rate_limit: Per-client rate limit
-        
+
     Returns:
         The initialized queue
     """

@@ -1,4 +1,3 @@
-import os
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, BackendType
@@ -9,19 +8,19 @@ from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import ensu
 pytestmark = pytest.mark.integration
 
 
-def _pg_available() -> bool:
+def test_apply_rls_policies_smoke(pg_eval_params):
+    # Build DatabaseConfig from shared params; skip if backend not available
     try:
-        cfg = DatabaseConfig.from_env()
-        return cfg.backend == BackendType.POSTGRESQL
+        cfg = DatabaseConfig(
+            backend=BackendType.POSTGRESQL,
+            pg_host=pg_eval_params["host"],
+            pg_port=int(pg_eval_params["port"]),
+            pg_database=pg_eval_params["database"],
+            pg_user=pg_eval_params["user"],
+            pg_password=pg_eval_params.get("password"),
+        )
+        backend = DatabaseBackendFactory.create_backend(cfg)
     except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _pg_available(), reason="Postgres not configured via env")
-def test_apply_rls_policies_smoke():
-    cfg = DatabaseConfig.from_env()
-    backend = DatabaseBackendFactory.create_backend(cfg)
+        pytest.skip("Postgres not configured or backend creation failed")
     applied = ensure_prompt_studio_rls(backend)
-    # idempotent: may return True even if policies exist; should not raise
     assert applied in (True, False)
-

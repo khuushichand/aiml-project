@@ -32,15 +32,15 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 
 class JWTService:
     """Service for creating and verifying JWT tokens with persistent secret management"""
-    
+
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize JWT service"""
         self.settings = settings or get_settings()
-        
+
         # Validate we're in multi-user mode
         if self.settings.AUTH_MODE != "multi_user":
             logger.warning("JWTService initialized in single-user mode - JWT features may not work correctly")
-        
+
         # JWT configuration
         self.algorithm = self.settings.JWT_ALGORITHM
         # Note: We don't cache timedeltas to allow dynamic configuration changes during testing
@@ -78,9 +78,9 @@ class JWTService:
                 raise ConfigurationError("JWT_PUBLIC_KEY", f"Public key (or private) required for {self.algorithm}")
         else:
             raise ConfigurationError("JWT_ALGORITHM", f"Unsupported algorithm: {self.algorithm}")
-        
+
         logger.debug(f"JWTService initialized with algorithm: {self.algorithm}")
-    
+
     def create_access_token(
         self,
         user_id: int,
@@ -90,19 +90,19 @@ class JWTService:
     ) -> str:
         """
         Create an access token for a user
-        
+
         Args:
             user_id: User's database ID
             username: User's username
             role: User's role
             additional_claims: Additional claims to include in token
-            
+
         Returns:
             Encoded JWT access token
         """
         # Calculate expiration dynamically from settings
         expire = datetime.utcnow() + timedelta(minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        
+
         # Build token payload
         payload = {
             "sub": str(user_id),  # Subject (user ID)
@@ -118,11 +118,11 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        
+
         # Add any additional claims
         if additional_claims:
             payload.update(additional_claims)
-        
+
         # Encode the token
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
@@ -131,11 +131,11 @@ class JWTService:
             else:
                 logger.debug(f"Created access token for user {username} (ID: {user_id})")
             return token
-            
+
         except Exception as e:
             logger.error(f"Failed to create access token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
-    
+
     def create_refresh_token(
         self,
         user_id: int,
@@ -144,18 +144,18 @@ class JWTService:
     ) -> str:
         """
         Create a refresh token for a user
-        
+
         Args:
             user_id: User's database ID
             username: User's username
             additional_claims: Additional claims to include in token
-            
+
         Returns:
             Encoded JWT refresh token
         """
         # Calculate expiration dynamically from settings
         expire = datetime.utcnow() + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
-        
+
         # Build token payload (minimal claims for refresh token)
         payload = {
             "sub": str(user_id),
@@ -169,11 +169,11 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        
+
         # Add any additional claims
         if additional_claims:
             payload.update(additional_claims)
-        
+
         # Encode the token
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
@@ -182,22 +182,22 @@ class JWTService:
             else:
                 logger.debug(f"Created refresh token for user {username} (ID: {user_id})")
             return token
-            
+
         except Exception as e:
             logger.error(f"Failed to create refresh token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
-    
+
     async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Verify and decode a JWT token with blacklist checking (async version)
-        
+
         Args:
             token: JWT token to verify
             token_type: Expected token type ('access' or 'refresh')
-            
+
         Returns:
             Decoded token payload
-            
+
         Raises:
             InvalidTokenError: If token is invalid, malformed, or blacklisted
             TokenExpiredError: If token has expired
@@ -223,40 +223,40 @@ class JWTService:
                         raise primary_err
                 else:
                     raise
-            
+
             # Check if token is blacklisted
             jti = payload.get("jti")
             if jti:
                 from tldw_Server_API.app.core.AuthNZ.token_blacklist import is_token_blacklisted
                 if await is_token_blacklisted(jti):
                     raise InvalidTokenError("Token has been revoked")
-            
+
             # Verify token type if specified
             if token_type and payload.get("type") != token_type:
                 raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {payload.get('type')}")
-            
+
             if self.settings.PII_REDACT_LOGS:
                 logger.debug("Token verified successfully for authenticated user (details redacted)")
             else:
                 logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
             return payload
-            
+
         except ExpiredSignatureError:
             logger.debug("Token has expired")
             raise TokenExpiredError()
-            
+
         except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
             raise InvalidTokenError(f"Invalid token claims: {e}")
-            
+
         except JWTError as e:
             logger.warning(f"JWT verification error: {e}")
             raise InvalidTokenError(f"Invalid token: {e}")
-            
+
         except Exception as e:
             logger.error(f"Unexpected error verifying token: {e}")
             raise InvalidTokenError(f"Token verification failed: {e}")
-    
+
     def verify_token(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Verify and decode a JWT token (sync, stateless; no blacklist checks)
@@ -264,10 +264,10 @@ class JWTService:
         Args:
             token: JWT token to verify
             token_type: Expected token type ('access' or 'refresh')
-            
+
         Returns:
             Decoded token payload
-            
+
         Raises:
             InvalidTokenError: If token is invalid or malformed
             TokenExpiredError: If token has expired
@@ -303,49 +303,49 @@ class JWTService:
             else:
                 logger.debug(f"Token verified successfully for user ID: {payload.get('sub')}")
             return payload
-            
+
         except ExpiredSignatureError:
             logger.debug("Token has expired")
             raise TokenExpiredError()
-            
+
         except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
             raise InvalidTokenError(f"Invalid token claims: {e}")
-            
+
         except JWTError as e:
             logger.warning(f"JWT verification error: {e}")
             raise InvalidTokenError(f"Invalid token: {e}")
-            
+
         except Exception as e:
             logger.error(f"Unexpected error verifying token: {e}")
             raise InvalidTokenError(f"Token verification failed: {e}")
-    
+
     def decode_access_token(self, token: str) -> Dict[str, Any]:
         """
         Decode and verify an access token
-        
+
         Args:
             token: Access token to decode
-            
+
         Returns:
             Decoded token payload
-            
+
         Raises:
             InvalidTokenError: If token is invalid
             ExpiredTokenError: If token has expired
         """
         return self.verify_token(token, token_type="access")
-    
+
     def decode_refresh_token(self, token: str) -> Dict[str, Any]:
         """
         Decode and verify a refresh token
-        
+
         Args:
             token: Refresh token to decode
-            
+
         Returns:
             Decoded token payload
-            
+
         Raises:
             InvalidTokenError: If token is invalid
             ExpiredTokenError: If token has expired
@@ -410,7 +410,7 @@ class JWTService:
         except Exception as e:
             logger.error(f"Failed to create virtual access token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
-    
+
     def hash_token_candidates(self, token: str) -> list[str]:
         """Return ordered HMAC-SHA256 hashes derived from current and legacy secrets."""
         hashes: list[str] = []
@@ -427,18 +427,18 @@ class JWTService:
     def hash_token(self, token: str) -> str:
         """
         Create a secure hash of a token for storage using HMAC-SHA256.
-        
+
         This provides better security than plain SHA256 by using a secret key,
         preventing length extension attacks and providing authentication.
-        
+
         Note: We use HMAC-SHA256 instead of Argon2 because:
         - Tokens are already high-entropy (cryptographically random)
         - This hash is used for fast lookups on every request
         - Argon2 would add unnecessary latency without security benefit
-        
+
         Args:
             token: Token to hash
-            
+
         Returns:
             HMAC-SHA256 hash of the token
         """
@@ -446,14 +446,14 @@ class JWTService:
         if not candidates:
             raise ValueError("Unable to derive HMAC hash for token")
         return candidates[0]
-    
+
     def extract_jti(self, token: str) -> Optional[str]:
         """
         Extract the JTI (JWT ID) from a token without full verification
-        
+
         Args:
             token: JWT token
-            
+
         Returns:
             JTI if present, None otherwise
         """
@@ -463,7 +463,7 @@ class JWTService:
             return unverified.get("jti")
         except Exception:
             return None
-    
+
     def create_password_reset_token(
         self,
         user_id: int,
@@ -472,17 +472,17 @@ class JWTService:
     ) -> str:
         """
         Create a password reset token
-        
+
         Args:
             user_id: User's database ID
             email: User's email
             expires_in_hours: Token validity in hours
-            
+
         Returns:
             Encoded password reset token
         """
         expire = datetime.utcnow() + timedelta(hours=expires_in_hours)
-        
+
         payload = {
             "sub": str(user_id),
             "email": email,
@@ -495,7 +495,7 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        
+
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             if self.settings.PII_REDACT_LOGS:
@@ -503,11 +503,11 @@ class JWTService:
             else:
                 logger.info(f"Created password reset token for user {user_id}")
             return token
-            
+
         except Exception as e:
             logger.error(f"Failed to create password reset token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
-    
+
     def create_email_verification_token(
         self,
         user_id: int,
@@ -516,17 +516,17 @@ class JWTService:
     ) -> str:
         """
         Create an email verification token
-        
+
         Args:
             user_id: User's database ID
             email: Email to verify
             expires_in_hours: Token validity in hours
-            
+
         Returns:
             Encoded email verification token
         """
         expire = datetime.utcnow() + timedelta(hours=expires_in_hours)
-        
+
         payload = {
             "sub": str(user_id),
             "email": email,
@@ -539,7 +539,7 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        
+
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             if self.settings.PII_REDACT_LOGS:
@@ -547,11 +547,11 @@ class JWTService:
             else:
                 logger.info(f"Created email verification token for user {user_id}")
             return token
-            
+
         except Exception as e:
             logger.error(f"Failed to create email verification token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
-    
+
     def create_service_account_token(
         self,
         service_name: str,
@@ -560,17 +560,17 @@ class JWTService:
     ) -> str:
         """
         Create a long-lived token for service accounts
-        
+
         Args:
             service_name: Name of the service
             permissions: List of permissions granted
             expires_in_days: Token validity in days
-            
+
         Returns:
             Encoded service account token
         """
         expire = datetime.utcnow() + timedelta(days=expires_in_days)
-        
+
         payload = {
             "sub": f"service:{service_name}",
             "service": service_name,
@@ -584,12 +584,12 @@ class JWTService:
             payload["iss"] = self.settings.JWT_ISSUER
         if self.settings.JWT_AUDIENCE:
             payload["aud"] = self.settings.JWT_AUDIENCE
-        
+
         try:
             token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
             logger.info(f"Created service account token for {service_name}")
             return token
-            
+
         except Exception as e:
             logger.error(f"Failed to create service account token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}")
@@ -600,10 +600,10 @@ class JWTService:
 
         Args:
             refresh_token: Valid refresh token
-            
+
         Returns:
             Tuple of (new_access_token, refresh_token_out)
-            
+
         Raises:
             InvalidTokenError: If refresh token is invalid
         """
@@ -641,11 +641,11 @@ class JWTService:
             raise
         except Exception as _guard_e:
             logger.debug(f"Refresh helper blacklist guard skipped: {_guard_e}")
-        
+
         # Extract user information
         user_id = int(payload["sub"])
         username = payload.get("username", "")
-        
+
         # Fetch role from the configured user database for correctness
         role = payload.get("role", "user")
         try:
@@ -662,7 +662,7 @@ class JWTService:
                 role = "admin" if "admin" in roles else roles[0]
         except Exception as e:
             logger.debug(f"JWTService: failed to fetch user role on refresh; using fallback: {e}")
-        
+
         # Create new access token
         new_access_token = self.create_access_token(
             user_id=user_id,
@@ -741,14 +741,14 @@ class JWTService:
         else:
             logger.info(f"Refreshed access token for user {username}")
         return new_access_token, refresh_out
-    
+
     def get_token_remaining_time(self, token: str) -> Optional[int]:
         """
         Get remaining time before token expires
-        
+
         Args:
             token: JWT token
-            
+
         Returns:
             Remaining seconds until expiration, None if invalid
         """
@@ -759,7 +759,7 @@ class JWTService:
                 remaining = exp - datetime.utcnow().timestamp()
                 return max(0, int(remaining))
             return None
-            
+
         except (InvalidTokenError, TokenExpiredError):
             return None
 

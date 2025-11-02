@@ -13,7 +13,7 @@
   - Deterministic REST & WS behavior (same features, shared validation, consistent outputs).
   - Rich transcript artifacts: timestamps, speaker labels, confidence, diarization flags, language detection.
   - Robust operational profile: retries, queue integration, observability, audit support.
-  - Reproducible developer experience—fixtures, docs, and tests that don’t depend on proprietary hardware.
+  - Reproducible developer experience-fixtures, docs, and tests that don’t depend on proprietary hardware.
 
 - **Non-Goals**
   - No SIP ingestion, telephony gateways, or mobile SDKs in this release.
@@ -137,12 +137,12 @@
   - Config loader (`core/config`) for provider settings.
 
 - **Milestones**
-  1. **M1 – Baseline Documentation & Inventory**: capture current STT endpoints, provider configurations, and worker topology in docs; ensure contributors know existing touchpoints.
-  2. **M2 – Provider Interface Formalization**: refactor existing providers under a shared interface, add deterministic mock provider for CI.
-  3. **M3 – Streaming Parity**: finalize WebSocket pipeline (partial results, flow control, acknowledgement semantics).
-  4. **M4 – Persistence & Audit Enhancements**: diarization metadata, chunk table updates, audit event coverage.
-  5. **M5 – Observability & Testing Improvements**: metrics instrumentation, fixtures, offline evaluation scripts.
-  6. **M6 – Performance Tuning & Benchmarks**: GPU/CPU profiling, regression thresholds, publish benchmark scripts.
+  1. **M1 - Baseline Documentation & Inventory**: capture current STT endpoints, provider configurations, and worker topology in docs; ensure contributors know existing touchpoints.
+  2. **M2 - Provider Interface Formalization**: refactor existing providers under a shared interface, add deterministic mock provider for CI.
+  3. **M3 - Streaming Parity**: finalize WebSocket pipeline (partial results, flow control, acknowledgement semantics).
+  4. **M4 - Persistence & Audit Enhancements**: diarization metadata, chunk table updates, audit event coverage.
+  5. **M5 - Observability & Testing Improvements**: metrics instrumentation, fixtures, offline evaluation scripts.
+  6. **M6 - Performance Tuning & Benchmarks**: GPU/CPU profiling, regression thresholds, publish benchmark scripts.
 
 - **Risks & Mitigations**
   - Provider downtime/unavailability → multi-provider fallbacks, local deterministic mock, error escalation.
@@ -156,7 +156,7 @@
   2. How aggressively do we support diarization (default on/off, provider coverage)?
   3. Where should transcripts live when multiple transformations occur (versioning, delta storage)?
   4. Do we ship sample models/providers as dev dependencies or expect manual installation?
-  5. How do we expose quality metrics (WER) to contributors—CI dashboards, logs, or manual scripts?
+  5. How do we expose quality metrics (WER) to contributors-CI dashboards, logs, or manual scripts?
 
 - **Documentation Deliverables**
   - `/Docs/Audio_STT_Module.md`: architecture, provider setup, API/WS diagrams, troubleshooting.

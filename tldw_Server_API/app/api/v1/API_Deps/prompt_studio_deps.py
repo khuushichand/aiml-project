@@ -41,10 +41,10 @@ _db_lock = threading.Lock()
 def _get_prompt_studio_db_path_for_user(user_id: str) -> Path:
     """
     Determines the Prompt Studio database file path for a given user.
-    
+
     Args:
         user_id: User identifier
-        
+
     Returns:
         Path to the user's Prompt Studio database
     """
@@ -58,21 +58,21 @@ def _get_prompt_studio_db_path_for_user(user_id: str) -> Path:
 
     user_dir_name = str(user_id)
     user_specific_db_dir = base_dir / user_dir_name / DEFAULT_PROMPT_STUDIO_DB_SUBDIR
-    
+
     # Ensure directory exists
     user_specific_db_dir.mkdir(parents=True, exist_ok=True)
-    
+
     db_file = user_specific_db_dir / "prompt_studio.db"
     return db_file
 
 def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudioDatabase:
     """
     Get or create a PromptStudioDatabase instance for a user.
-    
+
     Args:
         user_id: User identifier
         client_id: Client identifier for sync logging
-        
+
     Returns:
         PromptStudioDatabase instance
     """
@@ -97,13 +97,13 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
             backend_signature = f"{backend.backend_type.value}:{id(backend)}"
 
     cache_key = (str(db_path), backend_signature)
-    
+
     with _db_lock:
         # Check cache first
         if cache_key in _db_instances_cache:
             logger.debug("Using cached PromptStudioDatabase for user %s", user_id)
             return _db_instances_cache[cache_key]
-        
+
         # Create new instance
         try:
             db_instance = create_prompt_studio_database(
@@ -139,12 +139,12 @@ async def get_prompt_studio_user(
 ) -> Dict[str, Any]:
     """
     Extract user context for Prompt Studio operations.
-    
+
     Args:
         request: FastAPI request object
         current_user: Current authenticated user
         x_client_id: Client ID from header
-        
+
     Returns:
         User context dictionary
     """
@@ -209,7 +209,7 @@ async def get_prompt_studio_user(
     authz = request.headers.get("Authorization")
     api_key_hdr = request.headers.get("X-API-KEY")
     # Use exact path matching for certain endpoints (do not strip trailing slash)
-    # This allows tests to differentiate between 
+    # This allows tests to differentiate between
     #   GET /api/v1/prompt-studio/projects  -> unauthorized
     #   GET /api/v1/prompt-studio/projects/ -> allowed (test convenience)
     path = (request.url.path or "")
@@ -261,8 +261,37 @@ async def get_prompt_studio_user(
         )
 
     # 3) Default path: use unified request user dependency (supports single and multi user)
-    # Use unified request-user dependency, passing the current Request explicitly
-    current_user: User = await get_request_user(request)  # direct call to avoid hard FastAPI DI coupling here
+    # IMPORTANT: When calling a FastAPI dependency directly, its Header/Depends defaults are not populated.
+    # Extract the needed header values from the Request and pass them explicitly.
+    try:
+        hdr_api_key = request.headers.get("X-API-KEY")
+    except Exception:
+        hdr_api_key = None
+    try:
+        hdr_authz = request.headers.get("Authorization")
+    except Exception:
+        hdr_authz = None
+    try:
+        hdr_legacy = request.headers.get("Token")
+    except Exception:
+        hdr_legacy = None
+
+    bearer_token = None
+    try:
+        if hdr_authz and isinstance(hdr_authz, str):
+            scheme, _, credential = hdr_authz.partition(" ")
+            if scheme.lower() == "bearer":
+                bearer_token = credential.strip()
+    except Exception:
+        bearer_token = None
+
+    # Use unified request-user dependency, passing extracted headers explicitly
+    current_user: User = await get_request_user(
+        request,
+        api_key=hdr_api_key,
+        token=bearer_token,
+        legacy_token_header=hdr_legacy,
+    )
 
     # Build user context from normalized User model
     try:
@@ -293,16 +322,16 @@ async def get_prompt_studio_db(
 ) -> PromptStudioDatabase:
     """
     Get PromptStudioDatabase instance for the current user.
-    
+
     Args:
         user_context: User context from authentication
-        
+
     Returns:
         PromptStudioDatabase instance
     """
     user_id = user_context["user_id"]
     client_id = user_context["client_id"]
-    
+
     # Allow anonymous only in explicit settings or during tests
     import os
     if (
@@ -314,7 +343,7 @@ async def get_prompt_studio_db(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required for Prompt Studio"
         )
-    
+
     return _get_or_create_prompt_studio_db(user_id, client_id)
 
 ########################################################################################################################
@@ -327,15 +356,15 @@ async def require_project_access(
 ) -> bool:
     """
     Verify user has access to a specific project.
-    
+
     Args:
         project_id: Project ID to check
         user_context: User context
         db: Database instance
-        
+
     Returns:
         True if access granted
-        
+
     Raises:
         HTTPException: If access denied
     """
@@ -344,22 +373,22 @@ async def require_project_access(
         if user_context.get("is_admin"):
             return True
         project = db.get_project(project_id)
-        
+
         if not project:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             )
-        
+
         # Check ownership or admin status
         if project["user_id"] != user_context["user_id"] and not user_context["is_admin"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this project"
             )
-        
+
         return True
-        
+
     except DatabaseError as e:
         logger.error(f"Database error checking project access: {e}")
         raise HTTPException(
@@ -386,7 +415,7 @@ def get_security_config() -> SecurityConfig:
     """
     Get security configuration for Prompt Studio.
     Cached for performance.
-    
+
     Returns:
         SecurityConfig instance
     """
@@ -412,15 +441,15 @@ async def check_rate_limit(
 ) -> bool:
     """
     Check rate limit for current user and operation.
-    
+
     Args:
         operation: Operation being performed
         user_context: User context
         security_config: Security configuration
-        
+
     Returns:
         True if within limits
-        
+
     Raises:
         HTTPException: If rate limit exceeded
     """
@@ -430,7 +459,7 @@ async def check_rate_limit(
         return True
     if not security_config.enable_rate_limiting:
         return True
-    
+
     user_id = str(user_context.get("user_id", "anonymous"))
 
     # Per-operation limits (per window; window duration controlled by shared limiter settings)
@@ -497,6 +526,6 @@ def shutdown_prompt_studio_deps():
                     db_instance.close()
             except Exception as e:
                 logger.error(f"Error closing database instance: {e}")
-        
+
         _db_instances_cache.clear()
         logger.info("Prompt Studio dependencies cleaned up")

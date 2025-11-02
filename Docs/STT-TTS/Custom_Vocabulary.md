@@ -6,14 +6,14 @@ Overview
 This feature lets you bias transcription and correct common mishearings without touching model tokenizers. It works in two ways:
 
 - Whisper prompt bias: Injects an `initial_prompt` built from your domain terms to guide recognition.
-- Post‑processing replacements: Applies whole‑word text replacements to the transcribed text (all providers).
+- Post-processing replacements: Applies whole-word text replacements to the transcribed text (all providers).
 
 Supported paths
 ---------------
-- Faster‑Whisper (batch): initial_prompt + post‑replacements
-- Faster‑Whisper (streaming): initial_prompt + post‑replacements
-- Nemo Parakeet/Canary (batch/streaming): post‑replacements
-- External providers (OpenAI‑compatible): post‑replacements
+- Faster-Whisper (batch): initial_prompt + post-replacements
+- Faster-Whisper (streaming): initial_prompt + post-replacements
+- Nemo Parakeet/Canary (batch/streaming): post-replacements
+- External providers (OpenAI-compatible): post-replacements
 
 Configuration
 -------------
@@ -30,10 +30,10 @@ custom_vocab_replacements_file = ./Config_Files/custom_vocab/replacements.json
 custom_vocab_initial_prompt_enable = True
 custom_vocab_postprocess_enable = True
 
-# Template for the Whisper initial prompt ("{terms}" is replaced by a comma‑separated list)
+# Template for the Whisper initial prompt ("{terms}" is replaced by a comma-separated list)
 custom_vocab_prompt_template = Domain terms: {terms}.
 
-# If True, replacements are case‑sensitive
+# If True, replacements are case-sensitive
 custom_vocab_case_sensitive = False
 ```
 
@@ -50,15 +50,15 @@ Sample files
 Behavior details
 ----------------
 - The terms list is capped (64 items) to keep prompts compact.
-- Replacements are applied with whole‑word matching and case‑insensitive by default.
-- Do NOT edit model vocabulary/tokenizer files (e.g., Parakeet `vocab.json`). This feature is prompt + post‑processing only.
+- Replacements are applied with whole-word matching and case-insensitive by default.
+- Do NOT edit model vocabulary/tokenizer files (e.g., Parakeet `vocab.json`). This feature is prompt + post-processing only.
 
 Where it lives
 --------------
 - Helper: `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/Audio_Custom_Vocabulary.py`
 - Whisper (batch): `Audio_Transcription_Lib.py`
 - Whisper (streaming): `Audio_Streaming_Unified.py`
-- API post‑processing: `api/v1/endpoints/audio.py`
+- API post-processing: `api/v1/endpoints/audio.py`
 
 Quick test
 ----------
@@ -71,5 +71,4 @@ Quick test
 Troubleshooting
 ---------------
 - No effect on Whisper? Ensure `custom_vocab_initial_prompt_enable=True` and the terms file path is correct.
-- Replacements not applying? Check `custom_vocab_postprocess_enable=True` and that keys match whole words (or set case‑sensitive behavior).
-
+- Replacements not applying? Check `custom_vocab_postprocess_enable=True` and that keys match whole words (or set case-sensitive behavior).

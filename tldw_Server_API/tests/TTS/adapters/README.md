@@ -19,7 +19,7 @@ Each adapter has two test files:
   - Error handling (auth, rate limit)
   - Streaming support
   - Request validation
-  
+
 - **Integration Tests**: `test_openai_adapter_integration.py`
   - Real API initialization
   - Actual audio generation
@@ -38,7 +38,7 @@ Each adapter has two test files:
   - Voice settings configuration
   - Streaming context manager
   - Error handling
-  
+
 - **Integration Tests**: `test_elevenlabs_adapter_integration.py`
   - Real API initialization
   - Actual audio generation
@@ -54,7 +54,7 @@ Each adapter has two test files:
   - Phoneme processing
   - Device selection (CPU/CUDA/MPS)
   - Model loading error handling
-  
+
 - **Integration Tests**: `test_kokoro_adapter_integration.py`
   - Real model initialization
   - Audio generation with local model
@@ -69,7 +69,7 @@ Each adapter has two test files:
   - Voice cloning support
   - GPU configuration
   - Multi-language support
-  
+
 - **Integration Tests**: `test_higgs_adapter_integration.py`
   - Model loading and initialization
   - Audio generation
@@ -81,7 +81,7 @@ Each adapter has two test files:
   - API endpoint configuration
   - Multi-speaker dialogue support
   - Language support
-  
+
 - **Integration Tests**: `test_dia_adapter_integration.py`
   - Model initialization
   - Dialogue generation
@@ -92,7 +92,7 @@ Each adapter has two test files:
   - Model selection
   - Character voice support
   - Speech style parameters
-  
+
 - **Integration Tests**: `test_chatterbox_adapter_integration.py`
   - Model initialization
   - Character-based generation
@@ -103,7 +103,7 @@ Each adapter has two test files:
   - Workspace configuration
   - Voice creation support
   - Batch processing
-  
+
 - **Integration Tests**: `test_vibevoice_adapter_integration.py`
   - Model initialization
   - Audio generation
@@ -126,7 +126,7 @@ pytest tests/TTS/adapters/test_*_integration.py -v -m integration
 # OpenAI adapter tests
 pytest tests/TTS/adapters/test_openai_adapter_*.py -v
 
-# Kokoro adapter tests  
+# Kokoro adapter tests
 pytest tests/TTS/adapters/test_kokoro_adapter_*.py -v
 ```
 

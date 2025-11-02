@@ -78,7 +78,7 @@ I find that leaving everything to LLM in a sequence is not as effective as using
 			* Reformatting - Change the presentation only
 				* Prose to screenplay, xml to json
 			* Refactoring - Achieve same results with greater efficiency
-				* Say the same exact thing but differently 
+				* Say the same exact thing but differently
 			* Language CHange - Translate between languages
 				* English -> Russian, C++ -> Rust
 			* Restructuring - Optimize structure for logical flow, etc
@@ -116,7 +116,7 @@ I find that leaving everything to LLM in a sequence is not as effective as using
   * Come up with an abstract idea "Help me create a step-by-step plan to <do x> and in order to accomplish <y goal>". Send that to sonnet 3.5 for the reasoning engine.
   * Take the sonnet 3.5 output and feed it into opus with a "Please elaborate and improve this plan and give me 5 variations. think step-by-step and be creative" for the Opus creativity and depth.
   * Take the opus output back to sonnet 3.5 and say "Select the best option out of these 5, refine it and verify it accomplishes <y goal>". again reasoning and discrimination engine.
-  * Chews up your daily message quota pretty quickly but the results are pretty great and totally worth it for complex tasks. 
+  * Chews up your daily message quota pretty quickly but the results are pretty great and totally worth it for complex tasks.
   * Basically a poor man's Opus 3.5
 * https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/
 - **Prompting Techniques 101**
@@ -190,7 +190,7 @@ I find that leaving everything to LLM in a sequence is not as effective as using
 	* https://www.promptingguide.ai/
 	- **Generated Knowledge Prompting**
 		* A technique that generates knowledge to be utilized as part of the prompt, asking questions by citing knowledge or laws instead of examples. This method, which ensures the model’s ability to maintain a consistent internal state or behavior despite varying inputs, finds its application in various contexts, such as LangChain, especially when interacting with data in CSV format.
-		* Operates on the principle of leveraging a large language model’s ability to produce potentially beneficial information related to a given prompt. The concept is to let the language model offer additional knowledge which can then be used to shape a more informed, contextual, and precise final response. 
+		* Operates on the principle of leveraging a large language model’s ability to produce potentially beneficial information related to a given prompt. The concept is to let the language model offer additional knowledge which can then be used to shape a more informed, contextual, and precise final response.
 		* For instance, if we are using a language model to provide answers to complex technical questions, we might first use a prompt that asks the model to generate an overview or explanation of the topic related to the question.
 		- Process:
 			1. Generate Knowledge: Initiated by providing the LLM with an instruction, a few fixed demonstrations for each task, and a new-question placeholder, where demonstrations are human-written and include a question in the style of the task alongside a helpful knowledge statement.
@@ -240,7 +240,7 @@ I find that leaving everything to LLM in a sequence is not as effective as using
 		* both a framework and a prompting technique. this approach stands out as a mechanism that elevates the precision of responses crafted by Large Language Models (LLMs) by structuring the information produced by an LLM into a graph format.
 		* Better than Tree of Thoughts
 	- **Metacognitive Prompting**
-		* 
+		*
 		- Sequence of steps:
 			1. Interpretation of Text: Analyze and comprehend the provided text.
 			2. Judgment Formation: Make an initial assessment or judgment based on the interpreted text.
@@ -248,7 +248,7 @@ I find that leaving everything to LLM in a sequence is not as effective as using
 			4. Final Decision and Justification: Make a conclusive decision and provide a reasoned justification for it.
 			5. Confidence Level Assessment: Evaluate and rate the level of confidence in the final decision and its justification.
 	- **Logical Chain-of-Thought (LogiCoT)**
-		* 
+		*
 - **Links**
 	* https://www.leewayhertz.com/prompt-engineering/
 	* Claude: https://docs.anthropic.com/claude/docs/prompt-engineering

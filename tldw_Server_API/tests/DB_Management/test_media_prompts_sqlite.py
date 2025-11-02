@@ -56,7 +56,7 @@ def test_sqlite_get_media_prompts_filters_and_orders(tmp_path):
                 db.client_id,
             ),
         )
-        # v2 (empty prompt) — should be filtered out
+        # v2 (empty prompt) - should be filtered out
         db._execute_with_connection(
             conn,
             (
@@ -97,4 +97,3 @@ def test_sqlite_get_media_prompts_filters_and_orders(tmp_path):
     # Expect two prompts (B from v3 first, then A from v1)
     assert [p["content"] for p in prompts] == ["B", "A"]
     assert [p["version_number"] for p in prompts] == [3, 1]
-

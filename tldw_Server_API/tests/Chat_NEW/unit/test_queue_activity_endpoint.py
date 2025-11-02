@@ -68,4 +68,3 @@ def test_queue_activity_endpoint_limit_too_small():
             resp = client.get("/api/v1/chat/queue/activity?limit=0")
             assert resp.status_code == 400
             assert "limit" in resp.json().get("detail", "").lower()
-

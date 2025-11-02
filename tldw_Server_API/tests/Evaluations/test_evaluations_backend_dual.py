@@ -27,24 +27,16 @@ def test_sqlite_evaluations_basic(tmp_path):
 
 
 @pytest.mark.integration
-def test_postgres_evaluations_basic_if_available(tmp_path):
-    host = os.getenv("POSTGRES_TEST_HOST")
-    user = os.getenv("POSTGRES_TEST_USER")
-    password = os.getenv("POSTGRES_TEST_PASSWORD")
-    database = os.getenv("POSTGRES_TEST_DATABASE", "tldw_content")
-    port = int(os.getenv("POSTGRES_TEST_PORT", "5432"))
-
-    if not host or not user:
-        pytest.skip("Postgres test env not configured")
-
+def test_postgres_evaluations_basic_if_available(tmp_path, pg_eval_params):
+    # Use shared Postgres params fixture (from tests/conftest.py)
     try:
         config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
-            pg_host=host,
-            pg_port=port,
-            pg_database=database,
-            pg_user=user,
-            pg_password=password,
+            pg_host=pg_eval_params["host"],
+            pg_port=int(pg_eval_params["port"]),
+            pg_database=pg_eval_params["database"],
+            pg_user=pg_eval_params["user"],
+            pg_password=pg_eval_params.get("password"),
         )
         backend = DatabaseBackendFactory.create_backend(config)
     except Exception:
@@ -65,4 +57,3 @@ def test_postgres_evaluations_basic_if_available(tmp_path):
     assert isinstance(items, list)
     assert any(it["id"] == eval_id for it in items)
     assert has_more in (True, False)
-

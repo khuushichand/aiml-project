@@ -52,21 +52,21 @@ class MetricValue:
 
 class MetricsRegistry:
     """Registry for all application metrics."""
-    
+
     def __init__(self):
         """Initialize the metrics registry."""
         self.metrics: Dict[str, MetricDefinition] = {}
         self.instruments: Dict[str, Any] = {}
         self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
-        
+
         # Initialize with telemetry manager
         self.telemetry = get_telemetry_manager()
         self.meter = self.telemetry.get_meter("tldw_server.metrics")
-        
+
         # Register standard metrics
         self._register_standard_metrics()
-    
+
     def _register_standard_metrics(self):
         """Register standard application metrics."""
         # HTTP metrics
@@ -78,7 +78,7 @@ class MetricsRegistry:
                 labels=["method", "endpoint", "status"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="http_request_duration_seconds",
@@ -89,7 +89,7 @@ class MetricsRegistry:
                 buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
             )
         )
-        
+
         # Database metrics
         self.register_metric(
             MetricDefinition(
@@ -99,7 +99,7 @@ class MetricsRegistry:
                 labels=["database"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="db_queries_total",
@@ -108,7 +108,7 @@ class MetricsRegistry:
                 labels=["database", "operation"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="db_query_duration_seconds",
@@ -174,7 +174,7 @@ class MetricsRegistry:
                 labels=["backend"],
             )
         )
-        
+
         # LLM metrics
         self.register_metric(
             MetricDefinition(
@@ -184,7 +184,7 @@ class MetricsRegistry:
                 labels=["provider", "model", "status"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="llm_tokens_used_total",
@@ -193,7 +193,7 @@ class MetricsRegistry:
                 labels=["provider", "model", "type"]  # type: prompt/completion
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="llm_request_duration_seconds",
@@ -204,7 +204,7 @@ class MetricsRegistry:
                 buckets=[0.1, 0.5, 1, 2.5, 5, 10, 30, 60]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="llm_cost_dollars",
@@ -285,7 +285,7 @@ class MetricsRegistry:
                 labels=["mode", "context", "reason"],
             )
         )
-        
+
         # RAG metrics
         self.register_metric(
             MetricDefinition(
@@ -336,7 +336,7 @@ class MetricsRegistry:
                 name="sandbox_runs_completed_total",
                 type=MetricType.COUNTER,
                 description="Total sandbox runs finished",
-                labels=["runtime", "outcome"],
+                labels=["runtime", "outcome", "reason"],
             )
         )
         self.register_metric(
@@ -345,8 +345,65 @@ class MetricsRegistry:
                 type=MetricType.HISTOGRAM,
                 description="Sandbox run duration in seconds",
                 unit="s",
-                labels=["runtime", "outcome"],
+                labels=["runtime", "outcome", "reason"],
                 buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 60, 120, 300]
+            )
+        )
+        # WS & queue metrics used by sandbox endpoints/streams
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_log_truncations_total",
+                type=MetricType.COUNTER,
+                description="Total number of sandbox log truncations",
+                labels=["component", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_queue_full_total",
+                type=MetricType.COUNTER,
+                description="Total number of sandbox queue-full events",
+                labels=["component", "runtime", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_queue_ttl_expired_total",
+                type=MetricType.COUNTER,
+                description="Total number of sandbox queue TTL expirations",
+                labels=["component", "runtime", "reason"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_connections_opened_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox WS connections opened",
+                labels=["component"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_heartbeats_sent_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox WS heartbeats sent",
+                labels=["component"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_disconnects_total",
+                type=MetricType.COUNTER,
+                description="Total sandbox WS disconnects",
+                labels=["component"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="sandbox_ws_queue_drops_total",
+                type=MetricType.COUNTER,
+                description="Total WS queue drops (oldest dropped)",
+                labels=["component", "reason"],
             )
         )
         self.register_metric(
@@ -366,7 +423,7 @@ class MetricsRegistry:
                 labels=["kind"],
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="rag_retrieval_latency_seconds",
@@ -377,7 +434,7 @@ class MetricsRegistry:
                 buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="rag_documents_retrieved",
@@ -387,7 +444,7 @@ class MetricsRegistry:
                 buckets=[1, 5, 10, 25, 50, 100, 250, 500]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="rag_cache_hits_total",
@@ -396,7 +453,7 @@ class MetricsRegistry:
                 labels=["cache_type"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="rag_cache_misses_total",
@@ -423,7 +480,7 @@ class MetricsRegistry:
                 labels=["strategy"]
             )
         )
-        
+
         # Post-generation verification (adaptive check) metrics
         self.register_metric(
             MetricDefinition(
@@ -437,7 +494,7 @@ class MetricsRegistry:
             MetricDefinition(
                 name="rag_hard_citation_coverage",
                 type=MetricType.GAUGE,
-                description="Per-answer hard-citation coverage ratio (0.0–1.0)",
+                description="Per-answer hard-citation coverage ratio (0.0-1.0)",
                 labels=["strategy"],
             )
         )
@@ -586,7 +643,7 @@ class MetricsRegistry:
             )
         )
 
-        # Quality evaluation (nightly eval set) — dashboard inputs
+        # Quality evaluation (nightly eval set) - dashboard inputs
         self.register_metric(
             MetricDefinition(
                 name="rag_eval_faithfulness_score",
@@ -668,7 +725,7 @@ class MetricsRegistry:
                 description="Total answers with missing supporting spans for one or more sentences",
             )
         )
-        
+
         # Embedding metrics
         self.register_metric(
             MetricDefinition(
@@ -721,7 +778,7 @@ class MetricsRegistry:
                 labels=["user_id", "media_type"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="embedding_generation_duration_seconds",
@@ -732,7 +789,7 @@ class MetricsRegistry:
                 buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]
             )
         )
-        
+
         # System metrics
         self.register_metric(
             MetricDefinition(
@@ -742,7 +799,7 @@ class MetricsRegistry:
                 unit="%"
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="system_memory_usage_bytes",
@@ -751,7 +808,7 @@ class MetricsRegistry:
                 unit="bytes"
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="system_disk_usage_bytes",
@@ -761,7 +818,7 @@ class MetricsRegistry:
                 labels=["mount_point"]
             )
         )
-        
+
         # Error metrics
         self.register_metric(
             MetricDefinition(
@@ -843,7 +900,7 @@ class MetricsRegistry:
                 labels=["user_id"],
             )
         )
-        
+
         # Circuit breaker metrics
         self.register_metric(
             MetricDefinition(
@@ -853,7 +910,7 @@ class MetricsRegistry:
                 labels=["service"]
             )
         )
-        
+
         self.register_metric(
             MetricDefinition(
                 name="circuit_breaker_trips_total",
@@ -951,32 +1008,32 @@ class MetricsRegistry:
                 labels=["tool"],
             )
         )
-    
+
     def register_metric(self, definition: MetricDefinition) -> bool:
         """
         Register a new metric definition.
-        
+
         Args:
             definition: MetricDefinition object
-            
+
         Returns:
             True if registered successfully
         """
         if definition.name in self.metrics:
             logger.warning(f"Metric {definition.name} already registered")
             return False
-        
+
         self.metrics[definition.name] = definition
-        
+
         # Create OpenTelemetry instrument
         if OTEL_AVAILABLE and self.meter:
             instrument = self._create_instrument(definition)
             if instrument:
                 self.instruments[definition.name] = instrument
-        
+
         logger.debug(f"Registered metric: {definition.name}")
         return True
-    
+
     def _create_instrument(self, definition: MetricDefinition):
         """Create an OpenTelemetry instrument for a metric definition."""
         try:
@@ -986,7 +1043,7 @@ class MetricsRegistry:
                     description=definition.description,
                     unit=definition.unit
                 )
-            
+
             elif definition.type == MetricType.GAUGE:
                 # Gauges are handled via callbacks in OpenTelemetry
                 return self.meter.create_observable_gauge(
@@ -995,7 +1052,7 @@ class MetricsRegistry:
                     unit=definition.unit,
                     callbacks=[lambda options: self._gauge_callback(definition.name, options)]
                 )
-            
+
             elif definition.type == MetricType.HISTOGRAM:
                 # If custom buckets were defined, register a view before creating the instrument
                 try:
@@ -1008,18 +1065,18 @@ class MetricsRegistry:
                     description=definition.description,
                     unit=definition.unit
                 )
-            
+
             elif definition.type == MetricType.UP_DOWN_COUNTER:
                 return self.meter.create_up_down_counter(
                     name=definition.name,
                     description=definition.description,
                     unit=definition.unit
                 )
-            
+
         except Exception as e:
             logger.error(f"Failed to create instrument for {definition.name}: {e}")
             return None
-    
+
     def _gauge_callback(self, metric_name: str, options: 'CallbackOptions'):
         """Callback for observable gauge metrics.
 
@@ -1043,11 +1100,11 @@ class MetricsRegistry:
             # Gauges must never break scrapes; return empty to avoid exporter errors
             logger.debug(f"Gauge callback error for {metric_name}: {e}")
         return observations
-    
+
     def record(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
         """
         Record a metric value.
-        
+
         Args:
             metric_name: Name of the metric
             value: Value to record
@@ -1056,82 +1113,82 @@ class MetricsRegistry:
         if metric_name not in self.metrics:
             logger.warning(f"Metric {metric_name} not registered")
             return
-        
+
         definition = self.metrics[metric_name]
         labels = labels or {}
-        
+
         # Store value for aggregation
         metric_value = MetricValue(value=value, labels=labels)
         self.values[metric_name].append(metric_value)
-        
+
         # Record in OpenTelemetry
         if metric_name in self.instruments:
             instrument = self.instruments[metric_name]
-            
+
             try:
                 if definition.type == MetricType.COUNTER:
                     instrument.add(value, attributes=labels)
-                
+
                 elif definition.type == MetricType.HISTOGRAM:
                     instrument.record(value, attributes=labels)
-                
+
                 elif definition.type == MetricType.UP_DOWN_COUNTER:
                     instrument.add(value, attributes=labels)
-                
+
                 # Gauges are handled via callbacks
-                
+
             except Exception as e:
                 logger.error(f"Failed to record metric {metric_name}: {e}")
-        
+
         # Execute callbacks
         for callback in self.callbacks[metric_name]:
             try:
                 callback(metric_name, value, labels)
             except Exception as e:
                 logger.error(f"Metric callback error: {e}")
-    
+
     def increment(self, metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
         """
         Increment a counter metric.
-        
+
         Args:
             metric_name: Name of the counter metric
             value: Amount to increment (default 1)
             labels: Optional labels
         """
         self.record(metric_name, value, labels)
-    
+
     def set_gauge(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
         """
         Set a gauge metric value.
-        
+
         Args:
             metric_name: Name of the gauge metric
             value: Value to set
             labels: Optional labels
         """
         self.record(metric_name, value, labels)
-    
+
     def observe(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
         """
         Observe a value for histogram metric.
-        
+
         Args:
             metric_name: Name of the histogram metric
             value: Value to observe
             labels: Optional labels
         """
         self.record(metric_name, value, labels)
-    
+
     @contextmanager
     def timer(self, metric_name: str, labels: Optional[Dict[str, str]] = None):
         """
         Context manager to time an operation.
-        
+
         Args:
             metric_name: Name of the histogram metric for timing
             labels: Optional labels
-            
+
         Yields:
             Timer context
         """
@@ -1141,31 +1198,31 @@ class MetricsRegistry:
         finally:
             duration = time.time() - start_time
             self.observe(metric_name, duration, labels)
-    
+
     def add_callback(self, metric_name: str, callback: Callable):
         """
         Add a callback for metric events.
-        
+
         Args:
             metric_name: Name of the metric
             callback: Callable(metric_name, value, labels)
         """
         self.callbacks[metric_name].append(callback)
-    
+
     def get_metric_stats(self, metric_name: str, labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
         Get statistics for a metric.
-        
+
         Args:
             metric_name: Name of the metric
             labels: Optional label filter
-            
+
         Returns:
             Dictionary with metric statistics
         """
         if metric_name not in self.values:
             return {}
-        
+
         # Filter values by labels if provided
         values = list(self.values[metric_name])
         if labels:
@@ -1173,12 +1230,12 @@ class MetricsRegistry:
             values = [val for val in values if all(
                 val.labels.get(key) == expected for key, expected in labels.items()
             )]
-        
+
         if not values:
             return {}
-        
+
         numeric_values = [v.value for v in values]
-        
+
         return {
             "count": len(numeric_values),
             "sum": sum(numeric_values),
@@ -1190,16 +1247,16 @@ class MetricsRegistry:
             "latest": numeric_values[-1],
             "latest_timestamp": values[-1].timestamp
         }
-    
+
     def get_all_metrics(self) -> Dict[str, Dict[str, Any]]:
         """
         Get all current metric values and statistics.
-        
+
         Returns:
             Dictionary of metric names to their statistics
         """
         result = {}
-        
+
         for metric_name, definition in self.metrics.items():
             stats = self.get_metric_stats(metric_name)
             if stats:
@@ -1209,22 +1266,22 @@ class MetricsRegistry:
                     "unit": definition.unit,
                     "stats": stats
                 }
-        
+
         return result
-    
+
     def export_prometheus_format(self) -> str:
         """
         Export metrics in Prometheus text format.
-        
+
         Returns:
             Prometheus-formatted metrics string
         """
         lines = []
-        
+
         for metric_name, definition in self.metrics.items():
             if metric_name not in self.values:
                 continue
-            
+
             # Add HELP and TYPE lines
             lines.append(f"# HELP {metric_name} {definition.description}")
             # Map internal metric types to Prometheus types
@@ -1235,13 +1292,13 @@ class MetricsRegistry:
                 definition.type.value
             )
             lines.append(f"# TYPE {metric_name} {prom_type}")
-            
+
             # Group values by labels
             label_groups = defaultdict(list)
             for value in self.values[metric_name]:
                 label_key = ",".join(f'{k}="{v}"' for k, v in sorted(value.labels.items()))
                 label_groups[label_key].append(value)
-            
+
             # Export values
             for label_str, values in label_groups.items():
                 if definition.type == MetricType.GAUGE:
@@ -1251,7 +1308,7 @@ class MetricsRegistry:
                         lines.append(f"{metric_name}{{{label_str}}} {latest.value}")
                     else:
                         lines.append(f"{metric_name} {latest.value}")
-                
+
                 elif definition.type in [MetricType.COUNTER, MetricType.UP_DOWN_COUNTER]:
                     # For counters, use the sum
                     total = sum(v.value for v in values)
@@ -1259,7 +1316,7 @@ class MetricsRegistry:
                         lines.append(f"{metric_name}{{{label_str}}} {total}")
                     else:
                         lines.append(f"{metric_name} {total}")
-                
+
                 elif definition.type == MetricType.HISTOGRAM:
                     # For histograms, calculate buckets
                     numeric_values = [v.value for v in values]
@@ -1271,7 +1328,7 @@ class MetricsRegistry:
                                 lines.append(f"{metric_name}_bucket{{{label_str},{bucket_label}}} {count}")
                             else:
                                 lines.append(f"{metric_name}_bucket{{{bucket_label}}} {count}")
-                    
+
                     # Add +Inf bucket, sum, and count
                     if label_str:
                         lines.append(f"{metric_name}_bucket{{{label_str},le=\"+Inf\"}} {len(numeric_values)}")
@@ -1311,7 +1368,7 @@ class MetricsRegistry:
                             lines.append(f"{alias_name}{{{alias_labels}}} {total}")
                         else:
                             lines.append(f"{alias_name} {total}")
-        
+
         return "\n".join(lines) + "\n"
 
 
@@ -1322,7 +1379,7 @@ _metrics_registry: Optional[MetricsRegistry] = None
 def get_metrics_registry() -> MetricsRegistry:
     """
     Get or create the global metrics registry.
-    
+
     Returns:
         MetricsRegistry instance
     """

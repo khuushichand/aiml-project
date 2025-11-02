@@ -19,40 +19,40 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 class Permission(str, Enum):
     """Prompt Studio permissions."""
-    
+
     # Project permissions
     PROJECT_CREATE = "project.create"
     PROJECT_READ = "project.read"
     PROJECT_UPDATE = "project.update"
     PROJECT_DELETE = "project.delete"
     PROJECT_SHARE = "project.share"
-    
+
     # Prompt permissions
     PROMPT_CREATE = "prompt.create"
     PROMPT_READ = "prompt.read"
     PROMPT_UPDATE = "prompt.update"
     PROMPT_DELETE = "prompt.delete"
     PROMPT_EXECUTE = "prompt.execute"
-    
+
     # Test permissions
     TEST_CREATE = "test.create"
     TEST_READ = "test.read"
     TEST_UPDATE = "test.update"
     TEST_DELETE = "test.delete"
     TEST_EXECUTE = "test.execute"
-    
+
     # Evaluation permissions
     EVALUATION_CREATE = "evaluation.create"
     EVALUATION_READ = "evaluation.read"
     EVALUATION_CANCEL = "evaluation.cancel"
     EVALUATION_DELETE = "evaluation.delete"
-    
+
     # Optimization permissions
     OPTIMIZATION_CREATE = "optimization.create"
     OPTIMIZATION_READ = "optimization.read"
     OPTIMIZATION_CANCEL = "optimization.cancel"
     OPTIMIZATION_DELETE = "optimization.delete"
-    
+
     # Admin permissions
     ADMIN_ACCESS = "admin.access"
     ADMIN_USERS = "admin.users"
@@ -61,7 +61,7 @@ class Permission(str, Enum):
 
 class Role(str, Enum):
     """User roles."""
-    
+
     VIEWER = "viewer"
     EDITOR = "editor"
     ADMIN = "admin"
@@ -125,11 +125,11 @@ ROLE_PERMISSIONS = {
 
 class AuthenticationManager:
     """Manages user authentication for Prompt Studio."""
-    
+
     def __init__(self, db: PromptStudioDatabase, secret_key: str):
         """
         Initialize authentication manager.
-        
+
         Args:
             db: Database instance
             secret_key: Secret key for JWT tokens
@@ -145,15 +145,15 @@ class AuthenticationManager:
         self.secret_key = secret_key
         self.algorithm = "HS256"
         self.token_expiry_hours = 24
-        
+
         # Initialize user tables if needed
         self._init_auth_tables()
-    
+
     def _init_auth_tables(self):
         """Initialize authentication tables."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         # Users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS prompt_studio_users (
@@ -171,7 +171,7 @@ class AuthenticationManager:
                 client_id TEXT NOT NULL
             )
         """)
-        
+
         # Sessions table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS prompt_studio_sessions (
@@ -185,7 +185,7 @@ class AuthenticationManager:
                 FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id)
             )
         """)
-        
+
         # Project permissions table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS prompt_studio_project_permissions (
@@ -200,7 +200,7 @@ class AuthenticationManager:
                 UNIQUE(project_id, user_id)
             )
         """)
-        
+
         # Audit log table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS prompt_studio_audit_log (
@@ -215,29 +215,29 @@ class AuthenticationManager:
                 FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id)
             )
         """)
-        
+
         conn.commit()
-    
+
     ####################################################################################################################
     # User Management
-    
+
     def create_user(self, username: str, email: str, password: str,
                    role: Role = Role.EDITOR) -> Dict[str, Any]:
         """
         Create a new user.
-        
+
         Args:
             username: Username
             email: Email address
             password: Plain text password
             role: User role
-            
+
         Returns:
             Created user details
         """
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         # Check if user exists
         cursor.execute(
             "SELECT id FROM prompt_studio_users WHERE username = ? OR email = ?",
@@ -245,13 +245,13 @@ class AuthenticationManager:
         )
         if cursor.fetchone():
             raise ValueError("User with this username or email already exists")
-        
+
         # Hash password
         password_hash = self._hash_password(password)
-        
+
         # Generate API key
         api_key = self._generate_api_key()
-        
+
         # Create user
         cursor.execute("""
             INSERT INTO prompt_studio_users (
@@ -266,12 +266,12 @@ class AuthenticationManager:
             api_key,
             self.db.client_id
         ))
-        
+
         user_id = cursor.lastrowid
         conn.commit()
-        
+
         logger.info(f"Created user: {username} (ID: {user_id})")
-        
+
         return {
             "id": user_id,
             "username": username,
@@ -279,48 +279,48 @@ class AuthenticationManager:
             "role": role.value,
             "api_key": api_key
         }
-    
+
     def authenticate_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         """
         Authenticate a user with username and password.
-        
+
         Args:
             username: Username or email
             password: Plain text password
-            
+
         Returns:
             User details if authenticated, None otherwise
         """
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         # Get user
         cursor.execute("""
             SELECT id, username, email, password_hash, role, is_active
             FROM prompt_studio_users
             WHERE (username = ? OR email = ?) AND is_active = 1
         """, (username, username))
-        
+
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         user_id, username, email, password_hash, role, is_active = row
-        
+
         # Verify password
         if not self._verify_password(password, password_hash):
             return None
-        
+
         # Update last login
         cursor.execute(
             "UPDATE prompt_studio_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
             (user_id,)
         )
         conn.commit()
-        
+
         # Create session token
         token = self.create_session(user_id)
-        
+
         return {
             "id": user_id,
             "username": username,
@@ -328,26 +328,26 @@ class AuthenticationManager:
             "role": role,
             "token": token
         }
-    
+
     def authenticate_api_key(self, api_key: str) -> Optional[Dict[str, Any]]:
         """
         Authenticate using API key.
-        
+
         Args:
             api_key: API key
-            
+
         Returns:
             User details if authenticated
         """
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             SELECT id, username, email, role
             FROM prompt_studio_users
             WHERE api_key = ? AND is_active = 1
         """, (api_key,))
-        
+
         row = cursor.fetchone()
         if row:
             return {
@@ -356,22 +356,22 @@ class AuthenticationManager:
                 "email": row[2],
                 "role": row[3]
             }
-        
+
         return None
-    
+
     ####################################################################################################################
     # Session Management
-    
+
     def create_session(self, user_id: int, ip_address: Optional[str] = None,
                       user_agent: Optional[str] = None) -> str:
         """
         Create a session for a user.
-        
+
         Args:
             user_id: User ID
             ip_address: Client IP address
             user_agent: Client user agent
-            
+
         Returns:
             JWT token
         """
@@ -382,13 +382,13 @@ class AuthenticationManager:
             "iat": datetime.utcnow(),
             "jti": secrets.token_urlsafe(16)
         }
-        
+
         token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
-        
+
         # Store session
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             INSERT INTO prompt_studio_sessions (
                 user_id, token, expires_at, ip_address, user_agent
@@ -400,29 +400,29 @@ class AuthenticationManager:
             ip_address,
             user_agent
         ))
-        
+
         conn.commit()
-        
+
         return token
-    
+
     def validate_session(self, token: str) -> Optional[Dict[str, Any]]:
         """
         Validate a session token.
-        
+
         Args:
             token: JWT token
-            
+
         Returns:
             User details if valid
         """
         try:
             # Decode token
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            
+
             # Check if session exists and not expired
             conn = self.db.get_connection()
             cursor = conn.cursor()
-            
+
             cursor.execute("""
                 SELECT u.id, u.username, u.email, u.role
                 FROM prompt_studio_sessions s
@@ -430,7 +430,7 @@ class AuthenticationManager:
                 WHERE s.token = ? AND s.expires_at > CURRENT_TIMESTAMP
                     AND u.is_active = 1
             """, (token,))
-            
+
             row = cursor.fetchone()
             if row:
                 return {
@@ -439,40 +439,40 @@ class AuthenticationManager:
                     "email": row[2],
                     "role": row[3]
                 }
-            
+
         except JWTError:
             pass
-        
+
         return None
-    
+
     def revoke_session(self, token: str):
         """Revoke a session."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute(
             "DELETE FROM prompt_studio_sessions WHERE token = ?",
             (token,)
         )
-        
+
         conn.commit()
-    
+
     ####################################################################################################################
     # Helper Methods
-    
+
     def _hash_password(self, password: str) -> str:
         """Hash a password using PBKDF2."""
         salt = secrets.token_bytes(32)
         pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
         return salt.hex() + pwd_hash.hex()
-    
+
     def _verify_password(self, password: str, password_hash: str) -> bool:
         """Verify a password against hash."""
         salt = bytes.fromhex(password_hash[:64])
         stored_hash = password_hash[64:]
         pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000)
         return pwd_hash.hex() == stored_hash
-    
+
     def _generate_api_key(self) -> str:
         """Generate a unique API key."""
         return f"pstudio_{secrets.token_urlsafe(32)}"
@@ -482,11 +482,11 @@ class AuthenticationManager:
 
 class PermissionManager:
     """Manages permissions for Prompt Studio resources."""
-    
+
     def __init__(self, db: PromptStudioDatabase):
         """
         Initialize permission manager.
-        
+
         Args:
             db: Database instance
         """
@@ -497,19 +497,19 @@ class PermissionManager:
             stacklevel=2,
         )
         self.db = db
-    
+
     def check_permission(self, user_id: int, permission: Permission,
                         resource_type: Optional[str] = None,
                         resource_id: Optional[int] = None) -> bool:
         """
         Check if user has permission.
-        
+
         Args:
             user_id: User ID
             permission: Required permission
             resource_type: Type of resource (project, prompt, etc.)
             resource_id: Resource ID
-            
+
         Returns:
             True if user has permission
         """
@@ -517,23 +517,23 @@ class PermissionManager:
         user_role = self._get_user_role(user_id)
         if not user_role:
             return False
-        
+
         # Check role-based permissions
         role_perms = ROLE_PERMISSIONS.get(Role(user_role), set())
         if permission in role_perms:
             return True
-        
+
         # Check resource-specific permissions
         if resource_type == "project" and resource_id:
             return self._check_project_permission(user_id, resource_id, permission)
-        
+
         return False
-    
+
     def grant_project_access(self, project_id: int, user_id: int,
                            role: Role, granted_by: int):
         """
         Grant user access to a project.
-        
+
         Args:
             project_id: Project ID
             user_id: User ID to grant access
@@ -542,10 +542,10 @@ class PermissionManager:
         """
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         # Get role permissions
         permissions = list(ROLE_PERMISSIONS.get(role, set()))
-        
+
         params = (
             project_id,
             user_id,
@@ -579,7 +579,7 @@ class PermissionManager:
             )
 
         conn.commit()
-        
+
         # Log action
         self.log_action(
             user_id=granted_by,
@@ -588,20 +588,20 @@ class PermissionManager:
             resource_id=project_id,
             details=f"Granted {role.value} to user {user_id}"
         )
-    
+
     def revoke_project_access(self, project_id: int, user_id: int,
                              revoked_by: int):
         """Revoke user access to a project."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             DELETE FROM prompt_studio_project_permissions
             WHERE project_id = ? AND user_id = ?
         """, (project_id, user_id))
-        
+
         conn.commit()
-        
+
         # Log action
         self.log_action(
             user_id=revoked_by,
@@ -610,24 +610,24 @@ class PermissionManager:
             resource_id=project_id,
             details=f"Revoked access for user {user_id}"
         )
-    
+
     def get_user_projects(self, user_id: int) -> List[Dict[str, Any]]:
         """Get projects user has access to."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         # Get owned projects
         cursor.execute("""
             SELECT p.*, 'owner' as role
             FROM prompt_studio_projects p
             WHERE p.created_by = ? AND p.deleted = 0
         """, (user_id,))
-        
+
         projects = []
         for row in cursor.fetchall():
             project = self.db._row_to_dict(cursor, row)
             projects.append(project)
-        
+
         # Get shared projects
         cursor.execute("""
             SELECT p.*, pp.role
@@ -635,13 +635,13 @@ class PermissionManager:
             JOIN prompt_studio_project_permissions pp ON p.id = pp.project_id
             WHERE pp.user_id = ? AND p.deleted = 0
         """, (user_id,))
-        
+
         for row in cursor.fetchall():
             project = self.db._row_to_dict(cursor, row)
             projects.append(project)
-        
+
         return projects
-    
+
     def log_action(self, user_id: int, action: str,
                   resource_type: Optional[str] = None,
                   resource_id: Optional[int] = None,
@@ -650,7 +650,7 @@ class PermissionManager:
         """Log an action for audit trail."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             INSERT INTO prompt_studio_audit_log (
                 user_id, action, resource_type, resource_id,
@@ -664,44 +664,44 @@ class PermissionManager:
             details,
             ip_address
         ))
-        
+
         conn.commit()
-    
+
     def _get_user_role(self, user_id: int) -> Optional[str]:
         """Get user's global role."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute(
             "SELECT role FROM prompt_studio_users WHERE id = ?",
             (user_id,)
         )
-        
+
         row = cursor.fetchone()
         return row[0] if row else None
-    
+
     def _check_project_permission(self, user_id: int, project_id: int,
                                  permission: Permission) -> bool:
         """Check project-specific permission."""
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        
+
         # Check if user owns the project
         cursor.execute("""
             SELECT created_by FROM prompt_studio_projects
             WHERE id = ? AND deleted = 0
         """, (project_id,))
-        
+
         row = cursor.fetchone()
         if row and row[0] == user_id:
             return True  # Owner has all permissions
-        
+
         # Check granted permissions
         cursor.execute("""
             SELECT permissions FROM prompt_studio_project_permissions
             WHERE project_id = ? AND user_id = ?
         """, (project_id, user_id))
-        
+
         row = cursor.fetchone()
         if row:
             raw_permissions = row[0]
@@ -713,7 +713,7 @@ class PermissionManager:
                 except (json.JSONDecodeError, TypeError):
                     permissions = []
             return permission.value in permissions
-        
+
         return False
 
 ########################################################################################################################
@@ -721,58 +721,58 @@ class PermissionManager:
 
 class ResourceAccessControl:
     """Controls access to Prompt Studio resources."""
-    
+
     def __init__(self, auth_manager: AuthenticationManager,
                  perm_manager: PermissionManager):
         """
         Initialize resource access control.
-        
+
         Args:
             auth_manager: Authentication manager
             perm_manager: Permission manager
         """
         self.auth = auth_manager
         self.perms = perm_manager
-    
+
     def require_auth(self, token: Optional[str] = None,
                      api_key: Optional[str] = None) -> Dict[str, Any]:
         """
         Require authentication.
-        
+
         Args:
             token: JWT token
             api_key: API key
-            
+
         Returns:
             User details
-            
+
         Raises:
             ValueError: If not authenticated
         """
         user = None
-        
+
         if token:
             user = self.auth.validate_session(token)
         elif api_key:
             user = self.auth.authenticate_api_key(api_key)
-        
+
         if not user:
             raise ValueError("Authentication required")
-        
+
         return user
-    
+
     def require_permission(self, user: Dict[str, Any], permission: Permission,
                          resource_type: Optional[str] = None,
                          resource_id: Optional[int] = None):
         """
         Require specific permission.
-        
+
         Args:
             user: User details
             permission: Required permission
             resource_type: Resource type
             resource_id: Resource ID
-            
+
         Raises:
             ValueError: If permission denied
         """
@@ -780,18 +780,18 @@ class ResourceAccessControl:
             user["id"], permission, resource_type, resource_id
         ):
             raise ValueError(f"Permission denied: {permission.value}")
-    
+
     def filter_by_access(self, user: Dict[str, Any],
                         resources: List[Dict[str, Any]],
                         resource_type: str) -> List[Dict[str, Any]]:
         """
         Filter resources by user access.
-        
+
         Args:
             user: User details
             resources: List of resources
             resource_type: Type of resources
-            
+
         Returns:
             Filtered list of accessible resources
         """
@@ -799,9 +799,9 @@ class ResourceAccessControl:
             # Get user's accessible projects
             user_projects = self.perms.get_user_projects(user["id"])
             project_ids = {p["id"] for p in user_projects}
-            
+
             return [r for r in resources if r.get("id") in project_ids]
-        
+
         # For other resources, check project access
         filtered = []
         for resource in resources:
@@ -810,5 +810,5 @@ class ResourceAccessControl:
                 user["id"], Permission.PROJECT_READ, "project", project_id
             ):
                 filtered.append(resource)
-        
+
         return filtered

@@ -90,4 +90,3 @@ def test_offline_streaming_and_persist_flow(test_client: TestClient, auth_header
     assert messages_resp.status_code == 200
     msgs = messages_resp.json().get("messages")
     assert any(m.get("content") == user_prompt and m.get("sender") == "assistant" for m in msgs)
-

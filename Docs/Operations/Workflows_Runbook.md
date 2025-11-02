@@ -8,7 +8,7 @@ Operational guidance for running, migrating, backing up, and troubleshooting the
   - Schema management: created/updated by `WorkflowsDatabase._initialize_schema_backend()` on startup.
   - Check current schema: `SELECT version FROM workflow_schema_version;` Compare to `_CURRENT_SCHEMA_VERSION` in `Workflows_DB.py`.
   - Known migration (v3): convert `workflow_events.payload_json` from `TEXT` to `JSONB` and add GIN index; ensures efficient JSON filtering. Validate with `\d+ workflow_events`.
-  - Dry‑run checklist:
+  - Dry-run checklist:
     - Take snapshot (see Backups) and validate restore.
     - Put the app in maintenance mode to avoid concurrent writes.
     - Apply DB migrations by starting a single server instance; verify logs for schema bump completion.
@@ -38,7 +38,7 @@ Operational guidance for running, migrating, backing up, and troubleshooting the
   - Policy: delete file:// artifacts from disk if present and remove DB rows older than cutoff.
 
 - Run/event retention (manual)
-  - Consider periodic deletion by age for `workflow_events` and old `workflow_runs` in high‑volume deployments.
+  - Consider periodic deletion by age for `workflow_events` and old `workflow_runs` in high-volume deployments.
   - Example (Postgres): `DELETE FROM workflow_events WHERE created_at < NOW() - INTERVAL '90 days';` (test in staging first).
 
 ## Incident Triage
@@ -69,6 +69,6 @@ Operational guidance for running, migrating, backing up, and troubleshooting the
 ## Debugging
 
 Enable targeted debug logs to aid triage:
-- `WORKFLOWS_DEBUG=1` – enable broad Workflows debug logs.
-- `WORKFLOWS_ARTIFACTS_DEBUG=1` – log artifact endpoints (IDs, paths, Range headers, containment decisions).
-- `WORKFLOWS_DLQ_DEBUG=1` – log DLQ list/replay requests and worker processing decisions.
+- `WORKFLOWS_DEBUG=1` - enable broad Workflows debug logs.
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` - log artifact endpoints (IDs, paths, Range headers, containment decisions).
+- `WORKFLOWS_DLQ_DEBUG=1` - log DLQ list/replay requests and worker processing decisions.

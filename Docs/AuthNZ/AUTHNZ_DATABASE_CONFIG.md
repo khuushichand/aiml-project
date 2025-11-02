@@ -119,7 +119,7 @@ python -m tldw_Server_API.app.core.AuthNZ.migrate_to_multiuser
    ```bash
    # Ubuntu/Debian
    sudo apt-get install postgresql postgresql-contrib
-   
+
    # macOS
    brew install postgresql
    ```
@@ -128,16 +128,16 @@ python -m tldw_Server_API.app.core.AuthNZ.migrate_to_multiuser
    ```sql
    -- Connect as postgres superuser
    sudo -u postgres psql
-   
+
    -- Create database
    CREATE DATABASE tldw_users;
-   
+
    -- Create user
    CREATE USER tldw_user WITH ENCRYPTED PASSWORD 'secure_password';
-   
+
    -- Grant privileges
    GRANT ALL PRIVILEGES ON DATABASE tldw_users TO tldw_user;
-   
+
    -- Exit
    \q
    ```
@@ -147,7 +147,7 @@ python -m tldw_Server_API.app.core.AuthNZ.migrate_to_multiuser
    # Set PostgreSQL environment
    export TLDW_USER_DB_BACKEND=postgresql
    export DATABASE_URL=postgresql://tldw_user:secure_password@localhost:5432/tldw_users
-   
+
    # Run migration
    python -m tldw_Server_API.app.core.AuthNZ.migrate_to_multiuser
    ```
@@ -200,7 +200,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-  
+
   tldw_server:
     build: .
     environment:
@@ -463,5 +463,5 @@ PY
 
 ---
 
-*Last Updated: 2024*  
+*Last Updated: 2024*
 *AuthNZ Database Backend Version: 2.0*

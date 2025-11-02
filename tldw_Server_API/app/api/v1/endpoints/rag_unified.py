@@ -419,7 +419,7 @@ async def get_capabilities(request: Request):
             "supported": True,
             "strategies": ["flashrank", "cross_encoder", "hybrid", "llama_cpp"],
             "models": [
-                "flashrank", 
+                "flashrank",
                 "cross-encoder (e.g., BAAI/bge-reranker-v2-m3, Jina reranker)",
                 "GGUF via llama.cpp (e.g., Qwen3-Embedding-0.6B_f16.gguf, BGE/Jina GGUF)"
             ]
@@ -666,13 +666,13 @@ async def list_vlm_backends():
     summary="Unified RAG Search",
     description="""
     The unified RAG search endpoint with ALL features accessible via parameters.
-    
+
     **Key Features:**
     - No configuration files needed
     - Every feature is a direct parameter
     - Mix and match any features
     - Transparent execution
-    
+
     **Available Features:**
     - Query expansion (acronym, synonym, domain, entity)
     - Semantic caching with adaptive thresholds
@@ -687,7 +687,7 @@ async def list_vlm_backends():
     - Performance monitoring and observability
     - Batch processing support
     - Resilience features (retries, circuit breakers)
-    
+
     Simply set any feature parameter to enable it. All parameters are optional
     except the query itself.
     """,
@@ -708,7 +708,7 @@ async def unified_search_endpoint(
 ):
     """
     Unified RAG search with all features as parameters.
-    
+
     This endpoint replaces the complex configuration-based approach with
     a simple, parameter-driven interface. Every feature in the RAG system
     is accessible by setting the appropriate parameter.
@@ -740,7 +740,7 @@ async def unified_search_endpoint(
                 )
         except Exception:
             pass
-        
+
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
@@ -748,7 +748,7 @@ async def unified_search_endpoint(
             "notes_db_path": chacha_db.db_path if chacha_db else None,
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
-        
+
         # Branch: agentic strategy builds a synthetic chunk at query time
         if getattr(request, 'strategy', 'standard') == 'agentic':
             agentic_cfg = AgenticConfig(
@@ -826,7 +826,7 @@ async def unified_search_endpoint(
                 # Core parameters
                 query=request.query,
                 sources=request.sources,
-                
+
                 # Database paths
                 media_db_path=db_paths.get("media_db_path"),
                 notes_db_path=db_paths.get("notes_db_path"),
@@ -834,7 +834,7 @@ async def unified_search_endpoint(
                 # Database adapters (prefer adapters over raw SQL fallbacks)
                 media_db=media_db,
                 chacha_db=chacha_db,
-                
+
                 # Search configuration
                 search_mode=request.search_mode,
                 fts_level=request.fts_level,
@@ -842,29 +842,29 @@ async def unified_search_endpoint(
                 enable_intent_routing=request.enable_intent_routing,
                 top_k=request.top_k,
                 min_score=request.min_score,
-            
+
             # Query expansion
             expand_query=request.expand_query,
             expansion_strategies=request.expansion_strategies,
             spell_check=request.spell_check,
-            
+
             # Caching
             enable_cache=request.enable_cache,
             cache_threshold=request.cache_threshold,
             adaptive_cache=request.adaptive_cache,
-            
+
             # Filtering
             keyword_filter=request.keyword_filter,
             include_media_ids=request.include_media_ids,
             include_note_ids=request.include_note_ids,
-            
+
             # Security
             enable_security_filter=request.enable_security_filter,
             detect_pii=request.detect_pii,
             redact_pii=request.redact_pii,
             sensitivity_level=request.sensitivity_level,
             content_filter=request.content_filter,
-            
+
             # Document processing
             enable_table_processing=request.enable_table_processing,
             table_method=request.table_method,
@@ -874,7 +874,7 @@ async def unified_search_endpoint(
             vlm_detect_tables_only=request.vlm_detect_tables_only,
             vlm_max_pages=request.vlm_max_pages,
             vlm_late_chunk_top_k_docs=request.vlm_late_chunk_top_k_docs,
-            
+
             # Chunking
             chunk_type_filter=request.chunk_type_filter,
             enable_parent_expansion=request.enable_parent_expansion,
@@ -891,19 +891,19 @@ async def unified_search_endpoint(
             mv_max_spans=request.mv_max_spans,
             mv_flatten_to_spans=request.mv_flatten_to_spans,
             enable_numeric_table_boost=getattr(request, 'enable_numeric_table_boost', False),
-            
+
             # Reranking
             enable_reranking=request.enable_reranking,
             reranking_strategy=request.reranking_strategy,
             rerank_top_k=request.rerank_top_k,
             reranking_model=request.reranking_model,
-            
+
             # Citations
             enable_citations=request.enable_citations,
             citation_style=request.citation_style,
             include_page_numbers=request.include_page_numbers,
             enable_chunk_citations=request.enable_chunk_citations,
-            
+
             # Generation
             enable_generation=request.enable_generation,
             strict_extractive=getattr(request, 'strict_extractive', False),
@@ -940,58 +940,58 @@ async def unified_search_endpoint(
             claims_max=request.claims_max,
             claims_concurrency=request.claims_concurrency,
             nli_model=request.nli_model,
-            
+
             # Feedback
             collect_feedback=request.collect_feedback,
             feedback_user_id=request.feedback_user_id or (current_user.username if current_user else None),
             apply_feedback_boost=request.apply_feedback_boost,
-            
+
             # Monitoring
             enable_monitoring=request.enable_monitoring,
             enable_observability=request.enable_observability,
             trace_id=request.trace_id,
-            
+
             # Performance
             enable_performance_analysis=request.enable_performance_analysis,
             timeout_seconds=request.timeout_seconds,
-            
+
             # Quick wins
             highlight_results=request.highlight_results,
             highlight_query_terms=request.highlight_query_terms,
             track_cost=request.track_cost,
             debug_mode=request.debug_mode,
-            
+
             # Batch
             enable_batch=request.enable_batch,
             batch_queries=request.batch_queries,
             batch_concurrent=request.batch_concurrent,
-            
+
             # Resilience
             enable_resilience=request.enable_resilience,
             retry_attempts=request.retry_attempts,
             circuit_breaker=request.circuit_breaker,
-            
+
             # User context
             user_id=current_user.username if current_user else request.user_id,
             session_id=request.session_id
         )
-        
+
         # Convert to response format
         response = convert_result_to_response(result)
-        
+
         # Log performance if monitoring enabled
         if request.enable_monitoring:
             logger.info(f"Query completed in {result.total_time:.3f}s - Cache hit: {result.cache_hit}")
             if request.debug_mode:
                 logger.debug(f"Timings: {result.timings}")
                 logger.debug(f"Metadata: {result.metadata}")
-        
+
         # Handle any errors that occurred
         if result.errors and request.debug_mode:
             logger.warning(f"Errors during processing: {result.errors}")
-        
+
         return response
-        
+
     except Exception as e:
         logger.error(f"Unified search error: {e}", exc_info=True)
         import traceback
@@ -1035,7 +1035,7 @@ async def rag_implicit_feedback(
     summary="Batch RAG Search",
     description="""
     Process multiple queries concurrently using the unified pipeline.
-    
+
     All parameters from the single search endpoint are available and will
     be applied to all queries in the batch.
     """,
@@ -1052,21 +1052,21 @@ async def unified_batch_endpoint(
 ):
     """
     Batch processing endpoint for multiple queries.
-    
+
     Processes multiple queries concurrently with the same parameters.
     """
     try:
         logger.info(f"Batch RAG search: {len(request.queries)} queries, user={current_user.username if current_user else 'anonymous'}")
-        
+
         start_time = time.time()
-        
+
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
             "notes_db_path": None,
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
-        
+
         # Convert request to kwargs, excluding queries (Pydantic compat)
         kwargs = model_dump_compat(request, exclude={"queries", "max_concurrent"})
         kwargs.update(db_paths)
@@ -1080,16 +1080,16 @@ async def unified_batch_endpoint(
             chacha_db=chacha_db,
             **kwargs
         )
-        
+
         # Convert results
         responses = [convert_result_to_response(r) for r in results]
-        
+
         # Count successes and failures
         successful = sum(1 for r in results if not r.errors)
         failed = len(results) - successful
-        
+
         total_time = time.time() - start_time
-        
+
         return UnifiedBatchResponse(
             results=responses,
             total_queries=len(request.queries),
@@ -1097,7 +1097,7 @@ async def unified_batch_endpoint(
             failed=failed,
             total_time=total_time
         )
-        
+
     except Exception as e:
         logger.error(f"Batch search error: {e}")
         raise HTTPException(
@@ -1111,7 +1111,7 @@ async def unified_batch_endpoint(
     summary="Simple Search",
     description="""
     Simplified search endpoint for basic use cases.
-    
+
     Uses sensible defaults:
     - Caching enabled
     - Reranking enabled
@@ -1144,10 +1144,10 @@ async def simple_search_endpoint(
             mon.evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
         except Exception:
             pass
-        
+
         # Use the simple_search wrapper
         documents = await simple_search(query, top_k)
-        
+
         return {
             "query": query,
             "documents": [
@@ -1161,7 +1161,7 @@ async def simple_search_endpoint(
             ],
             "count": len(documents)
         }
-        
+
     except Exception as e:
         logger.error(f"Simple search error: {e}")
         raise HTTPException(
@@ -1376,7 +1376,7 @@ async def unified_search_stream_endpoint(
     summary="Advanced Search",
     description="""
     Advanced search with commonly used features enabled.
-    
+
     Automatically enables:
     - Query expansion
     - Citations
@@ -1408,13 +1408,13 @@ async def advanced_search_endpoint(
             mon.evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
         except Exception:
             pass
-        
+
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
-        
+
         # Use the advanced_search wrapper
         result = await advanced_search(
             query=query,
@@ -1424,9 +1424,9 @@ async def advanced_search_endpoint(
             chacha_db=chacha_db,
             **db_paths
         )
-        
+
         return convert_result_to_response(result)
-        
+
     except Exception as e:
         logger.error(f"Advanced search error: {e}")
         raise HTTPException(
@@ -1531,7 +1531,7 @@ async def unified_health_simple(request: Request):
     try:
         # Test basic search functionality
         test_result = await simple_search("test", top_k=1)
-        
+
         return {
             "status": "healthy",
             "pipeline": "unified",

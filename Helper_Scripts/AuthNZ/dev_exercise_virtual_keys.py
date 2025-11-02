@@ -120,4 +120,3 @@ if __name__ == "__main__":
     exercise_virtual_jwt()
     exercise_virtual_api_key()
     print("\nDone.")
-

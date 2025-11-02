@@ -21,4 +21,3 @@ Guidance
 - When changing Media/ChaCha schema: update `Media_DB_v2._CURRENT_SCHEMA_VERSION` and add inline migration helpers or SQLite migration SQL files (under `DB_Management/migrations/`).
 - When changing Evaluations/Audit schema: update the appropriate migration module and record the step in the module’s registry tables.
 - Keep tests aligned with the registry logic: content tests should validate `schema_version` and FTS/RLS; evaluation tests should validate both `schema_version` and `migrations` integrity.
-

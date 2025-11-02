@@ -28,7 +28,7 @@ def get_config_path() -> Path:
     config_path = os.getenv("TLDW_CONFIG_PATH")
     if config_path:
         return Path(config_path)
-    
+
     # Default location
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))))
@@ -41,20 +41,20 @@ def load_safe_config() -> Dict:
     Excludes sensitive information like actual API keys.
     """
     config_path = get_config_path()
-    
+
     if not config_path.exists():
         logger.warning(f"Config file not found at {config_path}")
         return {
             "configured": False,
             "message": "Configuration file not found"
         }
-    
+
     config = configparser.ConfigParser()
     config.read(config_path)
-    
+
     # Get authentication mode
     auth_mode = config.get('Authentication', 'auth_mode', fallback='single_user')
-    
+
     # Determine what to expose based on auth mode
     safe_config = {
         "configured": True,
@@ -64,7 +64,7 @@ def load_safe_config() -> Dict:
             "port": config.getint('Server', 'port', fallback=8000)
         }
     }
-    
+
     # In single-user mode, we can expose the API key for documentation
     if auth_mode == 'single_user':
         api_key = config.get('Authentication', 'single_user_api_key', fallback='').strip()
@@ -79,7 +79,7 @@ def load_safe_config() -> Dict:
         safe_config["api_key_for_docs"] = "" if api_key in placeholders else api_key
     else:
         safe_config["api_key_for_docs"] = ""
-    
+
     # Check which LLM providers are configured (without exposing keys)
     configured_providers = []
     if config.has_section('API'):
@@ -94,14 +94,14 @@ def load_safe_config() -> Dict:
             'huggingface_api_key': 'HuggingFace',
             'openrouter_api_key': 'OpenRouter'
         }
-        
+
         for key_name, provider_name in provider_keys.items():
             value = config.get('API', key_name, fallback='')
             if value and value not in ['', 'your_api_key_here', 'YOUR_API_KEY_HERE']:
                 configured_providers.append(provider_name)
-    
+
     safe_config["configured_llm_providers"] = configured_providers
-    
+
     # Feature flags / capabilities (safe to expose)
     try:
         from tldw_Server_API.app.core.config import settings as _settings
@@ -114,7 +114,7 @@ def load_safe_config() -> Dict:
         safe_config["capabilities"] = caps
     except Exception:
         pass
-    
+
     return safe_config
 
 
@@ -122,27 +122,27 @@ def load_safe_config() -> Dict:
 async def get_documentation_config():
     """
     Get configuration information suitable for auto-populating documentation.
-    
+
     This endpoint returns non-sensitive configuration that can be used to:
     - Auto-populate API keys in documentation (single-user mode only)
     - Show which LLM providers are configured
     - Provide the correct base URL for examples
-    
+
     Returns:
         Dict with configuration information safe for documentation
     """
     config = load_safe_config()
-    
+
     # Build base URL
     host = config.get("server", {}).get("host", "127.0.0.1")
     port = config.get("server", {}).get("port", 8000)
-    
+
     # Convert 0.0.0.0 to localhost for documentation
     if host == "0.0.0.0":
         host = "localhost"
-    
+
     base_url = f"http://{host}:{port}"
-    
+
     return {
         "configured": config.get("configured", False),
         "auth_mode": config.get("auth_mode", "single_user"),
@@ -335,7 +335,7 @@ async def get_quickstart_redirect():
     2) Config [WebUI] quickstart_url
     3) Config [Docs] quickstart_url
     4) Default: /webui/
-    
+
     Behavior:
     - If the target starts with http(s)://, redirect there.
     - If the target starts with '/', redirect to that path (same origin).

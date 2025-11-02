@@ -34,4 +34,3 @@ def test_media_and_prompts_paths_follow_env_base(monkeypatch, tmp_path):
     # Ensure directories are created
     assert media_path.parent.exists()
     assert prompts_path.parent.exists()
-

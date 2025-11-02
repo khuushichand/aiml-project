@@ -66,7 +66,7 @@ chunking_router = APIRouter()
     response_model=ChunkingResponse,
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "Invalid input, options, or chunking error (e.g., invalid JSON in text for 'json' method)."},
-        status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Validation error in request payload."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "Validation error in request payload."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error during chunking."},
     }
 )
@@ -99,7 +99,7 @@ async def process_text_for_chunking_json(
         # Import necessary modules for template support
         import json
         from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
-        
+
         try:
             # Use the injected user-specific database instance
             # Get template from database
@@ -110,20 +110,20 @@ async def process_text_for_chunking_json(
             if template_data:
                 logger.info(f"Using chunking template: {request_data.options.template_name}")
                 template_used = True
-                
+
                 # Parse template JSON and prepare options
                 template_config = json.loads(template_data['template_json'])
-                
+
                 # Start with template's chunking config
                 effective_options = template_config.get('chunking', {}).get('config', {}).copy()
                 effective_options['method'] = template_config.get('chunking', {}).get('method', 'words')
-                
+
                 # Allow explicit request options to override template defaults
                 request_options_dict = request_data.options.model_dump(exclude_unset=True)
                 # Remove template_name from override options
                 request_options_dict.pop('template_name', None)
                 effective_options.update(request_options_dict)
-                
+
                 logger.debug(f"Template-based effective options: {effective_options}")
 
                 # Build Template object (DB schema -> stages)
@@ -225,7 +225,7 @@ async def process_text_for_chunking_json(
         except Exception as e:
             logger.error(f"Error loading template: {e}")
             # Fall back to regular processing
-    
+
     if not template_used:
         # Prepare effective chunking options (original logic)
         effective_options = default_chunk_options_from_lib.copy()
@@ -250,7 +250,7 @@ async def process_text_for_chunking_json(
                 effective_options[key_to_check] = int(effective_options[key_to_check])
             except (ValueError, TypeError) as e:
                  raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Option '{key_to_check}' must be an integer. Value: {effective_options[key_to_check]}. Error: {e}"
                 )
 
@@ -389,7 +389,7 @@ async def process_text_for_chunking_json(
         )
         for chunk in chunk_results
     ]
-    
+
     return ChunkingResponse(
         chunks=chunked_responses,
         original_file_name=request_data.file_name,
@@ -405,7 +405,7 @@ async def process_text_for_chunking_json(
     response_model=ChunkingResponse,
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "No file uploaded, or chunking error."},
-        status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Validation error in form parameters."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "Validation error in form parameters."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error during chunking."},
     }
 )
@@ -558,7 +558,7 @@ async def process_file_for_chunking(
         )
         for chunk in chunk_results
     ]
-    
+
     return ChunkingResponse(
         chunks=chunked_responses,
         original_file_name=file.filename,

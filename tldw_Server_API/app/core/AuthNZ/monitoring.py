@@ -57,60 +57,60 @@ if PROMETHEUS_AVAILABLE:
         'Total number of authentication attempts',
         ['method', 'status']
     )
-    
+
     api_key_operations_total = Counter(
         'authnz_api_key_operations_total',
         'Total number of API key operations',
         ['operation']
     )
-    
+
     rate_limit_violations_total = Counter(
         'authnz_rate_limit_violations_total',
         'Total number of rate limit violations',
         ['endpoint']
     )
-    
+
     security_alerts_total = Counter(
         'authnz_security_alerts_total',
         'Total number of security alerts',
         ['alert_type']
     )
-    
+
     # Histograms
     auth_duration_seconds = Histogram(
         'authnz_auth_duration_seconds',
         'Authentication request duration in seconds',
         ['method']
     )
-    
+
     password_strength_score = Histogram(
         'authnz_password_strength_score',
         'Password strength scores',
         buckets=[0, 20, 40, 60, 80, 100]
     )
-    
+
     # Gauges
     active_sessions_count = Gauge(
         'authnz_active_sessions_count',
         'Number of active sessions'
     )
-    
+
     active_api_keys_count = Gauge(
         'authnz_active_api_keys_count',
         'Number of active API keys'
     )
-    
+
     failed_auth_rate = Gauge(
         'authnz_failed_auth_rate_5min',
         'Failed authentication rate over 5 minutes'
     )
-    
+
     security_alert_channel_status = Gauge(
         'authnz_security_alert_channel_status',
         'Last dispatch status per security alert sink (1=success, 0=disabled, -1=failure)',
         ['sink']
     )
-    
+
     security_alert_last_success = Gauge(
         'authnz_security_alert_last_success',
         'Overall result of the last security alert dispatch (1=success, 0=failure)'
@@ -140,7 +140,7 @@ else:
 
 class AuthNZMonitor:
     """Centralized monitoring for AuthNZ operations"""
-    
+
     def __init__(self):
         """Initialize the monitor"""
         self.settings = get_settings()
@@ -152,7 +152,7 @@ class AuthNZMonitor:
             'suspicious_ips': 5,
             'password_reset_flood': 10
         }
-        
+
     async def record_metric(
         self,
         metric_type: MetricType,
@@ -162,7 +162,7 @@ class AuthNZMonitor:
     ):
         """
         Record a metric
-        
+
         Args:
             metric_type: Type of metric to record
             value: Metric value (default 1 for counters)
@@ -173,16 +173,16 @@ class AuthNZMonitor:
             # Update Prometheus metrics if available
             if PROMETHEUS_AVAILABLE:
                 await self._update_prometheus_metric(metric_type, value, labels)
-            
+
             # Store in database for analysis
             await self._store_metric_in_db(metric_type, value, labels, metadata)
-            
+
             # Check if this metric triggers any alerts
             await self._check_alert_conditions(metric_type, value, metadata)
-            
+
         except Exception as e:
             logger.error(f"Failed to record metric {metric_type}: {e}")
-    
+
     async def _update_prometheus_metric(
         self,
         metric_type: MetricType,
@@ -192,27 +192,27 @@ class AuthNZMonitor:
         """Update Prometheus metrics"""
         if not PROMETHEUS_AVAILABLE:
             return
-        
+
         labels = labels or {}
-        
+
         # Update appropriate Prometheus metric
         if metric_type in [MetricType.AUTH_ATTEMPT, MetricType.AUTH_SUCCESS, MetricType.AUTH_FAILURE]:
             method = labels.get('method', 'unknown')
             status = 'success' if metric_type == MetricType.AUTH_SUCCESS else 'failure'
             auth_attempts_total.labels(method=method, status=status).inc(value)
-            
+
         elif metric_type in [MetricType.API_KEY_CREATED, MetricType.API_KEY_ROTATED, MetricType.API_KEY_REVOKED]:
             operation = metric_type.value.replace('api_key_', '')
             api_key_operations_total.labels(operation=operation).inc(value)
-            
+
         elif metric_type == MetricType.RATE_LIMIT_HIT:
             endpoint = labels.get('endpoint', 'unknown')
             rate_limit_violations_total.labels(endpoint=endpoint).inc(value)
-            
+
         elif metric_type == MetricType.SECURITY_ALERT:
             alert_type = labels.get('alert_type', 'unknown')
             security_alerts_total.labels(alert_type=alert_type).inc(value)
-    
+
     async def _store_metric_in_db(
         self,
         metric_type: MetricType,
@@ -223,7 +223,7 @@ class AuthNZMonitor:
         """Store metric in database for historical analysis"""
         try:
             db_pool = await get_db_pool()
-            
+
             # Prepare data
             metric_data = {
                 'type': metric_type.value,
@@ -232,7 +232,7 @@ class AuthNZMonitor:
                 'metadata': metadata or {},
                 'timestamp': datetime.utcnow().isoformat()
             }
-            
+
             # Store in audit log for now (could have dedicated metrics table)
             async with db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchrow'):
@@ -258,10 +258,10 @@ class AuthNZMonitor:
                          datetime.utcnow().isoformat())
                     )
                     await conn.commit()
-                    
+
         except Exception as e:
             logger.error(f"Failed to store metric in database: {e}")
-    
+
     async def _check_alert_conditions(
         self,
         metric_type: MetricType,
@@ -275,7 +275,7 @@ class AuthNZMonitor:
             'timestamp': datetime.utcnow(),
             'metadata': metadata
         })
-        
+
         # Clean old entries from buffer (keep last hour)
         cutoff = datetime.utcnow() - timedelta(hours=1)
         for key in self._metrics_buffer:
@@ -283,7 +283,7 @@ class AuthNZMonitor:
                 m for m in self._metrics_buffer[key]
                 if m['timestamp'] > cutoff
             ]
-        
+
         # Check specific alert conditions
         if metric_type == MetricType.AUTH_FAILURE:
             await self._check_auth_failure_rate()
@@ -291,7 +291,7 @@ class AuthNZMonitor:
             await self._check_rate_limit_violations()
         elif metric_type == MetricType.API_KEY_VALIDATION:
             await self._check_api_key_abuse()
-    
+
     async def _check_auth_failure_rate(self):
         """Check if authentication failure rate is too high"""
         five_min_ago = datetime.utcnow() - timedelta(minutes=5)
@@ -299,14 +299,14 @@ class AuthNZMonitor:
             m for m in self._metrics_buffer[MetricType.AUTH_FAILURE]
             if m['timestamp'] > five_min_ago
         ]
-        
+
         if len(recent_failures) > self._alert_thresholds['failed_auth_5min']:
             # Extract unique IPs
             unique_ips = set()
             for failure in recent_failures:
                 if failure['metadata'] and 'ip_address' in failure['metadata']:
                     unique_ips.add(failure['metadata']['ip_address'])
-            
+
             await self.trigger_alert(
                 'high_auth_failure_rate',
                 f"{len(recent_failures)} authentication failures in 5 minutes from {len(unique_ips)} unique IPs",
@@ -316,7 +316,7 @@ class AuthNZMonitor:
                     'unique_ips': list(unique_ips)
                 }
             )
-    
+
     async def _check_rate_limit_violations(self):
         """Check if rate limit violations are excessive"""
         fifteen_min_ago = datetime.utcnow() - timedelta(minutes=15)
@@ -324,7 +324,7 @@ class AuthNZMonitor:
             m for m in self._metrics_buffer[MetricType.RATE_LIMIT_HIT]
             if m['timestamp'] > fifteen_min_ago
         ]
-        
+
         if len(recent_violations) > self._alert_thresholds['rate_limit_violations_15min']:
             await self.trigger_alert(
                 'excessive_rate_limiting',
@@ -332,7 +332,7 @@ class AuthNZMonitor:
                 severity='medium',
                 metadata={'violation_count': len(recent_violations)}
             )
-    
+
     async def _check_api_key_abuse(self):
         """Check for API key abuse patterns"""
         one_hour_ago = datetime.utcnow() - timedelta(hours=1)
@@ -340,13 +340,13 @@ class AuthNZMonitor:
             m for m in self._metrics_buffer[MetricType.API_KEY_VALIDATION]
             if m['timestamp'] > one_hour_ago
         ]
-        
+
         # Group by API key
         key_usage = defaultdict(int)
         for validation in recent_validations:
             if validation['metadata'] and 'key_id' in validation['metadata']:
                 key_usage[validation['metadata']['key_id']] += 1
-        
+
         # Check for abuse
         for key_id, count in key_usage.items():
             if count > self._alert_thresholds['api_key_abuse_hourly']:
@@ -356,7 +356,7 @@ class AuthNZMonitor:
                     severity='high',
                     metadata={'key_id': key_id, 'usage_count': count}
                 )
-    
+
     async def trigger_alert(
         self,
         alert_type: str,
@@ -366,7 +366,7 @@ class AuthNZMonitor:
     ):
         """
         Trigger a security alert
-        
+
         Args:
             alert_type: Type of alert
             message: Alert message
@@ -380,29 +380,29 @@ class AuthNZMonitor:
             'high': logger.error,
             'critical': logger.critical
         }.get(severity, logger.warning)
-        
+
         log_method(f"🚨 SECURITY ALERT [{severity.upper()}]: {alert_type} - {message}")
-        
+
         # Record the alert as a metric
         await self.record_metric(
             MetricType.SECURITY_ALERT,
             labels={'alert_type': alert_type, 'severity': severity},
             metadata=metadata
         )
-        
+
         # In production, integrate with alerting services
         # await self._send_to_alerting_service(alert_type, message, severity, metadata)
-    
+
     async def get_metrics_summary(
         self,
         time_range_minutes: int = 60
     ) -> Dict[str, Any]:
         """
         Get a summary of metrics for the specified time range
-        
+
         Args:
             time_range_minutes: Time range in minutes
-            
+
         Returns:
             Dictionary with metrics summary
         """
@@ -411,11 +411,11 @@ class AuthNZMonitor:
             cutoff = datetime.utcnow() - timedelta(minutes=time_range_minutes)
             is_postgres = getattr(db_pool, "pool", None) is not None
             cutoff_param = cutoff if is_postgres else cutoff.isoformat()
-            
+
             # Get authentication metrics
             auth_metrics = await db_pool.fetchone(
                 """
-                SELECT 
+                SELECT
                     COUNT(CASE WHEN action = 'metric_auth_success' THEN 1 END) as successful_auths,
                     COUNT(CASE WHEN action = 'metric_auth_failure' THEN 1 END) as failed_auths,
                     COUNT(CASE WHEN action = 'metric_rate_limit_hit' THEN 1 END) as rate_limit_hits
@@ -425,7 +425,7 @@ class AuthNZMonitor:
                 """,
                 cutoff_param,
             )
-            
+
             # Get active sessions count
             revoked_inactive_value = False
             now_dt = datetime.utcnow()
@@ -440,7 +440,7 @@ class AuthNZMonitor:
                 """,
                 (expires_param, revoked_inactive_value),
             )
-            
+
             # Get active API keys count
             api_keys_count = await db_pool.fetchone(
                 """
@@ -449,11 +449,11 @@ class AuthNZMonitor:
                 WHERE status = 'active'
                 """
             )
-            
+
             # Calculate success rate
             total_auths = (auth_metrics['successful_auths'] or 0) + (auth_metrics['failed_auths'] or 0)
             success_rate = ((auth_metrics['successful_auths'] or 0) / total_auths * 100) if total_auths > 0 else 100
-            
+
             return {
                 'time_range_minutes': time_range_minutes,
                 'authentication': {
@@ -472,18 +472,18 @@ class AuthNZMonitor:
                 },
                 'timestamp': now_dt.isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get metrics summary: {e}")
             return {
                 'error': str(e),
                 'timestamp': datetime.utcnow().isoformat()
             }
-    
+
     async def get_security_dashboard(self) -> Dict[str, Any]:
         """
         Get a comprehensive security dashboard
-        
+
         Returns:
             Dictionary with security metrics and alerts
         """
@@ -491,7 +491,7 @@ class AuthNZMonitor:
             # Get metrics for different time ranges
             last_hour = await self.get_metrics_summary(60)
             last_24h = await self.get_metrics_summary(24 * 60)
-            
+
             # Get recent alerts
             db_pool = await get_db_pool()
             recent_alerts = await db_pool.fetchall(
@@ -503,7 +503,7 @@ class AuthNZMonitor:
                 LIMIT 10
                 """
             )
-            
+
             alerts_list = []
             for alert in recent_alerts:
                 try:
@@ -515,7 +515,7 @@ class AuthNZMonitor:
                     })
                 except Exception as e:
                     logger.debug(f"Failed to parse monitoring alert details JSON: error={e}")
-            
+
             return {
                 'metrics': {
                     'last_hour': last_hour,
@@ -525,23 +525,23 @@ class AuthNZMonitor:
                 'health_status': self._calculate_health_status(last_hour),
                 'timestamp': datetime.utcnow().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get security dashboard: {e}")
             return {
                 'error': str(e),
                 'timestamp': datetime.utcnow().isoformat()
             }
-    
+
     def _calculate_health_status(self, metrics: Dict[str, Any]) -> str:
         """Calculate overall health status based on metrics"""
         if 'error' in metrics:
             return 'unknown'
-        
+
         # Check various health indicators
         auth_success_rate = metrics.get('authentication', {}).get('success_rate', 100)
         rate_violations = metrics.get('rate_limiting', {}).get('violations', 0)
-        
+
         if auth_success_rate < 50 or rate_violations > 100:
             return 'critical'
         elif auth_success_rate < 80 or rate_violations > 50:
@@ -574,7 +574,7 @@ async def record_auth_attempt(
 ):
     """Convenience function to record authentication attempt"""
     monitor = await get_authnz_monitor()
-    
+
     metric_type = MetricType.AUTH_SUCCESS if success else MetricType.AUTH_FAILURE
     await monitor.record_metric(
         metric_type,
@@ -593,13 +593,13 @@ async def record_api_key_operation(
 ):
     """Convenience function to record API key operation"""
     monitor = await get_authnz_monitor()
-    
+
     metric_map = {
         'created': MetricType.API_KEY_CREATED,
         'rotated': MetricType.API_KEY_ROTATED,
         'revoked': MetricType.API_KEY_REVOKED
     }
-    
+
     metric_type = metric_map.get(operation)
     if metric_type:
         await monitor.record_metric(
@@ -614,7 +614,7 @@ async def record_rate_limit_violation(
 ):
     """Convenience function to record rate limit violation"""
     monitor = await get_authnz_monitor()
-    
+
     await monitor.record_metric(
         MetricType.RATE_LIMIT_HIT,
         labels={'endpoint': endpoint},

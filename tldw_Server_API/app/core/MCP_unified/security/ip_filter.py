@@ -42,7 +42,7 @@ class IPAccessController:
                 if "/" in entry:
                     networks.append(ipaddress.ip_network(entry, strict=False))
                 else:
-                    # Single IP – derive correct mask
+                    # Single IP - derive correct mask
                     family_mask = "/32" if ":" not in entry else "/128"
                     networks.append(ipaddress.ip_network(f"{entry}{family_mask}", strict=False))
             except ValueError:
@@ -91,7 +91,7 @@ class IPAccessController:
     def is_allowed(self, ip_str: Optional[str]) -> bool:
         """Return True if the resolved IP passes the allow/block rules."""
         if not ip_str:
-            # Unknown IP – only allow when no allowlist is configured.
+            # Unknown IP - only allow when no allowlist is configured.
             return not self.allowed_networks
         try:
             ip_obj = ipaddress.ip_address(ip_str)

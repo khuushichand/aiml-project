@@ -45,7 +45,7 @@ Optional flags:
 The script logs progress and finishes with a metric summary. Example output:
 
 ```
-2025-02-01 12:00:00.000 | INFO  | Benchmark complete — F1: 0.952 (± 0.006), Precision: 0.941 (± 0.008), Recall: 0.964 (± 0.006), Accuracy: 0.305 (± 0.034)
+2025-02-01 12:00:00.000 | INFO  | Benchmark complete - F1: 0.952 (± 0.006), Precision: 0.941 (± 0.008), Recall: 0.964 (± 0.006), Accuracy: 0.305 (± 0.034)
 ```
 
 ## Programmatic Usage

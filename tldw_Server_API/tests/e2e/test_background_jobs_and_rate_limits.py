@@ -107,4 +107,3 @@ def test_rate_limit_backoff_retry_envelope(api_client):
         elapsed = time.time() - start
         assert elapsed >= 0.5, f"Backoff did not occur (elapsed={elapsed:.2f}s)"
         pytest.skip("Still rate-limited after retries; environment enforces longer windows.")
-

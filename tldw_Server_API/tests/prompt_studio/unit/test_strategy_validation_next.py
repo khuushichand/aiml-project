@@ -90,4 +90,3 @@ def test_hp_and_random_max_tokens_range_ok(backend):
 def test_hp_and_random_max_tokens_range_invalid(backend, cfg):
     with pytest.raises(HTTPException):
         pso._validate_strategy_config(backend, cfg)
-

@@ -370,12 +370,12 @@ evaluation_params:
     Question: {question}
     Expected: {expected_answer}
     Model: {model_answer}
-    
+
     Rate 0-1 based on:
     - Factual accuracy (50%)
     - Completeness (30%)
     - Clarity (20%)
-    
+
     SCORE: X.X EXPLANATION: ...
 ```
 

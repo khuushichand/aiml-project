@@ -8,4 +8,3 @@ appropriate. Ask clarifying questions when necessary.
 
 Changelog:
 - v1.0: Seed default system prompt.
-

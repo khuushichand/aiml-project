@@ -3,7 +3,7 @@ info:
   title: TLDW Server Chatbook API
   description: |
     API for managing chatbooks - portable archives of conversations, notes, and other content.
-    
+
     Chatbooks provide a way to backup, share, and migrate content between servers or accounts.
     They are ZIP archives containing JSON metadata and content files.
   version: 1.0.0
@@ -371,7 +371,7 @@ components:
       schema:
         type: string
         example: cb_export_20240115_abc123
-    
+
     StatusFilter:
       name: status
       in: query
@@ -379,7 +379,7 @@ components:
       schema:
         type: string
         enum: [pending, in_progress, completed, failed, cancelled, expired]
-    
+
     Limit:
       name: limit
       in: query
@@ -389,7 +389,7 @@ components:
         minimum: 1
         maximum: 1000
         default: 100
-    
+
     Offset:
       name: offset
       in: query
@@ -398,7 +398,7 @@ components:
         type: integer
         minimum: 0
         default: 0
-    
+
     OrderBy:
       name: order_by
       in: query
@@ -407,7 +407,7 @@ components:
         type: string
         enum: [created_at, completed_at, name, size]
         default: created_at
-    
+
     OrderDesc:
       name: order_desc
       in: query

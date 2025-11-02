@@ -44,4 +44,3 @@ def ndcg(ranked_ids: List[str], gt_ids: List[str], k: int) -> float:
     for i in range(ideal_hits):
         idcg += (2.0**1.0 - 1.0) / math.log2(i + 2.0)
     return (dcg / idcg) if idcg > 0 else 0.0
-

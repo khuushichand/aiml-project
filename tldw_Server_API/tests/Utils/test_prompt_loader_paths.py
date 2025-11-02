@@ -26,4 +26,3 @@ def test_prompts_dir_respects_env_override(tmp_path, monkeypatch):
         assert p == prompts.resolve(), f"Env override not respected: {p} vs {prompts}"
     finally:
         monkeypatch.delenv("TLDW_CONFIG_DIR", raising=False)
-

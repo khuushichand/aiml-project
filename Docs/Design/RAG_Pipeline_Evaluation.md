@@ -1,4 +1,4 @@
-# RAG Pipeline Evaluation – Design
+# RAG Pipeline Evaluation - Design
 
 This document specifies the design to evaluate end-to-end RAG configurations using the existing unified RAG pipeline. The goal is to let users compare ingestion/chunking/retrieval/reranking/generation options and obtain step-level metrics and a leaderboard to pick the best configuration for their media and tasks.
 
@@ -45,7 +45,7 @@ Out-of-scope (v1):
 
 4. Caching
    - Fingerprint inputs (query, source selection, chunking flags) to cache:
-     - Retrieval-time chunksets (if materialized in memory for a run) – optional; primarily we rely on pipeline’s on-the-fly chunking.
+     - Retrieval-time chunksets (if materialized in memory for a run) - optional; primarily we rely on pipeline’s on-the-fly chunking.
      - Embeddings and retrieval outcomes via semantic cache where possible.
    - Config toggles in spec: `cache_chunksets`, `cache_embeddings`, `cache_retrievals`.
 
@@ -192,7 +192,7 @@ Notes:
 ## Testing Strategy
 
 - Unit: schema normalization/validators; grid expansion; metric calculators; caching keys/fingerprints.
-- Integration: synthetic dataset (2–3 QAs); 2–3 configs per dimension; mock LLM/embeddings for determinism; assert leaderboard ordering and best-config selection.
+- Integration: synthetic dataset (2-3 QAs); 2-3 configs per dimension; mock LLM/embeddings for determinism; assert leaderboard ordering and best-config selection.
 
 ## Future Work (v1.1)
 

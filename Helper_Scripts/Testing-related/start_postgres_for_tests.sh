@@ -30,4 +30,3 @@ done
 echo "Postgres ready. Example env to run tests:"
 echo "  export TEST_DATABASE_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${PG_DB}"
 echo "  python -m pytest -m 'integration' -v"
-

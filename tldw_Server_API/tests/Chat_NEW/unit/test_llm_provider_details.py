@@ -38,4 +38,3 @@ def test_provider_details_includes_capabilities_and_health(monkeypatch):
             # health should be present due to injection from manager
             assert 'health' in detail
             assert detail['health'].get('status') in ('healthy', 'degraded', 'unhealthy', 'circuit_open', 'CLOSED', 'OPEN', 'HALF_OPEN')
-

@@ -56,7 +56,7 @@ Unread/Unreviewed
 
 
 ```
- I would use a model like moondream2 and apply for each page a prompt "describe this page" and then another prompt with the current page and previous N page descriptions to ask if a new document started 
+ I would use a model like moondream2 and apply for each page a prompt "describe this page" and then another prompt with the current page and previous N page descriptions to ask if a new document started
 ```
 
 ```
@@ -64,5 +64,5 @@ Unread/Unreviewed
 
 With fiction I've also found that supplying the LLM with the book's name can often really help. Pushing it in the right direction to "understand" the setting, characters, etc.
 
-I basically just scripted everything out in python. It sounds like a pain, but it's really just some loops, strings, and a post/response with the LLM's api. 
+I basically just scripted everything out in python. It sounds like a pain, but it's really just some loops, strings, and a post/response with the LLM's api.
 ```

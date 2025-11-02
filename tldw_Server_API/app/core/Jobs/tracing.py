@@ -35,4 +35,3 @@ def job_span(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: Optiona
         meta2 = dict(meta)
         meta2["duration_ms"] = int(dur * 1000)
         logger.bind(job_trace=True).info(f"job_span.end event={event} attrs={meta2}")
-

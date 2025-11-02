@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 
 class TestJWTServiceUnit:
     """Unit tests for JWT service."""
-    
+
     def test_create_access_token(self, jwt_service):
         """Test creating an access token."""
         token = jwt_service.create_access_token(
@@ -23,17 +23,17 @@ class TestJWTServiceUnit:
             username="testuser",
             role="user"
         )
-        
+
         assert token is not None
         assert isinstance(token, str)
-        
+
         # Decode and verify
         payload = jwt.decode(
             token,
             jwt_service.settings.JWT_SECRET_KEY,
             algorithms=[jwt_service.settings.JWT_ALGORITHM]
         )
-        
+
         assert payload["sub"] == "1"  # JWT service stores user_id as string in 'sub'
         assert payload["username"] == "testuser"
         assert payload["role"] == "user"
@@ -41,27 +41,27 @@ class TestJWTServiceUnit:
         assert "exp" in payload
         assert "iat" in payload
         assert "jti" in payload
-    
+
     def test_create_refresh_token(self, jwt_service):
         """Test creating a refresh token."""
         token = jwt_service.create_refresh_token(user_id=1, username="testuser")
-        
+
         assert token is not None
         assert isinstance(token, str)
-        
+
         # Decode and verify
         payload = jwt.decode(
             token,
             jwt_service.settings.JWT_SECRET_KEY,
             algorithms=[jwt_service.settings.JWT_ALGORITHM]
         )
-        
+
         assert payload["sub"] == "1"  # JWT service stores user_id as string in 'sub'
         assert payload["type"] == "refresh"
         assert "exp" in payload
         assert "iat" in payload
         assert "jti" in payload
-    
+
     def test_decode_access_token_valid(self, jwt_service):
         """Test decoding a valid access token."""
         token = jwt_service.create_access_token(
@@ -69,52 +69,52 @@ class TestJWTServiceUnit:
             username="testuser",
             role="user"
         )
-        
+
         payload = jwt_service.decode_access_token(token)
-        
+
         assert payload["sub"] == "1"  # JWT service stores user_id as string in 'sub'
         assert payload["username"] == "testuser"
         assert payload["role"] == "user"
         assert payload["type"] == "access"
-    
+
     def test_decode_access_token_expired(self, jwt_service):
         """Test decoding an expired access token."""
         # Create expired token
         original_expire = jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES
         jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES = -1
-        
+
         token = jwt_service.create_access_token(
             user_id=1,
             username="testuser",
             role="user"
         )
-        
+
         jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES = original_expire
-        
+
         with pytest.raises(TokenExpiredError):
             jwt_service.decode_access_token(token)
-    
+
     def test_decode_access_token_invalid(self, jwt_service):
         """Test decoding an invalid access token."""
         with pytest.raises(InvalidTokenError):
             jwt_service.decode_access_token("invalid.token.here")
-    
+
     def test_decode_refresh_token_as_access(self, jwt_service):
         """Test that refresh tokens cannot be used as access tokens."""
         refresh_token = jwt_service.create_refresh_token(user_id=1, username="testuser")
-        
+
         with pytest.raises(InvalidTokenError, match="Invalid token type"):
             jwt_service.decode_access_token(refresh_token)
-    
+
     def test_decode_refresh_token_valid(self, jwt_service):
         """Test decoding a valid refresh token."""
         token = jwt_service.create_refresh_token(user_id=1, username="testuser")
-        
+
         payload = jwt_service.decode_refresh_token(token)
-        
+
         assert payload["sub"] == "1"  # JWT service stores user_id as string in 'sub'
         assert payload["type"] == "refresh"
-    
+
     def test_token_with_additional_claims(self, jwt_service):
         """Test creating tokens with additional claims."""
         token = jwt_service.create_access_token(
@@ -126,9 +126,9 @@ class TestJWTServiceUnit:
                 "custom_claim": "custom_value"
             }
         )
-        
+
         payload = jwt_service.decode_access_token(token)
-        
+
         assert payload["session_id"] == "session-123"
         assert payload["custom_claim"] == "custom_value"
 

@@ -52,11 +52,11 @@ def replace_placeholders(text: Optional[str], char_name: Optional[str], user_nam
 def replace_user_placeholder(history: List[Tuple[Optional[str], Optional[str]]], user_name: Optional[str]) -> List[
     Tuple[Optional[str], Optional[str]]]:
     """Replace {{user}} placeholders in chat history with the actual user name.
-    
+
     Args:
         history: List of tuples containing (user_message, bot_message) pairs
         user_name: The name to replace {{user}} with, defaults to "User" if None
-        
+
     Returns:
         Updated history with placeholders replaced
     """
@@ -71,13 +71,13 @@ def replace_user_placeholder(history: List[Tuple[Optional[str], Optional[str]]],
 
 def extract_character_id_from_ui_choice(choice: str) -> int:
     """Extract character ID from a UI choice string.
-    
+
     Args:
         choice: A string in format 'Name (ID: 123)' or just a numeric ID
-        
+
     Returns:
         The extracted character ID as an integer
-        
+
     Raises:
         ValueError: If the choice format is invalid or ID cannot be parsed
     """

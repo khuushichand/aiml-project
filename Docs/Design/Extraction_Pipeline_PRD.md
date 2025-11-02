@@ -79,4 +79,3 @@ Introduce a modular extraction pipeline that pairs with the fetch/router. The ro
 - Unit tests: selector compilation and uniqueness, transform functions, safe-eval DSL, JSON parsing robustness, clustering for small inputs.
 - Integration (external_api): schema-driven extraction on known pages, regex catalog correctness, LLM block extraction happy-path, end-to-end with curl backend.
 - Security tests: egress-denied URLs blocked; PII masking enforced when enabled.
-

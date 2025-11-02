@@ -1,6 +1,6 @@
 # Embeddings Module Prompts
 
-## Situate Context Prompt (per‑chunk)
+## Situate Context Prompt (per-chunk)
 ```
 Please give a short succinct context to situate this chunk within the overall document
 for the purposes of improving search retrieval of the chunk.
@@ -18,4 +18,3 @@ short section title and a one-line summary.
 
 Changelog:
 - v1.0: Initial default prompts for outline/situating.
-

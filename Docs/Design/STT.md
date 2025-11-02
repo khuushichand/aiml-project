@@ -12,7 +12,7 @@ https://github.com/taresh18/conversify
 https://github.com/kyutai-labs/delayed-streams-modeling/
 https://www.reddit.com/r/LocalLLaMA/comments/1lgv0y9/help_me_build_a_good_tts_llm_stt_stack/
 https://huggingface.co/Banafo/Kroko-ASR
-https://github.com/travisvn/chatterbox-tts-api/  
+https://github.com/travisvn/chatterbox-tts-api/
 https://huggingface.co/livekit/turn-detector
 https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-turn-detector
 https://github.com/senstella/parakeet-mlx
@@ -88,4 +88,3 @@ STT
         https://arxiv.org/abs/2502.12900
 https://github.com/psdwizzard/MeetingBuddy
 https://github.com/mehtabmahir/easy-whisper-ui
-

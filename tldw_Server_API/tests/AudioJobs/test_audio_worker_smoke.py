@@ -70,4 +70,3 @@ async def test_audio_worker_pipeline_smoke_skip_if_missing():
                 os.remove(tmp_path)
             except Exception:
                 pass
-

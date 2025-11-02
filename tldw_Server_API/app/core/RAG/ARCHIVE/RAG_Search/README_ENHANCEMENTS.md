@@ -181,7 +181,7 @@ async def expand_query(query: str):
     # Your expansion logic
     pass
 
-@monitor_reranking  
+@monitor_reranking
 async def rerank_results(query: str, docs: List[Dict]):
     # Your reranking logic
     pass

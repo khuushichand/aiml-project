@@ -127,9 +127,9 @@ def chunk_text():
     chunk_size = data.get('chunkSize', 300)
     overlap = data.get('overlap', 0)
     splitter_type = data.get('splitter', 'words')
-    
+
     logger.debug(f"Chunking with: splitter={splitter_type}, chunk_size={chunk_size}, overlap={overlap}")
-    
+
     if splitter_type == 'words':
         chunks = chunk_text_by_words(text, chunk_size, overlap)
     elif splitter_type == 'sentences':
@@ -140,9 +140,9 @@ def chunk_text():
         chunks = chunk_text_by_tokens(text, chunk_size, overlap)
     else:
         return jsonify({'error': 'Invalid splitter type'}), 400
-    
+
     logger.debug(f"Number of chunks created: {len(chunks)}")
-    
+
     # Process chunks to include start and end indices
     processed_chunks = []
     current_index = 0
@@ -156,7 +156,7 @@ def chunk_text():
             'overlapWithNext': overlap if end_index < len(text) else 0
         })
         current_index = end_index - overlap
-    
+
     logger.debug(f"Processed chunks: {processed_chunks}")
 
     response = {

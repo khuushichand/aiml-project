@@ -4,7 +4,7 @@
 
 requirements.txt:
 ```
-pip install keyring cryptography browser_cookie3 pycryptodome 
+pip install keyring cryptography browser_cookie3 pycryptodome
 ```
 
 

@@ -44,4 +44,3 @@ export function VlmBackendsCard() {
 }
 
 export default VlmBackendsCard;
-

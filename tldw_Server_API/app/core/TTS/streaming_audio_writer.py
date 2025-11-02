@@ -24,7 +24,7 @@ class StreamingAudioWriter:
     def __init__(self, format: str, sample_rate: int, channels: int = 1):
         """
         Initialize the streaming audio writer.
-        
+
         Args:
             format: Target audio format (wav, mp3, opus, flac, aac, pcm)
             sample_rate: Sample rate in Hz
@@ -44,13 +44,13 @@ class StreamingAudioWriter:
             "flac": "flac",
             "aac": "aac",
         }
-        
+
         # Format-specific setup
         if self.format in ["wav", "flac", "mp3", "pcm", "aac", "opus"]:
             if self.format != "pcm":
                 self.output_buffer = BytesIO()
                 container_options = {}
-                
+
                 # Disable Xing VBR header for MP3 to fix iOS timeline reading issues
                 if self.format == 'mp3':
                     container_options = {'write_xing': '0'}
@@ -63,14 +63,14 @@ class StreamingAudioWriter:
                     format=self.format if self.format != "aac" else "adts",
                     options=container_options
                 )
-                
+
                 # Add audio stream with appropriate codec
                 self.stream = self.container.add_stream(
                     codec_map[self.format],
                     rate=self.sample_rate,
                     layout="mono" if self.channels == 1 else "stereo",
                 )
-                
+
                 # Set bit rate for applicable codecs
                 if self.format in ['mp3', 'aac', 'opus']:
                     # Use reasonable default bitrates
@@ -88,11 +88,11 @@ class StreamingAudioWriter:
     ) -> bytes:
         """
         Write a chunk of audio data and return bytes in the target format.
-        
+
         Args:
             audio_data: NumPy array of audio samples (int16)
             finalize: If True, flush and finalize the stream
-            
+
         Returns:
             Bytes of encoded audio in the target format
         """
@@ -102,10 +102,10 @@ class StreamingAudioWriter:
                 packets = self.stream.encode(None)
                 for packet in packets:
                     self.container.mux(packet)
-                
+
                 # Close the container to write final data
                 self.container.close()
-                
+
                 # Get the final bytes from the buffer
                 self.output_buffer.seek(0)
                 data = self.output_buffer.read()
@@ -162,40 +162,40 @@ class StreamingAudioWriter:
 
 class AudioNormalizer:
     """Normalizes audio data for consistent output"""
-    
+
     def normalize(self, audio_data: np.ndarray, target_dtype=np.int16) -> np.ndarray:
         """
         Normalize audio data to target dtype with proper scaling.
-        
+
         Args:
             audio_data: Input audio as numpy array (typically float32)
             target_dtype: Target data type (default int16)
-            
+
         Returns:
             Normalized audio array
         """
         if audio_data.dtype == target_dtype:
             return audio_data
-        
+
         # Handle float to int16 conversion
         if audio_data.dtype in [np.float32, np.float64]:
             # Clip to [-1, 1] range
             audio_data = np.clip(audio_data, -1.0, 1.0)
-            
+
             if target_dtype == np.int16:
                 # Scale to int16 range
                 return (audio_data * 32767).astype(np.int16)
             elif target_dtype == np.int32:
                 # Scale to int32 range
                 return (audio_data * 2147483647).astype(np.int32)
-        
+
         # Handle int to float conversion
         elif target_dtype in [np.float32, np.float64]:
             if audio_data.dtype == np.int16:
                 return audio_data.astype(target_dtype) / 32767.0
             elif audio_data.dtype == np.int32:
                 return audio_data.astype(target_dtype) / 2147483647.0
-        
+
         # Default: just cast
         return audio_data.astype(target_dtype)
 

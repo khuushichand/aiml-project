@@ -94,4 +94,3 @@ def test_content_hash_normalization_stability(s):
     ha = hashlib.sha256(na.encode("utf-8")).hexdigest()
     hb = hashlib.sha256(nb.encode("utf-8")).hexdigest()
     assert ha == hb
-

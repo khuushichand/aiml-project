@@ -68,11 +68,13 @@ class SandboxOrchestrator:
             self._idem_ttl_sec = 600
         # Queue policy
         try:
-            self._queue_max = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+            import os as _os
+            self._queue_max = int(_os.getenv("SANDBOX_QUEUE_MAX_LENGTH") or getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
         except Exception:
             self._queue_max = 100
         try:
-            self._queue_ttl = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
+            import os as _os
+            self._queue_ttl = int(_os.getenv("SANDBOX_QUEUE_TTL_SEC") or getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
         except Exception:
             self._queue_ttl = 120
         self._session_roots: Dict[str, str] = {}
@@ -119,10 +121,9 @@ class SandboxOrchestrator:
             # If missing from sessions map (unlikely), synthesize from stored
             return Session(id=stored.get("id", ""), runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
 
-        # Create a new session and its workspace
+        # Create a new session (workspace optional in scaffold)
         sid = str(uuid.uuid4())
         sess = Session(id=sid, runtime=spec.runtime or self.policy.cfg.default_runtime, base_image=spec.base_image, expires_at=None)
-        ws_dir = self._ensure_workspace(user_id, sid)
         with self._lock:
             self._sessions[sid] = sess
             # Store idempotent response body
@@ -151,7 +152,14 @@ class SandboxOrchestrator:
         # Enforce queue capacity: prune TTL then check max length
         self._prune_queue_ttl()
         with self._lock:
-            if self._queue_max > 0 and len(self._queue) >= self._queue_max:
+            # Read effective queue capacity at call time to honor per-test env overrides
+            try:
+                import os as _os
+                effective_queue_max = int(_os.getenv("SANDBOX_QUEUE_MAX_LENGTH") or getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
+            except Exception:
+                effective_queue_max = 100
+            # If max length is <= 0, treat as no capacity (force backpressure)
+            if effective_queue_max <= 0 or len(self._queue) >= effective_queue_max:
                 raise QueueFull(retry_after=max(1, int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))))
 
         # Create new run in queued state
@@ -218,6 +226,20 @@ class SandboxOrchestrator:
                     st.message = "queue_ttl_expired"
                     st.finished_at = datetime.utcnow()
                     self._store.update_run(st)
+                    # Metrics: TTL expiry, include runtime label if available
+                    try:
+                        from tldw_Server_API.app.core.Metrics import increment_counter as _inc
+                        rt_label = None
+                        try:
+                            rt_label = st.runtime.value if getattr(st, "runtime", None) else None
+                        except Exception:
+                            rt_label = None
+                        labels = {"component": "sandbox", "reason": "queue_ttl_expired"}
+                        if rt_label:
+                            labels["runtime"] = rt_label
+                        _inc("sandbox_queue_ttl_expired_total", labels=labels)
+                    except Exception:
+                        pass
                     try:
                         from .streams import get_hub
                         get_hub().publish_event(rid, "end", {"exit_code": None, "reason": "queue_ttl_expired"})
@@ -229,12 +251,6 @@ class SandboxOrchestrator:
     def get_enqueue_time(self, run_id: str) -> Optional[float]:
         with self._lock:
             return self._enqueue_index.get(run_id)
-
-
-class QueueFull(Exception):
-    def __init__(self, retry_after: int = 30) -> None:
-        super().__init__("queue_full")
-        self.retry_after = int(retry_after)
 
     # -----------------
     # Lookups (stubs)
@@ -467,3 +483,9 @@ class QueueFull(Exception):
         except Exception as e:
             logger.debug(f"store.count_runs failed: {e}")
             return 0
+
+
+class QueueFull(Exception):
+    def __init__(self, retry_after: int = 30) -> None:
+        super().__init__("queue_full")
+        self.retry_after = int(retry_after)

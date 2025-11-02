@@ -89,4 +89,3 @@ async def test_stream_errors_as_audio_false_raises_exception():
         # Consume the async generator to trigger exception
         async for _ in svc.generate_speech(req, fallback=False):
             pass
-

@@ -44,4 +44,3 @@ def test_parallel_acquire_no_double_sqlite(tmp_path):
     assert len(flat) == len(set(flat))
     # At least most of the jobs should be acquired exactly once
     assert len(flat) >= total * 0.7
-

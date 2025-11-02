@@ -242,13 +242,13 @@ class UnifiedSearchResult:
 async def unified_rag_pipeline(
     # ========== REQUIRED PARAMETERS ==========
     query: str,
-    
+
     # ========== DATA SOURCES ==========
     sources: List[str] = None,  # ["media_db", "notes", "characters", "chats"]
     media_db_path: Optional[str] = None,
     notes_db_path: Optional[str] = None,
     character_db_path: Optional[str] = None,
-    
+
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
     fts_level: Literal["media", "chunk"] = "media",
@@ -258,38 +258,38 @@ async def unified_rag_pipeline(
     auto_temporal_filters: bool = False,
     top_k: int = 10,
     min_score: float = 0.0,
-    
+
     # ========== QUERY EXPANSION ==========
     expand_query: bool = False,
     expansion_strategies: List[str] = None,  # ["acronym", "synonym", "domain", "entity"]
     spell_check: bool = False,
-    
+
     # ========== HYDE ==========
     enable_hyde: bool = False,
     hyde_provider: Optional[str] = None,
     hyde_model: Optional[str] = None,
-    
+
     # ========== GAP ANALYSIS / FOLLOW-UPS ==========
     enable_gap_analysis: bool = False,
     max_followup_searches: int = 2,
-    
+
     # ========== CACHING ==========
     enable_cache: bool = True,
     cache_threshold: float = 0.85,
     adaptive_cache: bool = True,
-    
+
     # ========== FILTERING ==========
     keyword_filter: List[str] = None,  # Filter by these keywords
     include_media_ids: Optional[List[int]] = None,
     include_note_ids: Optional[List[str]] = None,
-    
+
     # ========== SECURITY & PRIVACY ==========
     enable_security_filter: bool = False,
     detect_pii: bool = False,
     redact_pii: bool = False,
     sensitivity_level: Literal["public", "internal", "confidential", "restricted"] = "public",
     content_filter: bool = False,
-    
+
     # ========== DOCUMENT PROCESSING ==========
     enable_table_processing: bool = False,
     table_method: Literal["markdown", "html", "hybrid"] = "markdown",
@@ -300,7 +300,7 @@ async def unified_rag_pipeline(
     vlm_detect_tables_only: bool = True,
     vlm_max_pages: Optional[int] = None,
     vlm_late_chunk_top_k_docs: int = 3,
-    
+
     # ========== CHUNKING & CONTEXT ==========
     enable_enhanced_chunking: bool = False,
     chunk_type_filter: List[str] = None,  # ["text", "code", "table", "list"]
@@ -318,7 +318,7 @@ async def unified_rag_pipeline(
     mv_max_spans: int = 8,
     mv_flatten_to_spans: bool = False,
     enable_numeric_table_boost: bool = False,
-    
+
     # ========== RERANKING ==========
     enable_reranking: bool = True,
     reranking_strategy: Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "llm_scoring", "two_tier", "none"] = "flashrank",
@@ -327,13 +327,13 @@ async def unified_rag_pipeline(
     # Two-tier specific: request-level gating overrides (optional)
     rerank_min_relevance_prob: Optional[float] = None,
     rerank_sentinel_margin: Optional[float] = None,
-    
+
     # ========== CITATIONS ==========
     enable_citations: bool = False,
     citation_style: Literal["apa", "mla", "chicago", "harvard", "ieee"] = "apa",
     include_page_numbers: bool = False,
     enable_chunk_citations: bool = True,
-    
+
     # ========== ANSWER GENERATION ==========
     enable_generation: bool = True,
     strict_extractive: bool = False,
@@ -364,27 +364,27 @@ async def unified_rag_pipeline(
     adaptive_rerun_doc_budget: Optional[int] = None,
     # Internal guard to prevent nested rerun loops
     _adaptive_rerun: bool = False,
-    
+
     # ========== FEEDBACK ==========
     collect_feedback: bool = False,
     feedback_user_id: Optional[str] = None,
     apply_feedback_boost: bool = False,
-    
+
     # ========== MONITORING & OBSERVABILITY ==========
     enable_monitoring: bool = False,
     enable_observability: bool = False,
     trace_id: Optional[str] = None,
-    
+
     # ========== PERFORMANCE ==========
     enable_performance_analysis: bool = False,
     timeout_seconds: Optional[float] = None,
-    
+
     # ========== STREAMING ==========
     enable_streaming: bool = False,
-    
+
     # ========== INDEXING / NAMESPACE ==========
     index_namespace: Optional[str] = None,
-    
+
     # ========== QUICK WINS ==========
     highlight_results: bool = False,
     highlight_query_terms: bool = False,
@@ -417,53 +417,53 @@ async def unified_rag_pipeline(
     claims_max: int = 25,
     nli_model: Optional[str] = None,
     claims_concurrency: int = 8,
-    
+
     # ========== BATCH PROCESSING ==========
     enable_batch: bool = False,
     batch_queries: List[str] = None,
     batch_concurrent: int = 5,
-    
+
     # ========== RESILIENCE ==========
     enable_resilience: bool = False,
     retry_attempts: int = 3,
     circuit_breaker: bool = False,
-    
+
     # ========== CACHING EXTRAS ==========
     cache_ttl: int = 3600,
-    
+
     # ========== FILTERING EXTRAS ==========
     enable_date_filter: bool = False,
     date_range: Optional[Dict[str, str]] = None,
     filter_media_types: Optional[List[str]] = None,
-    
+
     # ========== ALT INPUTS ==========
     media_db: Any = None,
     chacha_db: Any = None,
-    
+
     # ========== ERROR HANDLING ==========
     fallback_on_error: bool = False,
-    
+
     # ========== USER CONTEXT ==========
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
-    
+
     # ========== ADDITIONAL PARAMETERS ==========
     **kwargs: Any
 ) -> UnifiedSearchResult:
     """
     Unified RAG Pipeline - All features accessible via parameters.
-    
+
     This is the ONE function for all RAG operations. Every feature is controlled
     by explicit parameters. No configuration files, no presets, just parameters.
-    
+
     Args:
         query: The search query (required)
         sources: List of databases to search
         ... (see parameters above for all options)
-        
+
     Returns:
         UnifiedSearchResult with all requested data
-        
+
     Example:
         result = await unified_rag_pipeline(
             query="What is machine learning?",
@@ -474,7 +474,7 @@ async def unified_rag_pipeline(
             reranking_strategy="hybrid"
         )
     """
-    
+
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
 
@@ -570,7 +570,7 @@ async def unified_rag_pipeline(
                 security_report=None,
                 total_time=0.0,
             )
-    
+
     # Initialize monitoring if requested
     metrics = None
     if enable_monitoring:
@@ -590,7 +590,7 @@ async def unified_rag_pipeline(
             gate["unsupported_ratio"] = unsupported_ratio
         if threshold is not None:
             gate["threshold"] = threshold
-    
+
     try:
         # ========== SPELL CHECK ==========
         if spell_check:
@@ -737,7 +737,7 @@ async def unified_rag_pipeline(
                 }
             except Exception as e:
                 result.errors.append(f"Intent routing failed: {e}")
-        
+
         # ========== CACHE CHECK ==========
         cached_documents = None
         if enable_cache:
@@ -756,7 +756,7 @@ async def unified_rag_pipeline(
                     cache = AdaptiveCache(similarity_threshold=cache_threshold)
             else:
                 cache = None
-            
+
             if cache:
                 # First try direct get on the main query (support sync or async)
                 try:
@@ -812,11 +812,11 @@ async def unified_rag_pipeline(
                         # Backward compatibility: older cache entries stored document lists directly
                         result.documents = cached_documents
                     result.metadata.setdefault("cached_flag", True)
-                            
+
             result.timings["cache_check"] = time.time() - cache_start
             if metrics:
                 metrics.cache_lookup_time = result.timings["cache_check"]
-        
+
         # ========== INTENT-BASED WEIGHTING (optional) ==========
         if adaptive_hybrid_weights and search_mode == "hybrid" and QueryAnalyzer:
             try:
@@ -967,7 +967,7 @@ async def unified_rag_pipeline(
                         _otel_cm = None
                         _otel_span = None
                 if MultiDatabaseRetriever and RetrievalConfig:
-                    
+
                     # Set up database paths
                     db_paths = {}
                     if media_db_path:
@@ -976,7 +976,7 @@ async def unified_rag_pipeline(
                         db_paths["notes_db"] = notes_db_path
                     if character_db_path:
                         db_paths["character_cards_db"] = character_db_path
-                    
+
                     # Initialize retriever (minimal signature). Tests may patch this constructor.
                     try:
                         retriever = MultiDatabaseRetriever(
@@ -1022,11 +1022,11 @@ async def unified_rag_pipeline(
                                     config.date_filter = (datetime.fromisoformat(s), datetime.fromisoformat(e))
                             except Exception:
                                 pass
-                    
+
                     # Determine sources
                     if sources is None:
                         sources = ["media_db"]
-                    
+
                     source_map = {
                         "media_db": DataSource.MEDIA_DB,
                         "media": DataSource.MEDIA_DB,
@@ -1034,9 +1034,9 @@ async def unified_rag_pipeline(
                         "characters": DataSource.CHARACTER_CARDS,
                         "chats": DataSource.CHARACTER_CARDS
                     }
-                    
+
                     data_sources = [source_map.get(s, DataSource.MEDIA_DB) for s in sources]
-                    
+
                     # Retrieve documents
                     rh = getattr(retriever, 'retrieve_hybrid', None)
                     hybrid_supported = rh is not None and asyncio.iscoroutinefunction(rh)
@@ -1060,7 +1060,7 @@ async def unified_rag_pipeline(
                             allowed_media_ids=include_media_ids,
                             allowed_note_ids=include_note_ids,
                         )
-                        
+
                     # Optionally run HyDE-enhanced media retrieval and merge
                     if enable_hyde and hyde_vector and search_mode == "hybrid":
                         try:
@@ -1092,7 +1092,7 @@ async def unified_rag_pipeline(
                         pass
                     result.metadata["sources_searched"] = sources
                     result.metadata["documents_retrieved"] = len(documents)
-                    
+
                     result.timings["retrieval"] = time.time() - retrieval_start
                     # Record phase duration with difficulty label
                     try:
@@ -1121,7 +1121,7 @@ async def unified_rag_pipeline(
                         pass
                     if metrics:
                         metrics.retrieval_time = result.timings["retrieval"]
-                        
+
             except Exception as e:
                 result.errors.append(f"Document retrieval failed: {str(e)}")
                 logger.error(f"Retrieval error: {e}")
@@ -1183,7 +1183,7 @@ async def unified_rag_pipeline(
                     observe_histogram("rag_phase_duration_seconds", result.timings["multi_vector"], labels={"phase": "multi_vector", "difficulty": str(result.metadata.get("query_intent", "na"))})
                 except Exception:
                     pass
-        
+
         # ========== NUMERIC/TABLE-AWARE BOOST (optional, pre-rerank) ==========
         if enable_numeric_table_boost and result.documents:
             try:
@@ -1274,7 +1274,7 @@ async def unified_rag_pipeline(
                 result.timings["gap_analysis"] = time.time() - ga_start
             except Exception as e:
                 result.errors.append(f"Gap analysis failed: {e}")
-        
+
         # ========== KEYWORD FILTERING ==========
         if keyword_filter and result.documents:
             filter_start = time.time()
@@ -1283,7 +1283,7 @@ async def unified_rag_pipeline(
                 content_lower = doc.content.lower()
                 if any(keyword.lower() in content_lower for keyword in keyword_filter):
                     filtered_docs.append(doc)
-            
+
             result.metadata["pre_filter_count"] = len(result.documents)
             result.documents = filtered_docs
             result.metadata["post_filter_count"] = len(filtered_docs)
@@ -1376,21 +1376,21 @@ async def unified_rag_pipeline(
             except Exception:
                 # Non-fatal: continue
                 pass
-        
+
         # ========== SECURITY FILTERING ==========
         if enable_security_filter and result.documents:
             security_start = time.time()
             try:
                 if SecurityFilter and SensitivityLevel:
                     security_filter = SecurityFilter()
-                    
+
                     # Detect PII if requested
                     if detect_pii:
                         pii_report = await security_filter.detect_pii_batch(
                             [doc.content for doc in result.documents]
                         )
                         result.security_report = {"pii_detected": pii_report}
-                    
+
                     # Filter by sensitivity
                     sensitivity_map = {
                         "public": SensitivityLevel.PUBLIC,
@@ -1398,27 +1398,27 @@ async def unified_rag_pipeline(
                         "confidential": SensitivityLevel.CONFIDENTIAL,
                         "restricted": SensitivityLevel.RESTRICTED
                     }
-                    
+
                     filtered_docs = await security_filter.filter_by_sensitivity(
                         result.documents,
                         max_level=sensitivity_map[sensitivity_level]
                     )
-                    
+
                     # Redact PII if requested
                     if redact_pii:
                         for doc in filtered_docs:
                             doc.content = await security_filter.redact_pii(doc.content)
-                    
+
                     result.documents = filtered_docs
                     result.timings["security_filter"] = time.time() - security_start
-                    
+
             except ImportError:
                 result.errors.append("Security filter module not available")
                 logger.warning("Security filter requested but module not available")
             except Exception as e:
                 result.errors.append(f"Security filter failed: {str(e)}")
                 logger.error(f"Security filter error: {e}")
-        
+
         # ========== TABLE PROCESSING ==========
         if enable_table_processing and result.documents:
             table_start = time.time()
@@ -1426,7 +1426,7 @@ async def unified_rag_pipeline(
                 if TableProcessor:
                     processor = TableProcessor()
                     processed_docs = []
-                    
+
                     for doc in result.documents:
                         processed = await processor.process_document(
                             doc.content,
@@ -1434,14 +1434,14 @@ async def unified_rag_pipeline(
                         )
                         doc.content = processed
                         processed_docs.append(doc)
-                    
+
                     result.documents = processed_docs
                     result.timings["table_processing"] = time.time() - table_start
-                    
+
             except ImportError:
                 result.errors.append("Table processing module not available")
                 logger.warning("Table processing requested but module not available")
-        
+
         # ========== VLM LATE CHUNKING (Optional) ==========
         if enable_vlm_late_chunking and result.documents:
             vlm_start = time.time()
@@ -1613,7 +1613,7 @@ async def unified_rag_pipeline(
                         "llm_scoring": RerankingStrategy.LLM_SCORING,
                         "two_tier": RerankingStrategy.TWO_TIER,
                     }
-                    
+
                     # Determine LLM reranker provider/model from config when requested
                     selected_strategy = strategy_map[reranking_strategy]
                     llm_client = None
@@ -1679,7 +1679,7 @@ async def unified_rag_pipeline(
                         result.documents = [sd.document for sd in reranked[:(rerank_top_k or top_k)]]
                     else:
                         result.documents = reranked[:(rerank_top_k or top_k)]
-                    
+
                     result.timings["reranking"] = time.time() - rerank_start
                     try:
                         from tldw_Server_API.app.core.Metrics.metrics_manager import observe_histogram
@@ -1703,7 +1703,7 @@ async def unified_rag_pipeline(
                             result.metadata["reranking_calibration"].update(getattr(reranker, 'last_metadata'))
                     except Exception:
                         pass
-                        
+
                 else:
                     result.errors.append("Reranking module not available")
                     logger.warning("Reranking requested but module not available")
@@ -1891,7 +1891,7 @@ async def unified_rag_pipeline(
             except Exception as e:
                 result.errors.append(f"Citation generation failed: {str(e)}")
                 logger.error(f"Citation error: {e}")
-        
+
         # ========== ANSWER GENERATION ==========
         # Honor reranking calibration gating if present (e.g., TwoTier strategy)
         try:
@@ -2056,7 +2056,7 @@ async def unified_rag_pipeline(
                         pass
                     if metrics:
                         metrics.generation_time = result.timings["answer_generation"]
-                        
+
             except ImportError:
                 result.errors.append("Generation module not available")
                 logger.warning("Answer generation requested but module not available")
@@ -2709,7 +2709,7 @@ async def unified_rag_pipeline(
                     collector = UnifiedFeedbackSystem()
                     result.feedback_id = str(uuid.uuid4())
                     result.metadata["feedback_enabled"] = True
-                    
+
                     # Apply feedback boost if requested
                     if apply_feedback_boost and result.documents:
                         try:
@@ -2728,16 +2728,16 @@ async def unified_rag_pipeline(
                         )
                     except Exception:
                         pass
-                    
+
                     result.timings["feedback"] = time.time() - feedback_start
-                    
+
             except ImportError:
                 result.errors.append("Feedback module not available")
                 logger.warning("Feedback requested but module not available")
             except Exception as e:
                 result.errors.append(f"Feedback system failed: {str(e)}")
                 logger.error(f"Feedback error: {e}")
-        
+
         # ========== RESULT HIGHLIGHTING ==========
         if highlight_results and result.documents:
             highlight_start = time.time()
@@ -2748,13 +2748,13 @@ async def unified_rag_pipeline(
                             doc.content,
                             query if highlight_query_terms else None
                         )
-                    
+
                     result.timings["highlighting"] = time.time() - highlight_start
-                    
+
             except ImportError:
                 result.errors.append("Highlighting module not available")
                 logger.warning("Highlighting requested but module not available")
-        
+
         # ========== COST TRACKING ==========
         if track_cost:
             try:
@@ -2766,12 +2766,12 @@ async def unified_rag_pipeline(
                         input_tokens=total_tokens,
                         output_tokens=len(result.generated_answer.split()) if result.generated_answer else 0
                     )
-                    
+
                     result.metadata["estimated_cost"] = cost
-                    
+
             except ImportError:
                 result.errors.append("Cost tracking module not available")
-        
+
         # ========== CACHE STORAGE ==========
         if enable_cache and not result.cache_hit and result.documents:
             try:
@@ -2804,7 +2804,7 @@ async def unified_rag_pipeline(
                             set_fn(query, cache_payload, ttl=cache_ttl)
             except Exception as e:
                 logger.error(f"Cache storage error: {e}")
-        
+
         # ========== OBSERVABILITY ==========
         if enable_observability:
             try:
@@ -2817,10 +2817,10 @@ async def unified_rag_pipeline(
                         timings=result.timings,
                         metadata=result.metadata
                     )
-                    
+
             except ImportError:
                 result.errors.append("Observability module not available")
-        
+
         # ========== PERFORMANCE ANALYSIS ==========
         if enable_performance_analysis:
             try:
@@ -2831,12 +2831,12 @@ async def unified_rag_pipeline(
                         document_count=len(result.documents),
                         cache_hit=result.cache_hit
                     )
-                    
+
                     result.metadata["performance_analysis"] = analysis
-                    
+
             except ImportError:
                 result.errors.append("Performance monitor not available")
-        
+
     except Exception as e:
         result.errors.append(f"Pipeline error: {str(e)}")
         logger.error(f"Unified pipeline error: {e}")
@@ -2850,25 +2850,25 @@ async def unified_rag_pipeline(
                 "metadata": result.metadata,
                 "timings": result.timings,
             }
-    
+
     finally:
         # Calculate total time
         result.total_time = time.time() - start_time
         result.timings["total"] = result.total_time
-        
+
         # Finalize metrics if monitoring
         if metrics:
             metrics.total_time = result.total_time
             metrics.cache_hit = result.cache_hit
             metrics.documents_retrieved = len(result.documents)
-            
+
             if enable_monitoring:
                 try:
                     collector = MetricsCollector()
                     await collector.record_query_metrics(metrics)
                 except Exception as e:
                     logger.error(f"Metrics recording error: {e}")
-        
+
         # Debug output if requested
         if debug_mode:
             try:
@@ -2880,7 +2880,7 @@ async def unified_rag_pipeline(
             logger.debug(f"Cache hit: {result.cache_hit}")
             logger.debug(f"Timings: {result.timings}")
             logger.debug(f"Errors: {result.errors}")
-    
+
     # Convert to Pydantic response
     try:
         from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
@@ -2947,12 +2947,12 @@ async def unified_batch_pipeline(
 ) -> List[UnifiedSearchResult]:
     """
     Process multiple queries concurrently using the unified pipeline.
-    
+
     Args:
         queries: List of queries to process
         max_concurrent: Maximum concurrent executions
         **kwargs: All parameters supported by unified_rag_pipeline_core
-        
+
     Returns:
         List of results in the same order as queries
     """
@@ -3113,11 +3113,11 @@ async def unified_batch_pipeline(
 async def simple_search(query: str, top_k: int = 10) -> List[Document]:
     """
     Simple search wrapper for basic use cases.
-    
+
     Args:
         query: Search query
         top_k: Number of results
-        
+
     Returns:
         List of documents
     """
@@ -3139,13 +3139,13 @@ async def advanced_search(
 ) -> UnifiedSearchResult:
     """
     Advanced search with commonly used features enabled.
-    
+
     Args:
         query: Search query
         with_citations: Enable citation generation
         with_answer: Enable answer generation
         **kwargs: Additional parameters
-        
+
     Returns:
         Full search result
     """

@@ -67,7 +67,7 @@ Verifier: `HybridClaimVerifier` (per claim)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import ClaimsEngine
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
-# Minimal Document type (id, content, score) – or use RAG types
+# Minimal Document type (id, content, score) - or use RAG types
 class Doc:
     def __init__(self, id, content, score=0.0):
         self.id = id

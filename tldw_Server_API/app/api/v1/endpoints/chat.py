@@ -36,10 +36,10 @@ from fastapi import (
     Request,
     status,
 )
- 
+
 
 # Import new modules for integration
- 
+
 # Temporary shim for test patch compatibility. Prefer real AuthNZ util if present.
 try:
     from tldw_Server_API.app.core.AuthNZ.auth_utils import (
@@ -146,6 +146,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
 )
 import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
@@ -447,7 +448,7 @@ async def _save_message_turn_to_db(
         image_start_time = time.time()
         # Call async function directly instead of using run_in_executor
         text_parts, images = await _process_content_for_db_sync(content, conversation_id)
-        
+
         # Track image processing metrics if images were processed
         if images:
             image_processing_time = time.time() - image_start_time
@@ -603,7 +604,7 @@ async def _save_message_turn_to_db(
         status.HTTP_401_UNAUTHORIZED: {"description": "Invalid authentication token."},
         status.HTTP_404_NOT_FOUND: {"description": "Resource not found (e.g., character)."},
         status.HTTP_409_CONFLICT: {"description": "Data conflict (e.g., version mismatch during DB operation)."},
-        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Request payload too large (e.g., too many messages, too many images)."},
+        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "Request payload too large (e.g., too many messages, too many images)."},
         status.HTTP_429_TOO_MANY_REQUESTS: {"description": "Rate limit exceeded."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error."},
         status.HTTP_502_BAD_GATEWAY: {"description": "Error received from an upstream LLM provider."},
@@ -613,6 +614,7 @@ async def _save_message_turn_to_db(
     dependencies=[
         Depends(rbac_rate_limit("chat.create")),
         Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.completions", count_as="call")),
+        Depends(enforce_llm_budget),  # Hard budget stop before handler runs
     ]
 )
 async def create_chat_completion(
@@ -627,6 +629,16 @@ async def create_chat_completion(
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
+    """
+    Handle an incoming chat completion request: validate input, enforce budget and rate limits, run moderation, build conversation context, call the selected LLM provider (with optional provider fallback or mock in test mode), persist conversation turns as needed, and return either a streaming or non-streaming completion response.
+
+    Parameters:
+        request_data (ChatCompletionRequest): The incoming chat completion payload (messages, model, streaming flag, tools, etc.).
+        request (Request | None): Optional FastAPI request object used for audit logging, IP extraction, and rate-limiting context.
+
+    Returns:
+        Response: A StreamingResponse (for streaming requests) or JSONResponse containing the LLM completion payload or an error body; raises HTTPException for client/server errors.
+    """
     current_loop = asyncio.get_running_loop()
 
     # Generate unique request ID for tracking and set it in context
@@ -636,6 +648,9 @@ async def create_chat_completion(
 
     # Initialize metrics collector
     metrics = get_chat_metrics()
+
+    # Budget enforcement is handled by the dependency and/or middleware.
+    # Avoid duplicating authorization logic in the handler to prevent drift.
 
     # Parse provider and model for metrics (no mutation)
     provider, model = parse_provider_model_for_metrics(request_data, DEFAULT_LLM_PROVIDER)
@@ -682,8 +697,8 @@ async def create_chat_completion(
             tags=[provider, model],
             metadata={"message_count": len(request_data.messages), "stream": bool(request_data.stream)},
         )
-    except Exception:
-        pass
+    except Exception as _usage_log_err:
+        logger.debug(f"Usage event logging failed: {_usage_log_err}")
 
     # Start tracking the request
     # Serialize request once and reuse
@@ -707,18 +722,18 @@ async def create_chat_completion(
         # Validate request payload using helper function
         validation_start = time.time()
         is_valid, error_message = await validate_request_payload(
-            request_data, 
+            request_data,
             max_messages=MAX_MESSAGES_PER_REQUEST,
             max_images=MAX_IMAGES_PER_REQUEST,
             max_text_length=MAX_TEXT_LENGTH
         )
         metrics.metrics.validation_duration.record(time.time() - validation_start)
-        
+
         if not is_valid:
             metrics.track_validation_failure("payload", error_message)
             logger.warning(f"Request validation failed: {error_message}")
             if "too many" in error_message.lower() or "too long" in error_message.lower():
-                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=error_message)
+                raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
 
@@ -730,7 +745,7 @@ async def create_chat_completion(
                 request_data.character_id = validate_character_id(request_data.character_id)
             if request_data.tools:
                 # Convert ToolDefinition objects to dictionaries for validation
-                tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool 
+                tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool
                                   for tool in request_data.tools]
                 validated_tools = validate_tool_definitions(tools_as_dicts)
                 # Keep the validated tools as dicts since that's what the LLM API expects
@@ -739,10 +754,10 @@ async def create_chat_completion(
                 request_data.temperature = validate_temperature(request_data.temperature)
             if request_data.max_tokens is not None:
                 request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
-            
+
             # Validate overall request size (reuse cached JSON)
             validate_request_size(request_json)
-            
+
             # Apply rate limiting
             rate_limiter = get_rate_limiter()
             # In some test scenarios we patch dependencies with Mocks. Historically we
@@ -809,7 +824,7 @@ async def create_chat_completion(
                         conversation_id=limiter_conversation_id,
                         estimated_tokens=estimated_tokens
                     )
-                    
+
                     if not allowed:
                         metrics.track_rate_limit(user_id)
                         if audit_service and context:
@@ -886,7 +901,7 @@ async def create_chat_completion(
         # Normalize provider/model on the request for downstream logic
         provider = normalize_request_provider_and_model(request_data, _get_default_provider())
         model = request_data.model or model
-        
+
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
         logger.info(
             f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
@@ -1060,7 +1075,7 @@ async def create_chat_completion(
             # Use provider manager for health checks and failover
             provider_manager = get_provider_manager()
             selected_provider = provider
-            
+
             if provider_manager:
                 # Check if the requested provider is healthy first
                 # Use the circuit breaker check if the provider is registered
@@ -1144,6 +1159,13 @@ async def create_chat_completion(
                     # Use user_id for per-client fairness; HIGH priority for streaming
                     priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
                     # Use request_id generated for this call
+                    logger.debug(
+                        "Queue admission: enqueue request_id=%s client_id=%s priority=%s est_tokens=%s",
+                        request_id,
+                        str(user_id),
+                        getattr(priority, "name", str(priority)),
+                        est_tokens_for_queue,
+                    )
                     q_future = await queue.enqueue(
                         request_id=request_id,
                         request_data={"endpoint": "/api/v1/chat/completions"},
@@ -1153,22 +1175,29 @@ async def create_chat_completion(
                     )
                     # Await admission; if queue times out internally, it will raise
                     await q_future
+                    logger.debug(
+                        "Queue admission: admitted request_id=%s", request_id
+                    )
                 except ValueError as e:
                     # Queue full or rate limit in queue -> 429
-                    logger.warning(f"Queue admission rejected: {e}")
+                    logger.warning(
+                        "Queue admission rejected for request_id=%s: %s", request_id, e
+                    )
                     raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
                 except Exception as e:
                     # Treat unexpected queue errors as service unavailable
-                    logger.error(f"Queue admission error: {e}")
+                    logger.error(
+                        "Queue admission error for request_id=%s: %s", request_id, e
+                    )
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
             # The request queue system has been initialized in main.py but is not yet
             # integrated here. Once the central scheduling/queue module is built, this
             # endpoint should enqueue requests rather than processing them directly.
-            # 
+            #
             # Integration points:
             # 1. Get the request queue instance: queue = get_request_queue()
             # 2. Determine priority based on user/request type
-            # 3. Enqueue the request with: 
+            # 3. Enqueue the request with:
             #    future = await queue.enqueue(
             #        request_id=request_id,
             #        request_data={'cleaned_args': cleaned_args, 'request': request_data},
@@ -1188,7 +1217,7 @@ async def create_chat_completion(
             #
             # Current implementation continues with direct processing:
             # ------------------------------------------------------------------------
-            
+
             mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
             use_mock_provider = (
                 _test_mode_flag
@@ -1347,7 +1376,7 @@ async def create_chat_completion(
                 status.HTTP_403_FORBIDDEN,
                 status.HTTP_404_NOT_FOUND,
                 status.HTTP_409_CONFLICT,
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status.HTTP_413_CONTENT_TOO_LARGE,
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
                 status.HTTP_502_BAD_GATEWAY,
@@ -1366,7 +1395,7 @@ async def create_chat_completion(
         except ChatModuleException as e_chat:
             # Our custom exceptions with structured error handling
             e_chat.log()
-            
+
             # Map to appropriate HTTP status codes
             status_map = {
                 ChatErrorCode.AUTH_MISSING_TOKEN: status.HTTP_401_UNAUTHORIZED,
@@ -1374,16 +1403,16 @@ async def create_chat_completion(
                 ChatErrorCode.AUTH_EXPIRED_TOKEN: status.HTTP_401_UNAUTHORIZED,
                 ChatErrorCode.AUTH_INSUFFICIENT_PERMISSIONS: status.HTTP_403_FORBIDDEN,
                 ChatErrorCode.VAL_INVALID_REQUEST: status.HTTP_400_BAD_REQUEST,
-                ChatErrorCode.VAL_MESSAGE_TOO_LONG: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                ChatErrorCode.VAL_FILE_TOO_LARGE: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                ChatErrorCode.VAL_MESSAGE_TOO_LONG: status.HTTP_413_CONTENT_TOO_LARGE,
+                ChatErrorCode.VAL_FILE_TOO_LARGE: status.HTTP_413_CONTENT_TOO_LARGE,
                 ChatErrorCode.DB_NOT_FOUND: status.HTTP_404_NOT_FOUND,
                 ChatErrorCode.RATE_LIMIT_EXCEEDED: status.HTTP_429_TOO_MANY_REQUESTS,
                 ChatErrorCode.EXT_PROVIDER_ERROR: status.HTTP_502_BAD_GATEWAY,
                 ChatErrorCode.INT_CONFIGURATION_ERROR: status.HTTP_503_SERVICE_UNAVAILABLE,
             }
-            
+
             http_status = status_map.get(e_chat.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
+
             # Log audit event if service available
             if audit_service and context:
                 await audit_service.log_event(
@@ -1396,7 +1425,7 @@ async def create_chat_completion(
                         "request_id": request_id
                     }
                 )
-            
+
             # Tests expect detail to be a string; expose safe user_message when available
             safe_detail = getattr(e_chat, 'user_message', None) or str(e_chat)
             raise HTTPException(
@@ -1500,14 +1529,14 @@ async def create_chat_completion(
                     client_detail = "An internal server error occurred."
             raise HTTPException(status_code=err_status, detail=client_detail)
 
-        
+
 
         except Exception as e_final:
             # Log the full traceback for debugging
             import traceback
             logger.error(f"Unexpected error in chat completion: {type(e_final).__name__}: {str(e_final)}")
             logger.error(f"Full traceback:\n{traceback.format_exc()}")
-            
+
             # Create a structured error for unexpected exceptions
             unexpected_error = ChatModuleException(
                 code=ChatErrorCode.INT_UNEXPECTED_ERROR,
@@ -1522,12 +1551,12 @@ async def create_chat_completion(
                 user_message="An unexpected error occurred. Please try again or contact support if the issue persists."
             )
             unexpected_error.log(level="critical")
-            
+
             # Send alert for critical errors
             if hasattr(e_final, '__module__') and 'sqlite' not in e_final.__module__:
                 # Don't alert for database errors, they're handled separately
                 logger.critical(f"ALERT: Critical error in chat module - Request ID: {request_id if 'request_id' in locals() else 'Not set'}")
-            
+
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected internal server error occurred."
@@ -1669,7 +1698,7 @@ async def create_chat_dictionary(
     try:
         service = ChatDictionaryService(db)
         dict_id = service.create_dictionary(dictionary.name, dictionary.description)
-        
+
         # Fetch the created dictionary
         dict_data = service.get_dictionary(dict_id)
         if not dict_data:
@@ -1677,13 +1706,13 @@ async def create_chat_dictionary(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Dictionary created but could not be retrieved"
             )
-        
+
         # Get entry count
         entries = service.get_entries(dictionary_id=dict_id)
         dict_data['entry_count'] = len(entries)
-        
+
         return ChatDictionaryResponse(**dict_data)
-        
+
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
@@ -1706,24 +1735,24 @@ async def list_chat_dictionaries(
     try:
         service = ChatDictionaryService(db)
         dictionaries = service.list_dictionaries(include_inactive=include_inactive)
-        
+
         # Add entry counts
         for dict_data in dictionaries:
             entries = service.get_entries(dictionary_id=dict_data['id'], active_only=False)
             dict_data['entry_count'] = len(entries)
-        
+
         active_count = sum(1 for d in dictionaries if d.get('is_active', True))
         inactive_count = len(dictionaries) - active_count
-        
+
         dict_responses = [ChatDictionaryResponse(**d) for d in dictionaries]
-        
+
         return DictionaryListResponse(
             dictionaries=dict_responses,
             total=len(dictionaries),
             active_count=active_count,
             inactive_count=inactive_count
         )
-        
+
     except Exception as e:
         logger.error(f"Error listing dictionaries: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -1743,24 +1772,24 @@ async def get_chat_dictionary(
     """Get a specific dictionary with all its entries."""
     try:
         service = ChatDictionaryService(db)
-        
+
         dict_data = service.get_dictionary(dictionary_id)
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
         entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
         dict_data['entry_count'] = len(entries)
-        
+
         entry_responses = [
             _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id)
             for entry_dict in entries
         ]
-        
+
         return ChatDictionaryWithEntries(
             **dict_data,
             entries=entry_responses
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1783,23 +1812,23 @@ async def update_chat_dictionary(
     """Update a dictionary's metadata."""
     try:
         service = ChatDictionaryService(db)
-        
+
         success = service.update_dictionary(
             dictionary_id,
             name=update.name,
             description=update.description,
             is_active=update.is_active
         )
-        
+
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
         dict_data = service.get_dictionary(dictionary_id)
         entries = service.get_entries(dictionary_id=dictionary_id)
         dict_data['entry_count'] = len(entries)
-        
+
         return ChatDictionaryResponse(**dict_data)
-        
+
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except HTTPException:
@@ -1825,10 +1854,10 @@ async def delete_chat_dictionary(
     try:
         service = ChatDictionaryService(db)
         success = service.delete_dictionary(dictionary_id, hard_delete=hard_delete)
-        
+
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1860,12 +1889,12 @@ async def add_dictionary_entry(
     """
     try:
         service = ChatDictionaryService(db)
-        
+
         # Check dictionary exists
         dict_data = service.get_dictionary(dictionary_id)
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
         timed_effects_dict = entry.timed_effects.model_dump() if entry.timed_effects else None
 
         entry_id = service.add_entry(
@@ -1901,7 +1930,7 @@ async def add_dictionary_entry(
             }
 
         return _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
-        
+
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
@@ -1926,26 +1955,26 @@ async def list_dictionary_entries(
     """List all entries in a dictionary, optionally filtered by group."""
     try:
         service = ChatDictionaryService(db)
-        
+
         # Check dictionary exists
         dict_data = service.get_dictionary(dictionary_id)
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
         entries = service.get_entries(dictionary_id=dictionary_id, group=group, active_only=False)
 
         entry_responses = [
             _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id)
             for entry_dict in entries
         ]
-        
+
         return EntryListResponse(
             entries=entry_responses,
             total=len(entries),
             dictionary_id=dictionary_id,
             group=group
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1968,7 +1997,7 @@ async def update_dictionary_entry(
     """Update a dictionary entry."""
     try:
         service = ChatDictionaryService(db)
-        
+
         timed_effects_dict = update.timed_effects.model_dump() if update.timed_effects else None
 
         success = service.update_entry(
@@ -1983,10 +2012,10 @@ async def update_dictionary_entry(
             enabled=update.enabled,
             case_sensitive=update.case_sensitive,
         )
-        
+
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
-        
+
         dictionary_id_for_entry = service._get_entry_dict_id(entry_id)
         if dictionary_id_for_entry is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
@@ -1997,7 +2026,7 @@ async def update_dictionary_entry(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
 
         return _entry_dict_to_response(updated_entry, fallback_dictionary_id=dictionary_id_for_entry)
-        
+
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
@@ -2022,10 +2051,10 @@ async def delete_dictionary_entry(
     try:
         service = ChatDictionaryService(db)
         success = service.delete_entry(entry_id)
-        
+
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2054,12 +2083,12 @@ async def process_text_with_dictionaries(
     """
     try:
         service = ChatDictionaryService(db)
-        
+
         start_time = time.time()
-        
+
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            
+
             processed_text, stats = service.process_text(
                 request.text,
                 dictionary_id=request.dictionary_id,
@@ -2068,16 +2097,16 @@ async def process_text_with_dictionaries(
                 token_budget=request.token_budget,
                 return_stats=True,
             )
-            
+
             # Check if token budget was exceeded
             token_budget_exceeded = any(
                 issubclass(warning.category, TokenBudgetExceededWarning) for warning in w
             )
             if token_budget_exceeded:
                 stats["token_budget_exceeded"] = True
-        
+
         processing_time_ms = (time.time() - start_time) * 1000
-        
+
         return ProcessTextResponse(
             original_text=request.text,
             processed_text=processed_text if isinstance(processed_text, str) else processed_text.get("processed_text", request.text),
@@ -2087,7 +2116,7 @@ async def process_text_with_dictionaries(
             token_budget_exceeded=stats.get("token_budget_exceeded", False),
             processing_time_ms=processing_time_ms,
         )
-        
+
     except Exception as e:
         logger.error(f"Error processing text: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -2121,7 +2150,7 @@ async def import_dictionary(
     """
     try:
         service = ChatDictionaryService(db)
-        
+
         # Import directly from markdown content
         dict_id = service.import_from_markdown(import_request.content, import_request.name)
 
@@ -2139,7 +2168,7 @@ async def import_dictionary(
             entries_imported=len(entries),
             groups_created=groups,
         )
-            
+
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ConflictError as e:
@@ -2163,12 +2192,12 @@ async def export_dictionary(
     """Export a dictionary to markdown format."""
     try:
         service = ChatDictionaryService(db)
-        
+
         # Get dictionary info
         dict_data = service.get_dictionary(dictionary_id)
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
         # Export to markdown string directly
         content = service.export_to_markdown(dictionary_id)
 
@@ -2181,7 +2210,7 @@ async def export_dictionary(
             entry_count=len(entries),
             group_count=len(groups),
         )
-            
+
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:
@@ -2263,11 +2292,11 @@ async def get_dictionary_statistics(
     """Get statistics for a dictionary."""
     try:
         service = ChatDictionaryService(db)
-        
+
         dict_data = service.get_dictionary(dictionary_id)
         if not dict_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-        
+
         # Use service statistics and enrich with groups and average probability
         stats = service.get_statistics(dictionary_id)
         entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
@@ -2288,7 +2317,7 @@ async def get_dictionary_statistics(
             total_usage_count=service.get_usage_statistics(dictionary_id).get("times_used"),
             last_used=None,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2336,7 +2365,7 @@ async def generate_document(
     """Generate a document from a conversation."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         # Convert string enum to internal enum
         doc_type = DocumentType(request.document_type.value)
 
@@ -2399,7 +2428,7 @@ async def generate_document(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Service for '{provider_name}' is not configured (key missing)."
             )
-        
+
         if request.async_generation:
             # Create async job
             job_id = service.create_generation_job(
@@ -2412,7 +2441,7 @@ async def generate_document(
                     "custom_prompt": request.custom_prompt
                 }
             )
-            
+
             return AsyncGenerationResponse(
                 job_id=job_id,
                 status=GenStatus.PENDING,
@@ -2436,7 +2465,7 @@ async def generate_document(
                 )
 
             content = await asyncio.to_thread(_generate_doc, request.stream)
-            
+
             if isinstance(content, dict):
                 if content.get("success") is False:
                     detail = content.get("error") or "Document generation failed"
@@ -2551,20 +2580,20 @@ async def generate_document(
                         "X-Accel-Buffering": "no",
                     },
                 )
-            
+
             # Get the saved document
             docs = service.get_generated_documents(
                 conversation_id=request.conversation_id,
                 document_type=doc_type,
                 limit=1
             )
-            
+
             if not docs:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Document generated but not saved"
                 )
-            
+
             doc = docs[0]
             return GenerateDocumentResponse(
                 document_id=doc['id'],
@@ -2577,7 +2606,7 @@ async def generate_document(
                 generation_time_ms=doc['generation_time_ms'],
                 created_at=doc['created_at']
             )
-            
+
     except InputError as e:
         logger.warning(f"Input error generating document: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -2606,13 +2635,13 @@ async def get_job_status(
     try:
         service = DocumentGeneratorService(db)
         job = service.get_job_status(job_id)
-        
+
         if not job:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Job {job_id} not found"
             )
-        
+
         # Calculate progress (simplified)
         progress = 0
         if job['status'] == GenStatus.PENDING.value:
@@ -2621,7 +2650,7 @@ async def get_job_status(
             progress = 50
         elif job['status'] in [GenStatus.COMPLETED.value, GenStatus.FAILED.value, GenStatus.CANCELLED.value]:
             progress = 100
-        
+
         return JobStatusResponse(
             job_id=job['job_id'],
             conversation_id=job['conversation_id'],
@@ -2636,7 +2665,7 @@ async def get_job_status(
             completed_at=job['completed_at'],
             progress_percentage=progress
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2657,30 +2686,30 @@ async def cancel_job(
     """Cancel a document generation job."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         job = service.get_job_status(job_id)
         if not job:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Job {job_id} not found"
             )
-        
+
         if job['status'] in [GenStatus.COMPLETED.value, GenStatus.FAILED.value, GenStatus.CANCELLED.value]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Job {job_id} is already {job['status']}"
             )
-        
+
         success = service.update_job_status(job_id, GenStatus.CANCELLED)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to cancel job"
             )
-        
+
         return {"message": f"Job {job_id} cancelled successfully"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2704,26 +2733,26 @@ async def list_generated_documents(
     """List previously generated documents."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         # Convert string enum to internal enum if provided
         doc_type = DocumentType(document_type.value) if document_type else None
-        
+
         documents = service.get_generated_documents(
             conversation_id=conversation_id,
             document_type=doc_type,
             limit=limit
         )
-        
+
         # Convert to response models
         doc_responses = [GeneratedDocument(**doc) for doc in documents]
-        
+
         return DocumentListResponse(
             documents=doc_responses,
             total=len(doc_responses),
             conversation_id=conversation_id,
             document_type=document_type
         )
-        
+
     except Exception as e:
         logger.error(f"Error listing generated documents: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -2743,17 +2772,17 @@ async def get_generated_document(
     """Get a specific generated document."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         doc = service.get_generated_document_by_id(document_id)
-        
+
         if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found"
             )
-        
+
         return GeneratedDocument(**doc)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2774,17 +2803,17 @@ async def delete_generated_document(
     """Delete a generated document."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         success = service.delete_generated_document(document_id)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found"
             )
-        
+
         return {"message": f"Document {document_id} deleted successfully"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2806,10 +2835,10 @@ async def save_prompt_config(
     """Save a custom prompt configuration for a document type."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         # Convert string enum to internal enum
         doc_type = DocumentType(config.document_type.value)
-        
+
         success = service.save_user_prompt_config(
             document_type=doc_type,
             system_prompt=config.system_prompt,
@@ -2817,13 +2846,13 @@ async def save_prompt_config(
             temperature=config.temperature,
             max_tokens=config.max_tokens
         )
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to save prompt configuration"
             )
-        
+
         return PromptConfigResponse(
             document_type=config.document_type,
             system_prompt=config.system_prompt,
@@ -2834,7 +2863,7 @@ async def save_prompt_config(
             created_at=datetime.datetime.utcnow(),
             updated_at=datetime.datetime.utcnow()
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2856,12 +2885,12 @@ async def get_prompt_config(
     """Get the prompt configuration for a document type."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         # Convert string enum to internal enum
         doc_type = DocumentType(document_type.value)
-        
+
         config = service.get_user_prompt_config(doc_type)
-        
+
         # Check if it's a custom config by trying to fetch from database
         is_custom = False
         try:
@@ -2880,7 +2909,7 @@ async def get_prompt_config(
         except Exception as e:
             logger.error(f"Unexpected error checking custom prompts: {type(e).__name__}: {e}", exc_info=True)
             is_custom = False  # Safe default
-        
+
         return PromptConfigResponse(
             document_type=document_type,
             system_prompt=config['system'],
@@ -2891,7 +2920,7 @@ async def get_prompt_config(
             created_at=None,
             updated_at=None
         )
-        
+
     except Exception as e:
         logger.error(f"Error getting prompt config: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -2911,15 +2940,15 @@ async def bulk_generate_documents(
     """Generate multiple documents in bulk (async)."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         job_ids = []
         total_jobs = len(request.conversation_ids) * len(request.document_types)
-        
+
         for conv_id in request.conversation_ids:
             for doc_type_str in request.document_types:
                 # Convert string enum to internal enum
                 doc_type = DocumentType(doc_type_str.value)
-                
+
                 # Create job for each combination
                 job_id = service.create_generation_job(
                     conversation_id=conv_id,
@@ -2929,17 +2958,17 @@ async def bulk_generate_documents(
                     prompt_config={}
                 )
                 job_ids.append(job_id)
-        
+
         # Estimate time (simplified - 10 seconds per document)
         estimated_time = total_jobs * 10
-        
+
         return BulkGenerateResponse(
             total_jobs=total_jobs,
             job_ids=job_ids,
             estimated_time_seconds=estimated_time,
             message=f"Created {total_jobs} generation jobs"
         )
-        
+
     except Exception as e:
         logger.error(f"Error creating bulk generation jobs: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -2958,10 +2987,10 @@ async def get_generation_statistics(
     """Get statistics about document generation."""
     try:
         service = DocumentGeneratorService(db)
-        
+
         # Get all documents for statistics
         all_docs = service.get_generated_documents(limit=1000)
-        
+
         if not all_docs:
             return GenerationStatistics(
                 total_documents=0,
@@ -2972,40 +3001,40 @@ async def get_generation_statistics(
                 last_generated=None,
                 most_used_model=None
             )
-        
+
         # Calculate statistics
         by_type = {}
         by_provider = {}
         total_time = 0
         total_tokens = 0
         models = {}
-        
+
         for doc in all_docs:
             # Count by type
             doc_type = doc['document_type']
             by_type[doc_type] = by_type.get(doc_type, 0) + 1
-            
+
             # Count by provider
             provider = doc['provider']
             by_provider[provider] = by_provider.get(provider, 0) + 1
-            
+
             # Sum generation time
             total_time += doc.get('generation_time_ms', 0)
-            
+
             # Sum tokens
             if doc.get('token_count'):
                 total_tokens += doc['token_count']
-            
+
             # Count models
             model = doc['model']
             models[model] = models.get(model, 0) + 1
-        
+
         # Find most used model
         most_used_model = max(models, key=models.get) if models else None
-        
+
         # Get last generated
         last_doc = max(all_docs, key=lambda d: d['created_at'])
-        
+
         return GenerationStatistics(
             total_documents=len(all_docs),
             by_type=by_type,
@@ -3015,7 +3044,7 @@ async def get_generation_statistics(
             last_generated=last_doc['created_at'],
             most_used_model=most_used_model
         )
-        
+
     except Exception as e:
         logger.error(f"Error getting generation statistics: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

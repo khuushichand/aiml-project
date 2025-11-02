@@ -16,7 +16,7 @@ This guide describes how to rotate JWT signing configuration for the AuthNZ modu
 - Steps:
   1. Generate new secret: `python -c "import secrets; print(secrets.token_urlsafe(48))"`
   2. Set `JWT_SECRET_KEY_NEW` in your secret store or staging env.
-  3. Deploy code that can read from the new key (rollout window) and accept tokens signed with the old key if needed (optional dual-validate code path) — or perform a brief cutover window.
+  3. Deploy code that can read from the new key (rollout window) and accept tokens signed with the old key if needed (optional dual-validate code path) - or perform a brief cutover window.
   4. Switch `JWT_SECRET_KEY` to the new value.
   5. Restart server processes.
 - Impact:

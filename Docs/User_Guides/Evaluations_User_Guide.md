@@ -112,7 +112,7 @@ Uses string similarity for approximate matching.
   "eval_type": "fuzzy_match",
   "eval_spec": {"threshold": 0.8},
   "dataset": [
-    {"input": {"output": "The cat sat on the mat"}, 
+    {"input": {"output": "The cat sat on the mat"},
      "expected": {"output": "The cat was sitting on the mat"}}
   ]
 }
@@ -206,7 +206,7 @@ evaluation = {
         1. Correctness: Does it solve the problem?
         2. Efficiency: Is it optimized?
         3. Readability: Is it clean and well-structured?
-        
+
         Score each from 0-1.
         """
     }
@@ -319,13 +319,13 @@ while True:
         headers={"Authorization": f"Bearer {API_KEY}"}
     )
     status = response.json()["status"]
-    
+
     if status == "completed":
         break
     elif status == "failed":
         print("Evaluation failed:", response.json().get("error_message"))
         break
-    
+
     print(f"Progress: {response.json().get('progress', {})}")
     time.sleep(2)
 ```
@@ -453,11 +453,11 @@ eval_config = {
         {
             "input": {
                 "source_text": """
-                Scientists at MIT have developed a new type of battery that could 
-                revolutionize energy storage. The aluminum-sulfur battery is made 
-                from abundant materials and costs a fraction of lithium-ion batteries. 
-                Initial tests show it can charge in under a minute and maintains 
-                capacity after thousands of cycles. The breakthrough could accelerate 
+                Scientists at MIT have developed a new type of battery that could
+                revolutionize energy storage. The aluminum-sulfur battery is made
+                from abundant materials and costs a fraction of lithium-ion batteries.
+                Initial tests show it can charge in under a minute and maintains
+                capacity after thousands of cycles. The breakthrough could accelerate
                 adoption of renewable energy by solving intermittent storage challenges.
                 """,
                 "summary": "MIT scientists created an affordable aluminum-sulfur battery that charges quickly and could advance renewable energy storage."
@@ -482,8 +482,8 @@ run_config = {
 }
 
 response = requests.post(
-    f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs", 
-    json=run_config, 
+    f"{BASE_URL}/api/v1/evaluations/{eval_id}/runs",
+    json=run_config,
     headers=headers
 )
 run_id = response.json()["id"]
@@ -503,11 +503,11 @@ if status == "completed":
     # Results are included in the run when status becomes 'completed'.
     # response = requests.get(f"{BASE_URL}/api/v1/evaluations/runs/{run_id}/results", headers=headers)
     results = response.json()
-    
+
     print("\n=== Evaluation Results ===")
     print(f"Overall Score: {results['results']['aggregate']['mean_score']:.2%}")
     print(f"Pass Rate: {results['results']['aggregate']['pass_rate']:.1%}")
-    
+
     print("\nMetric Breakdown:")
     for metric, stats in results['results']['by_metric'].items():
         print(f"  {metric}: {stats['mean']:.2f}")
@@ -527,10 +527,10 @@ for model in models_to_test:
         headers=headers
     )
     run_id = response.json()["id"]
-    
+
     # Wait and collect results
     # ... (monitoring code)
-    
+
     results_comparison[model] = results
 
 # Compare models

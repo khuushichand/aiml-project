@@ -10,6 +10,7 @@ Env:
 """
 
 import base64
+import hashlib
 import json
 import os
 from typing import Any, Dict, Optional
@@ -26,13 +27,20 @@ def _get_key_from_env() -> Optional[bytes]:
     key_b64 = os.getenv("WORKFLOWS_ARTIFACT_ENC_KEY", "").strip()
     if not key_b64:
         return None
+    # Try strict base64 decode first
+    raw: Optional[bytes]
     try:
-        key = base64.b64decode(key_b64)
-        if len(key) not in (16, 24, 32):
-            return None
-        return key
+        raw = base64.b64decode(key_b64)
     except Exception:
-        return None
+        raw = None
+    # If base64 failed, derive from the literal string
+    if raw is None or len(raw) == 0:
+        # Treat provided env var as passphrase; derive a 32-byte key deterministically
+        return hashlib.sha256(key_b64.encode("utf-8")).digest()
+    # Accept standard AES key sizes directly; otherwise derive via SHA-256
+    if len(raw) in (16, 24, 32):
+        return raw
+    return hashlib.sha256(raw).digest()
 
 
 def _get_secondary_key_from_env() -> Optional[bytes]:
@@ -41,12 +49,14 @@ def _get_secondary_key_from_env() -> Optional[bytes]:
     if not key_b64:
         return None
     try:
-        key = base64.b64decode(key_b64)
-        if len(key) not in (16, 24, 32):
-            return None
-        return key
+        raw = base64.b64decode(key_b64)
     except Exception:
-        return None
+        raw = None
+    if raw is None or len(raw) == 0:
+        return hashlib.sha256(key_b64.encode("utf-8")).digest()
+    if len(raw) in (16, 24, 32):
+        return raw
+    return hashlib.sha256(raw).digest()
 
 
 def encrypt_json_blob(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -99,12 +109,16 @@ def decrypt_json_blob(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def _decode_key_b64(key_b64: str) -> Optional[bytes]:
     try:
-        key = base64.b64decode(key_b64)
-        if len(key) not in (16, 24, 32):
-            return None
-        return key
+        raw = base64.b64decode(key_b64)
     except Exception:
-        return None
+        raw = None
+    if raw is None or len(raw) == 0:
+        # Derive from literal if not valid base64
+        return hashlib.sha256(key_b64.encode("utf-8")).digest()
+    if len(raw) in (16, 24, 32):
+        return raw
+    # For non-standard lengths, derive a 32-byte AES key deterministically
+    return hashlib.sha256(raw).digest()
 
 
 def encrypt_json_blob_with_key(data: Dict[str, Any], key_b64: str) -> Optional[Dict[str, Any]]:

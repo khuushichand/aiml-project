@@ -9,13 +9,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Literal
 from fastapi import (
-    APIRouter, 
-    Depends, 
-    HTTPException, 
-    Query, 
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
     Path,
     status,
-    
+
 )
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -40,7 +40,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     ChatSessionUpdate,
     ChatSessionListResponse,
     MessageResponse,
-    
+
     CharacterChatCompletionPrepRequest,
     CharacterChatCompletionPrepResponse,
     CharacterChatCompletionV2Request,
@@ -159,20 +159,20 @@ async def create_chat_session(
 ):
     """
     Create a new chat session with a character.
-    
+
     Args:
         session_data: Chat session creation data
         db: Database instance
         current_user: Authenticated user
-        
+
     Notes:
         This API does not automatically create a first assistant message. Clients
         should POST a first user/assistant message after chat creation. The library
         helper `start_new_chat_session` can seed a first message when used directly.
-        
+
     Returns:
         Created chat session details
-        
+
     Raises:
         HTTPException: 404 if character not found, 429 if rate limited
     """
@@ -191,7 +191,7 @@ async def create_chat_session(
         except Exception:
             # Non-fatal: skip enforcement if count fails
             logger.debug("Non-fatal: chat limit count failed; skipping cap enforcement")
-        
+
         # Verify character exists
         character = db.get_character_card_by_id(session_data.character_id)
         if not character:
@@ -199,12 +199,12 @@ async def create_chat_session(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Character with ID {session_data.character_id} not found"
             )
-        
+
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         title = session_data.title or f"{character['name']} Chat ({timestamp})"
-        
+
         # Create conversation data
         conv_data = {
             'id': chat_id,
@@ -215,7 +215,7 @@ async def create_chat_session(
             'client_id': str(current_user.id),
             'version': 1
         }
-        
+
         # Add to database
         created_id = db.add_conversation(conv_data)
         if not created_id:
@@ -223,7 +223,7 @@ async def create_chat_session(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create chat session"
             )
-        
+
         # Retrieve created conversation
         created_conv = db.get_conversation_by_id(created_id)
         if not created_conv:
@@ -231,7 +231,7 @@ async def create_chat_session(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve created chat session"
             )
-        
+
         # Optionally seed the chat with a greeting (first_message or alternate)
         if seed_first_message:
             try:
@@ -266,12 +266,12 @@ async def create_chat_session(
                         pass
             except Exception as _seed_err:
                 logger.debug(f"Non-fatal: failed to seed first message for chat {created_id}: {_seed_err}")
-        
+
         # Log creation
         logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
-        
+
         return _convert_db_conversation_to_response(created_conv)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -291,43 +291,43 @@ async def get_chat_session(
 ):
     """
     Get details of a specific chat session.
-    
+
     Args:
         chat_id: Chat session ID
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         Chat session details
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized
     """
     try:
         conversation = db.get_conversation_by_id(chat_id)
-        
+
         if not conversation:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session {chat_id} not found"
             )
-        
+
         # Verify ownership
         if conversation.get('client_id') != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have access to this chat session"
             )
-        
+
         # Get message count efficiently
         try:
             conversation['message_count'] = db.count_messages_for_conversation(chat_id)
         except Exception:
             messages = db.get_messages_for_conversation(chat_id, limit=1000)
             conversation['message_count'] = len(messages) if messages else 0
-        
+
         return _convert_db_conversation_to_response(conversation)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -873,14 +873,14 @@ async def list_chat_sessions(
 ):
     """
     List all chat sessions for the current user.
-    
+
     Args:
         character_id: Optional character ID filter
         limit: Maximum number of items to return
         offset: Number of items to skip
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         List of chat sessions with pagination info
     """
@@ -901,16 +901,16 @@ async def list_chat_sessions(
                 total_count = db.count_conversations_for_user(user_id_str)
             except Exception:
                 total_count = len(conversations)
-        
+
         # Filter by client_id for security (redundant in happy path, kept defensively)
         user_conversations = [conv for conv in conversations if conv.get('client_id') == user_id_str]
-        
+
         # Sort by last_modified descending
         user_conversations.sort(key=lambda x: x.get('last_modified', ''), reverse=True)
-        
+
         # Apply pagination after filtering
         paginated = user_conversations[offset:offset+limit]
-        
+
         # Add message counts using efficient counter
         for conv in paginated:
             try:
@@ -918,14 +918,14 @@ async def list_chat_sessions(
             except Exception:
                 messages = db.get_messages_for_conversation(conv['id'], limit=1000)
                 conv['message_count'] = len(messages) if messages else 0
-        
+
         return ChatSessionListResponse(
             chats=[_convert_db_conversation_to_response(conv) for conv in paginated],
             total=total_count,
             limit=limit,
             offset=offset
         )
-        
+
     except Exception as e:
         logger.error(f"Error listing chat sessions: {e}", exc_info=True)
         raise HTTPException(
@@ -945,59 +945,59 @@ async def update_chat_session(
 ):
     """
     Update a chat session's metadata.
-    
+
     Args:
         chat_id: Chat session ID
         update_data: Update data
         expected_version: Expected version for optimistic locking
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         Updated chat session details
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
         # Get current conversation
         conversation = db.get_conversation_by_id(chat_id)
-        
+
         if not conversation:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session {chat_id} not found"
             )
-        
+
         # Verify ownership
         if conversation.get('client_id') != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have access to this chat session"
             )
-        
+
         # Check version
         if conversation.get('version', 1) != expected_version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"
             )
-        
+
         # Update fields via DB abstraction with optimistic locking
         update_fields = update_data.model_dump(exclude_unset=True)
         # Only allow supported fields
         allowed_update = {k: v for k, v in update_fields.items() if k in {"title", "rating"}}
         # db.update_conversation updates metadata and bumps version even if payload is empty
         db.update_conversation(chat_id, allowed_update, expected_version)
-        
+
         # Retrieve updated conversation
         updated_conv = db.get_conversation_by_id(chat_id)
         if updated_conv:
             messages = db.get_messages_for_conversation(chat_id, limit=1000)
             updated_conv['message_count'] = len(messages) if messages else 0
-        
+
         return _convert_db_conversation_to_response(updated_conv)
-        
+
     except ConflictError as e:
         # Optimistic locking or state conflicts
         logger.warning(f"Conflict updating chat session {chat_id}: {e}")
@@ -1025,40 +1025,40 @@ async def delete_chat_session(
 ):
     """
     Soft delete a chat session.
-    
+
     Args:
         chat_id: Chat session ID
         expected_version: Expected version for optimistic locking
         db: Database instance
         current_user: Authenticated user
-        
+
     Raises:
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
         # Get current conversation
         conversation = db.get_conversation_by_id(chat_id)
-        
+
         if not conversation:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session {chat_id} not found"
             )
-        
+
         # Verify ownership
         if conversation.get('client_id') != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have access to this chat session"
             )
-        
+
         # Check version if provided
         if expected_version is not None and conversation.get('version', 1) != expected_version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"
             )
-        
+
         # Collect all current non-deleted messages prior to conversation soft-delete (page through to cover large chats)
         page_size = 10000
         existing_messages: List[Dict[str, Any]] = []
@@ -1079,9 +1079,9 @@ async def delete_chat_session(
         exp_ver = expected_version if expected_version is not None else conversation.get('version', 1)
         # Finally soft delete the conversation
         db.soft_delete_conversation(chat_id, exp_ver)
-        
+
         logger.info(f"Soft deleted chat session {chat_id} by user {current_user.id}")
-        
+
     except ConflictError as e:
         logger.warning(f"Conflict deleting chat session {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
@@ -1109,7 +1109,7 @@ async def delete_chat_session(
 # Chat Export Endpoint
 # ========================================================================
 
-@router.get("/{chat_id}/export", 
+@router.get("/{chat_id}/export",
             summary="Export chat history", tags=["Chat Export"])
 async def export_chat_history(
     chat_id: str = Path(..., description="Chat session ID"),
@@ -1121,7 +1121,7 @@ async def export_chat_history(
 ):
     """
     Export chat history in various formats.
-    
+
     Args:
         chat_id: Chat session ID to export
         format: Export format
@@ -1129,10 +1129,10 @@ async def export_chat_history(
         include_character: Whether to include character info
         db: Database instance
         current_user: Authenticated user
-        
+
     Returns:
         Chat history in requested format
-        
+
     Raises:
         HTTPException: 404 if chat not found, 403 if unauthorized
     """
@@ -1144,22 +1144,22 @@ async def export_chat_history(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Chat session {chat_id} not found"
             )
-        
+
         # Verify ownership
         if conversation.get('client_id') != str(current_user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You don't have access to this chat session"
             )
-        
+
         # Get character info if requested
         character = None
         if include_character:
             character = db.get_character_card_by_id(conversation['character_id'])
-        
+
         # Get messages
         messages = db.get_messages_for_conversation(chat_id, limit=10000)
-        
+
         # Format based on requested type
         if format == "markdown":
             # Markdown format
@@ -1171,7 +1171,7 @@ async def export_chat_history(
                 lines.append(f"**Date**: {conversation.get('created_at', '')}")
                 lines.append(f"**Messages**: {len(messages)}")
                 lines.append("\n---\n")
-            
+
             for msg in messages:
                 if msg.get('deleted'):
                     continue
@@ -1180,9 +1180,9 @@ async def export_chat_history(
                 timestamp = msg.get('timestamp', '')
                 lines.append(f"**{sender.title()}** ({timestamp}):")
                 lines.append(f"{content}\n")
-            
+
             return {"content": "\n".join(lines), "format": "markdown"}
-            
+
         elif format == "text":
             # Plain text format
             lines = []
@@ -1192,16 +1192,16 @@ async def export_chat_history(
                     lines.append(f"Character: {character.get('name', 'Unknown')}")
                 lines.append(f"Date: {conversation.get('created_at', '')}")
                 lines.append("-" * 40)
-            
+
             for msg in messages:
                 if msg.get('deleted'):
                     continue
                 sender = msg.get('sender', 'unknown')
                 content = msg.get('content', '')
                 lines.append(f"{sender}: {content}")
-            
+
             return {"content": "\n".join(lines), "format": "text"}
-            
+
         else:
             # JSON format (default)
             export_data = {
@@ -1248,7 +1248,7 @@ async def export_chat_history(
                 export_data["messages"].append(item)
                 if include_metadata and md and md.get('extra') is not None and msg.get('id'):
                     message_metadata_extra[msg.get('id')] = md.get('extra')
-            
+
             if include_metadata:
                 export_data["metadata"] = {
                     "total_messages": len(messages),
@@ -1257,9 +1257,9 @@ async def export_chat_history(
                 }
                 if message_metadata_extra:
                     export_data["message_metadata_extra"] = message_metadata_extra
-            
+
             return export_data
-            
+
     except HTTPException:
         raise
     except Exception as e:

@@ -1,0 +1,745 @@
+2025-11-01 10:39:46.417 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.telemetry:<module>:65 - OpenTelemetry not fully available: No module named 'opentelemetry.exporter.prometheus'
+2025-11-01 10:39:46.418 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.telemetry:<module>:66 - Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi
+2025-11-01 10:39:46.438 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.telemetry:__init__:185 - OpenTelemetry not available, using fallback implementations
+2025-11-01 10:39:46.388 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:<module>:329 - Logging configured (Loguru + stdlib interception)
+2025-11-01 10:39:46.462 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_flush_startup_logs:58 - Attempting to load OpenAI TTS mappings from: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/openai_tts_mappings.json
+2025-11-01 10:39:46.529 | WARNING  | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.postgresql_backend:<module>:50 - psycopg (v3) not available. PostgreSQL backend will not work.
+2025-11-01 10:39:46.533 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Loading environment variables from: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/.env
+2025-11-01 10:39:46.534 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Loading environment variables from: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/.ENV
+2025-11-01 10:39:46.536 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Attempting to load comprehensive config from: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt
+2025-11-01 10:39:46.537 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_comprehensive_config(): Sections found in config: ['Setup', 'Server', 'Processing', 'Media-Processing', 'Chat-Dictionaries', 'Chat-Module', 'Character-Chat', 'Settings', 'Auto-Save', 'Prompts', 'Database', 'Chunking', 'AuthNZ', 'Embeddings', 'Claims', 'RAG', 'API', 'Local-API', 'STT-Settings', 'external_providers', 'TTS-Settings', 'API-Routes', 'Search-Engines', 'Web-Scraper', 'Logging', 'Moderation', 'Redis', 'Web-Scraping', 'personalization', 'persona', 'persona.rbac']
+2025-11-01 10:39:46.539 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.AuthNZ.settings:_ensure_jwt_secret:532 - Single-user mode - skipping JWT secret initialization
+2025-11-01 10:39:46.539 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Determined ACTUAL_PROJECT_ROOT for database paths: /Users/macbook-dev/Documents/GitHub/tldw_server2
+2025-11-01 10:39:46.540 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Early loading environment variables from: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/.env
+2025-11-01 10:39:46.541 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Early loading environment variables from: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/.ENV
+2025-11-01 10:39:46.543 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:46.544 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Ensured main SQLite database directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases
+2025-11-01 10:39:46.545 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - Ensured user data base directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases
+2025-11-01 10:39:46.545 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.AuthNZ.settings:get_settings:878 - Settings initialized - Auth mode: single_user
+2025-11-01 10:39:46.545 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps:<module>:182 - Using cachetools.LRUCache for audit service instances (maxsize=20).
+2025-11-01 10:39:46.628 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Embeddings.circuit_breaker:__init__:143 - Circuit breaker 'api_request' initialized: failure_threshold=5, recovery_timeout=60s
+2025-11-01 10:39:47.043 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.numpy_compat:patch_numpy_sctypes:22 - Applying NumPy 2.0 compatibility patch for np.sctypes
+2025-11-01 10:39:47.043 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.numpy_compat:patch_numpy_sctypes:33 - NumPy 2.0 compatibility patch applied successfully
+2025-11-01 10:39:47.044 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.numpy_compat:ensure_numpy_compatibility:46 - NumPy compatibility ensured
+2025-11-01 10:39:47.044 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.numpy_compat:ensure_numpy_compatibility:46 - NumPy compatibility ensured
+2025-11-01 10:39:48.726 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:48.727 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:48.729 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:48.730 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:48.736 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps:<module>:107 - Using LRUCache for ChaChaNotes DB instances (maxsize=20).
+2025-11-01 10:39:48.785 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Chat.prompt_template_manager:<module>:199 - Prompt templates directory: /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/Chat/prompt_templates
+2025-11-01 10:39:48.786 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Chat.prompt_template_manager:<module>:200 - Available templates found: []
+2025-11-01 10:39:48.886 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: http_requests_total
+2025-11-01 10:39:48.886 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: http_request_duration_seconds
+2025-11-01 10:39:48.886 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: db_connections_active
+2025-11-01 10:39:48.887 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: db_queries_total
+2025-11-01 10:39:48.887 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: db_query_duration_seconds
+2025-11-01 10:39:48.887 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_snapshots_table_bytes
+2025-11-01 10:39:48.888 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_snapshots_table_rows
+2025-11-01 10:39:48.888 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_hits_total
+2025-11-01 10:39:48.888 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_misses_total
+2025-11-01 10:39:48.888 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_invalidations_total
+2025-11-01 10:39:48.889 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_generation
+2025-11-01 10:39:48.889 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_entries
+2025-11-01 10:39:48.889 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_requests_total
+2025-11-01 10:39:48.890 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_tokens_used_total
+2025-11-01 10:39:48.890 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_request_duration_seconds
+2025-11-01 10:39:48.890 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_cost_dollars
+2025-11-01 10:39:48.890 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_cost_dollars_by_user
+2025-11-01 10:39:48.891 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_cost_dollars_by_operation
+2025-11-01 10:39:48.891 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_tokens_used_total_by_user
+2025-11-01 10:39:48.891 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_tokens_used_total_by_operation
+2025-11-01 10:39:48.892 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_connection_attempts_total
+2025-11-01 10:39:48.892 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_connection_duration_seconds
+2025-11-01 10:39:48.892 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_connection_errors_total
+2025-11-01 10:39:48.892 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_fallback_total
+2025-11-01 10:39:48.893 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_queries_total
+2025-11-01 10:39:48.893 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: app_exception_events_total
+2025-11-01 10:39:48.893 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: app_warning_events_total
+2025-11-01 10:39:48.894 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_sessions_created_total
+2025-11-01 10:39:48.894 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_runs_started_total
+2025-11-01 10:39:48.894 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_runs_completed_total
+2025-11-01 10:39:48.894 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_run_duration_seconds
+2025-11-01 10:39:48.895 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_upload_bytes_total
+2025-11-01 10:39:48.895 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_upload_files_total
+2025-11-01 10:39:48.895 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_retrieval_latency_seconds
+2025-11-01 10:39:48.896 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_documents_retrieved
+2025-11-01 10:39:48.896 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_cache_hits_total
+2025-11-01 10:39:48.896 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_cache_misses_total
+2025-11-01 10:39:48.897 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_timeouts_total
+2025-11-01 10:39:48.897 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_exceptions_total
+2025-11-01 10:39:48.897 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_retries_total
+2025-11-01 10:39:48.897 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_hard_citation_coverage
+2025-11-01 10:39:48.898 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_nli_unsupported_ratio
+2025-11-01 10:39:48.898 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_unsupported_claims_total
+2025-11-01 10:39:48.898 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_fix_success_total
+2025-11-01 10:39:48.899 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_postcheck_duration_seconds
+2025-11-01 10:39:48.899 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_rerun_performed_total
+2025-11-01 10:39:48.899 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_rerun_adopted_total
+2025-11-01 10:39:48.899 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_rerun_duration_seconds
+2025-11-01 10:39:48.900 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_budget_exhausted_total
+2025-11-01 10:39:48.900 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_docs_scored_total
+2025-11-01 10:39:48.900 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_phase_duration_seconds
+2025-11-01 10:39:48.901 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranking_duration_seconds
+2025-11-01 10:39:48.901 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_rewrite_cache_hits_total
+2025-11-01 10:39:48.901 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_rewrite_cache_misses_total
+2025-11-01 10:39:48.901 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_rewrite_cache_puts_total
+2025-11-01 10:39:48.902 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_batch_query_reuse_total
+2025-11-01 10:39:48.902 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_phase_budget_exhausted_total
+2025-11-01 10:39:48.902 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_total_claims_checked_total
+2025-11-01 10:39:48.903 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_eval_faithfulness_score
+2025-11-01 10:39:48.903 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_eval_coverage_score
+2025-11-01 10:39:48.903 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_eval_last_run_timestamp
+2025-11-01 10:39:48.903 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_generation_gated_total
+2025-11-01 10:39:48.904 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_policy_filtered_chunks_total
+2025-11-01 10:39:48.904 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_sanitized_docs_total
+2025-11-01 10:39:48.904 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_ocr_dropped_docs_total
+2025-11-01 10:39:48.905 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_injection_chunks_downweighted_total
+2025-11-01 10:39:48.905 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_numeric_mismatches_total
+2025-11-01 10:39:48.905 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_missing_hard_citations_total
+2025-11-01 10:39:48.905 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: embeddings_generated_total
+2025-11-01 10:39:48.906 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: hyde_questions_generated_total
+2025-11-01 10:39:48.906 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: hyde_generation_failures_total
+2025-11-01 10:39:48.906 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: hyde_vectors_written_total
+2025-11-01 10:39:48.907 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: uploads_total
+2025-11-01 10:39:48.907 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: upload_bytes_total
+2025-11-01 10:39:48.907 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: embedding_generation_duration_seconds
+2025-11-01 10:39:48.908 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: system_cpu_usage_percent
+2025-11-01 10:39:48.908 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: system_memory_usage_bytes
+2025-11-01 10:39:48.908 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: system_disk_usage_bytes
+2025-11-01 10:39:48.908 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: errors_total
+2025-11-01 10:39:48.909 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_fetch_total
+2025-11-01 10:39:48.909 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_fetch_latency_seconds
+2025-11-01 10:39:48.909 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_playwright_fallback_total
+2025-11-01 10:39:48.910 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_blocked_by_robots_total
+2025-11-01 10:39:48.910 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: security_ssrf_block_total
+2025-11-01 10:39:48.910 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: security_headers_responses_total
+2025-11-01 10:39:48.910 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: user_storage_used_mb
+2025-11-01 10:39:48.911 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: user_storage_quota_mb
+2025-11-01 10:39:48.911 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: circuit_breaker_state
+2025-11-01 10:39:48.911 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: circuit_breaker_trips_total
+2025-11-01 10:39:48.912 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_queue_depth
+2025-11-01 10:39:48.912 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_processing
+2025-11-01 10:39:48.912 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_leases_active
+2025-11-01 10:39:48.912 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_leases_expiring_soon
+2025-11-01 10:39:48.913 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_leases_stale_processing
+2025-11-01 10:39:48.913 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_tool_calls_total
+2025-11-01 10:39:48.913 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_tool_duration_seconds
+2025-11-01 10:39:48.914 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_cache_hits_total
+2025-11-01 10:39:48.914 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_span_length_chars
+2025-11-01 10:39:48.914 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: span_bytes_read_total
+2025-11-01 10:39:48.914 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: chunker_cache_get_total
+2025-11-01 10:39:48.915 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: chunker_cache_put_total
+2025-11-01 10:39:48.915 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:48.919 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:48.925 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:48.926 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:48.927 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:48.927 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.api.v1.API_Deps.DB_Deps:<module>:42 - Using LRUCache for user DB instances (maxsize=100).
+2025-11-01 10:39:49.064 | WARNING  | trace= span= req= job= ps=: | tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create:get_resource_limits:149 - Could not load resource limits from config: 'dict' object has no attribute 'lower'. Using defaults.
+2025-11-01 10:39:49.067 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create:__init__:279 - TokenBucketLimiter initialized with capacity 20 tokens per 60 seconds.
+2025-11-01 10:39:49.067 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create:exponential_backoff:334 - ExponentialBackoff decorator configured with max_retries=3, base_delay=1s.
+[nltk_data] Error loading wordnet: <urlopen error [Errno 8] nodename
+[nltk_data]     nor servname provided, or not known>
+2025-11-01 10:39:49.215 | WARNING  | trace= span= req= job= ps=: | tldw_Server_API.app.core.RAG.rag_service.query_features:_ensure_resource:74 - NLTK resource 'wordnet' unavailable; continuing without it
+2025-11-01 10:39:49.562 | DEBUG    | trace= span= req= job= ps=: | importlib._bootstrap:_call_with_frames_removed:488 - minimum date setting: 1995-01-01 00:00:00
+2025-11-01 10:39:49.572 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.api.v1.endpoints.media:<module>:595 - Redis cache disabled by configuration
+2025-11-01 10:39:49.683 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: http_requests_total
+2025-11-01 10:39:49.683 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: http_request_duration_seconds
+2025-11-01 10:39:49.684 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: db_connections_active
+2025-11-01 10:39:49.684 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: db_queries_total
+2025-11-01 10:39:49.684 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: db_query_duration_seconds
+2025-11-01 10:39:49.685 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_snapshots_table_bytes
+2025-11-01 10:39:49.685 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_snapshots_table_rows
+2025-11-01 10:39:49.685 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_hits_total
+2025-11-01 10:39:49.686 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_misses_total
+2025-11-01 10:39:49.686 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_invalidations_total
+2025-11-01 10:39:49.686 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_generation
+2025-11-01 10:39:49.686 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: privilege_cache_entries
+2025-11-01 10:39:49.687 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_requests_total
+2025-11-01 10:39:49.687 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_tokens_used_total
+2025-11-01 10:39:49.687 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_request_duration_seconds
+2025-11-01 10:39:49.688 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_cost_dollars
+2025-11-01 10:39:49.688 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_cost_dollars_by_user
+2025-11-01 10:39:49.688 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_cost_dollars_by_operation
+2025-11-01 10:39:49.688 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_tokens_used_total_by_user
+2025-11-01 10:39:49.689 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: llm_tokens_used_total_by_operation
+2025-11-01 10:39:49.689 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_connection_attempts_total
+2025-11-01 10:39:49.689 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_connection_duration_seconds
+2025-11-01 10:39:49.690 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_connection_errors_total
+2025-11-01 10:39:49.690 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: infra_redis_fallback_total
+2025-11-01 10:39:49.690 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_queries_total
+2025-11-01 10:39:49.690 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: app_exception_events_total
+2025-11-01 10:39:49.691 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: app_warning_events_total
+2025-11-01 10:39:49.691 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_sessions_created_total
+2025-11-01 10:39:49.691 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_runs_started_total
+2025-11-01 10:39:49.692 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_runs_completed_total
+2025-11-01 10:39:49.692 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_run_duration_seconds
+2025-11-01 10:39:49.692 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_upload_bytes_total
+2025-11-01 10:39:49.692 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: sandbox_upload_files_total
+2025-11-01 10:39:49.693 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_retrieval_latency_seconds
+2025-11-01 10:39:49.693 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_documents_retrieved
+2025-11-01 10:39:49.693 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_cache_hits_total
+2025-11-01 10:39:49.694 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_cache_misses_total
+2025-11-01 10:39:49.694 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_timeouts_total
+2025-11-01 10:39:49.694 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_exceptions_total
+2025-11-01 10:39:49.694 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_retries_total
+2025-11-01 10:39:49.695 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_hard_citation_coverage
+2025-11-01 10:39:49.695 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_nli_unsupported_ratio
+2025-11-01 10:39:49.695 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_unsupported_claims_total
+2025-11-01 10:39:49.696 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_fix_success_total
+2025-11-01 10:39:49.696 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_postcheck_duration_seconds
+2025-11-01 10:39:49.696 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_rerun_performed_total
+2025-11-01 10:39:49.697 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_rerun_adopted_total
+2025-11-01 10:39:49.697 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_adaptive_rerun_duration_seconds
+2025-11-01 10:39:49.697 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_budget_exhausted_total
+2025-11-01 10:39:49.697 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranker_llm_docs_scored_total
+2025-11-01 10:39:49.698 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_phase_duration_seconds
+2025-11-01 10:39:49.698 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_reranking_duration_seconds
+2025-11-01 10:39:49.698 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_rewrite_cache_hits_total
+2025-11-01 10:39:49.699 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_rewrite_cache_misses_total
+2025-11-01 10:39:49.699 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_rewrite_cache_puts_total
+2025-11-01 10:39:49.699 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_batch_query_reuse_total
+2025-11-01 10:39:49.699 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_phase_budget_exhausted_total
+2025-11-01 10:39:49.700 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_total_claims_checked_total
+2025-11-01 10:39:49.700 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_eval_faithfulness_score
+2025-11-01 10:39:49.700 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_eval_coverage_score
+2025-11-01 10:39:49.701 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_eval_last_run_timestamp
+2025-11-01 10:39:49.701 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_generation_gated_total
+2025-11-01 10:39:49.701 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_policy_filtered_chunks_total
+2025-11-01 10:39:49.701 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_sanitized_docs_total
+2025-11-01 10:39:49.702 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_ocr_dropped_docs_total
+2025-11-01 10:39:49.702 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_injection_chunks_downweighted_total
+2025-11-01 10:39:49.702 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_numeric_mismatches_total
+2025-11-01 10:39:49.703 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: rag_missing_hard_citations_total
+2025-11-01 10:39:49.703 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: embeddings_generated_total
+2025-11-01 10:39:49.703 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: hyde_questions_generated_total
+2025-11-01 10:39:49.703 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: hyde_generation_failures_total
+2025-11-01 10:39:49.704 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: hyde_vectors_written_total
+2025-11-01 10:39:49.704 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: uploads_total
+2025-11-01 10:39:49.704 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: upload_bytes_total
+2025-11-01 10:39:49.705 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: embedding_generation_duration_seconds
+2025-11-01 10:39:49.705 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: system_cpu_usage_percent
+2025-11-01 10:39:49.705 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: system_memory_usage_bytes
+2025-11-01 10:39:49.705 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: system_disk_usage_bytes
+2025-11-01 10:39:49.706 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: errors_total
+2025-11-01 10:39:49.706 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_fetch_total
+2025-11-01 10:39:49.706 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_fetch_latency_seconds
+2025-11-01 10:39:49.707 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_playwright_fallback_total
+2025-11-01 10:39:49.707 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: scrape_blocked_by_robots_total
+2025-11-01 10:39:49.707 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: security_ssrf_block_total
+2025-11-01 10:39:49.707 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: security_headers_responses_total
+2025-11-01 10:39:49.708 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: user_storage_used_mb
+2025-11-01 10:39:49.708 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: user_storage_quota_mb
+2025-11-01 10:39:49.708 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: circuit_breaker_state
+2025-11-01 10:39:49.709 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: circuit_breaker_trips_total
+2025-11-01 10:39:49.709 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_queue_depth
+2025-11-01 10:39:49.709 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_processing
+2025-11-01 10:39:49.709 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_leases_active
+2025-11-01 10:39:49.710 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_leases_expiring_soon
+2025-11-01 10:39:49.710 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio_leases_stale_processing
+2025-11-01 10:39:49.710 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_tool_calls_total
+2025-11-01 10:39:49.711 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_tool_duration_seconds
+2025-11-01 10:39:49.711 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_cache_hits_total
+2025-11-01 10:39:49.711 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: agentic_span_length_chars
+2025-11-01 10:39:49.711 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: span_bytes_read_total
+2025-11-01 10:39:49.712 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.executions.total
+2025-11-01 10:39:49.712 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.executions.duration_seconds
+2025-11-01 10:39:49.712 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.tokens.used
+2025-11-01 10:39:49.713 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.cost.total
+2025-11-01 10:39:49.713 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.tests.total
+2025-11-01 10:39:49.713 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.evaluations.score
+2025-11-01 10:39:49.714 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.evaluations.duration_seconds
+2025-11-01 10:39:49.714 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.optimizations.total
+2025-11-01 10:39:49.714 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.optimizations.improvement
+2025-11-01 10:39:49.714 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.optimizations.iterations
+2025-11-01 10:39:49.715 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.queued
+2025-11-01 10:39:49.715 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.processing
+2025-11-01 10:39:49.715 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.completed
+2025-11-01 10:39:49.716 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.duration_seconds
+2025-11-01 10:39:49.716 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.queue_latency_seconds
+2025-11-01 10:39:49.716 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.retries_total
+2025-11-01 10:39:49.716 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.scheduled_total
+2025-11-01 10:39:49.717 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.failures_total
+2025-11-01 10:39:49.717 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.lease_renewals_total
+2025-11-01 10:39:49.717 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.reclaims_total
+2025-11-01 10:39:49.718 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.stale_processing
+2025-11-01 10:39:49.718 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: jobs.backlog
+2025-11-01 10:39:49.718 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.idempotency.hit_total
+2025-11-01 10:39:49.718 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.idempotency.miss_total
+2025-11-01 10:39:49.719 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.pg_advisory.lock_attempts_total
+2025-11-01 10:39:49.719 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.pg_advisory.locks_acquired_total
+2025-11-01 10:39:49.719 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.pg_advisory.unlocks_total
+2025-11-01 10:39:49.720 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.websocket.connections
+2025-11-01 10:39:49.720 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.websocket.messages
+2025-11-01 10:39:49.720 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.database.operations
+2025-11-01 10:39:49.721 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.database.latency_ms
+2025-11-01 10:39:49.721 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.sims_total
+2025-11-01 10:39:49.721 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.tree_nodes
+2025-11-01 10:39:49.721 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.avg_branching
+2025-11-01 10:39:49.722 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.best_reward
+2025-11-01 10:39:49.722 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.tokens_spent
+2025-11-01 10:39:49.722 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.duration_ms
+2025-11-01 10:39:49.723 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: prompt_studio.mcts.errors_total
+2025-11-01 10:39:49.764 | DEBUG    | trace= span= req= job= ps=: | matplotlib.cbook:_get_data_path:603 - matplotlib data path: /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/lib/python3.12/site-packages/matplotlib/mpl-data
+2025-11-01 10:39:49.766 | WARNING  | trace= span= req= job= ps=: | matplotlib:get_configdir:579 - /Users/macbook-dev/.matplotlib is not a writable directory
+2025-11-01 10:39:49.767 | WARNING  | trace= span= req= job= ps=: | matplotlib:get_configdir:579 - Matplotlib created a temporary cache directory at /var/folders/p_/x47tgtn57cv43r7yxxn40tyh0000gn/T/matplotlib-98sx1k5j because there was an issue with the default path (/Users/macbook-dev/.matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2025-11-01 10:39:49.767 | DEBUG    | trace= span= req= job= ps=: | matplotlib:gen_candidates:633 - CONFIGDIR=/var/folders/p_/x47tgtn57cv43r7yxxn40tyh0000gn/T/matplotlib-98sx1k5j
+2025-11-01 10:39:49.768 | DEBUG    | trace= span= req= job= ps=: | importlib._bootstrap:_call_with_frames_removed:488 - interactive is False
+2025-11-01 10:39:49.768 | DEBUG    | trace= span= req= job= ps=: | importlib._bootstrap:_call_with_frames_removed:488 - platform is darwin
+2025-11-01 10:39:49.777 | DEBUG    | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1627 - CACHEDIR=/private/var/folders/p_/x47tgtn57cv43r7yxxn40tyh0000gn/T/matplotlib-98sx1k5j
+2025-11-01 10:39:49.778 | DEBUG    | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - font search path [PosixPath('/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/lib/python3.12/site-packages/matplotlib/mpl-data/fonts/ttf'), PosixPath('/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/lib/python3.12/site-packages/matplotlib/mpl-data/fonts/afm'), PosixPath('/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/lib/python3.12/site-packages/matplotlib/mpl-data/fonts/pdfcorefonts')]
+
+Fontconfig error: No writable cache directories
+	/opt/homebrew/var/cache/fontconfig
+	/Users/macbook-dev/.cache/fontconfig
+	/Users/macbook-dev/.fontconfig
+2025-11-01 10:39:54.780 | WARNING  | trace= span= req= job= ps=: | threading:run:1433 - Matplotlib is building the font cache; this may take a moment.
+2025-11-01 10:39:55.370 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/Fonts/Apple Color Emoji.ttc: Could not set the fontsize (invalid pixel size; error code 0x17)
+2025-11-01 10:39:55.379 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/Fonts/ZitherIndia.otf: Can not load face (SFNT font table missing; error code 0x8e)
+2025-11-01 10:39:55.381 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/Fonts/ZitherMalayalam.otf: Can not load face (SFNT font table missing; error code 0x8e)
+2025-11-01 10:39:55.396 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/Fonts/ZitherTamil.otf: Can not load face (SFNT font table missing; error code 0x8e)
+2025-11-01 10:39:55.402 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/Fonts/Supplemental/NISC18030.ttf: Could not set the fontsize (invalid pixel size; error code 0x17)
+2025-11-01 10:39:55.407 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc: Can not load face (locations (loca) table missing; error code 0x90)
+2025-11-01 10:39:55.411 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:_load_fontmanager:1637 - Failed to extract font properties from /System/Library/Fonts/LastResort.otf: tuple indices must be integers or slices, not str
+2025-11-01 10:39:55.426 | INFO     | trace= span= req= job= ps=: | matplotlib.font_manager:<module>:1643 - generated new fontManager
+2025-11-01 10:39:55.609 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_runs_started
+2025-11-01 10:39:55.609 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_runs_completed
+2025-11-01 10:39:55.610 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_runs_failed
+2025-11-01 10:39:55.610 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_run_duration_ms
+2025-11-01 10:39:55.610 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_steps_started
+2025-11-01 10:39:55.611 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_steps_succeeded
+2025-11-01 10:39:55.611 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_steps_failed
+2025-11-01 10:39:55.611 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_step_duration_ms
+2025-11-01 10:39:55.612 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_webhook_deliveries_total
+2025-11-01 10:39:55.612 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: workflows_engine_queue_depth
+2025-11-01 10:39:55.624 | DEBUG    | trace= span= req= job= ps=: | importlib._bootstrap:_handle_fromlist:1412 - loaded lazy attr 'SafeConfigParser': <class 'configparser.ConfigParser'>
+2025-11-01 10:39:55.625 | DEBUG    | trace= span= req= job= ps=: | importlib._bootstrap:_handle_fromlist:1412 - loaded lazy attr 'NativeStringIO': <class '_io.StringIO'>
+2025-11-01 10:39:55.625 | DEBUG    | trace= span= req= job= ps=: | importlib._bootstrap:_handle_fromlist:1412 - loaded lazy attr 'BytesIO': <class '_io.BytesIO'>
+2025-11-01 10:39:55.627 | DEBUG    | trace= span= req= job= ps=: | passlib.registry:get_crypt_handler:364 - registered 'bcrypt' handler: <class 'passlib.handlers.bcrypt.bcrypt'>
+2025-11-01 10:39:55.742 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.config_manager:_apply_environment_overrides:197 - Applying development environment overrides
+2025-11-01 10:39:55.743 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.config_manager:_parse_rate_limit_configs:221 - Loaded 5 rate limit tier configurations
+2025-11-01 10:39:55.743 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.config_manager:_parse_circuit_breaker_configs:236 - Loaded 6 circuit breaker configurations
+2025-11-01 10:39:55.744 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.config_manager:load_config:183 - Configuration loaded successfully from /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/evaluations_config.yaml
+2025-11-01 10:39:55.744 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.config_manager:load_config:184 - Environment: development
+2025-11-01 10:39:55.745 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:55.748 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:55.748 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.metrics:__init__:272 - Evaluation metrics initialized
+2025-11-01 10:39:55.749 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_initialize_pool:186 - Initializing connection pool: size=10, max_overflow=20
+2025-11-01 10:39:55.750 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211184928
+2025-11-01 10:39:55.750 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211185168
+2025-11-01 10:39:55.751 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211185408
+2025-11-01 10:39:55.751 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211185648
+2025-11-01 10:39:55.752 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211186128
+2025-11-01 10:39:55.752 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211186608
+2025-11-01 10:39:55.753 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211186848
+2025-11-01 10:39:55.753 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211187088
+2025-11-01 10:39:55.754 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211187328
+2025-11-01 10:39:55.754 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_create_connection:225 - Created new database connection 13211187568
+2025-11-01 10:39:55.755 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_initialize_pool:200 - Connection pool initialized with 10 connections
+2025-11-01 10:39:55.755 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_start_maintenance:399 - Started connection pool maintenance
+2025-11-01 10:39:55.755 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:__init__:594 - Initialized Evaluations connection manager for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1/evaluations/evaluations.db
+2025-11-01 10:39:55.756 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:55.757 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.db_adapter:get_database_adapter:310 - Initialized sqlite database adapter
+2025-11-01 10:39:55.757 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:55.804 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: simpleqa
+2025-11-01 10:39:55.805 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: simpleqa_verified
+2025-11-01 10:39:55.805 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: mmlu_pro
+2025-11-01 10:39:55.806 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: gpqa_diamond
+2025-11-01 10:39:55.806 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: simple_bench
+2025-11-01 10:39:55.806 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: aider_polyglot
+2025-11-01 10:39:55.807 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: bfcl
+2025-11-01 10:39:55.807 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: mask
+2025-11-01 10:39:55.807 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: vending_bench
+2025-11-01 10:39:55.807 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.benchmark_registry:register:295 - Registered benchmark: swe_bench
+2025-11-01 10:39:55.808 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:55.809 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/1
+2025-11-01 10:39:55.810 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.migrations:migrate:107 - Database already at version 4, no migrations needed
+2025-11-01 10:39:55.811 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.migrations:migrate_evaluations_database:325 - Evaluations database at version 4
+2025-11-01 10:39:55.811 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.evaluation_manager:_init_database:111 - Database migrations applied successfully
+2025-11-01 10:39:55.895 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:<module>:2258 - Global rate limiter initialized (SlowAPI)
+2025-11-01 10:39:55.895 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.AuthNZ.csrf_protection:add_csrf_protection:409 - CSRF Protection explicitly disabled via CSRF_ENABLED setting
+2025-11-01 10:39:55.896 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:<module>:2377 - TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)
+2025-11-01 10:39:55.897 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:<module>:2610 - WebUI mounted at /webui from /Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/WebUI
+2025-11-01 10:39:55.897 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:<module>:2653 - Docs mounted at /docs-static from /Users/macbook-dev/Documents/GitHub/tldw_server2/Docs
+2025-11-01 10:39:55.898 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: tldw_Server_API.app.main.api_metrics_calls_total
+2025-11-01 10:39:55.898 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: tldw_Server_API.app.main.api_metrics_duration_seconds
+2025-11-01 10:39:55.899 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Metrics.metrics_manager:register_metric:977 - Registered metric: tldw_Server_API.app.main.api_metrics_errors_total
+2025-11-01 10:39:56.262 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: connectors
+2025-11-01 10:39:56.386 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: workflows
+2025-11-01 10:39:56.391 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Scheduler.base.registry:decorator:79 - Registered task handler: workflow_run
+2025-11-01 10:39:56.392 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Scheduler.base.registry:decorator:79 - Registered task handler: watchlist_run
+2025-11-01 10:39:56.398 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: scheduler
+2025-11-01 10:39:56.398 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: research
+2025-11-01 10:39:56.461 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: benchmarks
+2025-11-01 10:39:56.479 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: jobs
+2025-11-01 10:39:56.481 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: sandbox
+2025-11-01 10:39:56.481 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: flashcards
+2025-11-01 10:39:56.490 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: personalization
+2025-11-01 10:39:56.490 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.main:_include_if_enabled:2739 - Route disabled by policy: persona
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-8.4.2, pluggy-1.6.0 -- /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/python3
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Users/macbook-dev/Documents/GitHub/tldw_server2
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, anyio-4.11.0, hypothesis-6.142.5, Faker-37.12.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py::test_pipeline_happy_path_test_mode 2025-11-01 10:39:56.569 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.address`.
+2025-11-01 10:39:56.570 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.address` has been localized to `en_US`.
+2025-11-01 10:39:56.571 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.automotive`.
+2025-11-01 10:39:56.573 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.automotive` has been localized to `en_US`.
+2025-11-01 10:39:56.573 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.bank`.
+2025-11-01 10:39:56.574 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Specified locale `en_US` is not available for provider `faker.providers.bank`. Locale reset to `en_GB` for this provider.
+2025-11-01 10:39:56.575 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.barcode`.
+2025-11-01 10:39:56.575 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.barcode` has been localized to `en_US`.
+2025-11-01 10:39:56.576 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.color`.
+2025-11-01 10:39:56.577 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.color` has been localized to `en_US`.
+2025-11-01 10:39:56.577 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.company`.
+2025-11-01 10:39:56.578 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.company` has been localized to `en_US`.
+2025-11-01 10:39:56.579 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.credit_card`.
+2025-11-01 10:39:56.579 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.credit_card` has been localized to `en_US`.
+2025-11-01 10:39:56.580 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.currency`.
+2025-11-01 10:39:56.580 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.currency` has been localized to `en_US`.
+2025-11-01 10:39:56.581 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.date_time`.
+2025-11-01 10:39:56.582 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.date_time` has been localized to `en_US`.
+2025-11-01 10:39:56.582 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.doi` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.583 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.emoji` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.583 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.file` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.583 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.geo`.
+2025-11-01 10:39:56.584 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.geo` has been localized to `en_US`.
+2025-11-01 10:39:56.584 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.internet`.
+2025-11-01 10:39:56.585 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.internet` has been localized to `en_US`.
+2025-11-01 10:39:56.586 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.isbn`.
+2025-11-01 10:39:56.586 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.isbn` has been localized to `en_US`.
+2025-11-01 10:39:56.587 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.job`.
+2025-11-01 10:39:56.588 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.job` has been localized to `en_US`.
+2025-11-01 10:39:56.588 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.lorem`.
+2025-11-01 10:39:56.589 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.lorem` has been localized to `en_US`.
+2025-11-01 10:39:56.589 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.misc`.
+2025-11-01 10:39:56.590 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.misc` has been localized to `en_US`.
+2025-11-01 10:39:56.590 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.passport`.
+2025-11-01 10:39:56.591 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.passport` has been localized to `en_US`.
+2025-11-01 10:39:56.591 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.person`.
+2025-11-01 10:39:56.593 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.person` has been localized to `en_US`.
+2025-11-01 10:39:56.595 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.phone_number`.
+2025-11-01 10:39:56.596 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.phone_number` has been localized to `en_US`.
+2025-11-01 10:39:56.597 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.profile` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.597 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.python` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.597 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.sbn` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.598 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Looking for locale `en_US` in provider `faker.providers.ssn`.
+2025-11-01 10:39:56.599 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.ssn` has been localized to `en_US`.
+2025-11-01 10:39:56.600 | DEBUG    | trace= span= req= job= ps=: | faker.factory:create:58 - Provider `faker.providers.user_agent` does not feature localization. Specified locale `en_US` is not used for this provider.
+2025-11-01 10:39:56.601 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:39:56.601 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:39:56.602 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777
+2025-11-01 10:39:56.602 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.604 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: wf_schedule_id
+2025-11-01 10:39:56.604 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_filters_json
+2025-11-01 10:39:56.604 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: defer_until
+2025-11-01 10:39:56.604 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: consec_not_modified
+2025-11-01 10:39:56.605 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.605 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: version
+2025-11-01 10:39:56.605 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: expires_at
+2025-11-01 10:39:56.606 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: groups.user_id, groups.name
+2025-11-01 10:39:56.606 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.607 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.607 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777
+2025-11-01 10:39:56.608 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.608 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777
+2025-11-01 10:39:56.608 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.609 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.610 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.610 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.610 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.611 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.611 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.611 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.612 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.612 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.612 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.613 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777
+2025-11-01 10:39:56.614 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777/Media_DB_v2.db [Client ID: 777]
+2025-11-01 10:39:56.614 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.615 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.615 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.616 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.616 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777/Media_DB_v2.db
+2025-11-01 10:39:56.617 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=5 decision=None gating=False url=https://example.com/
+2025-11-01 10:39:56.617 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.617 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.config:_buffered_log:30 - load_and_log_configs(): Loading and logging configurations...
+2025-11-01 10:39:56.620 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.620 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media 0c37b867-6216-4c29-b835-1d2a3f6e9239 update v3 at 2025-11-01T17:39:56.620Z
+2025-11-01 10:39:56.621 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.622 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.622 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.623 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=5 decision=None gating=False url=https://example.com/
+2025-11-01 10:39:56.623 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.624 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.625 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media 0c37b867-6216-4c29-b835-1d2a3f6e9239 update v4 at 2025-11-01T17:39:56.625Z
+2025-11-01 10:39:56.625 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.626 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.626 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.627 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:472 - watchlists.filter:rss source=2 decision=None gating=False title=Test Item
+2025-11-01 10:39:56.627 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.628 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.629 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media e95ad4ac-a613-4155-b39c-f0e20e5b4fc2 update v2 at 2025-11-01T17:39:56.629Z
+2025-11-01 10:39:56.629 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.630 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.630 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 2: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.631 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/777
+2025-11-01 10:39:56.631 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.632 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.633 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.633 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.633 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.634 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.634 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.635 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.635 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.635 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.636 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+PASSED
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py::test_scope_resolution_groups_and_tags 2025-11-01 10:39:56.637 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:39:56.638 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/778
+2025-11-01 10:39:56.638 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.640 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: wf_schedule_id
+2025-11-01 10:39:56.640 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_filters_json
+2025-11-01 10:39:56.640 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: defer_until
+2025-11-01 10:39:56.641 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: consec_not_modified
+2025-11-01 10:39:56.641 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.641 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: version
+2025-11-01 10:39:56.642 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: expires_at
+2025-11-01 10:39:56.642 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: groups.user_id, groups.name
+2025-11-01 10:39:56.643 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: groups.user_id, groups.name
+2025-11-01 10:39:56.643 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.643 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.644 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.644 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/778
+2025-11-01 10:39:56.645 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.645 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/778
+2025-11-01 10:39:56.646 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.647 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.647 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.647 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.648 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.648 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.648 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.649 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.649 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.650 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.650 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.651 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/778
+2025-11-01 10:39:56.652 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/778/Media_DB_v2.db [Client ID: 778]
+2025-11-01 10:39:56.652 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.653 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.653 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.654 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.654 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/778/Media_DB_v2.db
+2025-11-01 10:39:56.655 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=4 decision=None gating=False url=https://b.example.com/
+2025-11-01 10:39:56.655 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.656 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.657 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media eb041893-a194-4781-af61-ce59543ca3d0 update v21 at 2025-11-01T17:39:56.656Z
+2025-11-01 10:39:56.657 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.658 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.658 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.659 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=3 decision=None gating=False url=https://a.example.com/
+2025-11-01 10:39:56.659 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.660 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.661 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media eb041893-a194-4781-af61-ce59543ca3d0 update v22 at 2025-11-01T17:39:56.660Z
+2025-11-01 10:39:56.661 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.662 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.662 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 2: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+PASSED
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py::test_scope_resolution_groups_only 2025-11-01 10:39:56.663 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:39:56.664 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/781
+2025-11-01 10:39:56.664 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.666 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: wf_schedule_id
+2025-11-01 10:39:56.666 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_filters_json
+2025-11-01 10:39:56.666 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: defer_until
+2025-11-01 10:39:56.667 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: consec_not_modified
+2025-11-01 10:39:56.667 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.667 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: version
+2025-11-01 10:39:56.668 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: expires_at
+2025-11-01 10:39:56.668 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: groups.user_id, groups.name
+2025-11-01 10:39:56.668 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: groups.user_id, groups.name
+2025-11-01 10:39:56.668 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.669 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.670 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/781
+2025-11-01 10:39:56.670 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.670 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/781
+2025-11-01 10:39:56.671 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.672 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.672 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.673 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.673 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.674 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.674 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.674 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.675 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.675 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.675 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.677 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/781
+2025-11-01 10:39:56.678 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/781/Media_DB_v2.db [Client ID: 781]
+2025-11-01 10:39:56.678 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.679 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.680 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.680 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.680 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/781/Media_DB_v2.db
+2025-11-01 10:39:56.681 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=1 decision=None gating=False url=https://in.example.com/
+2025-11-01 10:39:56.681 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.682 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.683 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media c81223a1-4132-411c-a02e-5ad33bdf1d78 update v11 at 2025-11-01T17:39:56.683Z
+2025-11-01 10:39:56.683 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.684 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.684 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+PASSED
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py::test_rss_dedup_and_meta_and_stats 2025-11-01 10:39:56.686 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:39:56.686 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.686 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.688 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: wf_schedule_id
+2025-11-01 10:39:56.688 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_filters_json
+2025-11-01 10:39:56.689 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: defer_until
+2025-11-01 10:39:56.689 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: consec_not_modified
+2025-11-01 10:39:56.689 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.689 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: version
+2025-11-01 10:39:56.690 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: expires_at
+2025-11-01 10:39:56.690 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.691 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.691 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.692 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.692 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.693 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.694 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.694 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.694 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.695 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.695 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.695 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.695 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.696 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.696 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.698 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.698 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779/Media_DB_v2.db [Client ID: 779]
+2025-11-01 10:39:56.698 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.700 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.700 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.700 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.701 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779/Media_DB_v2.db
+2025-11-01 10:39:56.701 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:472 - watchlists.filter:rss source=4 decision=None gating=False title=Test Item
+2025-11-01 10:39:56.702 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.703 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.703 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media 6d2280d5-d185-410e-a451-ad7f935a4ff6 update v11 at 2025-11-01T17:39:56.703Z
+2025-11-01 10:39:56.704 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.704 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.705 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.706 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.706 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.706 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.706 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.708 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.708 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.708 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.709 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.709 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.709 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.710 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.710 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.710 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.711 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.712 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779
+2025-11-01 10:39:56.712 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779/Media_DB_v2.db [Client ID: 779]
+2025-11-01 10:39:56.713 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.714 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.714 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.715 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.715 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/779/Media_DB_v2.db
+PASSED
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py::test_watchlist_run_enqueues_embeddings SKIPPED
+tldw_Server_API/tests/Watchlists/test_watchlists_pipeline.py::test_site_scrape_rules_integration 2025-11-01 10:39:56.717 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:39:56.717 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.718 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.719 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: wf_schedule_id
+2025-11-01 10:39:56.719 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_filters_json
+2025-11-01 10:39:56.720 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: defer_until
+2025-11-01 10:39:56.720 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: consec_not_modified
+2025-11-01 10:39:56.720 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.721 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: version
+2025-11-01 10:39:56.721 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: expires_at
+2025-11-01 10:39:56.721 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: UNIQUE constraint failed: sources.user_id, sources.url
+2025-11-01 10:39:56.722 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.722 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.723 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.723 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.724 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.725 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.725 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.725 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.726 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.726 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.726 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.727 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.727 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.728 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.730 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.730 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881/Media_DB_v2.db [Client ID: 881]
+2025-11-01 10:39:56.730 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.731 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.732 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.732 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.733 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881/Media_DB_v2.db
+2025-11-01 10:39:56.733 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=1 decision=None gating=False url=https://example.com/blog/test-scrape-1
+2025-11-01 10:39:56.733 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.735 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.735 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media 3e931920-6403-4f72-8da1-aa2488779117 update v21 at 2025-11-01T17:39:56.735Z
+2025-11-01 10:39:56.736 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.737 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.737 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.738 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Watchlists.pipeline:run_watchlist_job:818 - watchlists.filter:site source=1 decision=None gating=False url=https://example.com/blog/test-scrape-2
+2025-11-01 10:39:56.738 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:add_media_with_keywords:4202 - add_media_with_keywords: url=%s, title=%s, client=%s
+2025-11-01 10:39:56.739 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1353 - Started SQLite transaction.
+2025-11-01 10:39:56.740 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_log_sync_event:2728 - Logged sync event: Media 3e931920-6403-4f72-8da1-aa2488779117 update v22 at 2025-11-01T17:39:56.739Z
+2025-11-01 10:39:56.740 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:transaction:1357 - Committed SQLite transaction.
+2025-11-01 10:39:56.741 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.741 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Collections_DB:_update_content_fts_entry:420 - Collections FTS update failed for item 1: SQLite error: cannot DELETE from contentless fts5 table: content_items_fts
+2025-11-01 10:39:56.742 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.742 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.743 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.743 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.744 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: metadata_json
+2025-11-01 10:39:56.745 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted
+2025-11-01 10:39:56.745 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: deleted_at
+2025-11-01 10:39:56.745 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: retention_until
+2025-11-01 10:39:56.746 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_type
+2025-11-01 10:39:56.746 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: origin_id
+2025-11-01 10:39:56.746 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: job_id
+2025-11-01 10:39:56.747 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: run_id
+2025-11-01 10:39:56.747 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: source_id
+2025-11-01 10:39:56.747 | ERROR    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.sqlite_backend:execute:315 - Query execution failed: duplicate column name: read_at
+2025-11-01 10:39:56.749 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.db_path_utils:get_user_base_directory:65 - Ensured user directory exists: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881
+2025-11-01 10:39:56.749 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:728 - Initializing Database object for path: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881/Media_DB_v2.db [Client ID: 881]
+2025-11-01 10:39:56.749 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.backends.factory:create_backend:60 - Creating sqlite backend
+2025-11-01 10:39:56.750 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1679 - Checking DB schema. Current version: 8. Code supports: 8
+2025-11-01 10:39:56.751 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1682 - Database schema is up to date.
+2025-11-01 10:39:56.751 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:_initialize_schema_sqlite:1725 - Verified FTS tables exist.
+2025-11-01 10:39:56.752 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.DB_Management.Media_DB_v2:__init__:781 - Database initialization completed successfully for /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases/881/Media_DB_v2.db
+PASSED2025-11-01 10:39:56.753 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:shutdown:533 - Shutting down connection pool
+2025-11-01 10:39:56.753 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211184928
+2025-11-01 10:39:56.754 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211185168
+2025-11-01 10:39:56.754 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211185408
+2025-11-01 10:39:56.754 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211185648
+2025-11-01 10:39:56.755 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211186128
+2025-11-01 10:39:56.755 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211186608
+2025-11-01 10:39:56.755 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211186848
+2025-11-01 10:39:56.756 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211187088
+2025-11-01 10:39:56.756 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211187328
+2025-11-01 10:39:56.756 | DEBUG    | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:_close_connection:376 - Closed connection 13211187568
+2025-11-01 10:40:01.762 | INFO     | trace= span= req= job= ps=: | tldw_Server_API.app.core.Evaluations.connection_pool:shutdown:554 - Connection pool shutdown complete
+
+
+================== 5 passed, 1 skipped, 276 warnings in 5.25s ==================
+2025-11-01 10:40:02.434 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:40:02.435 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector
+2025-11-01 10:40:02.440 | DEBUG    | trace= span= req= job= ps=: | asyncio.unix_events:__init__:64 - Using selector: KqueueSelector

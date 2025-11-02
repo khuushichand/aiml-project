@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.PrivilegeMaps import (
     get_privilege_snapshot_store,
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 
 
 router = APIRouter(prefix="/privileges", tags=["privileges"])
@@ -389,6 +390,7 @@ async def create_privilege_snapshot(
     current_user: Dict[str, Any] = Depends(require_privilege_admin),
     service: PrivilegeMapService = Depends(get_privilege_map_service),
     store: PrivilegeSnapshotStore = Depends(get_privilege_snapshot_store),
+    request: Request = None,
 ):
     generated_by = str(current_user.get("id") or "system")
     user_ids = list(payload.user_ids or [])
@@ -418,7 +420,10 @@ async def create_privilege_snapshot(
                 request_id=snapshot_id,
             )
         except Exception as exc:
-            logger.error("Failed to enqueue privilege snapshot job: %s", exc)
+            rid = ensure_request_id(request) if request is not None else None
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="privilege_maps").error(
+                "Failed to enqueue privilege snapshot job: %s", exc
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to queue privilege snapshot job.",

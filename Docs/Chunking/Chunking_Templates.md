@@ -16,12 +16,12 @@ Templates are stored in the database as JSON and managed via the Chunking Templa
 
 Top-level fields used by the API and DB layer:
 
-- name: string – template name (unique among non-deleted templates)
-- description: string – human-readable description
-- tags: list[string] – optional categorization
-- preprocessing: list[Operation] – optional list of preprocessing steps
-- chunking: ChunkingSpec – required; defines the chunking method and config
-- postprocessing: list[Operation] – optional list of postprocessing steps
+- name: string - template name (unique among non-deleted templates)
+- description: string - human-readable description
+- tags: list[string] - optional categorization
+- preprocessing: list[Operation] - optional list of preprocessing steps
+- chunking: ChunkingSpec - required; defines the chunking method and config
+- postprocessing: list[Operation] - optional list of postprocessing steps
 
 Where:
 
@@ -45,9 +45,9 @@ Preprocessing operations (operation value):
 
 - normalize_whitespace: { max_line_breaks?: number }
 - remove_headers: { patterns?: string[] }
-- extract_sections: { pattern?: string } – writes section positions to internal metadata
+- extract_sections: { pattern?: string } - writes section positions to internal metadata
 - clean_markdown: { remove_links?: bool, remove_images?: bool, remove_formatting?: bool }
-- detect_language: {} – writes detected_language to internal metadata
+- detect_language: {} - writes detected_language to internal metadata
 
 Postprocessing operations (operation value):
 
@@ -55,7 +55,7 @@ Postprocessing operations (operation value):
 - filter_empty: { min_length?: number }
 - merge_small: { min_size?: number, separator?: string }
 - add_metadata: { prefix?: string, suffix?: string }
-- format_chunks: { template: string } – e.g., "--- Section {index}/{total} ---\n{chunk}\n"
+- format_chunks: { template: string } - e.g., "--- Section {index}/{total} ---\n{chunk}\n"
 
 ## Examples
 

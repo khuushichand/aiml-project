@@ -18,7 +18,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - [Live Transcription](#live-transcription)
 - [Usage Examples](#usage-examples)
 - [Performance Comparison](#performance-comparison)
- - [Notes & Limitations](#notes--limitations)
+- [Notes & Limitations](#notes--limitations)
 
 ## Features
 
@@ -55,7 +55,7 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 ### 3. NVIDIA Parakeet TDT
 - **Model**: `parakeet`
 - **Size**: 0.6 billion parameters
-- **Variants**: 
+- **Variants**:
   - Standard (PyTorch)
   - ONNX (optimized for CPU/GPU)
   - MLX (optimized for Apple Silicon)
@@ -200,6 +200,28 @@ nemo_cache_dir = ./models/nemo
 
 Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`). Environment overrides are limited; use `config.txt` to change default transcriber, Nemo device, model variant, and cache dir.
 
+Additional streaming quota/env controls:
+- `AUDIO_TIER_LIMITS_JSON`: JSON mapping to override per-tier limits, e.g. `{ "free": { "daily_minutes": 60, "concurrent_streams": 2 } }`
+- `AUDIO_STREAM_TTL_SECONDS`: TTL for Redis stream counters (default 120) to mitigate counter leaks on abrupt disconnects
+- `AUDIO_FAILOPEN_CAP_MINUTES`: Bounded fail-open allowance (minutes) per WebSocket connection when the quota backing store (DB/Redis) is unavailable. Defaults to `5.0`. Set to a positive float to change.
+
+Config file overrides (Config_Files/config.txt):
+```ini
+[Audio-Quota]
+free_daily_minutes = 60
+free_concurrent_streams = 2
+free_concurrent_jobs = 1
+free_max_file_size_mb = 25
+standard_daily_minutes = 480
+premium_daily_minutes = unlimited  # or 'none'
+# Optional bounded fail-open allowance (minutes) per connection when quota store is unavailable
+failopen_cap_minutes = 5.0
+
+[Audio]
+# You can also specify the fail-open cap here if [Audio-Quota] is not present
+failopen_cap_minutes = 5.0
+```
+
 ## Live Transcription
 
 ### WebSocket API (Real-time)
@@ -213,7 +235,7 @@ Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`
   - Client may send config after auth: `{ "type": "config", "sample_rate": 16000, "language": "en", "model_variant": "standard|onnx|mlx" }`
   - Send audio chunks: `{ "type": "audio", "data": "<base64 float32 little-endian mono>" }`
   - Optional finalize: `{ "type": "commit" }`
-  - Server messages include:
+- Server messages include:
     - `{ "type": "status", "message": "Authenticated" }` or `"Authenticated (JWT)"`
     - `{ "type": "partial", "text": "...", "timestamp": ..., "is_final": false, "segment_id": 3, "segment_start": 12.5, "segment_end": 15.0 }`
     - `{ "type": "final", "text": "...", "timestamp": ..., "is_final": true, "segment_id": 3, "segment_start": 12.5, "segment_end": 14.0, "overlap": 0.5, "speaker_id": 1, "speaker_label": "SPEAKER_1" }` (speaker fields appear when diarization is enabled)
@@ -223,10 +245,21 @@ Note: STT configuration is read from `Config_Files/config.txt` (`[STT-Settings]`
     - `{ "type": "error", "message": "..." }`
     - Quota exceeded (structured): `{ "type": "error", "error_type": "quota_exceeded", "quota": "daily_minutes" }` followed by close with code `4003`.
 
+#### Observability: Fail-open metrics
+
+When the quota backing store is unavailable, the server allows a bounded amount of streaming time per connection (fail-open). The following metrics are emitted:
+
+- `audio_failopen_minutes_total{reason=db_check|db_record}`: Minutes allowed during fail-open when quota checks or recording fail.
+- `audio_failopen_events_total{reason=db_check|db_record}`: Count of fail-open allowance events.
+- `audio_failopen_cap_exhausted_total{reason=db_check|db_record}`: Count of connections that hit the fail-open cap and were closed with `quota_exceeded`.
+
+Use these to build dashboards/alerts on fail-open frequency and potential quota-store outages.
+
   - Metadata fields (`segment_id`, `segment_start`, `segment_end`, `chunk_start`, `chunk_end`, `overlap`) allow clients to align transcripts on a timeline or build diarization overlays.
 
 Helper endpoints
 - `GET /api/v1/audio/stream/status` → returns availability and supported models/variants and features
+- `GET /api/v1/audio/stream/limits` → per-user limits, minutes remaining, active streams
 - `POST /api/v1/audio/stream/test` → runs a built-in quick test of streaming setup
 
 Examples (wscat)
@@ -278,6 +311,22 @@ The insight payload mirrors granola-style UX:
 }
 ```
 
+### Auth & Close Codes
+
+- Auth modes
+  - Single-user: pass `?token=<API_KEY>` query, or `X-API-KEY` header, or `Authorization: Bearer <API_KEY>`, or first message `{ "type":"auth", "token":"..." }`.
+  - Multi-user: prefer `Authorization: Bearer <JWT>`; first-message JWT also accepted. Virtual API keys via `X-API-KEY` are supported with endpoint/path allowlists and DB-backed quotas.
+- Quotas
+  - Concurrent streams and daily minutes enforced per user; Redis is used when available for cross-process counters; otherwise in-process.
+  - On quota violations, the server emits `{ "type":"error", "error_type":"quota_exceeded", "quota":"daily_minutes|concurrent_streams" }` and closes with code `4003`.
+- Common close codes
+  - `4401` Unauthorized (auth missing/invalid)
+  - `4403` Forbidden (endpoint/path not allowed or key/JWT quota exceeded)
+  - `4003` Application quota violation (daily minutes / concurrent streams)
+  - `1008` Policy violation (e.g., IP not on allowlist)
+  - `1011` Internal error (e.g., no models available after fallback)
+
+
 #### Speaker Diarization & Audio Persistence
 
 Add a `diarization` object inside the config message to enable per-segment speaker tagging:
@@ -299,6 +348,75 @@ Add a `diarization` object inside the config message to enable per-segment speak
 - When enabled, every finalized segment includes `speaker_id`/`speaker_label`.
 - On `commit`, the server emits a `diarization_summary` frame containing `speaker_map`, aggregate speaker stats, and (optionally) the path to the persisted WAV file for replay or offline reprocessing.
 - `store_audio` writes the full session audio to the provided directory (defaults to the system temp directory).
+
+##### VAD Fallback Behavior
+
+- The diarization pipeline uses Silero VAD to detect speech regions. Loading Silero via `torch.hub` can be network-bound and may fail in locked-down environments.
+- When VAD is unavailable or fails at runtime, the server can optionally fall back to a single full-span speech region so diarization and transcript alignment can still proceed.
+- This behavior is controlled by a configuration flag: `diarization.allow_vad_fallback` (default: `true`).
+  - `true`: On VAD failures, use one region from 0.0s to full duration.
+  - `false`: Treat VAD failure as fatal for diarization and return an error.
+- Torch Hub cache directory is configured via `TORCH_HOME` (preferred) or `TORCH_HUB`, and the server sets `torch.hub.set_dir(...)` to ensure the directory is respected.
+- To run in a locked-down/no-network environment, set `diarization.enable_torch_hub_fetch=false` to disable hub fetching entirely. With `diarization.allow_vad_fallback=true` (default), the server will fall back to a single full-span speech region when VAD is not available.
+- Audio persistence prefers `soundfile`. If not available, the server falls back to `scipy.io.wavfile` or the standard `wave` module (16-bit PCM). A warning is logged when falling back.
+
+##### Embedding Model Local-Only Mode
+
+- The diarization pipeline uses a speaker embedding model (default: `speechbrain/spkrec-ecapa-voxceleb`). By default, the server may download this model when missing.
+- To run fully offline, set `diarization.embedding_local_only=true`. In this mode, the server will only load models from local paths and will never attempt a network fetch.
+- Resolution order when `embedding_local_only=true`:
+  1) If `diarization.embedding_model` is a local filesystem path that exists, load from that directory.
+  2) Else, look under the pre-seeded cache directory: `pretrained_models/<sanitized_name>`.
+  3) If neither exists, diarization raises a structured error indicating local files are required.
+
+Example config snippet (config.txt or env-equivalent):
+
+```
+[diarization]
+embedding_model = /opt/models/speechbrain/spkrec-ecapa-voxceleb
+embedding_local_only = true
+```
+
+Expected directory layout for a SpeechBrain model (simplified):
+
+```
+/opt/models/speechbrain/spkrec-ecapa-voxceleb/
+├── hyperparams.yaml
+├── model.ckpt          # or equivalent checkpoint
+├── README.md           # optional
+└── additional files…
+```
+
+Notes:
+- `embedding_model` also accepts repo identifiers (e.g., `speechbrain/spkrec-ecapa-voxceleb`) when `embedding_local_only=false` (default). In that case the server caches into `pretrained_models/<sanitized_name>/`.
+- Combine with `diarization.enable_torch_hub_fetch=false` and `diarization.allow_vad_fallback=true` to operate in fully offline/locked-down environments.
+
+Example error payloads when files are missing and `embedding_local_only=true`:
+
+- WebSocket (unified streaming) warning frame on initialization/finalize:
+
+```
+{
+  "type": "warning",
+  "state": "diarization_unavailable",
+  "message": "Diarization disabled: initialization failed",
+  "details": "Embedding model files not found locally. Set embedding_local_only=false to allow download or provide a local path in embedding_model."
+}
+```
+
+- Generic structured error shape for non-WS callers (illustrative):
+
+```
+{
+  "error": true,
+  "error_type": "diarization_model_unavailable",
+  "message": "Embedding model files not found locally",
+  "details": {
+    "embedding_model": "/opt/models/speechbrain/spkrec-ecapa-voxceleb",
+    "embedding_local_only": true
+  }
+}
+```
 
 ### Basic Live Transcription (Local Python)
 
@@ -462,7 +580,7 @@ with open("audio.wav", "rb") as f:
         "model": "parakeet",
         "response_format": "json"
     }
-    
+
     response = requests.post(url, headers=headers, files=files, data=data)
     result = response.json()
     print(result["text"])
@@ -602,7 +720,7 @@ TTS
 
 ## Related Documentation
 
-- [API Overview](./API_Overview.md)
+- [API Overview](./API_README.md)
 - [Configuration Guide](../User_Guides/Configuration.md)
 - [Live Transcription Guide](../User_Guides/Live_Transcription.md)
 - [Model Selection Guide](../User_Guides/Model_Selection.md)

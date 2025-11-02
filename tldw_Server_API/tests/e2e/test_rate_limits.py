@@ -68,5 +68,3 @@ def test_rate_limit_evaluations(api_client):
     got = _burst_until_429(_call)
     if not got:
         pytest.skip("Evaluations rate limits not enforced in this environment.")
-
-

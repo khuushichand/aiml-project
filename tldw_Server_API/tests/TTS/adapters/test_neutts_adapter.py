@@ -99,4 +99,3 @@ async def test_neutts_no_speech_tokens_error(monkeypatch):
     )
     with pytest.raises(TTSGenerationError):
         await adapter.generate(req)
-

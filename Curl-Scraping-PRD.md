@@ -236,11 +236,11 @@ Rollback: Set `WEB_SCRAPER_HTTP_BACKEND=playwright` or `requests` and/or remove 
 
 ## 13. Milestones & Success Criteria
 
-### M1: Foundations (1–2 weeks)
+### M1: Foundations (1-2 weeks)
 - Modules scaffolded; UA profiles and router operational; unit tests passing.
 - Success: Router selects handlers; curl backend fetch works in CI with mocks.
 
-### M2: Integration (1–2 weeks)
+### M2: Integration (1-2 weeks)
 - `scrape_article` routed; WebSearch providers use UA helper; example rules for Medium/Substack.
 - Success: Improved success rate on selected domains (≥20% vs baseline); Playwright fallback intact.
 

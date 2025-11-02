@@ -67,4 +67,3 @@ async def aiter_sse_lines_httpx(resp: httpx.Response, *, provider: str = "provid
         yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
     except Exception as e_stream:
         yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
-

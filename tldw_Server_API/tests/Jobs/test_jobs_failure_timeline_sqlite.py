@@ -54,4 +54,3 @@ def test_failure_timeline_append_and_cap_sqlite(monkeypatch, tmp_path):
     assert len(tl2) == 10
     assert tl2[-1]["error_code"] in {"E_FINAL", "BOOM_FINAL"}
     assert int(tl2[-1]["retry_backoff"]) == 0
-

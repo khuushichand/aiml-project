@@ -1,6 +1,6 @@
 """
 test_chatbooks_multi_user_roundtrip.py
-Export/import round‑trip between two distinct users.
+Export/import round-trip between two distinct users.
 
 Flow:
 - User A creates a couple of notes and media items.

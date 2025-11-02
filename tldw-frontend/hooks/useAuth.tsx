@@ -16,7 +16,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
-  
+
   useEffect(() => {
     // Check if user is logged in on mount
     const checkAuth = async () => {
@@ -37,10 +37,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     };
-    
+
     checkAuth();
   }, []);
-  
+
   const login = async (username: string, password: string) => {
     try {
       await authService.login({ username, password });
@@ -51,13 +51,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw error;
     }
   };
-  
+
   const logout = () => {
     authService.logout();
     setUser(null);
     router.push('/login');
   };
-  
+
   return (
     <AuthContext.Provider
       value={{
@@ -80,4 +80,3 @@ export function useAuth() {
   }
   return context;
 }
-

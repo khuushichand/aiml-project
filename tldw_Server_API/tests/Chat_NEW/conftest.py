@@ -219,27 +219,27 @@ def populated_chacha_db(chacha_db) -> CharactersRAGDB:
         'client_id': 'test_user'
     }
     character_id = chacha_db.add_character_card(character_data)
-    
+
     # Add test conversations
     conversation_data = {
         'title': "Test Conversation",
         'character_id': character_id
     }
     conversation_id = chacha_db.add_conversation(conversation_data)
-    
+
     # Add test messages
     chacha_db.add_message({
         'conversation_id': conversation_id,
         'sender': "user",
         'content': "Hello, how are you?"
     })
-    
+
     chacha_db.add_message({
         'conversation_id': conversation_id,
         'sender': "assistant",
         'content': "I'm doing well, thank you! How can I help you today?"
     })
-    
+
     return chacha_db
 
 # =====================================================================
@@ -250,7 +250,7 @@ def populated_chacha_db(chacha_db) -> CharactersRAGDB:
 def mock_chacha_db():
     """Mock CharactersRAGDB for unit tests."""
     mock_db = MagicMock(spec=CharactersRAGDB)
-    
+
     # Setup default return values
     mock_db.add_conversation.return_value = "test-conversation-id"
     mock_db.add_message.return_value = "test-message-id"
@@ -261,7 +261,7 @@ def mock_chacha_db():
     }
     mock_db.get_messages.return_value = []
     mock_db.add_character_card.return_value = 1
-    
+
     return mock_db
 
 @pytest.fixture
@@ -299,7 +299,7 @@ def mock_streaming_response():
         ]
         for chunk in chunks:
             yield chunk
-    
+
     return stream_generator()
 
 # =====================================================================
@@ -363,7 +363,7 @@ def valid_messages() -> List[Dict[str, str]]:
     """Collection of valid message formats."""
     return [
         [{"role": "user", "content": "Simple message"}],
-        [{"role": "system", "content": "You are helpful."}, 
+        [{"role": "system", "content": "You are helpful."},
          {"role": "user", "content": "Hi"}],
         [{"role": "user", "content": "Question?"},
          {"role": "assistant", "content": "Answer."},
@@ -505,10 +505,10 @@ def conversation_generator():
             })
             if i < num_turns - 1:  # Don't add assistant message for last turn
                 messages.append({
-                    "role": "assistant", 
+                    "role": "assistant",
                     "content": f"Assistant response {i}"
                 })
-        
+
         return {
             "model": "gpt-3.5-turbo",
             "messages": messages,

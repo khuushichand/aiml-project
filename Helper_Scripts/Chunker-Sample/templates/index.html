@@ -42,9 +42,9 @@
         <p>Language Models do better when they're focused.</p>
         <p>One strategy is to pass a relevant subset (chunk) of your full data. There are many ways to chunk text.</p>
         <p>This is a tool to understand different chunking/splitting strategies.</p>
-        
+
         <textarea id="textInput" rows="10"></textarea>
-        
+
         <div class="control-group">
             <label for="splitterSelect">Splitter:</label>
             <select id="splitterSelect">
@@ -54,21 +54,21 @@
                 <option value="tokens">Tokens</option>
             </select>
         </div>
-        
+
         <div class="control-group">
             <label for="chunkSize">Chunk Size:</label>
             <input type="number" id="chunkSize" min="1" max="2000" value="300">
             <input type="range" id="chunkSizeRange" min="1" max="2000" value="300">
         </div>
-        
+
         <div class="control-group">
             <label for="overlap">Chunk Overlap:</label>
             <input type="number" id="overlap" min="0" max="1000" value="0">
             <input type="range" id="overlapRange" min="0" max="1000" value="0">
         </div>
-        
+
         <div id="stats"></div>
-        
+
         <div id="chunkedText" class="chunked-text"></div>
     </div>
 
@@ -144,7 +144,7 @@ Even after decades of thinking about this, I find that sentence startling.`;
 
                 chunks.forEach((chunk, index) => {
                     const color = colors[index % colors.length];
-                    
+
                     // Add any text between chunks
                     if (chunk.startIndex > lastEnd) {
                         highlightedText += originalText.slice(lastEnd, chunk.startIndex);

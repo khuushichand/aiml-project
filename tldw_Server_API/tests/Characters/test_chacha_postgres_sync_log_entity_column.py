@@ -21,19 +21,15 @@ except Exception:
 pytestmark = pytest.mark.skipif(not _PG, reason="Postgres driver not installed")
 
 
-def _pg_config() -> DatabaseConfig:
-    return DatabaseConfig(
+def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path, pg_eval_params):
+    config = DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
-        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+        pg_host=pg_eval_params["host"],
+        pg_port=int(pg_eval_params["port"]),
+        pg_database=pg_eval_params["database"],
+        pg_user=pg_eval_params["user"],
+        pg_password=pg_eval_params.get("password"),
     )
-
-
-def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path):
-    config = _pg_config()
     backend = DatabaseBackendFactory.create_backend(config)
 
     # Skip gracefully if Postgres is not reachable and not explicitly required

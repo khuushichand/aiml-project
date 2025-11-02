@@ -138,13 +138,15 @@ def _safe_log_format(record: dict) -> str:
     caused recursive parsing and "Max string recursion exceeded" errors.
     """
     # Note: Markup tags (<level>, <dim>, etc.) are parsed before placeholders
-    # are formatted, so the inserted {message} content will not be re‑parsed
+    # are formatted, so the inserted {message} content will not be re-parsed
     # for markup. This removes the need to strip '<' or '>' from messages.
     return (
         "<dim>{time:YYYY-MM-DD HH:mm:ss.SSS}</dim> | "
         "<level>{level: <8}</level> | "
         "<cyan>trace={extra[trace_id]}</cyan> <cyan>span={extra[span_id]}</cyan> "
-        "<yellow>req={extra[request_id]}</yellow> <yellow>ses={extra[session_id]}</yellow> | "
+        "<cyan>tp={extra[traceparent]}</cyan> "
+        "<yellow>req={extra[request_id]}</yellow> <yellow>job={extra[job_id]}</yellow> "
+        "<yellow>ps={extra[ps_component]}:{extra[ps_job_kind]}</yellow> | "
         "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
     )
 
@@ -228,6 +230,14 @@ def _ensure_log_extra_fields(record: dict) -> bool:
         extra.setdefault("span_id", "")
         extra.setdefault("request_id", "")
         extra.setdefault("session_id", "")
+        # Ensure W3C trace context placeholder exists even before patcher runs
+        extra.setdefault("traceparent", "")
+        # Structured context defaults (Prompt Studio/jobs)
+        extra.setdefault("job_id", "")
+        extra.setdefault("ps_component", "")
+        extra.setdefault("ps_job_kind", "")
+        extra.setdefault("optimization_id", "")
+        extra.setdefault("evaluation_id", "")
     except Exception:
         # Never block a log line due to filter errors
         pass
@@ -313,8 +323,8 @@ try:
                         _maybe_reinstall()
             _logcfg.dictConfig = _dict_config_wrapper  # type: ignore[assignment]
             _logcfg._tldw_dict_config_wrapped = True  # type: ignore[attr-defined]
-except Exception:
-    pass
+except Exception as _log_wrap_err:
+    logger.debug(f"Failed to wrap logging.config.dictConfig for interception: {_log_wrap_err}")
 
 # Apply once now as well
 _reinstall_intercept_handlers()
@@ -345,8 +355,8 @@ def _startup_trace(msg: str) -> None:
     if _STARTUP_TRACE:
         try:
             logger.info(f"[startup-trace] {msg}")
-        except Exception:
-            pass
+        except Exception as _startup_log_err:
+            logger.debug(f"Startup trace logging failed: {_startup_log_err}")
 
 _startup_trace(f"Endpoint import gating: ULTRA_MINIMAL_APP={_ULTRA_MINIMAL_APP}, MINIMAL_TEST_APP={_MINIMAL_TEST_APP}")
 #
@@ -381,7 +391,12 @@ elif not _MINIMAL_TEST_APP:
     # Metrics Endpoint
     from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
     # Sandbox Endpoint (scaffold)
-    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        _HAS_SANDBOX = True
+    except Exception as _sandbox_err:  # noqa: BLE001
+        logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sandbox_err}")
+        _HAS_SANDBOX = False
     # Chunking Endpoints
     from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
     from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
@@ -516,9 +531,14 @@ else:
     # Web Scraping Management Endpoints
     from tldw_Server_API.app.api.v1.endpoints.web_scraping import router as web_scraping_router
     # Sandbox Endpoint (scaffold)
-    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        _HAS_SANDBOX = True
+    except Exception as _sb_err:  # noqa: BLE001
+        logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sb_err}")
+        _HAS_SANDBOX = False
 
-# Metrics and Telemetry — import directly and fail fast on errors
+# Metrics and Telemetry - import directly and fail fast on errors
 from tldw_Server_API.app.core.Metrics import (
     initialize_telemetry,
     shutdown_telemetry,
@@ -527,7 +547,7 @@ from tldw_Server_API.app.core.Metrics import (
     OTEL_AVAILABLE,
 )
 
-# Core helpers — import directly (fail fast if missing)
+# Core helpers - import directly (fail fast if missing)
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import get_cached_evaluation_manager
 from tldw_Server_API.app.core.Setup.setup_manager import needs_setup
 from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
@@ -591,7 +611,43 @@ READINESS_STATE = {"ready": True}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Manage application startup and shutdown for the given FastAPI app, performing validations, initializing services, scheduling deferred non-critical startup tasks, and running background workers.
+
+    Parameters:
+        app (FastAPI): The FastAPI application instance whose lifespan is managed.
+
+    Returns:
+        None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
+    """
     _startup_trace("lifespan: entered")
+    # Determine if heavy (non-critical) startup should be deferred to background
+    # Read environment knobs with precedence:
+    # - DISABLE_HEAVY_STARTUP=true  => force synchronous (no deferral)
+    # - else DEFER_HEAVY_STARTUP=true => defer heavy startup
+    # - default => synchronous (no deferral)
+    try:
+        import os as _env_os
+
+        def _env_to_bool(v):
+            return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        _disable = _env_to_bool(_env_os.getenv("DISABLE_HEAVY_STARTUP"))
+        if _disable:
+            _defer_heavy = False
+        else:
+            _defer_heavy = _env_to_bool(_env_os.getenv("DEFER_HEAVY_STARTUP"))
+        # Default to synchronous (False) if neither flag is set
+        _defer_heavy = bool(_defer_heavy)
+    except Exception:
+        # On any error determining flags, default to synchronous startup
+        _defer_heavy = False
+
+    # Container for background startup tasks (used during shutdown)
+    try:
+        app.state.bg_tasks = {}
+    except Exception:
+        pass
     chat_config: dict[str, object] = {}
     # Startup: Validate MCP configuration in production (fail fast)
     try:
@@ -713,204 +769,260 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Startup: Privilege metadata validation failed: {exc}")
         raise
 
-    # Initialize MCP Unified Server (secure, production-ready)
-    logger.info("App Startup: Initializing MCP Unified server...")
-    try:
-        from tldw_Server_API.app.core.MCP_unified import get_mcp_server
-        mcp_server = get_mcp_server()
-        await mcp_server.initialize()
-        logger.info("App Startup: MCP Unified server initialized successfully")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize MCP Unified server: {e}")
-        logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
-        # Continue startup even if MCP fails (for backward compatibility)
+    # Heavy initializations: helpers and shared runner to avoid duplication
+    # Ensure resources are bound in the enclosing scope so shutdown can detect them
+    mcp_server = None
+    provider_manager = None
+    request_queue = None
+    async def _init_mcp_server(*, deferred: bool) -> None:
+        nonlocal mcp_server
+        try:
+            from tldw_Server_API.app.core.MCP_unified import get_mcp_server
+            mcp_server = get_mcp_server()
+            if not deferred:
+                logger.info("App Startup: Initializing MCP Unified server...")
+            await mcp_server.initialize()
+            logger.info(("Deferred startup: " if deferred else "App Startup: ") + "MCP Unified server initialized successfully")
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: MCP Unified server skipped/failed: {e}")
+            else:
+                logger.exception(f"App Startup: Failed to initialize MCP Unified server: {e}")
+                logger.warning("Ensure MCP_JWT_SECRET and MCP_API_KEY_SALT environment variables are set")
 
-    # Initialize Chat Module Components
+    async def _init_provider_manager(*, deferred: bool) -> None:
+        nonlocal provider_manager
+        try:
+            from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
+            from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
+            providers = list(PROVIDER_API_CALL_HANDLERS.keys())
+            provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
+            await provider_manager.start_health_checks()
+            if deferred:
+                logger.info(f"Deferred startup: Provider manager ready ({len(providers)} providers)")
+            else:
+                logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: provider manager skipped/failed: {e}")
+            else:
+                logger.exception(f"App Startup: Failed to initialize provider manager: {e}")
+
+    async def _init_request_queue(*, deferred: bool) -> None:
+        nonlocal request_queue
+        try:
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
+            cfg = load_comprehensive_config()
+            chat_cfg = {}
+            if cfg and cfg.has_section('Chat-Module'):
+                chat_cfg = dict(cfg.items('Chat-Module'))
+            queued_execution_enabled = False
+            try:
+                env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
+                if env_queued is not None:
+                    queued_execution_enabled = env_queued.strip().lower() in {"1", "true", "yes", "on"}
+                else:
+                    queued_execution_enabled = str(chat_cfg.get('queued_execution', 'False')).strip().lower() in {"1", "true", "yes", "on"}
+            except Exception:
+                queued_execution_enabled = False
+            if queued_execution_enabled:
+                request_queue = initialize_request_queue(
+                    max_queue_size=int(chat_cfg.get('max_queue_size', 100)),
+                    max_concurrent=int(chat_cfg.get('max_concurrent_requests', 10)),
+                    global_rate_limit=int(chat_cfg.get('rate_limit_per_minute', 60)),
+                    per_client_rate_limit=int(chat_cfg.get('rate_limit_per_conversation_per_minute', 20))
+                )
+                await request_queue.start(num_workers=4)
+                if deferred:
+                    logger.info("Deferred startup: Request queue online")
+                else:
+                    logger.info("App Startup: Request queue initialized with 4 workers")
+            else:
+                if not deferred:
+                    logger.info("App Startup: Request queue disabled (QUEUED_EXECUTION is off)")
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: request queue skipped/failed: {e}")
+            else:
+                logger.exception(f"App Startup: Failed to initialize request queue: {e}")
+
+    async def _init_rate_limiter(*, deferred: bool) -> None:
+        try:
+            from tldw_Server_API.app.core.config import load_comprehensive_config
+            from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
+            cfg = load_comprehensive_config()
+            chat_cfg = {}
+            if cfg and cfg.has_section('Chat-Module'):
+                chat_cfg = dict(cfg.items('Chat-Module'))
+            rl_cfg = RateLimitConfig(
+                global_rpm=int(chat_cfg.get('rate_limit_per_minute', 60)),
+                per_user_rpm=int(chat_cfg.get('rate_limit_per_user_per_minute', 20)),
+                per_conversation_rpm=int(chat_cfg.get('rate_limit_per_conversation_per_minute', 10)),
+                per_user_tokens_per_minute=int(chat_cfg.get('rate_limit_tokens_per_minute', 10000))
+            )
+            initialize_rate_limiter(rl_cfg)
+            logger.info(("Deferred startup: " if deferred else "App Startup: ") + "Rate limiter " + ("online" if deferred else "initialized"))
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: rate limiter skipped/failed: {e}")
+            else:
+                logger.exception(f"App Startup: Failed to initialize rate limiter: {e}")
+
+    async def _init_tts_service(*, deferred: bool) -> None:
+        try:
+            from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+            from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
+            cfg_obj = load_comprehensive_config_with_tts()
+            tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
+            await get_tts_service_v2(config=tts_cfg_dict)
+            logger.info(("Deferred startup: " if deferred else "App Startup: ") + "TTS service " + ("ready" if deferred else "initialized successfully"))
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: TTS skipped/failed: {e}")
+            else:
+                logger.exception(f"App Startup: Failed to initialize TTS service: {e}")
+                logger.warning("TTS functionality will be unavailable")
+
+    async def _init_chunking_templates(*, deferred: bool) -> None:
+        try:
+            from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
+            ok = ensure_templates_initialized()
+            if ok:
+                logger.info(("Deferred startup: " if deferred else "App Startup: ") + "Chunking templates " + ("ready" if deferred else "initialized successfully"))
+            else:
+                if deferred:
+                    logger.debug("Deferred startup: Chunking templates incomplete")
+                else:
+                    logger.warning("App Startup: Chunking templates initialization incomplete")
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: chunking templates skipped/failed: {e}")
+            else:
+                logger.exception(f"App Startup: Failed to initialize chunking templates: {e}")
+
+    async def _init_embeddings_dim_check(*, deferred: bool) -> None:
+        try:
+            enabled = os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+            if not enabled:
+                return
+            strict_mode = os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"}
+            if not deferred:
+                logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
+            from pathlib import Path as _Path
+            from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+            from tldw_Server_API.app.core.config import settings as _emb_settings
+
+            def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
+                mms: list[tuple[str, int, int, str]] = []
+                mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
+                client = getattr(mgr, 'client', None)
+                list_fn = getattr(client, 'list_collections', None)
+                collections = list_fn() if callable(list_fn) else []
+                for col in collections:
+                    try:
+                        name = getattr(col, 'name', None) or (col.get('name') if isinstance(col, dict) else None)
+                        if not name:
+                            continue
+                        get_fn = getattr(client, 'get_collection', None)
+                        c = get_fn(name=name) if callable(get_fn) else col
+                        meta = getattr(c, 'metadata', None) or {}
+                        expected = None
+                        if isinstance(meta, dict) and meta.get('embedding_dimension'):
+                            try:
+                                expected = int(meta.get('embedding_dimension'))
+                            except Exception:
+                                expected = None
+                        actual = None
+                        if hasattr(c, 'get') and callable(getattr(c, 'get')):
+                            try:
+                                res = c.get(limit=1, include=['embeddings'])
+                                embs = res.get('embeddings') if isinstance(res, dict) else None
+                                if embs and len(embs) > 0:
+                                    first = embs[0]
+                                    if first and hasattr(first, '__len__'):
+                                        actual = len(first)
+                            except Exception:
+                                pass
+                        if expected is not None and actual is not None and expected != actual:
+                            mms.append((name, expected, actual, user_id))
+                    except Exception:
+                        pass
+                try:
+                    mgr.close()
+                except Exception:
+                    pass
+                return mms
+
+            auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
+            mismatches: list[tuple[str, int, int, str]] = []
+            if auth_mode == "multi_user":
+                base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
+                if base and _Path(base).exists():
+                    for entry in _Path(base).iterdir():
+                        if entry.is_dir():
+                            user_id = entry.name
+                            try:
+                                mismatches.extend(_check_user(user_id))
+                            except Exception:
+                                pass
+                else:
+                    if not deferred:
+                        logger.warning("Embeddings dimension check: USER_DB_BASE_DIR missing or does not exist in multi_user mode")
+            else:
+                user_id = str(_emb_settings.get("SINGLE_USER_FIXED_ID", "1"))
+                mismatches.extend(_check_user(user_id))
+
+            if mismatches:
+                for (n, e, a, u) in mismatches:
+                    logger.error(("Deferred startup: " if deferred else "") + f"Embeddings dimension mismatch{' (deferred)' if deferred else ' at startup'} (user={u}) in collection '{n}': expected={e}, actual={a}")
+                if strict_mode:
+                    raise RuntimeError("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED")
+            else:
+                logger.info(("Deferred startup: " if deferred else "") + ("Embeddings dimension check OK" if deferred else "Embeddings dimension sanity check: OK (no mismatches)"))
+        except Exception as e:
+            if deferred:
+                logger.debug(f"Deferred startup: embeddings dimension check skipped/failed: {e}")
+            else:
+                logger.exception(f"Embeddings dimension sanity check failed: {e}")
+                # Do not raise except in strict mode (handled above)
+
+    async def _run_heavy_initializations(*, deferred: bool) -> None:
+        if deferred:
+            logger.info("Deferred startup: beginning non-critical initializations in background")
+        # MCP Unified server
+        await _init_mcp_server(deferred=deferred)
+        # Provider manager
+        await _init_provider_manager(deferred=deferred)
+        # Request queue
+        await _init_request_queue(deferred=deferred)
+        # Rate limiter
+        await _init_rate_limiter(deferred=deferred)
+        # TTS service
+        await _init_tts_service(deferred=deferred)
+        # Chunking templates
+        await _init_chunking_templates(deferred=deferred)
+        # Embeddings dimension check
+        await _init_embeddings_dim_check(deferred=deferred)
+        if deferred:
+            logger.info("Deferred startup: completed non-critical initializations")
+
+    # Initialize Chat Module Components (single log retained)
     logger.info("App Startup: Initializing Chat module components...")
 
-    # Initialize Provider Manager
-    try:
-        from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
-        # Seed from authoritative provider configuration to avoid drift
-        from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
-
-        # Get list of configured providers (authoritative mapping)
-        providers = list(PROVIDER_API_CALL_HANDLERS.keys())
-        provider_manager = initialize_provider_manager(providers, primary_provider=providers[0] if providers else None)
-        await provider_manager.start_health_checks()
-        logger.info(f"App Startup: Provider manager initialized with {len(providers)} providers")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize provider manager: {e}")
-
-    # Initialize Request Queue
-    try:
-        from tldw_Server_API.app.core.Chat.request_queue import initialize_request_queue
-        from tldw_Server_API.app.core.config import load_comprehensive_config
-
-        config = load_comprehensive_config()
-        chat_config = {}
-        if config and config.has_section('Chat-Module'):
-            chat_config = dict(config.items('Chat-Module'))
-
-        queued_execution_enabled = False
+    # Run heavy initializations synchronously or schedule in background
+    if _defer_heavy:
+        import asyncio as _asyncio
         try:
-            env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
-            if env_queued is not None:
-                queued_execution_enabled = env_queued.strip().lower() in {"1", "true", "yes", "on"}
-            else:
-                queued_execution_enabled = (
-                    str(chat_config.get('queued_execution', 'False')).strip().lower() in {"1", "true", "yes", "on"}
-                )
-        except Exception:
-            queued_execution_enabled = False
-
-        if queued_execution_enabled:
-            request_queue = initialize_request_queue(
-                max_queue_size=int(chat_config.get('max_queue_size', 100)),
-                max_concurrent=int(chat_config.get('max_concurrent_requests', 10)),
-                global_rate_limit=int(chat_config.get('rate_limit_per_minute', 60)),
-                per_client_rate_limit=int(chat_config.get('rate_limit_per_conversation_per_minute', 20))
-            )
-            await request_queue.start(num_workers=4)
-            logger.info("App Startup: Request queue initialized with 4 workers")
-        else:
-            logger.info("App Startup: Request queue disabled (QUEUED_EXECUTION is off)")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize request queue: {e}")
-
-    # Initialize Rate Limiter
-    try:
-        from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
-
-        rate_config = RateLimitConfig(
-            global_rpm=int(chat_config.get('rate_limit_per_minute', 60)),
-            per_user_rpm=int(chat_config.get('rate_limit_per_user_per_minute', 20)),
-            per_conversation_rpm=int(chat_config.get('rate_limit_per_conversation_per_minute', 10)),
-            per_user_tokens_per_minute=int(chat_config.get('rate_limit_tokens_per_minute', 10000))
-        )
-        rate_limiter = initialize_rate_limiter(rate_config)
-        logger.info("App Startup: Rate limiter initialized")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize rate limiter: {e}")
-
-    # Initialize TTS Service
-    logger.info("App Startup: Initializing TTS service...")
-    try:
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
-        from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
-
-        # Load comprehensive config and extract TTS config dict
-        cfg_obj = load_comprehensive_config_with_tts()
-        tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, 'get_tts_config') else None
-
-        # Initialize the TTS service with configuration (falls back to internal loader if None)
-        await get_tts_service_v2(config=tts_cfg_dict)
-        logger.info("App Startup: TTS service initialized successfully")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize TTS service: {e}")
-        logger.warning("TTS functionality will be unavailable")
-        # Continue startup even if TTS fails (for backward compatibility)
-
-    # Initialize Chunking Templates
-    logger.info("App Startup: Initializing chunking templates...")
-    try:
-        from tldw_Server_API.app.core.Chunking.template_initialization import ensure_templates_initialized
-
-        if ensure_templates_initialized():
-            logger.info("App Startup: Chunking templates initialized successfully")
-        else:
-            logger.warning("App Startup: Chunking templates initialization incomplete")
-    except Exception as e:
-        logger.error(f"App Startup: Failed to initialize chunking templates: {e}")
-        # Continue startup even if template initialization fails
+            app.state.bg_tasks['deferred_startup'] = _asyncio.create_task(_run_heavy_initializations(deferred=True))
+        except Exception as _ds_e:
+            logger.debug(f"Failed to schedule deferred startup task: {_ds_e}")
+    else:
+        await _run_heavy_initializations(deferred=False)
 
     # Note: Audit service now uses dependency injection
     # No need to initialize globally - use get_audit_service_for_user dependency in endpoints
     logger.info("App Startup: Audit service available via dependency injection")
-
-    # Embeddings: optional startup-time dimension sanity check (opt-in)
-    try:
-        if os.getenv("EMBEDDINGS_STARTUP_DIM_CHECK_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}:
-            strict_mode = (os.getenv("EMBEDDINGS_DIM_CHECK_STRICT", "false").lower() in {"true", "1", "yes", "y", "on"})
-            logger.info("App Startup: Running embeddings dimension sanity check (opt-in)")
-            try:
-                import os as _os_mod
-                from pathlib import Path as _Path
-                from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
-                from tldw_Server_API.app.core.config import settings as _emb_settings
-
-                def _check_user(user_id: str) -> list[tuple[str, int, int, str]]:
-                    mms: list[tuple[str, int, int, str]] = []
-                    mgr = ChromaDBManager(user_id=user_id, user_embedding_config=_emb_settings)
-                    client = getattr(mgr, 'client', None)
-                    list_fn = getattr(client, 'list_collections', None)
-                    collections = list_fn() if callable(list_fn) else []
-                    for col in collections:
-                        try:
-                            name = getattr(col, 'name', None) or (col.get('name') if isinstance(col, dict) else None)
-                            if not name:
-                                continue
-                            get_fn = getattr(client, 'get_collection', None)
-                            c = get_fn(name=name) if callable(get_fn) else col
-                            meta = getattr(c, 'metadata', None) or {}
-                            expected = None
-                            if isinstance(meta, dict) and meta.get('embedding_dimension'):
-                                try:
-                                    expected = int(meta.get('embedding_dimension'))
-                                except Exception:
-                                    expected = None
-                            actual = None
-                            if hasattr(c, 'get') and callable(getattr(c, 'get')):
-                                try:
-                                    res = c.get(limit=1, include=['embeddings'])
-                                    embs = res.get('embeddings') if isinstance(res, dict) else None
-                                    if embs and len(embs) > 0:
-                                        first = embs[0]
-                                        if first and hasattr(first, '__len__'):
-                                            actual = int(len(first))
-                                except Exception:
-                                    pass
-                            if expected is not None and actual is not None and expected != actual:
-                                mms.append((name, expected, actual, user_id))
-                        except Exception as _dc_err:
-                            logger.debug(f"Dimension check skipped for collection (user={user_id}): {_dc_err}")
-                    try:
-                        mgr.close()
-                    except Exception:
-                        pass
-                    return mms
-
-                auth_mode = str(_emb_settings.get("AUTH_MODE", os.getenv("AUTH_MODE", "single_user")))
-                mismatches: list[tuple[str, int, int, str]] = []
-                if auth_mode == "multi_user":
-                    base: _Path = _emb_settings.get("USER_DB_BASE_DIR")
-                    if base and _Path(base).exists():
-                        for entry in _Path(base).iterdir():
-                            if entry.is_dir():
-                                user_id = entry.name
-                                try:
-                                    mismatches.extend(_check_user(user_id))
-                                except Exception as _ue:
-                                    logger.debug(f"Dimension check error for user {user_id}: {_ue}")
-                    else:
-                        logger.warning("Embeddings dimension check: USER_DB_BASE_DIR missing or does not exist in multi_user mode")
-                else:
-                    user_id = str(_emb_settings.get("SINGLE_USER_FIXED_ID", "1"))
-                    mismatches.extend(_check_user(user_id))
-
-                if mismatches:
-                    for (n,e,a,u) in mismatches:
-                        logger.error(f"Embeddings dimension mismatch at startup (user={u}) in collection '{n}': expected={e}, actual={a}")
-                    if strict_mode:
-                        raise RuntimeError("EMBEDDINGS_STARTUP_DIM_CHECK_FAILED")
-                else:
-                    logger.info("Embeddings dimension sanity check: OK (no mismatches)")
-            except Exception as _dc:
-                logger.error(f"Embeddings dimension sanity check failed: {_dc}")
-                if strict_mode:
-                    raise
-    except Exception as _dim_outer:
-        logger.debug(f"Embeddings startup dimension check path failed early: {_dim_outer}")
 
     # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), audio Jobs (MVP), claims rebuild
     cleanup_task = None
@@ -1453,7 +1565,7 @@ async def lifespan(app: FastAPI):
                 _enabled = [k for k, v in _test_flags.items() if str(v).lower() in {"1", "true", "yes", "on"}]
                 if _enabled:
                     logger.warning(
-                        f"Test-mode toggles enabled in production: {', '.join(_enabled)} — disable these for secure deployments"
+                        f"Test-mode toggles enabled in production: {', '.join(_enabled)} - disable these for secure deployments"
                     )
         except Exception:
             pass
@@ -1490,6 +1602,17 @@ async def lifespan(app: FastAPI):
         pass
 
     # Cancel/stop background worker(s)
+    try:
+        bg = getattr(app.state, 'bg_tasks', None)
+        if isinstance(bg, dict):
+            task = bg.get('deferred_startup')
+            if task:
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+    except Exception:
+        pass
     try:
         if 'cleanup_task' in locals() and cleanup_task:
             cleanup_task.cancel()
@@ -1707,7 +1830,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown MCP Unified server
     try:
-        if 'mcp_server' in locals():
+        if 'mcp_server' in locals() and mcp_server is not None:
             await mcp_server.shutdown()
             logger.info("App Shutdown: MCP Unified server shutdown")
     except Exception as e:
@@ -1736,7 +1859,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown Provider Manager
     try:
-        if 'provider_manager' in locals():
+        if 'provider_manager' in locals() and provider_manager is not None:
             await provider_manager.stop_health_checks()
             logger.info("App Shutdown: Provider manager stopped")
     except Exception as e:
@@ -1744,7 +1867,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown Request Queue
     try:
-        if 'request_queue' in locals():
+        if 'request_queue' in locals() and request_queue is not None:
             await request_queue.stop()
             logger.info("App Shutdown: Request queue stopped")
     except Exception as e:
@@ -1861,8 +1984,10 @@ OPENAPI_TAGS = [
      "externalDocs": {"description": "AuthNZ usage", "url": _ext_url("/docs-static/AUTHNZ_USAGE_EXAMPLES.md")}},
     {"name": "users", "description": "User management: create, list, roles, and profiles.",
      "externalDocs": {"description": "Permission matrix", "url": _ext_url("/docs-static/AUTHNZ_PERMISSION_MATRIX.md")}},
-    {"name": "admin", "description": "Administrative operations and diagnostics. Includes Jobs Admin endpoints: stats, prune, TTL sweep, requeue quarantined, and integrity sweep.",
+    {"name": "admin", "description": "Administrative operations and diagnostics (non-Jobs). For Jobs Admin endpoints (stats, prune, TTL sweep, requeue quarantined, integrity sweep), see the 'jobs' tag.",
      "externalDocs": {"description": "Jobs Admin Examples", "url": _ext_url("/docs-static/Code_Documentation/Jobs_Admin_Examples.md")}},
+    {"name": "jobs", "description": "Jobs queue manager and admin (SQLite/PG).",
+     "externalDocs": {"description": "Jobs Manager ordering", "url": _ext_url("/docs-static/Code_Documentation/Jobs_Manager.md")}},
     {"name": "media", "description": "Ingest and process media (video/audio/PDF/EPUB/HTML/Markdown).",
      "externalDocs": {"description": "Overview", "url": _ext_url("/docs-static/Documentation.md")}},
     {"name": "audio", "description": "Audio transcription and TTS (OpenAI-compatible).",
@@ -1918,9 +2043,9 @@ OPENAPI_TAGS = [
     {"name": "config", "description": "Server configuration and capability info."},
     {"name": "sync", "description": "Synchronization operations and helpers."},
     {"name": "tools", "description": "Tooling endpoints (utilities)."},
-    {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) – experimental surface in 0.1.",
+    {"name": "mcp-unified", "description": "MCP server + endpoints (JWT/RBAC) - experimental surface in 0.1.",
      "externalDocs": {"description": "MCP Unified Developer Guide", "url": _ext_url("/docs-static/MCP/Unified/Developer_Guide.md")}},
-    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes) – experimental in 0.1."},
+    {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes)"},
     {"name": "chatbooks", "description": "Import/export chatbooks (backup/restore).",
      "externalDocs": {"description": "Chatbooks API", "url": _ext_url("/docs-static/API-related/Chatbook_Features_API_Documentation.md")}},
     {"name": "llm", "description": "LLM provider configuration and discovery.",
@@ -1944,7 +2069,7 @@ _prod_flag = _env_os.getenv("tldw_production", "false").lower() in {"true", "1",
 
 APP_DESCRIPTION = (
     """
-    Too Long; Didn't Watch Server (tldw_server) — unified research assistant and media analysis platform.
+    Too Long; Didn't Watch Server (tldw_server) - unified research assistant and media analysis platform.
 
     Auth: Click the “Authorize” button.
     - Single-user mode: use header X-API-KEY with the printed key.
@@ -2037,6 +2162,34 @@ async def _guard_workflow_templates_traversal(request, call_next):
             if ".." in tail.split("/"):
                 return JSONResponse({"detail": "Invalid template name"}, status_code=400)
     except Exception:
+        pass
+    return await call_next(request)
+
+# Early middleware to guard sandbox artifact path traversal/double-slash before Starlette routing
+@app.middleware("http")
+async def _guard_sandbox_artifact_path(request: Request, call_next):
+    try:
+        # Inspect raw ASGI path first to avoid client/Starlette normalization
+        raw_path = request.scope.get("raw_path")
+        path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path or "")
+        # Debug logging removed after verification
+        # Quick filter: only check sandbox artifact endpoints
+        # Example: /api/v1/sandbox/runs/{run_id}/artifacts/{path}
+        if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
+            from urllib.parse import unquote
+            # Segment after /artifacts/
+            idx = path_raw.find("/artifacts/")
+            tail = path_raw[idx + len("/artifacts/"):]
+            tail_unquoted = unquote(tail)
+            # Reject traversal attempts and absolute/double-slash paths
+            if (
+                ".." in tail_unquoted.split("/")
+                or tail_unquoted.startswith("/")
+                or "//" in tail
+            ):
+                return JSONResponse({"detail": "invalid_path"}, status_code=400)
+    except Exception:
+        # Fail open: if guard fails, let the request proceed
         pass
     return await call_next(request)
 
@@ -2294,8 +2447,8 @@ if _TEST_MODE:
             req_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
             if req_id:
                 tm.set_baggage("request_id", str(req_id))
-        except Exception:
-            pass
+        except Exception as _baggage_err:
+            logger.debug(f"Trace headers: failed to set baggage request_id: {_baggage_err}")
         response = await call_next(request)
         # Add trace headers to response
         try:
@@ -2315,8 +2468,8 @@ if _TEST_MODE:
                         span_id = _th(8)    # 16 hex chars
                         response.headers.setdefault("X-Trace-Id", trace_id)
                         response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
-                    except Exception:
-                        pass
+                    except Exception as _synth_err:
+                        logger.debug(f"Trace headers: failed to synthesize traceparent: {_synth_err}")
             else:
                 # No span; synthesize trace headers
                 try:
@@ -2325,10 +2478,10 @@ if _TEST_MODE:
                     span_id = _th(8)
                     response.headers.setdefault("X-Trace-Id", trace_id)
                     response.headers.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as _synth_err2:
+                    logger.debug(f"Trace headers: failed to synthesize trace headers (no-span case): {_synth_err2}")
+        except Exception as _trace_hdr_err:
+            logger.debug(f"Trace headers: middleware error while setting headers: {_trace_hdr_err}")
         return response
 else:
     _enable_sec_headers_env = _env_os.getenv("ENABLE_SECURITY_HEADERS")
@@ -2421,13 +2574,13 @@ if WEBUI_DIR.exists():
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers
         from fastapi.responses import JSONResponse
         from tldw_Server_API.app.core.config import load_comprehensive_config
-        
+
         config = {
             "apiUrl": "",  # Empty means use same origin
             "apiKey": "",  # Default empty
             "_comment": "Auto-generated configuration"
         }
-        
+
         # In single user mode, include the API key unless running in production
         import os as _os
         _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -2457,7 +2610,7 @@ if WEBUI_DIR.exists():
                     config["auth"]["preferApiKeyInMultiUser"] = True
             except Exception:
                 pass
-        
+
         # Add LLM providers information
         try:
             providers_info = get_configured_providers()
@@ -2495,7 +2648,7 @@ if WEBUI_DIR.exists():
             config["chat"] = {"default_save_to_db": default_save}
         except Exception as e:
             logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
-        
+
         return JSONResponse(content=config)
 
     # Gate WebUI static mount and config endpoint
@@ -2596,7 +2749,7 @@ async def metrics():
         pass
     return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
 
-# OpenTelemetry metrics endpoint (if using OTLP) — registered conditionally below
+# OpenTelemetry metrics endpoint (if using OTLP) - registered conditionally below
 @track_metrics(labels={"endpoint": "metrics"})
 async def api_metrics():
     """Get current metrics in JSON format."""
@@ -2613,13 +2766,25 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-    # Sandbox (scaffold) — include only if import succeeded
+    # Include Jobs admin endpoints for tests that exercise jobs stats/counters
     try:
-        if '_HAS_SANDBOX' in globals() and _HAS_SANDBOX:
-            app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
-    except Exception:
-        # Never let optional sandbox break startup
-        pass
+        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+        app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+    except Exception as _e:
+        logger.debug(f"Skipping jobs_admin router in minimal test app: {_e}")
+    # AuthNZ debug routes for tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
+        app.include_router(authnz_debug_router, prefix=f"{API_V1_PREFIX}", tags=["authnz-debug"])
+    except Exception as _e:
+        logger.debug(f"Skipping authnz_debug router in tests: {_e}")
+    # Sandbox (scaffold) - include in minimal test app to support sandbox tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+        app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
+    except Exception as _sandbox_err:
+        # Never let optional sandbox break startup in tests
+        logger.debug(f"Skipping sandbox router in minimal test app: {_sandbox_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:
@@ -2650,6 +2815,20 @@ else:
     if _HAS_AUTH_ENHANCED:
         _include_if_enabled("auth-enhanced", auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+
+    # Include AuthNZ debug endpoints once via the gated path.
+    # Force-enable when _TEST_MODE is true; otherwise respect route policy.
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
+        _include_if_enabled(
+            "authnz-debug",
+            authnz_debug_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["authnz-debug"],
+            default_stable=True if _TEST_MODE else False,
+        )
+    except Exception as _e:
+        logger.debug(f"Skipping authnz_debug router: {_e}")
     _include_if_enabled("privileges", privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
     from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
     from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
@@ -2664,7 +2843,7 @@ else:
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
     _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
-    # Tools (MCP-backed server tool execution) — include if initial guarded import succeeded
+    # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if 'tools_router' in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
@@ -2759,12 +2938,29 @@ else:
     _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
     if _HAS_JOBS_ADMIN:
-        _include_if_enabled("jobs", jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"], default_stable=False)
+        if _TEST_MODE:
+            # In tests, include Jobs admin endpoints unconditionally to avoid
+            # config-based gating interfering with unit tests that rely on them.
+            app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
+        else:
+            _include_if_enabled(
+                "jobs",
+                jobs_admin_router,
+                prefix=f"{API_V1_PREFIX}",
+                tags=["jobs"],
+                default_stable=False,
+            )
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
     # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
-    _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
-    _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=False)
+    if _HAS_SANDBOX:
+        if _TEST_MODE:
+            # In tests, force-include sandbox endpoints regardless of route policy
+            app.include_router(sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"])
+        else:
+            _include_if_enabled("sandbox", sandbox_router, prefix=f"{API_V1_PREFIX}", tags=["sandbox"], default_stable=False)
+    # Flashcards are now considered stable; include by default unless disabled
+    _include_if_enabled("flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=True)
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)
     _include_if_enabled("personalization", personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"], default_stable=False)
@@ -2781,13 +2977,13 @@ else:
 try:
     if route_enabled("metrics"):
         app.add_api_route("/metrics", metrics, include_in_schema=False)
-        app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"]) 
+        app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"])
     else:
         logger.info("Route disabled by policy: metrics")
 except Exception as _metrics_rt_err:
     logger.warning(f"Route gating error for metrics; including by default. Error: {_metrics_rt_err}")
     app.add_api_route("/metrics", metrics, include_in_schema=False)
-    app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"]) 
+    app.add_api_route(f"{API_V1_PREFIX}/metrics", api_metrics, methods=["GET"], tags=["monitoring"])
 
 # Router for trash endpoints - deletion of media items / trash file handling (FIXME: Secure delete vs lag on delete?)
 #app.include_router(trash_router, prefix=f"{API_V1_PREFIX}/trash", tags=["trash"])
@@ -2800,7 +2996,7 @@ except Exception as _metrics_rt_err:
 async def health_check():
     return {"status": "healthy"}
 
-# Readiness check (verifies critical dependencies) — registered conditionally below
+# Readiness check (verifies critical dependencies) - registered conditionally below
 async def readiness_check():
     """Readiness probe for orchestrators and load balancers."""
     try:

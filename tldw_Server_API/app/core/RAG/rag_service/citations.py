@@ -44,7 +44,7 @@ class ChunkCitation:
     text_snippet: str
     confidence: float
     usage_context: str  # How this chunk was used in the answer
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -65,7 +65,7 @@ class DualCitationResult:
     chunk_citations: List[ChunkCitation]  # Chunk-level citations
     inline_markers: Dict[str, str]  # Mapping of inline markers to chunks
     citation_map: Dict[str, List[str]]  # Document ID to chunk IDs mapping
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API response."""
         return {
@@ -78,7 +78,7 @@ class DualCitationResult:
 
 class AcademicCitationFormatter:
     """Formats citations according to academic standards."""
-    
+
     def format_citation(
         self,
         metadata: Dict[str, Any],
@@ -86,11 +86,11 @@ class AcademicCitationFormatter:
     ) -> str:
         """
         Format a citation according to the specified style.
-        
+
         Args:
             metadata: Document metadata containing author, title, date, etc.
             style: Citation style to use
-            
+
         Returns:
             Formatted citation string
         """
@@ -106,81 +106,81 @@ class AcademicCitationFormatter:
             return self._format_ieee(metadata)
         else:
             return self._format_generic(metadata)
-    
+
     def _format_mla(self, meta: Dict[str, Any]) -> str:
         """
         Format MLA citation.
         Format: Author. "Title." Publication, Date, Pages.
         """
         parts = []
-        
+
         # Author(s)
         author = self._format_author(meta.get("author"), style="mla")
         if author:
             parts.append(author)
-        
+
         # Title
         title = meta.get("title", "Untitled")
         if meta.get("is_article"):
             parts.append(f'"{title}"')
         else:
             parts.append(f"*{title}*")
-        
+
         # Publication/Container
         if meta.get("publication"):
             parts.append(meta["publication"])
         elif meta.get("website"):
             parts.append(meta["website"])
-        
+
         # Volume/Issue
         if meta.get("volume"):
             vol_issue = f"vol. {meta['volume']}"
             if meta.get("issue"):
                 vol_issue += f", no. {meta['issue']}"
             parts.append(vol_issue)
-        
+
         # Date
         date = self._format_date(meta.get("date"), style="mla")
         if date:
             parts.append(date)
-        
+
         # Pages
         if meta.get("pages"):
             parts.append(f"pp. {meta['pages']}")
         elif meta.get("page"):
             parts.append(f"p. {meta['page']}")
-        
+
         # URL/DOI
         if meta.get("doi"):
             parts.append(f"doi:{meta['doi']}")
         elif meta.get("url"):
             parts.append(meta["url"])
-        
+
         return ". ".join(parts) + "."
-    
+
     def _format_apa(self, meta: Dict[str, Any]) -> str:
         """
         Format APA citation.
         Format: Author. (Date). Title. Publication.
         """
         parts = []
-        
+
         # Author(s)
         author = self._format_author(meta.get("author"), style="apa")
         if author:
             parts.append(author)
-        
+
         # Date
         date = self._format_date(meta.get("date"), style="apa")
         parts.append(f"({date})")
-        
+
         # Title
         title = meta.get("title", "Untitled")
         if meta.get("is_article"):
             parts.append(title)
         else:
             parts.append(f"*{title}*")
-        
+
         # Publication
         if meta.get("publication"):
             pub = meta["publication"]
@@ -191,83 +191,83 @@ class AcademicCitationFormatter:
             if meta.get("pages"):
                 pub += f", {meta['pages']}"
             parts.append(pub)
-        
+
         # DOI/URL
         if meta.get("doi"):
             parts.append(f"https://doi.org/{meta['doi']}")
         elif meta.get("url"):
             parts.append(f"Retrieved from {meta['url']}")
-        
+
         return ". ".join(parts) + "."
-    
+
     def _format_chicago(self, meta: Dict[str, Any]) -> str:
         """
         Format Chicago citation (Notes-Bibliography style).
         """
         parts = []
-        
+
         # Author(s)
         author = self._format_author(meta.get("author"), style="chicago")
         if author:
             parts.append(author)
-        
+
         # Title
         title = meta.get("title", "Untitled")
         if meta.get("is_article"):
             parts.append(f'"{title}"')
         else:
             parts.append(f"*{title}*")
-        
+
         # Publication details
         if meta.get("publication"):
             parts.append(meta["publication"])
-        
+
         # Volume/Issue
         if meta.get("volume"):
             vol_str = str(meta["volume"])
             if meta.get("issue"):
                 vol_str += f", no. {meta['issue']}"
             parts.append(vol_str)
-        
+
         # Date
         date = self._format_date(meta.get("date"), style="chicago")
         if date:
             parts.append(f"({date})")
-        
+
         # Pages
         if meta.get("pages"):
             parts.append(meta["pages"])
-        
+
         # DOI/URL
         if meta.get("doi"):
             parts.append(f"https://doi.org/{meta['doi']}")
         elif meta.get("url"):
             parts.append(meta["url"])
-        
+
         return ". ".join(parts) + "."
-    
+
     def _format_harvard(self, meta: Dict[str, Any]) -> str:
         """
         Format Harvard citation.
         """
         parts = []
-        
+
         # Author(s) and date
         author = self._format_author(meta.get("author"), style="harvard")
         date = self._format_date(meta.get("date"), style="harvard")
-        
+
         if author:
             parts.append(f"{author} {date}")
         else:
             parts.append(date)
-        
+
         # Title
         title = meta.get("title", "Untitled")
         if meta.get("is_article"):
             parts.append(f"'{title}'")
         else:
             parts.append(f"*{title}*")
-        
+
         # Publication
         if meta.get("publication"):
             pub = meta["publication"]
@@ -278,35 +278,35 @@ class AcademicCitationFormatter:
             if meta.get("pages"):
                 pub += f", pp. {meta['pages']}"
             parts.append(pub)
-        
+
         # Available at
         if meta.get("url"):
             parts.append(f"Available at: {meta['url']}")
             parts.append(f"[Accessed {datetime.now().strftime('%d %B %Y')}]")
-        
+
         return ". ".join(parts) + "."
-    
+
     def _format_ieee(self, meta: Dict[str, Any], number: int = 1) -> str:
         """
         Format IEEE citation.
         """
         parts = []
-        
+
         # [Number] Author(s)
         parts.append(f"[{number}]")
-        
+
         author = self._format_author(meta.get("author"), style="ieee")
         if author:
             parts.append(author)
-        
+
         # "Title"
         title = meta.get("title", "Untitled")
         parts.append(f'"{title}"')
-        
+
         # Publication
         if meta.get("publication"):
             parts.append(f"in {meta['publication']}")
-        
+
         # Volume/Issue/Pages
         if meta.get("volume"):
             vol_str = f"vol. {meta['volume']}"
@@ -315,48 +315,48 @@ class AcademicCitationFormatter:
             if meta.get("pages"):
                 vol_str += f", pp. {meta['pages']}"
             parts.append(vol_str)
-        
+
         # Date
         date = self._format_date(meta.get("date"), style="ieee")
         if date:
             parts.append(date)
-        
+
         return " ".join(parts) + "."
-    
+
     def _format_generic(self, meta: Dict[str, Any]) -> str:
         """Fallback generic citation format."""
         parts = []
-        
+
         if meta.get("author"):
             parts.append(str(meta["author"]))
-        
+
         if meta.get("title"):
             parts.append(f'"{meta["title"]}"')
-        
+
         if meta.get("publication"):
             parts.append(meta["publication"])
-        
+
         if meta.get("date"):
             parts.append(str(meta["date"]))
-        
+
         if meta.get("url"):
             parts.append(meta["url"])
-        
+
         return ". ".join(parts) if parts else "Unknown source"
-    
+
     def _format_author(self, author: Any, style: str) -> Optional[str]:
         """Format author name(s) according to style."""
         if not author:
             return None
-        
+
         if isinstance(author, list):
             authors = author
         else:
             authors = [str(author)]
-        
+
         if not authors:
             return None
-        
+
         if style in ["mla", "chicago"]:
             # Last, First for first author
             if len(authors) == 1:
@@ -365,18 +365,18 @@ class AcademicCitationFormatter:
                 return f"{self._reverse_name(authors[0])}, and {authors[1]}"
             else:
                 return f"{self._reverse_name(authors[0])}, et al."
-        
+
         elif style == "apa":
             # Last, F. M.
             formatted = []
             for author in authors[:3]:  # APA shows up to 3 authors
                 formatted.append(self._initials_format(author))
-            
+
             if len(authors) > 3:
                 formatted.append("et al.")
-            
+
             return ", ".join(formatted)
-        
+
         elif style == "harvard":
             # Last, F
             if len(authors) == 1:
@@ -385,27 +385,27 @@ class AcademicCitationFormatter:
                 return f"{self._surname_initial(authors[0])} and {self._surname_initial(authors[1])}"
             else:
                 return f"{self._surname_initial(authors[0])} et al."
-        
+
         elif style == "ieee":
             # F. Last
             formatted = []
             for author in authors[:3]:
                 formatted.append(self._ieee_format(author))
-            
+
             if len(authors) > 3:
                 formatted.append("et al.")
-            
+
             return ", ".join(formatted)
-        
+
         return ", ".join(authors)
-    
+
     def _reverse_name(self, name: str) -> str:
         """Convert 'First Last' to 'Last, First'."""
         parts = name.strip().split()
         if len(parts) >= 2:
             return f"{parts[-1]}, {' '.join(parts[:-1])}"
         return name
-    
+
     def _initials_format(self, name: str) -> str:
         """Convert 'First Middle Last' to 'Last, F. M.'."""
         parts = name.strip().split()
@@ -414,14 +414,14 @@ class AcademicCitationFormatter:
             initials = ". ".join([p[0].upper() for p in parts[:-1]]) + "."
             return f"{last}, {initials}"
         return name
-    
+
     def _surname_initial(self, name: str) -> str:
         """Convert 'First Last' to 'Last, F'."""
         parts = name.strip().split()
         if len(parts) >= 2:
             return f"{parts[-1]}, {parts[0][0].upper()}"
         return name
-    
+
     def _ieee_format(self, name: str) -> str:
         """Convert 'First Middle Last' to 'F. M. Last'."""
         parts = name.strip().split()
@@ -429,12 +429,12 @@ class AcademicCitationFormatter:
             initials = ". ".join([p[0].upper() for p in parts[:-1]]) + "."
             return f"{initials} {parts[-1]}"
         return name
-    
+
     def _format_date(self, date: Any, style: str) -> str:
         """Format date according to style."""
         if not date:
             return "n.d." if style == "apa" else ""
-        
+
         # Try to parse date
         if isinstance(date, datetime):
             dt = date
@@ -453,7 +453,7 @@ class AcademicCitationFormatter:
                 except Exception:
                     logger.debug("metrics increment failed for rag citation_date_parse_failed")
                 return str(date)
-        
+
         if style == "mla":
             return dt.strftime("%d %b. %Y")  # 15 Jan. 2023
         elif style == "apa":
@@ -464,13 +464,13 @@ class AcademicCitationFormatter:
             return f"({dt.strftime('%Y')})"  # (2023)
         elif style == "ieee":
             return dt.strftime("%b. %Y")  # Jan. 2023
-        
+
         return str(date)
 
 
 class CitationGenerator:
     """Generate both academic and chunk-level citations for documents."""
-    
+
     def __init__(
         self,
         max_citation_length: int = 200,
@@ -482,7 +482,7 @@ class CitationGenerator:
     ):
         """
         Initialize citation generator.
-        
+
         Args:
             max_citation_length: Maximum length of citation text
             context_window: Characters of context around citation
@@ -497,18 +497,18 @@ class CitationGenerator:
         self.fuzzy_threshold = fuzzy_threshold
         self.enable_semantic = enable_semantic
         self.semantic_threshold = semantic_threshold
-        
+
         self.formatter = AcademicCitationFormatter()
-        
+
         # Compile regex patterns
         self._compile_patterns()
-    
+
     def _compile_patterns(self):
         """Pre-compile regex patterns for performance."""
         self.sentence_pattern = re.compile(r'[.!?]\s+')
         self.word_boundary = re.compile(r'\b')
         self.whitespace_pattern = re.compile(r'\s+')
-    
+
     async def generate_citations(
         self,
         documents: List[Document],
@@ -519,68 +519,68 @@ class CitationGenerator:
     ) -> DualCitationResult:
         """
         Generate both academic and chunk-level citations.
-        
+
         Args:
             documents: Documents to generate citations from
             query: The search query (for relevance matching)
             style: Academic citation style
             include_chunks: Whether to include chunk-level citations
             max_citations: Maximum number of citations to return
-            
+
         Returns:
             DualCitationResult with both types of citations
         """
         # Group documents by source document
         source_groups = self._group_by_source(documents)
-        
+
         # Generate academic citations for unique source documents
         academic_citations = []
         citation_map = {}
-        
+
         for source_id, doc_list in source_groups.items():
             # Get metadata from first document in group
             first_doc = doc_list[0]
             source_meta = first_doc.get_source_info()
-            
+
             # Generate academic citation
             if source_meta:
                 academic_cite = self.formatter.format_citation(source_meta, style)
                 academic_citations.append(academic_cite)
-                
+
                 # Map source to chunks
                 citation_map[source_id] = [d.id for d in doc_list]
-        
+
         # Generate chunk citations if requested
         chunk_citations = []
         inline_markers = {}
-        
+
         if include_chunks:
             for i, doc in enumerate(documents[:max_citations]):
                 chunk_cite = self._generate_chunk_citation(doc, query, i + 1)
                 chunk_citations.append(chunk_cite)
-                
+
                 # Create inline marker
                 marker = f"[{i + 1}]"
                 inline_markers[marker] = doc.id
-        
+
         return DualCitationResult(
             academic_citations=academic_citations,
             chunk_citations=chunk_citations,
             inline_markers=inline_markers,
             citation_map=citation_map
         )
-    
+
     def _group_by_source(self, documents: List[Document]) -> Dict[str, List[Document]]:
         """Group documents by their source document ID."""
         groups = defaultdict(list)
-        
+
         for doc in documents:
             # Use source_document_id if available, otherwise use document id
             source_id = doc.source_document_id or doc.id
             groups[source_id].append(doc)
-        
+
         return dict(groups)
-    
+
     def _generate_chunk_citation(
         self,
         document: Document,
@@ -590,13 +590,13 @@ class CitationGenerator:
         """Generate a chunk-level citation for verification."""
         # Extract relevant snippet
         snippet = self._extract_relevant_snippet(document.content, query)
-        
+
         # Get location information
         location = document.get_location_string()
-        
+
         # Determine usage context
         usage_context = self._determine_usage_context(document, query)
-        
+
         return ChunkCitation(
             chunk_id=document.id,
             source_document_id=document.source_document_id or document.id,
@@ -606,7 +606,7 @@ class CitationGenerator:
             confidence=document.score,
             usage_context=usage_context
         )
-    
+
     def _extract_relevant_snippet(
         self,
         content: str,
@@ -617,38 +617,38 @@ class CitationGenerator:
         if not query:
             # Return beginning of content
             return content[:max_length] + "..." if len(content) > max_length else content
-        
+
         # Find best matching section
         query_lower = query.lower()
         content_lower = content.lower()
-        
+
         # Look for exact match first
         pos = content_lower.find(query_lower)
         if pos != -1:
             start = max(0, pos - 50)
             end = min(len(content), pos + len(query) + 50)
             snippet = content[start:end]
-            
+
             if start > 0:
                 snippet = "..." + snippet
             if end < len(content):
                 snippet = snippet + "..."
-            
+
             return snippet
-        
+
         # Look for keyword matches
         keywords = query_lower.split()
         best_pos = -1
         best_score = 0
-        
+
         for i in range(0, len(content) - 100, 50):
             window = content_lower[i:i + 200]
             score = sum(1 for kw in keywords if kw in window)
-            
+
             if score > best_score:
                 best_score = score
                 best_pos = i
-        
+
         if best_pos >= 0:
             snippet = content[best_pos:best_pos + max_length]
             if best_pos > 0:
@@ -656,10 +656,10 @@ class CitationGenerator:
             if best_pos + max_length < len(content):
                 snippet = snippet + "..."
             return snippet
-        
+
         # Fallback to beginning
         return content[:max_length] + "..." if len(content) > max_length else content
-    
+
     def _determine_usage_context(
         self,
         document: Document,
@@ -674,7 +674,7 @@ class CitationGenerator:
             return "Supporting information"
         else:
             return "Background context"
-    
+
     def format_inline_citations(
         self,
         text: str,
@@ -682,24 +682,24 @@ class CitationGenerator:
     ) -> str:
         """
         Add inline citation markers to generated text.
-        
+
         Args:
             text: The generated text
             citations: Citation results
-            
+
         Returns:
             Text with inline citation markers
         """
         # This would require more sophisticated NLP to determine
         # where to place citations in the generated text
         # For now, append citations at the end
-        
+
         if citations.inline_markers:
             markers = " ".join(citations.inline_markers.keys())
             return f"{text} {markers}"
-        
+
         return text
-    
+
     def format_bibliography(
         self,
         citations: DualCitationResult,
@@ -707,19 +707,19 @@ class CitationGenerator:
     ) -> str:
         """
         Format a bibliography section.
-        
+
         Args:
             citations: Citation results
             style: Citation style
-            
+
         Returns:
             Formatted bibliography
         """
         lines = ["## References\n"]
-        
+
         for i, cite in enumerate(citations.academic_citations, 1):
             lines.append(f"{i}. {cite}")
-        
+
         if citations.chunk_citations:
             lines.append("\n## Source Chunks\n")
             for chunk in citations.chunk_citations:
@@ -727,7 +727,7 @@ class CitationGenerator:
                 lines.append(f"  Confidence: {chunk.confidence:.2f}")
                 lines.append(f"  Usage: {chunk.usage_context}")
                 lines.append("")
-        
+
         return "\n".join(lines)
 
 
@@ -735,11 +735,11 @@ class CitationGenerator:
 async def generate_citations(context: Any, **kwargs) -> Any:
     """Generate citations for pipeline context."""
     config = context.config.get("citations", {})
-    
+
     # Check if citations are enabled
     if not config.get("enabled", True):
         return context
-    
+
     # Create citation generator
     generator = CitationGenerator(
         max_citation_length=config.get("max_length", 200),
@@ -749,7 +749,7 @@ async def generate_citations(context: Any, **kwargs) -> Any:
         enable_semantic=config.get("enable_semantic", True),
         semantic_threshold=config.get("semantic_threshold", 0.7)
     )
-    
+
     # Determine citation style
     style_str = config.get("style", "mla").lower()
     style_map = {
@@ -760,7 +760,7 @@ async def generate_citations(context: Any, **kwargs) -> Any:
         "ieee": CitationStyle.IEEE
     }
     style = style_map.get(style_str, CitationStyle.MLA)
-    
+
     # Generate citations
     result = await generator.generate_citations(
         documents=context.documents,
@@ -769,7 +769,7 @@ async def generate_citations(context: Any, **kwargs) -> Any:
         include_chunks=config.get("include_chunks", True),
         max_citations=config.get("max_citations", 10)
     )
-    
+
     # Add to context
     context.citations = result
     context.metadata["citations"] = {
@@ -777,7 +777,7 @@ async def generate_citations(context: Any, **kwargs) -> Any:
         "chunks": len(result.chunk_citations),
         "style": style.value
     }
-    
+
     logger.info(f"Generated {len(result.academic_citations)} academic citations and {len(result.chunk_citations)} chunk citations")
-    
+
     return context

@@ -108,4 +108,3 @@ async def test_usage_tracker_inserts_sqlite(monkeypatch):
     cost = float(row["total_cost_usd"]) if isinstance(row, dict) else float(row[2])
     assert pt == 1000 and ct == 500
     assert cost > 0.0
-

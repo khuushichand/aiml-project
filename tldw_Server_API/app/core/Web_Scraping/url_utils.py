@@ -75,4 +75,3 @@ def normalize_for_crawl(url: str, source: str) -> str:
 
     normalized = urlunparse((scheme, netloc, path, "", query, fragment))
     return normalized
-

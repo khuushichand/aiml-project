@@ -17,4 +17,3 @@ def test_review_and_select_results_selector():
     # No selector should keep all
     selected_all = review_and_select_results(data)
     assert len(selected_all) == 2
-

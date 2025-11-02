@@ -21,4 +21,3 @@ def test_completion_idempotent_sqlite(tmp_path, monkeypatch):
     # Different token should not re-finalize
     ok3 = jm.complete_job(int(j["id"]), worker_id="w1", lease_id=token, completion_token="other-token")
     assert ok3 is False
-

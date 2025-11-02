@@ -52,34 +52,34 @@ def sanitize_html_text(value: Optional[str]) -> Optional[str]:
                 v = decoded
         except Exception:
             pass
-        
+
         # Remove all HTML tags and dangerous patterns more thoroughly
         # Remove script tags and their content (case insensitive, handles broken tags)
         v = re.sub(r'<\s*script[^>]*>.*?<\s*/\s*script\b[^>]*>', '', v, flags=re.IGNORECASE | re.DOTALL)
         v = re.sub(r'<\s*script[^>]*>', '', v, flags=re.IGNORECASE)
-        
+
         # Remove style tags and their content
         v = re.sub(r'<\s*style[^>]*>.*?<\s*/\s*style\s*>', '', v, flags=re.IGNORECASE | re.DOTALL)
         v = re.sub(r'<\s*style[^>]*>', '', v, flags=re.IGNORECASE)
-        
+
         # Remove all event handlers (onclick, onload, etc.)
         v = re.sub(r'\s*on\w+\s*=\s*["\']?[^"\'>\s]*["\']?', '', v, flags=re.IGNORECASE)
-        
+
         # Remove javascript: protocol
         v = re.sub(r'javascript\s*:', '', v, flags=re.IGNORECASE)
         v = re.sub(r'data\s*:', '', v, flags=re.IGNORECASE)
         v = re.sub(r'vbscript\s*:', '', v, flags=re.IGNORECASE)
-        
+
         # Remove all remaining HTML tags
         v = re.sub(r'<[^>]+>', '', v)
-        
+
         # Finally, escape any remaining HTML special characters
         v = html.escape(v)
 
     # Remove null bytes and control characters
     v = v.replace('\x00', '')
     v = ''.join(ch for ch in v if ord(ch) >= 32 or ch in ('\n', '\t'))
-    
+
     # Normalize whitespace
     v = re.sub(r'\n{3,}', '\n\n', v)
     v = re.sub(r' {2,}', ' ', v)
@@ -200,14 +200,14 @@ class EvaluationSpec(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_rag_pipeline(cls, values: "EvaluationSpec") -> "EvaluationSpec":  # type: ignore[name-defined]
-        # If rag_pipeline subtype is selected, ensure nested spec exists
+    def _validate_rag_pipeline(self) -> "EvaluationSpec":  # type: ignore[name-defined]
+        """Ensure nested rag_pipeline spec exists when subtype requires it."""
         try:
-            if values.sub_type == 'rag_pipeline' and values.rag_pipeline is None:
+            if self.sub_type == 'rag_pipeline' and self.rag_pipeline is None:
                 raise ValueError("rag_pipeline subtype requires eval_spec.rag_pipeline configuration")
         except Exception:
             pass
-        return values
+        return self
 
 
 class RunConfig(BaseModel):
@@ -276,7 +276,7 @@ class EvaluationResponse(BaseModel):
     updated: Optional[int] = Field(None, description="Update timestamp (OpenAI-compatible)")
     updated_at: Optional[int] = Field(None, description="Update timestamp (tldw-compatible)")
     metadata: Optional[Dict[str, Any]] = None
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -312,7 +312,7 @@ class RunResponse(BaseModel):
     error_message: Optional[str] = None
     results: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, int]] = None
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -348,7 +348,7 @@ class DatasetResponse(BaseModel):
     created_at: Optional[int] = Field(None, description="Creation timestamp (tldw-compatible)")
     created_by: str
     metadata: Optional[Dict[str, Any]] = None
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 
@@ -695,7 +695,7 @@ class QA3Item(BaseModel):
 
 class QA3Request(BaseModel):
     items: List[QA3Item] = Field(..., min_length=1)
-    allowed_labels: Optional[List[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"]) 
+    allowed_labels: Optional[List[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"])
     label_mapping: Optional[Dict[str, str]] = Field(None, description="Normalize gold labels, e.g., {'true':'SUPPORTED','false':'REFUTED'}")
     generate_predictions: Optional[bool] = Field(False, description="If true, call LLM to predict; else expect item.prediction and score-only")
     api_name: Optional[str] = Field("openai")

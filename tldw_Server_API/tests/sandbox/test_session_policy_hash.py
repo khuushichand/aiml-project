@@ -25,4 +25,3 @@ def test_session_creation_returns_policy_hash() -> None:
         j = r.json()
         assert "policy_hash" in j
         assert isinstance(j.get("policy_hash"), (str, type(None)))
-

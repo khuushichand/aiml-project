@@ -28,4 +28,3 @@ class RegexSentenceSplitter(SentenceSplitter):
             pass
         # Fallback: non-empty lines
         return [(m.start(), m.end()) for m in re.finditer(r".+", text)]
-

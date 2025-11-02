@@ -451,7 +451,7 @@ This endpoint supports:
 - Conversation history
 - Ephemeral or persistent operation (see `save_to_db` below)
 
-Streaming behavior follows the core Chat API: the server sends an initial `event: stream_start`, emits delta chunks as OpenAI‑style `choices[].delta.content`, and terminates with a single `data: [DONE]` (heartbeat comments are sent periodically). Duplicate terminal markers are suppressed.
+Streaming behavior follows the core Chat API: the server sends an initial `event: stream_start`, emits delta chunks as OpenAI-style `choices[].delta.content`, and terminates with a single `data: [DONE]` (heartbeat comments are sent periodically). Duplicate terminal markers are suppressed.
 
 ### Workflow for Character Chat Completions
 
@@ -571,12 +571,12 @@ Notes:
 
 #### Streaming Behavior
 
-When `stream=true` and the provider supports streaming, the server emits Server‑Sent Events (SSE):
+When `stream=true` and the provider supports streaming, the server emits Server-Sent Events (SSE):
 
 - Each chunk is sent as a line prefixed with `data: `, followed by a blank line (SSE framing).
-- If the upstream provider already emits SSE‑formatted lines (beginning with `data:`), they are forwarded as‑is.
+- If the upstream provider already emits SSE-formatted lines (beginning with `data:`), they are forwarded as-is.
 - Exactly one terminal marker is sent at the end: `data: [DONE]`. Duplicate terminal markers are suppressed.
-- On transform/iteration errors mid‑stream, an error payload is sent and the stream still terminates with `data: [DONE]`.
+- On transform/iteration errors mid-stream, an error payload is sent and the stream still terminates with `data: [DONE]`.
 
 **Response:** `200 OK`
 ```json
@@ -812,7 +812,7 @@ For JSON format:
 ```
 
 JSON export fields (metadata extras):
-- When `include_metadata=true` and one or more messages have stored extras, the response includes a top‑level `message_metadata_extra` object.
+- When `include_metadata=true` and one or more messages have stored extras, the response includes a top-level `message_metadata_extra` object.
 - Keys are `message_id`; values are arbitrary JSON previously stored for that message. By convention, tool execution outputs are stored under `tool_results`, keyed by `tool_call_id`.
 
 Example shape of `message_metadata_extra`:
@@ -860,7 +860,7 @@ Import a character from various formats including V3.
 
 ## Rate Limiting
 
-The API implements several rate limits to prevent abuse. Redis is optional — if Redis is unavailable or the `redis` package is not installed, the server automatically falls back to an in-memory limiter suitable for single-instance deployments.
+The API implements several rate limits to prevent abuse. Redis is optional - if Redis is unavailable or the `redis` package is not installed, the server automatically falls back to an in-memory limiter suitable for single-instance deployments.
 
 Configuration summary:
 - General character ops: `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`.
@@ -914,10 +914,10 @@ Dictionary and World Book modules estimate tokens when applying budgets. You can
 
 Endpoints:
 - GET `/api/v1/config/tokenizer` → returns current mode and settings
-- PUT `/api/v1/config/tokenizer` → updates mode (non‑persistent; in‑memory only)
+- PUT `/api/v1/config/tokenizer` → updates mode (non-persistent; in-memory only)
 
 Modes:
-- `whitespace` (default): counts whitespace‑separated tokens
+- `whitespace` (default): counts whitespace-separated tokens
 - `char_approx`: approximates by character length (≈ length/4). Adjustable with `divisor`.
 
 Examples:
@@ -931,7 +931,7 @@ GET /api/v1/config/tokenizer
 }
 ```
 
-2) Switch to character‑approximation with divisor 4
+2) Switch to character-approximation with divisor 4
 ```
 PUT /api/v1/config/tokenizer
 {
@@ -941,7 +941,7 @@ PUT /api/v1/config/tokenizer
 ```
 
 Notes:
-- This setting is applied process‑wide and is not persisted across restarts.
+- This setting is applied process-wide and is not persisted across restarts.
 - These endpoints adjust estimates for token budgets in chat dictionary and world book processing only.
 
 ---
@@ -1060,7 +1060,7 @@ class CharacterChatClient:
             "X-API-KEY": api_key,
             "Content-Type": "application/json"
         }
-    
+
     def create_character(self, name, description, personality, first_message):
         response = requests.post(
             f"{self.base_url}/api/v1/characters/",
@@ -1073,7 +1073,7 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def create_chat(self, character_id, title=None):
         response = requests.post(
             f"{self.base_url}/api/v1/chats/",
@@ -1084,7 +1084,7 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def send_message(self, chat_id, content, role="user"):
         """Send a message to a chat session."""
         response = requests.post(
@@ -1096,7 +1096,7 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def get_messages_for_completions(self, chat_id):
         """Get messages formatted for use with chat completions."""
         response = requests.get(
@@ -1109,15 +1109,15 @@ class CharacterChatClient:
             }
         )
         return response.json()
-    
+
     def get_completion(self, chat_id, message, max_tokens=500):
         # First get the formatted messages with character context
         context = self.get_messages_for_completions(chat_id)
-        
+
         # Add the new message
         messages = context["messages"]
         messages.append({"role": "user", "content": message})
-        
+
         # Call the main chat completions endpoint
         response = requests.post(
             f"{self.base_url}/api/v1/chat/completions",
@@ -1129,15 +1129,15 @@ class CharacterChatClient:
                 "temperature": 0.7
             }
         )
-        
+
         # Extract the response
         result = response.json()
         if "choices" in result and len(result["choices"]) > 0:
             ai_response = result["choices"][0]["message"]["content"]
-            
+
             # Save the AI response back to the conversation
             self.send_message(chat_id, ai_response, role="assistant")
-            
+
             return {
                 "response": ai_response,
                 "usage": result.get("usage", {})
@@ -1178,7 +1178,7 @@ else:
 
 For provider integration testing, see the “Commercial Tests” section in `Docs/API-related/Chat_API_Documentation.md`.
 
-Configuration notes for providers: API keys are read from environment variables and from `.env`/`.ENV` files (project root or `tldw_Server_API/Config_Files/`), falling back to `Config_Files/config.txt` `[API]` entries. See the Chat API doc for precedence and a quick sanity‑check snippet.
+Configuration notes for providers: API keys are read from environment variables and from `.env`/`.ENV` files (project root or `tldw_Server_API/Config_Files/`), falling back to `Config_Files/config.txt` `[API]` entries. See the Chat API doc for precedence and a quick sanity-check snippet.
 
 ---
 

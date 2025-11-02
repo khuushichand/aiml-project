@@ -130,18 +130,18 @@ def temp_media_db():
     # Create temporary directory for database
     db_dir = tempfile.mkdtemp()
     db_path = os.path.join(db_dir, "test_media.db")
-    
+
     # Initialize MediaDatabase with test client ID
     db = MediaDatabase(
         db_path=db_path,
         client_id="test_client"
     )
-    
+
     # Initialize the database schema
     db.initialize_db()
-    
+
     yield db_path
-    
+
     # Cleanup
     try:
         db.close_connection()
@@ -199,7 +199,7 @@ def mock_chroma_client():
     """Create a mock ChromaDB client for unit tests."""
     mock_client = MagicMock()
     mock_collection = MagicMock()
-    
+
     # Setup collection behavior
     mock_collection.count.return_value = 0
     mock_collection.add.return_value = None
@@ -218,40 +218,38 @@ def mock_chroma_client():
         "documents": ["Test document 1"],
         "metadatas": [{"source": "test"}]
     }
-    
+
     mock_client.get_or_create_collection.return_value = mock_collection
     mock_client.list_collections.return_value = []
     mock_client.delete_collection.return_value = None
     mock_client.reset.return_value = None
-    
+
     return mock_client
 
 @pytest.fixture
 def chromadb_manager(mock_chroma_client, temp_media_db):
-    """Create a ChromaDBManager instance with mocked dependencies."""
-    # Patch both Client (current) and PersistentClient (legacy) so manager.client uses the mock
-    with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.Client') as _mock_client_cls, \
-         patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient') as _mock_pclient_cls:
-        _mock_client_cls.return_value = mock_chroma_client
-        _mock_pclient_cls.return_value = mock_chroma_client
-        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
-        manager = ChromaDBManager(
-            user_id="test_user",
-            user_embedding_config={
-                "USER_DB_BASE_DIR": base_dir,
-                "embedding_config": {
-                    "default_model_id": "text-embedding-ada-002",
-                    "models": {
-                        "text-embedding-ada-002": {
-                            "provider": "openai",
-                            "model_name_or_path": "text-embedding-ada-002"
-                        }
+    """Create a ChromaDBManager instance with mocked dependencies (constructor injection)."""
+    base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+    manager = ChromaDBManager(
+        user_id="test_user",
+        user_embedding_config={
+            "USER_DB_BASE_DIR": base_dir,
+            "embedding_config": {
+                "default_model_id": "text-embedding-ada-002",
+                "models": {
+                    "text-embedding-ada-002": {
+                        "provider": "openai",
+                        "model_name_or_path": "text-embedding-ada-002"
                     }
                 }
-            }
-        )
-        manager.db_path = temp_media_db
-        yield manager
+            },
+            # Ensure no accidental persistent client usage in this unit fixture
+            "chroma_client_settings": {"backend": "stub"},
+        },
+        client=mock_chroma_client,
+    )
+    manager.db_path = temp_media_db
+    yield manager
 
 @pytest.fixture
 def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):
@@ -446,7 +444,7 @@ def storage_worker(mock_queue, mock_chroma_client, temp_media_db):
         mock_instance = MagicMock()
         mock_instance.store_in_chroma.return_value = True
         mock_manager_class.return_value = mock_instance
-        
+
         worker = StorageWorker(
             worker_id="storage_test_1",
             input_queue=mock_queue,
@@ -522,13 +520,13 @@ def sample_media_content():
         "title": "Test Media Content",
         "content": """This is a comprehensive test document for ChromaDB integration.
         It contains multiple paragraphs to test chunking functionality.
-        
+
         The document includes various topics to test semantic search:
         - Vector databases and their importance
         - Machine learning applications
         - Natural language processing
         - Information retrieval systems
-        
+
         This content should be properly chunked and embedded for testing.""",
         "author": "Test Suite",
         "media_type": "document",
@@ -671,7 +669,7 @@ def populate_collection():
         texts = [f"Test document {i} with some content" for i in range(num_items)]
         embeddings = np.random.randn(num_items, embedding_dim).tolist()
         metadatas = [{"index": i, "test": True} for i in range(num_items)]
-        
+
         collection.add(
             ids=ids,
             documents=texts,
@@ -687,12 +685,12 @@ def assert_embeddings_similar():
     def _assert(emb1: List[float], emb2: List[float], tolerance: float = 0.01):
         """Assert two embeddings are similar."""
         assert len(emb1) == len(emb2), f"Embedding dimensions don't match: {len(emb1)} vs {len(emb2)}"
-        
+
         # Calculate cosine similarity
         dot_product = sum(a * b for a, b in zip(emb1, emb2))
         norm1 = sum(a * a for a in emb1) ** 0.5
         norm2 = sum(b * b for b in emb2) ** 0.5
-        
+
         if norm1 > 0 and norm2 > 0:
             similarity = dot_product / (norm1 * norm2)
             assert similarity > (1 - tolerance), f"Embeddings not similar enough: {similarity}"

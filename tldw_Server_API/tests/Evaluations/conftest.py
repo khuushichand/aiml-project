@@ -65,13 +65,13 @@ def temp_db_path() -> Generator[Path, None, None]:
     """Create a temporary database file with full schema for testing."""
     with tempfile.NamedTemporaryFile(suffix="_test_eval.db", delete=False) as f:
         db_path = Path(f.name)
-    
+
     # Use the actual EvaluationsDatabase to initialize the schema
     from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-    
+
     # This will create the database with the exact same schema as production
     eval_db = EvaluationsDatabase(str(db_path))
-    
+
     # Also ensure evaluation_manager tables exist
     from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
     # The manager will add any additional tables it needs
@@ -79,15 +79,15 @@ def temp_db_path() -> Generator[Path, None, None]:
     # Override the db path for the manager
     manager.db_path = str(db_path)
     manager._init_database()
-    
+
     yield db_path
-    
+
     # Cleanup - ensure all connections are closed before deleting
     try:
         # Force close any remaining connections
         import gc
         gc.collect()  # Force garbage collection of any remaining connections
-        
+
         if db_path.exists():
             db_path.unlink()
     except Exception as e:
@@ -103,16 +103,16 @@ def in_memory_db() -> Generator[sqlite3.Connection, None, None]:
     # since EvaluationsDatabase expects a file path
     with tempfile.NamedTemporaryFile(suffix="_test_mem.db", delete=False) as f:
         db_path = Path(f.name)
-    
+
     try:
         # Initialize using the production database class
         from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
         eval_db = EvaluationsDatabase(str(db_path))
-        
+
         # Now open a connection to use in tests
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        
+
         yield conn
         conn.close()
     finally:
@@ -132,10 +132,10 @@ def mock_openai_server():
     import time
     import requests
     from pathlib import Path
-    
+
     # Path to mock server
     mock_server_path = Path(__file__).parent.parent.parent.parent / "mock_openai_server"
-    
+
     # Start the mock server in background. Avoid PIPEs (to prevent blocking if
     # not consumed) and run in a new session to simplify cleanup.
     process = subprocess.Popen(
@@ -145,7 +145,7 @@ def mock_openai_server():
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    
+
     # Wait for server to start
     max_retries = 30
     for _ in range(max_retries):
@@ -159,9 +159,9 @@ def mock_openai_server():
     else:
         process.terminate()
         raise RuntimeError("Mock OpenAI server failed to start")
-    
+
     yield "http://localhost:8080"
-    
+
     # Cleanup
     try:
         process.terminate()
@@ -181,14 +181,14 @@ def mock_openai_config(mock_openai_server, monkeypatch):
     # Set environment variables to use mock server
     monkeypatch.setenv("OPENAI_API_BASE", mock_openai_server)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    
+
     # Patch the OpenAI base URL in the config
     import tldw_Server_API.app.core.config as config
     if hasattr(config, 'loaded_config_data'):
         if 'openai_api' in config.loaded_config_data:
             config.loaded_config_data['openai_api']['base_url'] = mock_openai_server
             config.loaded_config_data['openai_api']['api_key'] = "test-key"
-    
+
     return mock_openai_server
 
 
@@ -199,11 +199,11 @@ def mock_openai_config(mock_openai_server, monkeypatch):
 @pytest.fixture(scope="function")
 def mock_rate_limiter(monkeypatch):
     """Mock rate limiter to prevent 429 errors in tests.
-    
+
     Use this fixture explicitly in tests that need to bypass rate limiting.
     """
     from unittest.mock import Mock, AsyncMock
-    
+
     # Create a mock rate limiter that always allows requests
     mock_limiter = Mock()
     mock_limiter.check_rate_limit = AsyncMock(return_value=(True, {"remaining": 100, "reset_at": None}))
@@ -214,28 +214,28 @@ def mock_rate_limiter(monkeypatch):
         "usage": {"evaluations": 0},
         "reset_at": None
     })
-    
+
     # Mock the get_rate_limiter_dep to return our mock
     async def mock_get_rate_limiter_dep():
         return mock_limiter
-    
+
     monkeypatch.setattr(
         "tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_rate_limiter_dep",
         mock_get_rate_limiter_dep
     )
-    
+
     # Also mock the actual check_evaluation_rate_limit function
     async def mock_check_evaluation_rate_limit(request, rate_limiter=None):
         # Always allow - no rate limiting in tests
         return None
-    
+
     monkeypatch.setattr(
         "tldw_Server_API.app.api.v1.endpoints.evaluations_unified.check_evaluation_rate_limit",
         mock_check_evaluation_rate_limit
     )
-    
+
     # Legacy evals and evals_openai endpoints removed; no additional patching required
-    
+
     return mock_limiter
 
 
@@ -382,18 +382,18 @@ async def flaky_webhook_receiver_server():
 @pytest.fixture(scope="function")
 def mock_llm_analyze(monkeypatch):
     """Mock the analyze function to avoid real OpenAI API calls in unit tests.
-    
+
     Use this fixture explicitly in unit tests that need to mock LLM calls.
     """
     from unittest.mock import AsyncMock
-    
+
     # Create a mock analyze function that returns realistic scores
     # The actual signature: analyze(api_name, input_data, custom_prompt_arg, api_key="", system_message="", temp=0.1)
     def mock_analyze(api_name, input_data, custom_prompt_arg="", api_key="", system_message="", temp=0.1, **kwargs):
         """Mock analyze function that returns scores based on content."""
         # Check both input_data and custom_prompt_arg for keywords
         combined_text = f"{input_data} {custom_prompt_arg}".lower()
-        
+
         # Return different scores based on the prompt content for variety
         if "relevance" in combined_text:
             return "4.3"
@@ -407,13 +407,13 @@ def mock_llm_analyze(monkeypatch):
             return "4.5"
         else:
             return "4.0"  # Default score
-    
+
     # Patch the analyze function in the rag_evaluator module
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Evaluations.rag_evaluator.analyze",
         mock_analyze
     )
-    
+
     # Also patch it in response_quality_evaluator if it exists
     try:
         monkeypatch.setattr(
@@ -422,14 +422,14 @@ def mock_llm_analyze(monkeypatch):
         )
     except:
         pass  # Module might not import it
-    
+
     return mock_analyze
 
 
 @pytest.fixture(scope="function")
 def local_embeddings_config():
     """Configure tests to use local embeddings model.
-    
+
     Uses sentence-transformers with a small, fast model that doesn't require API keys.
     """
     return {
@@ -442,12 +442,12 @@ def local_embeddings_config():
 @pytest.fixture(scope="function")
 def mock_embeddings(monkeypatch):
     """Mock embedding creation for unit tests that don't need real embeddings.
-    
+
     Use this fixture explicitly in unit tests. For integration tests,
     use local_embeddings_config instead.
     """
     import numpy as np
-    
+
     def mock_create_embedding(text, provider="openai", model="text-embedding-3-small", api_key=None):
         """Generate deterministic fake embeddings based on text hash."""
         # Generate a deterministic embedding based on the input text
@@ -457,13 +457,13 @@ def mock_embeddings(monkeypatch):
         np.random.seed(seed)
         # Return 384 dimensions for all-MiniLM-L6-v2 compatibility
         return np.random.randn(384).tolist()
-    
+
     # Patch the create_embedding function
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding",
         mock_create_embedding
     )
-    
+
     return mock_create_embedding
 
 # ============================================================================
@@ -475,22 +475,22 @@ def setup_auth_db(tmp_path):
     """Setup auth database for tests that need authentication."""
     # Import here to avoid circular imports
     from tldw_Server_API.app.core.AuthNZ.migrations import migration_001_create_users_table
-    
+
     # Create a temporary auth database
     auth_db_path = tmp_path / "test_auth.db"
-    
+
     # Initialize using the migration function
     conn = sqlite3.connect(str(auth_db_path))
-    
+
     # Use the actual migration which creates proper SQLite schema
     migration_001_create_users_table(conn)
-    
+
     # Note: The migration creates the users table with INTEGER for is_active
     # which is the correct SQLite type (not BOOLEAN)
-    
+
     conn.commit()
     conn.close()
-    
+
     yield auth_db_path
 
 @pytest.fixture(scope="function")
@@ -498,11 +498,11 @@ def evaluation_manager(temp_db_path, monkeypatch) -> EvaluationManager:
     """Create an EvaluationManager instance with test database."""
     # Import here to avoid circular imports
     from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-    
+
     # Initialize the database using the actual function from the module
     eval_db = EvaluationsDatabase(str(temp_db_path))
     # Note: Database is initialized in __init__, no need to call again
-    
+
     # Ensure the manager uses our temp database, not production
     # Mock the config to return our temp path
     def mock_get_db_path(self, explicit_path=None):
@@ -512,11 +512,11 @@ def evaluation_manager(temp_db_path, monkeypatch) -> EvaluationManager:
             except Exception:
                 return temp_db_path
         return temp_db_path
-    
+
     # Now create the manager with mocked path
     monkeypatch.setattr(EvaluationManager, "_get_db_path", mock_get_db_path)
     manager = EvaluationManager()
-    
+
     return manager
 
 
@@ -831,7 +831,7 @@ def auth_headers() -> Dict[str, str]:
     # Get the actual API key from settings
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
-    
+
     return {
         "X-API-KEY": settings.SINGLE_USER_API_KEY,
         "Content-Type": "application/json"
@@ -858,19 +858,19 @@ def event_loop():
 def performance_timer():
     """Provide a timer for performance testing."""
     import time
-    
+
     class Timer:
         def __init__(self):
             self.start_time = None
             self.end_time = None
-        
+
         def start(self):
             self.start_time = time.perf_counter()
-        
+
         def stop(self):
             self.end_time = time.perf_counter()
             return self.elapsed
-        
+
         @property
         def elapsed(self):
             if self.start_time is None:
@@ -878,7 +878,7 @@ def performance_timer():
             if self.end_time is None:
                 return time.perf_counter() - self.start_time
             return self.end_time - self.start_time
-    
+
     return Timer()
 
 
@@ -894,14 +894,14 @@ def reset_singletons():
     # _delivery_stats, _user_requests, or _user_tiers attributes.
     # If cleanup is needed, it should be done via database operations or
     # by creating new instances with clean test databases.
-    
+
     # Set connection pool limits to prevent file descriptor exhaustion
     import sqlite3
     # Limit the number of connections that can be cached
     sqlite3.connect(':memory:').execute('PRAGMA max_page_count = 1000')
-    
+
     yield
-    
+
     # Cleanup after test - force garbage collection to close connections
     import gc
     gc.collect()
@@ -916,7 +916,7 @@ def evaluation_data_generator():
     """Generate random evaluation data for property testing."""
     import random
     import string
-    
+
     def generate():
         return {
             "name": ''.join(random.choices(string.ascii_letters, k=10)),
@@ -934,7 +934,7 @@ def evaluation_data_generator():
                 for _ in range(random.randint(1, 5))
             ]
         }
-    
+
     return generate
 
 
@@ -942,7 +942,7 @@ def evaluation_data_generator():
 def mock_rag_evaluator(monkeypatch):
     """Mock RAGEvaluator for unit tests."""
     from unittest.mock import AsyncMock
-    
+
     # Mock the LLM analyze function for RAG tests
     def mock_analyze(*args, **kwargs):
         # Return scores based on what's being evaluated
@@ -955,16 +955,16 @@ def mock_rag_evaluator(monkeypatch):
             return "0.88"
         else:
             return "0.8"
-    
+
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib.analyze",
         mock_analyze
     )
-    
+
     # Mock embedding similarity if needed
     async def mock_compute_similarity(*args, **kwargs):
         return 0.85
-    
+
     return mock_analyze
 
 
@@ -979,12 +979,12 @@ def auto_mock_llm_for_unit_tests(request, monkeypatch):
             if 'faithfulness' in combined_text:
                 return "4.7"  # Use same value as mock_llm_analyze
             elif 'relevance' in combined_text:
-                return "4.3"  
+                return "4.3"
             elif 'similarity' in combined_text:
                 return "0.88"
             else:
                 return "4.0"
-        
+
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib.analyze",
             mock_analyze
@@ -996,7 +996,7 @@ def mock_llm_for_requires_llm(request, monkeypatch):
     """Automatically mock LLM calls for tests marked with requires_llm."""
     if "requires_llm" in [m.name for m in request.node.iter_markers()]:
         from unittest.mock import MagicMock, AsyncMock
-        
+
         # Mock the run_geval function to return proper structured data
         def mock_run_geval(*args, **kwargs):
             return {
@@ -1015,7 +1015,7 @@ def mock_llm_for_requires_llm(request, monkeypatch):
                     "relevance": "Covers main points"
                 }
             }
-        
+
         # Mock the RAG evaluator
         async def mock_rag_evaluate(*args, **kwargs):
             return {
@@ -1033,8 +1033,8 @@ def mock_llm_for_requires_llm(request, monkeypatch):
                     "Response could be more detailed"
                 ]
             }
-        
-        # Mock the response quality evaluator  
+
+        # Mock the response quality evaluator
         async def mock_response_quality_evaluate(*args, **kwargs):
             return {
                 "metrics": {
@@ -1048,11 +1048,11 @@ def mock_llm_for_requires_llm(request, monkeypatch):
                 "issues": [],
                 "suggestions": ["Consider adding more detail"]
             }
-        
+
         # Mock the LLM calls in Summarization_General_Lib
         def mock_analyze(*args, **kwargs):
             return "4"  # Return a simple score string
-            
+
         # Apply mocks
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Evaluations.ms_g_eval.run_geval",

@@ -181,4 +181,3 @@ class CompositeScorer(URLScorer):
             total /= float(len(self.scorers))
         self._cache[url] = total
         return total
-

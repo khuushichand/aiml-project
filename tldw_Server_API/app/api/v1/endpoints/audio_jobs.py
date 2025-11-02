@@ -10,6 +10,7 @@ try:
 except Exception:  # pragma: no cover - fallback for older environments
     model_validator = None  # type: ignore
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -74,6 +75,10 @@ async def submit_audio_job(
     - url → audio_download
     - local_path → audio_convert
     """
+    # Correlation IDs
+    rid = ensure_request_id(request) if request is not None else None
+    tp = ensure_traceparent(request) if request is not None else ""
+
     try:
         # Determine backend from env similar to jobs admin
         import os
@@ -94,13 +99,6 @@ async def submit_audio_job(
         else:
             payload["local_path"] = req.local_path.strip()
 
-        # Correlation IDs from middleware
-        rid = None
-        try:
-            if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
-                rid = str(request.state.request_id)
-        except Exception:
-            rid = None
         row = jm.create_job(
             domain="audio",
             queue="default",
@@ -110,6 +108,9 @@ async def submit_audio_job(
             priority=5,
             max_retries=3,
             request_id=rid,
+        )
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio", traceparent=tp).info(
+            "Submitted audio job: job_id=%s type=%s", row.get("id"), job_type
         )
         return SubmitAudioJobResponse(
             id=int(row.get("id")),
@@ -122,7 +123,9 @@ async def submit_audio_job(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to submit audio job: {e}")
+        get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio", traceparent=tp).error(
+            "Failed to submit audio job: %s", e
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit job")
 
 
@@ -349,6 +352,7 @@ class OwnerProcessingSummary(BaseModel):
 async def owner_processing_summary(
     owner_user_id: str,
     _=Depends(require_admin),
+    request: Request = None,
 ):
     try:
         import os
@@ -375,12 +379,27 @@ async def owner_processing_summary(
         finally:
             conn.close()
         # Limit
+        # Correlate logs with request_id if available
+        rid = ensure_request_id(request) if request is not None else None
+
         try:
             from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user
             limits = await get_limits_for_user(int(owner_user_id))
-            limit = int(limits.get("concurrent_jobs") or 0)
-        except Exception:
+        except (ImportError, ValueError, KeyError, RuntimeError) as e:
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                "Failed to get limits for owner %s; returning limit=None: %s", owner_user_id, e
+            )
+            limits = None
+        if limits is None:
             limit = None
+        else:
+            try:
+                limit = int(limits.get("concurrent_jobs") or 0)
+            except (ValueError, TypeError) as e:
+                get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
+                    "Could not parse concurrent_jobs limit for owner %s; returning limit=None: %s", owner_user_id, e
+                )
+                limit = None
         return OwnerProcessingSummary(owner_user_id=str(owner_user_id), processing=processing, limit=limit)
     except HTTPException:
         raise

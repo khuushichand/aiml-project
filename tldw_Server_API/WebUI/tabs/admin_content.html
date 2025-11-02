@@ -6,20 +6,20 @@
             <span class="endpoint-path">/api/v1/admin/users - List Users</span>
         </h2>
         <p>List all users with pagination and filtering.</p>
-        
+
         <div class="columns">
             <div class="column">
                 <div class="form-group">
                     <label for="adminUsersList_limit">Limit:</label>
                     <input type="number" id="adminUsersList_limit" value="20" min="1" max="100">
                 </div>
-                
+
                 <div class="form-group">
                     <label for="adminUsersList_offset">Offset:</label>
                     <input type="number" id="adminUsersList_offset" value="0" min="0">
                 </div>
             </div>
-            
+
             <div class="column">
                 <div class="form-group">
                     <label for="adminUsersList_role">Filter by Role:</label>
@@ -30,7 +30,7 @@
                         <option value="moderator">Moderator</option>
                     </select>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="adminUsersList_status">Filter by Status:</label>
                     <select id="adminUsersList_status">
@@ -42,14 +42,14 @@
                 </div>
             </div>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('adminUsersList', 'GET', '/api/v1/admin/users', 'query')">
             List Users
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="adminUsersList_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="adminUsersList_response">---</pre>
     </div>
@@ -365,7 +365,7 @@
                     </div>
                     <div class="form-group">
                         <label for="monWl_name">Name:</label>
-                        <input id="monWl_name" type="text" placeholder="Kid-Safe Defaults — Custom" />
+                        <input id="monWl_name" type="text" placeholder="Kid-Safe Defaults - Custom" />
                     </div>
                     <div class="form-group">
                         <label for="monWl_desc">Description:</label>
@@ -522,7 +522,7 @@
                 <div class="column">
                     <div class="form-group">
                         <label>Last Update:</label>
-                        <span id="monAlerts_last_update">—</span>
+                        <span id="monAlerts_last_update">-</span>
                     </div>
                 </div>
             </div>
@@ -709,7 +709,7 @@
                     if (!id) { Toast.error(`Enter a ${scopeType} id`); return; }
                     const listed = await apiClient.get('/api/v1/monitoring/watchlists');
                     const wls = (listed && listed.watchlists) || [];
-                    // Select global defaults (Kid-Safe Defaults — ...)
+                    // Select global defaults (Kid-Safe Defaults - ...)
                     const defaults = wls.filter(w => (w.name || '').startsWith('Kid-Safe Defaults'));
                     if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
                     let created = 0;
@@ -1009,7 +1009,7 @@
                 <div class="column">
                     <div class="form-group">
                         <label>Last Update:</label>
-                        <span id="monNotif_last_update">—</span>
+                        <span id="monNotif_last_update">-</span>
                         <span id="monNotif_updated" style="margin-left:8px;color:#28a745;"></span>
                     </div>
                 </div>
@@ -1441,7 +1441,7 @@
         <p style="font-size: 0.9em; color: #666; margin-top: -6px;">
             Tip: Managed operations require sending the current ETag in an <code>If-Match</code> header.
             Click <strong>Load</strong> to refresh and keep the ETag up to date. If someone else updates the list first,
-            your append/delete will return <code>412 Precondition Failed</code>—just reload and try again.
+            your append/delete will return <code>412 Precondition Failed</code>-just reload and try again.
         </p>
 
         <div class="columns">
@@ -1983,19 +1983,19 @@
             <span class="endpoint-path">/api/v1/admin/users/{user_id} - Get User</span>
         </h2>
         <p>Get detailed information about a specific user.</p>
-        
+
         <div class="form-group">
             <label for="adminUserGet_id">User ID <span class="required">*</span>:</label>
             <input type="text" id="adminUserGet_id" placeholder="user123">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('adminUserGet', 'GET', '/api/v1/admin/users/{id}', 'none')">
             Get User
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="adminUserGet_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="adminUserGet_response">---</pre>
     </div>
@@ -2048,7 +2048,7 @@
 
         <h3>Keys:</h3>
         <div id="adminUserApiKeys_list"></div>
-        
+
         <h3>Update Limits</h3>
         <div class="columns">
             <div class="column">
@@ -2255,12 +2255,12 @@
             <span class="endpoint-path">/api/v1/admin/users/{user_id} - Update User</span>
         </h2>
         <p>Update user information and settings.</p>
-        
+
         <div class="form-group">
             <label for="adminUserUpdate_id">User ID <span class="required">*</span>:</label>
             <input type="text" id="adminUserUpdate_id" placeholder="user123">
         </div>
-        
+
         <div class="form-group">
             <label for="adminUserUpdate_payload">Update Payload (JSON):</label>
             <textarea id="adminUserUpdate_payload" class="code-input" rows="10">{
@@ -2274,14 +2274,14 @@
   }
 }</textarea>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('adminUserUpdate', 'PUT', '/api/v1/admin/users/{id}', 'json')">
             Update User
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="adminUserUpdate_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="adminUserUpdate_response">---</pre>
     </div>
@@ -2292,19 +2292,19 @@
             <span class="endpoint-path">/api/v1/admin/users/{user_id} - Delete User</span>
         </h2>
         <p>Delete a user account.</p>
-        
+
         <div class="form-group">
             <label for="adminUserDelete_id">User ID <span class="required">*</span>:</label>
             <input type="text" id="adminUserDelete_id" placeholder="user123">
         </div>
-        
+
         <button class="api-button btn-danger" onclick="if(confirm('Are you sure you want to delete this user?')) makeRequest('adminUserDelete', 'DELETE', '/api/v1/admin/users/{id}', 'none')">
             Delete User
         </button>
-        
+
         <h3>cURL Command:</h3>
         <pre id="adminUserDelete_curl">---</pre>
-        
+
         <h3>Response:</h3>
         <pre id="adminUserDelete_response">---</pre>
     </div>
@@ -2443,7 +2443,7 @@
     <div class="endpoint-section" id="adminSystemStatus">
         <h2>System Status and Health Checks</h2>
         <p>Monitor system health and status across all services.</p>
-        
+
         <div class="btn-group">
             <button class="btn btn-primary" onclick="makeRequest('healthMain', 'GET', '/health', 'none')">
                 Main Health Check
@@ -2458,7 +2458,7 @@
                 Web Scraping Status
             </button>
         </div>
-        
+
         <h3>Response:</h3>
         <pre id="adminSystemStatus_response">---</pre>
     </div>
@@ -3008,7 +3008,7 @@
 
         <div class="columns" style="align-items:center; margin: 4px 0 12px 0;">
             <div class="column">
-                <span id="rbacRolesInfo">Roles: –</span>
+                <span id="rbacRolesInfo">Roles: -</span>
                 <span id="rbacRolesNote" style="opacity:0.75; margin-left:8px;"></span>
             </div>
             <div class="column">
@@ -3170,7 +3170,7 @@
             const { limit, offset } = _getRolesLimitOffset();
             const start = total ? Math.min(total, offset + 1) : (offset + 1);
             const end = total ? Math.min(total, offset + rolesReturned) : (offset + rolesReturned);
-            const text = total ? `Roles: ${start}–${end} of ${total}` : `Roles: ${start}–${end}`;
+            const text = total ? `Roles: ${start}-${end} of ${total}` : `Roles: ${start}-${end}`;
             info.textContent = text;
             // Update pager disabled states
             const prevBtn = document.getElementById('rbacPrevBtn');
@@ -3657,7 +3657,7 @@ async function _ensurePermissionCategories() {
 <div id="tabAdminUserPermissions" class="tab-content">
     <div class="endpoint-section" id="adminUserPerms">
         <h2>User Permissions Editor</h2>
-        <p>Search for a user, manage their roles, and set per‑permission overrides. Admin access required.</p>
+        <p>Search for a user, manage their roles, and set per-permission overrides. Admin access required.</p>
 
         <div class="columns" style="margin-bottom: 8px;">
             <div class="column">

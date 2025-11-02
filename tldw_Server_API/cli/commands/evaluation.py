@@ -39,45 +39,45 @@ def eval_group():
 def geval(ctx, text, summary, provider, model, api_key, save, output_format):
     """
     Run G-Eval summarization assessment.
-    
+
     Evaluates the quality of a summary against the original text using
     G-Eval methodology with multiple criteria including relevance,
     consistency, fluency, and coherence.
-    
+
     Arguments:
         TEXT    Original text to evaluate against
         SUMMARY Summary text to evaluate
-    
+
     Examples:
         tldw-evals eval geval "Original text..." "Summary text..."
         tldw-evals eval geval "file://input.txt" "file://summary.txt"
         tldw-evals eval geval "text" "summary" --provider anthropic --no-save
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Load text from files if needed
         text_content = _load_text_content(text)
         summary_content = _load_text_content(summary)
-        
+
         if not cli_context.quiet:
             print_info(f"Running G-Eval assessment with {provider}...")
-        
+
         # Run evaluation
         result = _run_geval_assessment(
             text_content, summary_content, provider, model, api_key, save, cli_context.config
         )
-        
+
         # Display results
         if output_format == 'json':
             print_json(result, "G-Eval Results")
         else:
             print_evaluation_results(result)
-        
+
         print_success("G-Eval assessment completed successfully")
-        
+
     except Exception as e:
         logger.exception("G-Eval assessment failed")
         print_error(f"G-Eval assessment failed: {e}")
@@ -97,46 +97,46 @@ def geval(ctx, text, summary, provider, model, api_key, save, output_format):
 def rag_eval(ctx, query, context, response, provider, model, api_key, save, output_format):
     """
     Run RAG (Retrieval-Augmented Generation) evaluation.
-    
+
     Evaluates RAG system performance by assessing context relevance,
     answer faithfulness, answer relevance, and overall quality.
-    
+
     Arguments:
         QUERY    User query/question
         CONTEXT  Retrieved context/documents
         RESPONSE Generated response/answer
-    
+
     Examples:
         tldw-evals eval rag "What is AI?" "Context about AI..." "AI response..."
         tldw-evals eval rag "file://query.txt" "file://context.txt" "file://response.txt"
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Load content from files if needed
         query_content = _load_text_content(query)
         context_content = _load_text_content(context)
         response_content = _load_text_content(response)
-        
+
         if not cli_context.quiet:
             print_info(f"Running RAG evaluation with {provider}...")
-        
+
         # Run evaluation
         result = _run_rag_evaluation(
             query_content, context_content, response_content,
             provider, model, api_key, save, cli_context.config
         )
-        
+
         # Display results
         if output_format == 'json':
             print_json(result, "RAG Evaluation Results")
         else:
             print_evaluation_results(result)
-        
+
         print_success("RAG evaluation completed successfully")
-        
+
     except Exception as e:
         logger.exception("RAG evaluation failed")
         print_error(f"RAG evaluation failed: {e}")
@@ -156,44 +156,44 @@ def rag_eval(ctx, query, context, response, provider, model, api_key, save, outp
 def quality_eval(ctx, text, response, provider, model, api_key, criteria, save, output_format):
     """
     Run response quality evaluation.
-    
+
     Evaluates response quality across multiple dimensions including
     accuracy, completeness, clarity, relevance, and helpfulness.
-    
+
     Arguments:
         TEXT     Original text/prompt
         RESPONSE Response to evaluate
-    
+
     Examples:
         tldw-evals eval quality "Question..." "Answer..."
         tldw-evals eval quality "text" "response" --criteria accuracy --criteria clarity
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Load content from files if needed
         text_content = _load_text_content(text)
         response_content = _load_text_content(response)
-        
+
         if not cli_context.quiet:
             print_info(f"Running response quality evaluation with {provider}...")
-        
+
         # Run evaluation
         result = _run_quality_evaluation(
             text_content, response_content, provider, model, api_key,
             list(criteria) if criteria else None, save, cli_context.config
         )
-        
+
         # Display results
         if output_format == 'json':
             print_json(result, "Quality Evaluation Results")
         else:
             print_evaluation_results(result)
-        
+
         print_success("Quality evaluation completed successfully")
-        
+
     except Exception as e:
         logger.exception("Quality evaluation failed")
         print_error(f"Quality evaluation failed: {e}")
@@ -212,49 +212,49 @@ def quality_eval(ctx, text, response, provider, model, api_key, criteria, save, 
 def batch_eval(ctx, input_file, output, provider, model, api_key, parallel, output_format):
     """
     Run batch evaluations from input file.
-    
+
     Processes multiple evaluations from a JSON or JSONL input file.
     Each line/entry should contain evaluation parameters.
-    
+
     Input file format (JSONL):
         {"type": "geval", "text": "...", "summary": "...", "provider": "openai"}
         {"type": "rag", "query": "...", "context": "...", "response": "..."}
         {"type": "quality", "text": "...", "response": "...", "criteria": ["accuracy"]}
-    
+
     Examples:
         tldw-evals eval batch evaluations.jsonl
         tldw-evals eval batch batch_input.json --output results.json --parallel 3
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Load batch input
         batch_data = _load_batch_input(input_file)
-        
+
         if not cli_context.quiet:
             print_info(f"Processing {len(batch_data)} evaluations with {parallel} parallel workers...")
-        
+
         # Run batch evaluation
         results = _run_batch_evaluation(
             batch_data, provider, model, api_key, parallel, cli_context.config, not cli_context.quiet
         )
-        
+
         # Save results if output file specified
         if output:
             _save_batch_results(results, output)
             if not cli_context.quiet:
                 print_success(f"Results saved to {output}")
-        
+
         # Display summary
         if output_format == 'json':
             print_json(results, "Batch Evaluation Results")
         else:
             _display_batch_summary(results)
-        
+
         print_success(f"Batch evaluation completed: {len(results)} evaluations processed")
-        
+
     except Exception as e:
         logger.exception("Batch evaluation failed")
         print_error(f"Batch evaluation failed: {e}")
@@ -274,42 +274,42 @@ def batch_eval(ctx, input_file, output, provider, model, api_key, parallel, outp
 def custom_eval(ctx, metric_name, text, prompt, provider, model, api_key, save, output_format):
     """
     Run custom metric evaluation.
-    
+
     Evaluates text using a custom metric with optional custom prompt.
     Useful for domain-specific or specialized evaluation criteria.
-    
+
     Arguments:
         METRIC_NAME Name of the custom metric
         TEXT        Text to evaluate
-    
+
     Examples:
         tldw-evals eval custom "creativity" "Story text..." --prompt "Rate creativity 1-10"
         tldw-evals eval custom "technical_accuracy" "file://technical_doc.txt"
     """
     cli_context = ctx.obj['cli_context']
-    
+
     try:
         cli_context.load_config()
-        
+
         # Load text content
         text_content = _load_text_content(text)
-        
+
         if not cli_context.quiet:
             print_info(f"Running custom evaluation '{metric_name}' with {provider}...")
-        
+
         # Run evaluation
         result = _run_custom_evaluation(
             metric_name, text_content, prompt, provider, model, api_key, save, cli_context.config
         )
-        
+
         # Display results
         if output_format == 'json':
             print_json(result, f"Custom Evaluation Results: {metric_name}")
         else:
             print_evaluation_results(result)
-        
+
         print_success(f"Custom evaluation '{metric_name}' completed successfully")
-        
+
     except Exception as e:
         logger.exception("Custom evaluation failed")
         print_error(f"Custom evaluation failed: {e}")
@@ -331,7 +331,7 @@ def custom_eval(ctx, metric_name, text, prompt, provider, model, api_key, save, 
 def label_choice(ctx, question, labels, context, expected, provider, model, api_key, json_mode, mapping, output_format):
     """
     Run label-choice evaluation (single sample).
-    
+
     The model must return exactly one of the allowed labels.
     """
     cli_context = ctx.obj['cli_context']
@@ -459,7 +459,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
 def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_key, json_mode, mapping, output_format):
     """
     Run NLI-style factuality check (single sample).
-    
+
     Labels typically: SUPPORTED, REFUTED, NEI.
     """
     cli_context = ctx.obj['cli_context']
@@ -590,7 +590,7 @@ def _load_text_content(input_str: str) -> str:
         file_path = Path(input_str[7:])  # Remove 'file://' prefix
         if not file_path.exists():
             raise click.ClickException(f"File not found: {file_path}")
-        
+
         try:
             return file_path.read_text(encoding='utf-8')
         except Exception as e:
@@ -599,16 +599,16 @@ def _load_text_content(input_str: str) -> str:
         return input_str
 
 
-def _run_geval_assessment(text: str, summary: str, provider: str, model: str, 
+def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
                          api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
     """Run G-Eval assessment."""
     try:
         from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
-        
+
         # Extract API key from config if not provided
         if not api_key:
             api_key = _get_api_key_from_config(config, provider)
-        
+
         result = run_geval(
             transcript=text,
             summary=summary,
@@ -616,7 +616,7 @@ def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
             api_name=provider,
             save=save
         )
-        
+
         return {
             'evaluation_type': 'geval',
             'evaluation_id': result.get('evaluation_id'),
@@ -626,31 +626,31 @@ def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
             'metrics': result.get('metrics', {}),
             'details': result
         }
-        
+
     except Exception as e:
         logger.error(f"G-Eval execution failed: {e}")
         raise
 
 
-def _run_rag_evaluation(query: str, context: str, response: str, provider: str, 
+def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
                        model: str, api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
     """Run RAG evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
-        
+
         # Extract API key from config if not provided
         if not api_key:
             api_key = _get_api_key_from_config(config, provider)
-        
+
         evaluator = RAGEvaluator(api_key=api_key, api_name=provider)
-        
+
         result = asyncio.run(evaluator.evaluate(
             query=query,
             contexts=[context],  # RAGEvaluator expects a list
             response=response,
             save_results=save
         ))
-        
+
         return {
             'evaluation_type': 'rag',
             'evaluation_id': result.get('evaluation_id'),
@@ -660,32 +660,32 @@ def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
             'metrics': result.get('metrics', {}),
             'details': result
         }
-        
+
     except Exception as e:
         logger.error(f"RAG evaluation execution failed: {e}")
         raise
 
 
 def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
-                           api_key: str, criteria: Optional[List[str]], save: bool, 
+                           api_key: str, criteria: Optional[List[str]], save: bool,
                            config: Dict[str, Any]) -> Dict[str, Any]:
     """Run response quality evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
-        
+
         # Extract API key from config if not provided
         if not api_key:
             api_key = _get_api_key_from_config(config, provider)
-        
+
         evaluator = ResponseQualityEvaluator(api_key=api_key, api_name=provider)
-        
+
         result = asyncio.run(evaluator.evaluate(
             original_text=text,
             response_text=response,
             criteria=criteria,
             save_results=save
         ))
-        
+
         return {
             'evaluation_type': 'quality',
             'evaluation_id': result.get('evaluation_id'),
@@ -695,7 +695,7 @@ def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
             'metrics': result.get('metrics', {}),
             'details': result
         }
-        
+
     except Exception as e:
         logger.error(f"Quality evaluation execution failed: {e}")
         raise
@@ -706,13 +706,13 @@ def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: s
     """Run custom metric evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-        
+
         # Extract API key from config if not provided
         if not api_key:
             api_key = _get_api_key_from_config(config, provider)
-        
+
         eval_manager = EvaluationManager()
-        
+
         result = asyncio.run(eval_manager.evaluate_custom_metric(
             text=text,
             metric_name=metric_name,
@@ -721,7 +721,7 @@ def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: s
             api_name=provider,
             save_results=save
         ))
-        
+
         return {
             'evaluation_type': 'custom',
             'metric_name': metric_name,
@@ -732,7 +732,7 @@ def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: s
             'metrics': result.get('metrics', {}),
             'details': result
         }
-        
+
     except Exception as e:
         logger.error(f"Custom evaluation execution failed: {e}")
         raise
@@ -742,7 +742,7 @@ def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
     """Load batch input from file."""
     try:
         content = input_file.read_text(encoding='utf-8')
-        
+
         # Try JSON first
         try:
             data = json.loads(content)
@@ -752,7 +752,7 @@ def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
                 return [data]
         except json.JSONDecodeError:
             pass
-        
+
         # Try JSONL
         batch_data = []
         for line_num, line in enumerate(content.strip().split('\n'), 1):
@@ -761,9 +761,9 @@ def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
                     batch_data.append(json.loads(line))
                 except json.JSONDecodeError as e:
                     raise click.ClickException(f"Invalid JSON on line {line_num}: {e}")
-        
+
         return batch_data
-        
+
     except Exception as e:
         raise click.ClickException(f"Failed to load batch input file: {e}")
 
@@ -773,11 +773,11 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
                          config: Dict[str, Any], show_progress: bool) -> List[Dict[str, Any]]:
     """Run batch evaluation with progress tracking."""
     results = []
-    
+
     if show_progress:
         with print_progress_bar(len(batch_data), "Evaluating") as progress:
             task = progress.add_task("Processing evaluations...", total=len(batch_data))
-            
+
             for i, eval_spec in enumerate(batch_data):
                 try:
                     result = _run_single_evaluation(eval_spec, default_provider, default_model, default_api_key, config)
@@ -790,7 +790,7 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
                         'error': str(e),
                         'input': eval_spec
                     })
-                
+
                 progress.update(task, advance=1)
     else:
         for i, eval_spec in enumerate(batch_data):
@@ -805,7 +805,7 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
                     'error': str(e),
                     'input': eval_spec
                 })
-    
+
     return results
 
 
@@ -835,7 +835,7 @@ def _run_single_evaluation(eval_spec: Dict[str, Any], default_provider: str,
     model = eval_spec.get('model', default_model)
     api_key = eval_spec.get('api_key', default_api_key)
     save = eval_spec.get('save', True)
-    
+
     if eval_type == 'geval':
         return _run_geval_assessment(
             eval_spec['text'], eval_spec['summary'],
@@ -864,10 +864,10 @@ def _save_batch_results(results: List[Dict[str, Any]], output_file: Path):
     """Save batch results to file."""
     try:
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str)
-            
+
     except Exception as e:
         raise click.ClickException(f"Failed to save results to {output_file}: {e}")
 
@@ -876,16 +876,16 @@ def _display_batch_summary(results: List[Dict[str, Any]]):
     """Display batch evaluation summary."""
     successful = sum(1 for r in results if r.get('status') != 'failed')
     failed = len(results) - successful
-    
+
     summary_data = [
         {'Metric': 'Total Evaluations', 'Count': len(results)},
         {'Metric': 'Successful', 'Count': successful},
         {'Metric': 'Failed', 'Count': failed},
         {'Metric': 'Success Rate', 'Count': f"{successful/len(results)*100:.1f}%" if results else "0%"}
     ]
-    
+
     print_table(summary_data, "Batch Evaluation Summary")
-    
+
     if failed > 0:
         print_info(f"Check logs for details on {failed} failed evaluation(s)")
 
@@ -901,18 +901,18 @@ def _get_api_key_from_config(config: Dict[str, Any], provider: str) -> Optional[
         'cohere': 'COHERE_API_KEY',
         'groq': 'GROQ_API_KEY'
     }
-    
+
     key_name = provider_key_map.get(provider.lower())
     if key_name:
         # Try to get from config
         for section, values in config.items():
             if isinstance(values, dict) and key_name in values:
                 return values[key_name]
-        
+
         # Try environment variable
         import os
         return os.getenv(key_name)
-    
+
     return None
 @eval_group.command('ocr')
 @click.option('--items-file', type=click.Path(exists=True, readable=True, path_type=Path), help='JSON/JSONL with items: {id, extracted_text|pdf_path, ground_truth_text}')

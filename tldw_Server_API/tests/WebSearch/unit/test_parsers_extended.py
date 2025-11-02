@@ -49,4 +49,3 @@ def test_parse_tavily_results_maps_fields():
     assert r["metadata"]["author"] == "A"
     assert r["metadata"]["language"] == "en"
     assert r["metadata"]["relevance_score"] == 0.8
-

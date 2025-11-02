@@ -43,4 +43,3 @@ def test_cycle_detection_blocks_definition(client_with_wf: TestClient):
     r = client.post("/api/v1/workflows", json=definition)
     assert r.status_code == 422
     assert "cycle" in r.json().get("detail", "").lower()
-

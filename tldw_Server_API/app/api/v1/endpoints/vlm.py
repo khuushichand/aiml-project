@@ -20,4 +20,3 @@ def list_vlm_backends() -> Dict[str, Any]:
     """List available VLM backends with lightweight health information."""
     out = _list_backends()
     return out
-

@@ -20,4 +20,3 @@ def test_admin_reload_pricing_catalog_smoke():
         assert r.status_code == 200, r.text
         data = r.json()
         assert isinstance(data, dict) and data.get("status") == "ok"
-

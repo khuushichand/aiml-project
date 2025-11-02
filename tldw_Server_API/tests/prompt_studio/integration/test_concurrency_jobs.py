@@ -128,4 +128,3 @@ def test_reclaim_expired_processing_job_dual_backend(prompt_studio_dual_backend_
     reclaimed = db.acquire_next_job()
     assert reclaimed is not None
     assert reclaimed["id"] == job["id"], f"Expected to reclaim same job, got {reclaimed}"
-

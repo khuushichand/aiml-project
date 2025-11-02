@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
 
 class TestV2Chunker:
     """Test the main V2 Chunker class."""
-    
+
     def test_chunker_initialization(self):
         """Test that Chunker initializes correctly."""
         chunker = Chunker()
@@ -34,7 +34,7 @@ class TestV2Chunker:
         assert chunker.config is not None
         # Use public API to check available methods
         assert len(chunker.get_available_methods()) > 0
-    
+
     def test_chunker_with_custom_config(self):
         """Test Chunker with custom configuration."""
         config = ChunkerConfig(
@@ -48,23 +48,23 @@ class TestV2Chunker:
         assert chunker.config.default_max_size == 100
         assert chunker.config.default_overlap == 10
         assert chunker.config.language == 'fr'
-    
+
     def test_chunk_text_returns_strings(self):
         """Test that chunk_text returns list of strings."""
         chunker = Chunker()
         text = "This is a test. This is another sentence. And a third one."
         chunks = chunker.chunk_text(text, method='sentences', max_size=2)
-        
+
         assert isinstance(chunks, list)
         assert all(isinstance(chunk, str) for chunk in chunks)
         assert len(chunks) > 0
-    
+
     def test_chunk_text_with_metadata(self):
         """Test that chunk_text_with_metadata returns ChunkResult objects."""
         chunker = Chunker()
         text = "This is a test. This is another sentence. And a third one."
         chunks = chunker.chunk_text_with_metadata(text, method='sentences', max_size=2)
-        
+
         assert isinstance(chunks, list)
         assert all(isinstance(chunk, ChunkResult) for chunk in chunks)
         assert all(isinstance(chunk.metadata, ChunkMetadata) for chunk in chunks)
@@ -134,7 +134,7 @@ class TestV2Chunker:
         assert paragraph_chunks
         counts = [len(c['text'].split()) for c in paragraph_chunks]
         assert max(counts) >= 5
-    
+
     def test_code_mode_ast_forces_ast_strategy_even_without_language_hint(self):
         """Explicit code_mode='ast' should route to the AST strategy regardless of language hints."""
         chunker = Chunker()
@@ -179,45 +179,45 @@ class TestV2Chunker:
         chunker = Chunker()
         result = chunker.chunk_text_with_metadata(" \n\t\r ", method='words', max_size=10)
         assert result == []
-    
+
     def test_invalid_method_raises_error(self):
         """Test that invalid chunking method raises error."""
         chunker = Chunker()
         with pytest.raises(InvalidChunkingMethodError):
             chunker.chunk_text("test", method='invalid_method')
-    
+
     def test_all_methods_available(self):
         """Test that all expected methods are available."""
         chunker = Chunker()
         expected_methods = [
-            'words', 'sentences', 'paragraphs', 'tokens', 
+            'words', 'sentences', 'paragraphs', 'tokens',
             'semantic', 'json', 'xml', 'ebook_chapters', 'rolling_summarize'
         ]
-        
+
         available = set(chunker.get_available_methods())
         for method in expected_methods:
             # Should be advertised by the chunker
             assert method in available
-    
+
     def test_empty_text_handling(self):
         """Test handling of empty text."""
         chunker = Chunker()
         # V2 returns empty list for empty text rather than raising error
         result = chunker.chunk_text("", method='words')
         assert result == []
-    
+
     def test_chunk_text_generator(self):
         """Test the generator method for memory efficiency."""
         chunker = Chunker()
         text = " ".join(["word"] * 1000)  # Large text
-        
+
         generator = chunker.chunk_text_generator(text, method='words', max_size=10)
         assert hasattr(generator, '__iter__')
-        
+
         chunks = list(generator)
         assert len(chunks) > 0
         assert all(isinstance(chunk, str) for chunk in chunks)
-    
+
     def test_process_text_respects_max_size_after_frontmatter(self):
         """process_text should trim headers before enforcing size limits."""
         config = ChunkerConfig(max_text_size=64)
@@ -508,7 +508,7 @@ class TestV2Chunker:
                     'max_size': 0,
                 },
             )
-    
+
     def test_chunk_text_enforces_byte_sized_limit(self):
         """Multibyte characters should count against max_text_size in bytes."""
         config = ChunkerConfig(max_text_size=5)
@@ -528,76 +528,76 @@ class TestV2Chunker:
 
 class TestWordsStrategy:
     """Test the words chunking strategy."""
-    
+
     def test_words_basic_chunking(self):
         """Test basic word-based chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy()
         text = " ".join([f"word{i}" for i in range(20)])
         chunks = strategy.chunk(text, max_size=5, overlap=2)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 1
         # Check overlap
         first_chunk_words = chunks[0].split()
         second_chunk_words = chunks[1].split()
         assert first_chunk_words[-2:] == second_chunk_words[:2]  # 2 word overlap
-    
+
     def test_words_no_overlap(self):
         """Test word chunking without overlap."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy()
         text = " ".join([f"word{i}" for i in range(20)])
         chunks = strategy.chunk(text, max_size=5, overlap=0)
-        
+
         assert len(chunks) == 4  # 20 words / 5 words per chunk
         # Verify no overlap
         for i in range(len(chunks) - 1):
             assert chunks[i].split()[-1] != chunks[i+1].split()[0]
-    
+
     def test_words_with_metadata(self):
         """Test word chunking with metadata."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy()
         text = "One two three four five six seven eight nine ten"
         chunks = strategy.chunk_with_metadata(text, max_size=3, overlap=1)
-        
+
         assert all(isinstance(chunk, ChunkResult) for chunk in chunks)
         assert chunks[0].metadata.word_count == 3
         assert chunks[0].metadata.method == 'words'
         assert chunks[0].metadata.index == 0
-    
+
     def test_words_metadata_preserves_offsets_with_whitespace(self):
         """Offsets should reflect original spacing even when output normalizes whitespace."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy()
         text = "Alpha  beta\tgamma\n\ndelta epsilon"
         chunks = strategy.chunk_with_metadata(text, max_size=2, overlap=0)
-        
+
         assert len(chunks) >= 2
         first = chunks[0]
         second = chunks[1]
-        
+
         # Chunk text normalizes internal whitespace
         assert first.text == "Alpha beta"
         # Offsets should still capture the double space from the original source
         assert text[first.metadata.start_char:first.metadata.end_char] == "Alpha  beta"
-        
+
         second_slice = text[second.metadata.start_char:second.metadata.end_char]
         assert "gamma" in second_slice
         assert "delta" in second_slice
         # Original slice retains the newline separator while normalized chunk text does not
         assert second_slice != second.text
         assert ' '.join(second_slice.split()) == second.text
-    
+
     def test_thai_tokenizer_fallback_preserves_newlines(self):
         """Fallback Thai tokenization should keep explicit newlines intact."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy(language='th')
         text = "กแรก\nกสอง"
         chunks = strategy.chunk(text, max_size=10, overlap=0)
@@ -607,39 +607,39 @@ class TestWordsStrategy:
 
 class TestSentencesStrategy:
     """Test the sentences chunking strategy."""
-    
+
     def test_sentences_basic_chunking(self):
         """Test basic sentence-based chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.sentences import SentenceChunkingStrategy
-        
+
         strategy = SentenceChunkingStrategy()
         text = "First sentence. Second sentence. Third sentence. Fourth sentence."
         chunks = strategy.chunk(text, max_size=2, overlap=1)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 1
         assert "First sentence. Second sentence." in chunks[0]
-    
+
     def test_sentences_handles_various_punctuation(self):
         """Test handling of various sentence endings."""
         from tldw_Server_API.app.core.Chunking.strategies.sentences import SentenceChunkingStrategy
-        
+
         strategy = SentenceChunkingStrategy()
         text = "Question? Exclamation! Statement. Another?"
         chunks = strategy.chunk(text, max_size=2, overlap=0)
-        
+
         assert len(chunks) == 2
         assert "Question? Exclamation!" in chunks[0]
         assert "Statement. Another?" in chunks[1]
-    
+
     def test_sentences_metadata_preserves_offsets_with_whitespace(self):
         """Sentence metadata should map back to original slices with preserved spacing."""
         from tldw_Server_API.app.core.Chunking.strategies.sentences import SentenceChunkingStrategy
-        
+
         strategy = SentenceChunkingStrategy()
         text = "First sentence.\n\n   Second sentence!  Third sentence?\nFourth sentence."
         chunks = strategy.chunk_with_metadata(text, max_size=2, overlap=1)
-        
+
         assert len(chunks) >= 2
         first = chunks[0]
         first_slice = text[first.metadata.start_char:first.metadata.end_char]
@@ -649,7 +649,7 @@ class TestSentencesStrategy:
         assert "Second sentence!" in first_slice
         assert first_slice != first.text
         assert ' '.join(first_slice.split()) == first.text
-        
+
         second = chunks[1]
         second_slice = text[second.metadata.start_char:second.metadata.end_char]
         assert ' '.join(second_slice.split()).startswith("Second sentence!")
@@ -659,38 +659,38 @@ class TestSentencesStrategy:
 
 class TestParagraphsStrategy:
     """Test the paragraphs chunking strategy."""
-    
+
     def test_paragraphs_basic_chunking(self):
         """Test basic paragraph-based chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.paragraphs import ParagraphChunkingStrategy
-        
+
         strategy = ParagraphChunkingStrategy()
         text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n\nFourth paragraph."
         chunks = strategy.chunk(text, max_size=2, overlap=1)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 1
         assert "First paragraph.\n\nSecond paragraph." in chunks[0]
-    
+
     def test_paragraphs_single_paragraph(self):
         """Test handling of text without paragraph breaks."""
         from tldw_Server_API.app.core.Chunking.strategies.paragraphs import ParagraphChunkingStrategy
-        
+
         strategy = ParagraphChunkingStrategy()
         text = "This is all one paragraph without any breaks."
         chunks = strategy.chunk(text, max_size=1, overlap=0)
-        
+
         assert len(chunks) == 1
         assert chunks[0] == text.strip()
-    
+
     def test_paragraphs_with_metadata(self):
         """Test paragraph chunking with metadata."""
         from tldw_Server_API.app.core.Chunking.strategies.paragraphs import ParagraphChunkingStrategy
-        
+
         strategy = ParagraphChunkingStrategy()
         text = "Para 1.\n\nPara 2.\n\nPara 3."
         chunks = strategy.chunk_with_metadata(text, max_size=2, overlap=0)
-        
+
         assert all(isinstance(chunk, ChunkResult) for chunk in chunks)
         assert chunks[0].metadata.method == 'paragraphs'
         assert chunks[0].metadata.options is not None
@@ -699,17 +699,17 @@ class TestParagraphsStrategy:
 
 class TestTokensStrategy:
     """Test the tokens chunking strategy."""
-    
+
     def test_tokens_basic_chunking(self):
         """Test basic token-based chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.tokens import TokenChunkingStrategy
-        
+
         # Test with actual tokenizer or skip if not available
         try:
             strategy = TokenChunkingStrategy()
             text = "Some text to tokenize for testing purposes"
             chunks = strategy.chunk(text, max_size=5, overlap=2)
-            
+
             assert isinstance(chunks, list)
             assert len(chunks) > 0
             assert all(isinstance(chunk, str) for chunk in chunks)
@@ -757,23 +757,23 @@ class TestTokensStrategy:
 
 class TestEbookChaptersStrategy:
     """Test the ebook chapters chunking strategy."""
-    
+
     def test_ebook_chapters_basic(self):
         """Test basic chapter detection and chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookChapterChunkingStrategy
-        
+
         strategy = EbookChapterChunkingStrategy()
         text = """Chapter 1: Introduction
         Some content here.
-        
+
         Chapter 2: Main Content
         More content here.
-        
+
         Chapter 3: Conclusion
         Final content."""
-        
+
         chunks = strategy.chunk(text, max_size=1000)  # Large size to keep chapters intact
-        
+
         assert len(chunks) == 3
         assert "Chapter 1" in chunks[0]
         assert "Chapter 2" in chunks[1]
@@ -810,56 +810,56 @@ class TestChunkerMetrics:
         assert any(e.labels.get("result") == "hit" for e in get_events)
         assert any(e.labels.get("result") == "stored" for e in put_events)
         assert first_chunks == second_chunks
-    
+
     def test_ebook_no_chapters(self):
         """Test handling of text without chapter markers."""
         from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookChapterChunkingStrategy
-        
+
         strategy = EbookChapterChunkingStrategy()
         text = "This is text without any chapter markers. " * 20
         chunks = strategy.chunk(text, max_size=50, overlap=10)
-        
+
         assert len(chunks) > 1  # Should split by size
         assert all(isinstance(chunk, str) for chunk in chunks)
-    
+
     def test_ebook_custom_pattern(self):
         """Test custom chapter pattern."""
         from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookChapterChunkingStrategy
-        
+
         strategy = EbookChapterChunkingStrategy()
         text = """Part 1: Beginning
         Content here.
-        
+
         Part 2: Middle
         More content.
-        
+
         Part 3: End
         Final content."""
-        
+
         # Use custom pattern that matches "Part N:"
         chunks = strategy.chunk(
-            text, 
+            text,
             max_size=1000,
             custom_chapter_pattern=r'Part \d+:'
         )
-        
+
         assert len(chunks) == 3
         assert "Part 1" in chunks[0]
 
 
 class TestSemanticStrategy:
     """Test the semantic chunking strategy."""
-    
+
     def test_semantic_basic_chunking(self):
         """Test basic semantic chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.semantic import SemanticChunkingStrategy
-        
+
         # Test with actual model or skip if not available
         try:
             strategy = SemanticChunkingStrategy()
             text = "First sentence. Second sentence. Third sentence. Fourth sentence."
             chunks = strategy.chunk(text, max_size=2, overlap=0)
-            
+
             assert isinstance(chunks, list)
             assert len(chunks) > 0
             assert all(isinstance(chunk, str) for chunk in chunks)
@@ -870,15 +870,15 @@ class TestSemanticStrategy:
 
 class TestJSONStrategy:
     """Test the JSON chunking strategy."""
-    
+
     def test_json_list_chunking(self):
         """Test chunking of JSON lists."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
-        
+
         strategy = JSONChunkingStrategy()
         json_text = '[{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}]'
         chunks = strategy.chunk(json_text, max_size=2, overlap=1)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 1
         # Each chunk should be valid JSON
@@ -886,15 +886,15 @@ class TestJSONStrategy:
         for chunk in chunks:
             parsed = json.loads(chunk)
             assert isinstance(parsed, list)
-    
+
     def test_json_dict_chunking(self):
         """Test chunking of JSON objects."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
-        
+
         strategy = JSONChunkingStrategy()
         json_text = '{"key1": "value1", "key2": "value2", "key3": "value3"}'
         chunks = strategy.chunk(json_text, max_size=2, overlap=0)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) >= 1
         # Each chunk should be valid JSON
@@ -902,11 +902,11 @@ class TestJSONStrategy:
         for chunk in chunks:
             parsed = json.loads(chunk)
             assert isinstance(parsed, dict)
-    
+
     def test_json_invalid_input(self):
         """Test handling of invalid JSON."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
-        
+
         strategy = JSONChunkingStrategy()
         with pytest.raises(InvalidInputError):
             strategy.chunk("not valid json {", max_size=2)
@@ -914,11 +914,11 @@ class TestJSONStrategy:
 
 class TestXMLStrategy:
     """Test the XML chunking strategy."""
-    
+
     def test_xml_basic_chunking(self):
         """Test basic XML chunking."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import XMLChunkingStrategy
-        
+
         strategy = XMLChunkingStrategy()
         xml_text = """<root>
             <item>Content 1</item>
@@ -926,15 +926,15 @@ class TestXMLStrategy:
             <item>Content 3</item>
         </root>"""
         chunks = strategy.chunk(xml_text, max_size=50, overlap=0)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) >= 1
         assert all(isinstance(chunk, str) for chunk in chunks)
-    
+
     def test_xml_invalid_input(self):
         """Test handling of invalid XML."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import XMLChunkingStrategy
-        
+
         strategy = XMLChunkingStrategy()
         with pytest.raises(InvalidInputError):
             strategy.chunk("not valid xml <", max_size=2)
@@ -942,74 +942,74 @@ class TestXMLStrategy:
 
 class TestRollingSummarizeStrategy:
     """Test the rolling summarize strategy."""
-    
+
     def test_rolling_summarize_without_llm(self):
         """Test that rolling summarize works without LLM (returns raw chunks)."""
         from tldw_Server_API.app.core.Chunking.strategies.rolling_summarize import RollingSummarizeStrategy
-        
+
         strategy = RollingSummarizeStrategy()
         # Without LLM, should return raw chunks (not summarized)
         result = strategy.chunk("Some text to summarize", max_size=100)
         assert isinstance(result, list)
         # Should return the text as-is since it's shorter than max_size
         assert len(result) >= 1
-    
+
     @patch('tldw_Server_API.app.core.Chunking.strategies.rolling_summarize.RollingSummarizeStrategy._call_llm')
     def test_rolling_summarize_with_llm(self, mock_llm):
         """Test rolling summarize with mocked LLM."""
         from tldw_Server_API.app.core.Chunking.strategies.rolling_summarize import RollingSummarizeStrategy
-        
+
         # Mock LLM responses
         mock_llm.return_value = "Summarized content"
-        
+
         # Create strategy with mock LLM function
         mock_llm_func = Mock(return_value="Summary")
         strategy = RollingSummarizeStrategy(llm_call_func=mock_llm_func)
-        
+
         text = "This is a long text. " * 100
         chunks = strategy.chunk(text, max_size=50, overlap=10)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 0
 
 
 class TestBackwardCompatibility:
     """Test backward compatibility functions."""
-    
+
     def test_improved_chunking_process(self):
         """Test the backward compatibility improved_chunking_process function."""
         from tldw_Server_API.app.core.Chunking import improved_chunking_process
-        
+
         text = "Test text. Another sentence. Third sentence."
         options = {
             'method': 'sentences',
             'max_size': 2,
             'overlap': 1
         }
-        
+
         chunks = improved_chunking_process(text, options)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 0
         assert all(isinstance(chunk, dict) for chunk in chunks)
         assert all('text' in chunk for chunk in chunks)
         assert all('metadata' in chunk for chunk in chunks)
-    
+
     def test_chunk_for_embedding(self):
         """Test the backward compatibility chunk_for_embedding function."""
         from tldw_Server_API.app.core.Chunking import chunk_for_embedding
-        
+
         text = "Test text for embedding. " * 10
         chunks = chunk_for_embedding(text, "test_file.txt", max_size=50)
-        
+
         assert isinstance(chunks, list)
         assert len(chunks) > 0
         assert all(isinstance(chunk, dict) for chunk in chunks)
-    
+
     def test_default_options_exported(self):
         """Test that DEFAULT_CHUNK_OPTIONS is properly exported."""
         from tldw_Server_API.app.core.Chunking import DEFAULT_CHUNK_OPTIONS
-        
+
         assert isinstance(DEFAULT_CHUNK_OPTIONS, dict)
         assert 'method' in DEFAULT_CHUNK_OPTIONS
         assert 'max_size' in DEFAULT_CHUNK_OPTIONS
@@ -1018,23 +1018,23 @@ class TestBackwardCompatibility:
 
 class TestErrorHandling:
     """Test error handling across the module."""
-    
+
     def test_empty_text_handling_strategies(self):
         """Test that strategies handle empty text appropriately."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy()
         # V2 strategies return empty list for empty text
         result = strategy.chunk("", max_size=10)
         assert result == []
-    
+
     def test_invalid_method_error(self):
         """Test that invalid method raises appropriate error."""
         chunker = Chunker()
-        
+
         with pytest.raises(InvalidChunkingMethodError) as exc_info:
             chunker.chunk_text("test text", method='nonexistent')
-        
+
         assert "unknown" in str(exc_info.value).lower()
 
     def test_method_name_case_insensitivity(self):
@@ -1048,17 +1048,17 @@ class TestErrorHandling:
         word_chunks_with_meta = chunker.chunk_text_with_metadata(text, method='WORDS', max_size=3)
         assert word_chunks_with_meta, "Expected metadata chunks when using upper-case 'WORDS' method"
         assert word_chunks_with_meta[0].metadata.method == 'words'
-    
+
     def test_invalid_parameters(self):
         """Test that invalid parameters are handled appropriately."""
         from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
-        
+
         strategy = WordChunkingStrategy()
-        
+
         # Negative max_size
         with pytest.raises((InvalidInputError, ValueError)):
             strategy.chunk("test text", max_size=-1)
-        
+
         # Overlap larger than max_size - V2 adjusts this automatically
         result = strategy.chunk("test text", max_size=10, overlap=15)
         # Should still work, overlap adjusted
@@ -1067,36 +1067,36 @@ class TestErrorHandling:
 
 class TestPerformance:
     """Test performance-related features."""
-    
+
     def test_generator_memory_efficiency(self):
         """Test that generator method is memory efficient."""
         chunker = Chunker()
         large_text = "word " * 10000  # Large text
-        
+
         # Generator should not create all chunks at once
         generator = chunker.chunk_text_generator(
-            large_text, 
-            method='words', 
+            large_text,
+            method='words',
             max_size=100
         )
-        
+
         # Get first chunk without generating all
         first_chunk = next(generator)
         assert isinstance(first_chunk, str)
         assert len(first_chunk.split()) <= 100
-    
+
     def test_caching_disabled_by_default(self):
         """Test that caching can be disabled."""
         config = ChunkerConfig(enable_cache=False)
         chunker = Chunker(config=config)
-        
+
         assert chunker._cache is None
-        
+
         # Should work without cache
         text = "Test text for caching"
         chunks1 = chunker.chunk_text(text, method='words', max_size=5)
         chunks2 = chunker.chunk_text(text, method='words', max_size=5)
-        
+
         assert chunks1 == chunks2
 
 

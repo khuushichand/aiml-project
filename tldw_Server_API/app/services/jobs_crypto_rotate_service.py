@@ -62,4 +62,3 @@ async def run_jobs_crypto_rotate(stop_event: asyncio.Event) -> None:
         logger.warning(f"Jobs Crypto Rotate Service stopped with error: {e}")
     finally:
         logger.info("Jobs Crypto Rotate Service: stopped")
-

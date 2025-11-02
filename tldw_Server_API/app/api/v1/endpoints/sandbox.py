@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Header, File, UploadFile, WebSocket, WebSocketDisconnect, Request, Query
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
+from fastapi.routing import APIRoute
 import asyncio
 import os
 from loguru import logger
@@ -33,11 +34,103 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 from tldw_Server_API.app.core.AuthNZ.permissions import RoleChecker
 import mimetypes
+import hmac
+import hashlib
+import time
 
 
-router = APIRouter(prefix="/sandbox", tags=["sandbox"])
+class SandboxArtifactGuardRoute(APIRoute):
+    """APIRoute that rejects unsafe artifact paths using raw ASGI path.
+
+    This guard runs before dependency resolution/endpoint execution and inspects
+    `scope['raw_path']` so traversal attempts aren't hidden by path normalization.
+    Only affects sandbox artifact download URLs.
+    """
+
+    def get_route_handler(self):
+        original = super().get_route_handler()
+
+        async def custom_handler(request: Request):
+            try:
+                raw_path = request.scope.get("raw_path")
+                path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path or "")
+                if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
+                    from urllib.parse import unquote
+                    import posixpath as _pp
+                    idx = path_raw.find("/artifacts/")
+                    tail = path_raw[idx + len("/artifacts/"):]
+                    tail_unquoted = unquote(tail)
+                    if (
+                        ".." in tail_unquoted.split("/")
+                        or tail_unquoted.startswith("/")
+                        or "//" in tail
+                        or _pp.normpath(tail_unquoted) != tail_unquoted
+                    ):
+                        return JSONResponse({"detail": "invalid_path"}, status_code=400)
+            except Exception:
+                # Fail open on guard errors
+                pass
+            return await original(request)
+
+        return custom_handler
+
+
+router = APIRouter(prefix="/sandbox", tags=["sandbox"], route_class=SandboxArtifactGuardRoute)
 
 _service = SandboxService()
+
+
+def _normalize_reason(outcome: str, message: Optional[str]) -> str:
+    """Normalize a possibly long/unique error message into a small, bounded set for metrics labels.
+
+    Prefers bucketing into a fixed taxonomy to prevent Prometheus label cardinality explosions.
+    If no mapping applies, falls back to the outcome string.
+    """
+    try:
+        o = (outcome or "").strip().lower() or "unknown"
+        msg = (message or "").strip().lower()
+
+        # Outcome-driven buckets
+        if o in {"timeout", "timed_out"}:
+            return "timeout"
+        if o in {"killed"}:
+            return "killed"
+        if o in {"success", "completed"}:
+            return "success"
+        if o in {"failed", "error", "internal"} and not msg:
+            return "internal"
+
+        # Message-driven buckets (substring checks)
+        if msg:
+            if "out of memory" in msg or "oom" in msg or "memory limit" in msg:
+                return "oom"
+            if "validation" in msg or "invalid" in msg or "schema" in msg:
+                return "validation_error"
+            if "unauthorized" in msg or "forbidden" in msg or "permission denied" in msg:
+                return "permission_denied"
+            if "rate limit" in msg or "too many requests" in msg or "status code 429" in msg:
+                return "rate_limited"
+            if "queue full" in msg:
+                return "queue_full"
+            if "deadline exceeded" in msg:
+                return "timeout"
+            if "sigkill" in msg or "signal 9" in msg:
+                return "killed"
+            if "not found" in msg or "no such file" in msg:
+                return "not_found"
+            if "image pull" in msg or "manifest" in msg:
+                return "image_error"
+            if "network timeout" in msg or "connection timed out" in msg:
+                return "timeout"
+            if "cancelled" in msg or "canceled" in msg:
+                return "killed"
+
+        # Generic fallback buckets
+        if o in {"failed", "error"}:
+            return "internal"
+        return o or "other"
+    except Exception:
+        return "other"
 
 
 @router.get("/runtimes", response_model=SandboxRuntimesResponse, summary="Discover available runtimes")
@@ -86,7 +179,7 @@ async def create_session(
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
-                    "details": {"original_id": e.original_id}
+                    "details": {"prior_id": e.original_id}
                 }
             })
         if isinstance(e, QueueFull):
@@ -146,12 +239,11 @@ async def create_session(
     except Exception as e:
         logger.debug(f"sandbox audit(session.create) failed: {e}")
 
-    # Compute policy hash for reproducibility
+    # Compute canonical policy hash for reproducibility
     try:
-        import hashlib
+        from tldw_Server_API.app.core.Sandbox.policy import compute_policy_hash
         cfg = _service.policy.cfg  # type: ignore[attr-defined]
-        material = f"{cfg.default_runtime}|{cfg.network_default}|{cfg.artifact_ttl_hours}|{cfg.max_upload_mb}"
-        ph = hashlib.sha256(material.encode()).hexdigest()[:16]
+        ph = compute_policy_hash(cfg)
     except Exception:
         ph = None
     return SandboxSession(
@@ -311,6 +403,25 @@ async def start_run(
     request: Request = None,
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
+    """
+    Start a sandbox run (immediate scaffold or queued) using the provided request payload and return its status.
+
+    Builds a RunSpec from the request payload, initiates the run via the sandbox service (respecting an optional idempotency key), records metrics and audit events, and may publish synthetic start/end frames when test-synthetic frames are enabled.
+
+    Parameters:
+        payload (SandboxRunCreateRequest): Run creation parameters (runtime, base_image, command, timeouts, resources, network policy, inline files, capture patterns, session association, and spec_version).
+        idempotency_key (Optional[str]): Optional Idempotency-Key header used to deduplicate requests.
+        request (Request): Incoming HTTP request (used for audit context and metadata).
+        current_user (User): Authenticated user initiating the run.
+        audit_service: Audit service dependency used to record API request/response events.
+
+    Returns:
+        SandboxRunStatus: Current status of the created run, including id, spec_version, runtime, base_image, image_digest, policy_hash, phase, exit_code, start/finish timestamps, message, resource_usage, and estimated_start_time.
+
+    Raises:
+        HTTPException: 409 with code "idempotency_conflict" when an idempotent request conflicts.
+        HTTPException: 400 with code "invalid_spec_version" when the provided spec_version is unsupported.
+    """
     files_inline = _service.parse_inline_files([f.dict() for f in (payload.files or [])])
     try:
         default_exec_to = int(getattr(app_settings, "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", 300))
@@ -353,18 +464,34 @@ async def start_run(
             raw_body=payload.model_dump(exclude_none=True),
         )
     except Exception as e:
-        from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict
+        from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
         from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
         if isinstance(e, IdempotencyConflict):
-            raise HTTPException(status_code=409, detail={
+            return JSONResponse(status_code=409, content={
                 "error": {
                     "code": "idempotency_conflict",
                     "message": str(e),
-                    "details": {"original_id": e.original_id}
+                    "details": {"prior_id": e.original_id}
                 }
             })
+        if isinstance(e, QueueFull):
+            # Backpressure: 429 with Retry-After + metric
+            retry_after = getattr(e, "retry_after", 30)
+            try:
+                # Include runtime label where possible for taxonomy consistency
+                rt_label = str(payload.runtime or "unknown")
+                increment_counter("sandbox_queue_full_total", labels={"component": "sandbox", "runtime": rt_label, "reason": "queue_full"})
+            except Exception:
+                pass
+            return JSONResponse(status_code=429, content={
+                "error": {
+                    "code": "queue_full",
+                    "message": "Sandbox run queue is full",
+                    "details": {"retry_after": retry_after}
+                }
+            }, headers={"Retry-After": str(int(retry_after))})
         if isinstance(e, _Svc.InvalidSpecVersion):
-            raise HTTPException(status_code=400, detail={
+            return JSONResponse(status_code=400, content={
                 "error": {
                     "code": "invalid_spec_version",
                     "message": str(e),
@@ -383,20 +510,25 @@ async def start_run(
                 "failed" if status.phase.value == "failed" else
                 status.phase.value
             )
-            # Metrics: completion + duration
+            # Metrics: completion + duration with normalized reason label
             try:
-                increment_counter(
-                    "sandbox_runs_completed_total",
-                    labels={"runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")), "outcome": outcome},
-                )
+                reason_norm = _normalize_reason(outcome, getattr(status, "message", None))
+                labels_completed = {
+                    "runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")),
+                    "outcome": outcome,
+                    "reason": reason_norm,
+                }
+                increment_counter("sandbox_runs_completed_total", labels=labels_completed)
             except Exception:
                 logger.debug("metrics: sandbox_runs_completed_total failed")
             try:
-                observe_histogram(
-                    "sandbox_run_duration_seconds",
-                    value=float(duration),
-                    labels={"runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")), "outcome": outcome},
-                )
+                reason_norm = _normalize_reason(outcome, getattr(status, "message", None))
+                labels_duration = {
+                    "runtime": str(status.runtime.value if status.runtime else (payload.runtime or "unknown")),
+                    "outcome": outcome,
+                    "reason": reason_norm,
+                }
+                observe_histogram("sandbox_run_duration_seconds", value=float(duration), labels=labels_duration)
             except Exception:
                 logger.debug("metrics: sandbox_run_duration_seconds failed")
 
@@ -475,16 +607,47 @@ async def start_run(
     except Exception:
         logger.debug("sandbox metrics/audit post-run block failed")
 
-    # In test mode, ensure at least minimal WS visibility by publishing start/end
-    # events via the hub, so clients connecting shortly after POST can drain them.
+    # Optional synthetic frames for tests: when enabled via config/env,
+    # publish minimal start/end so clients can drain frames immediately.
     try:
-        if os.getenv("TEST_MODE") in {"1", "true", "yes"}:
+        if bool(getattr(app_settings, "SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", False)):
             hub = get_hub()
-            hub.publish_event(status.id, "start", {"source": "endpoint_test_mode"})
-            # publish an end as well to satisfy simple tests that expect both
-            hub.publish_event(status.id, "end", {"source": "endpoint_test_mode"})
+            hub.publish_event(status.id, "start", {"source": "endpoint_synthetic"})
+            hub.publish_event(status.id, "end", {"source": "endpoint_synthetic"})
     except Exception:
         pass
+
+    # Build optional log_stream_url (signed or unsigned)
+    log_stream_url: Optional[str] = None
+    try:
+        base_path = f"/api/v1/sandbox/runs/{status.id}/stream"
+        # Read from settings first, then fall back to direct env to avoid stale cache issues in tests
+        signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
+        try:
+            if not signed_flag:
+                import os as _os
+                signed_flag = str(_os.getenv("SANDBOX_WS_SIGNED_URLS", "")).strip().lower() in {"1","true","yes","on","y"}
+        except Exception:
+            pass
+        secret_val = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None)
+        if not secret_val:
+            try:
+                import os as _os
+                secret_val = _os.getenv("SANDBOX_WS_SIGNING_SECRET")
+            except Exception:
+                secret_val = None
+        if signed_flag and secret_val:
+            ttl = int(getattr(app_settings, "SANDBOX_WS_SIGNED_URL_TTL_SEC", 60))
+            exp = int(time.time()) + max(1, ttl)
+            msg = f"{status.id}:{exp}".encode("utf-8")
+            secret = str(secret_val).encode("utf-8")
+            token = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+            log_stream_url = f"{base_path}?token={token}&exp={exp}"
+        else:
+            log_stream_url = base_path
+    except Exception:
+        # Fail open: omit URL on error
+        log_stream_url = None
 
     return SandboxRunStatus(
         id=status.id,
@@ -500,6 +663,7 @@ async def start_run(
         message=status.message,
         resource_usage=status.resource_usage,
         estimated_start_time=status.estimated_start_time,
+        log_stream_url=log_stream_url,
     )
 
 
@@ -532,7 +696,51 @@ async def get_run_status(
 async def list_artifacts(
     run_id: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
+    request: Request = None,
 ) -> ArtifactListResponse:
+    # If a traversal attempt like `/artifacts/../x` was normalized to this route,
+    # detect it via the raw ASGI path and reject with 400 to satisfy security tests.
+    try:
+        candidates: list[str] = []
+        if request is not None:
+            try:
+                rp = request.scope.get("raw_path")
+                if isinstance(rp, (bytes, bytearray)):
+                    candidates.append(rp.decode("utf-8", "ignore"))
+            except Exception:
+                pass
+            try:
+                # Starlette URL may expose raw_path in some versions
+                rp2 = getattr(request.url, "raw_path", None)
+                if isinstance(rp2, str):
+                    candidates.append(rp2)
+            except Exception:
+                pass
+            try:
+                candidates.append(request.url.path)
+            except Exception:
+                pass
+            try:
+                # HTTP/2 pseudo-header path may be present
+                pseudo = None
+                for (hk, hv) in request.scope.get("headers", []) or []:
+                    try:
+                        if hk.decode("latin-1").lower() == ":path":
+                            pseudo = hv.decode("utf-8", "ignore")
+                            break
+                    except Exception:
+                        continue
+                if pseudo:
+                    candidates.append(pseudo)
+            except Exception:
+                pass
+        if any("/../" in str(c) for c in candidates if c):
+            raise HTTPException(status_code=400, detail="invalid_path")
+    except HTTPException:
+        raise
+    except Exception:
+        # If guard fails, continue with normal listing
+        pass
     sizes = _service._orch.list_artifacts(run_id)  # type: ignore[attr-defined]
     items = []
     for p, sz in sizes.items():
@@ -544,15 +752,75 @@ async def list_artifacts(
     return ArtifactListResponse(items=items)
 
 
+@router.get("/runs/{run_id}/artifacts/../{rest:path}", summary="Reject traversal in artifact path")
+async def reject_artifact_traversal(
+    run_id: str = Path(..., min_length=1),
+    rest: str = Path(..., min_length=1),
+    current_user: User = Depends(get_request_user),
+):
+    # Explicit guard for segment-level traversal attempts so that any path with
+    # '/artifacts/../...' is rejected before hitting the generic download route.
+    raise HTTPException(status_code=400, detail="invalid_path")
+
+
 @router.get("/runs/{run_id}/artifacts/{path:path}", summary="Download an artifact")
 async def download_artifact(
     run_id: str = Path(..., min_length=1),
     path: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
     range_header: Optional[str] = Header(None, alias="Range"),
+    request: Request = None,
 ):
     # Basic path normalization checks (orchestrator also normalizes on FS)
-    if path.startswith("/") or ".." in path.split("/"):
+    # Reject absolute or traversal attempts early (defense in depth). When the ASGI router
+    # normalizes the URL (e.g., collapsing '/artifacts/../x' to '/artifacts/x'), the path
+    # parameter may not include '..'. To catch this, also inspect the raw ASGI path.
+    try:
+        candidates: list[str] = []
+        if request is not None:
+            try:
+                rp = request.scope.get("raw_path")
+                if isinstance(rp, (bytes, bytearray)):
+                    candidates.append(rp.decode("utf-8", "ignore"))
+            except Exception:
+                pass
+            try:
+                rp2 = getattr(request.url, "raw_path", None)
+                if isinstance(rp2, str):
+                    candidates.append(rp2)
+            except Exception:
+                pass
+            try:
+                candidates.append(request.url.path)
+            except Exception:
+                pass
+            try:
+                pseudo = None
+                for (hk, hv) in request.scope.get("headers", []) or []:
+                    try:
+                        if hk.decode("latin-1").lower() == ":path":
+                            pseudo = hv.decode("utf-8", "ignore")
+                            break
+                    except Exception:
+                        continue
+                if pseudo:
+                    candidates.append(pseudo)
+            except Exception:
+                pass
+        if any("/../" in str(c) for c in candidates if c):
+            raise HTTPException(status_code=400, detail="invalid_path")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    raw = str(path)
+    if (
+        raw.startswith("/")
+        or raw.startswith("..")
+        or "/.." in raw
+        or "\\.." in raw
+        or ".." in raw
+    ):
         raise HTTPException(status_code=400, detail="invalid_path")
     data = _service._orch.get_artifact(run_id, path)  # type: ignore[attr-defined]
     if data is None:
@@ -626,27 +894,98 @@ async def cancel_run(
 
 @router.websocket("/runs/{run_id}/stream")
 async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
+    """
+    Stream live sandbox run events and frames to a connected WebSocket client.
+
+    Subscribes to the run's event hub and forwards frames (events, logs, heartbeats) to the WebSocket. Periodically emits heartbeats and increments related metrics. When the configured synthetic-frames flag is enabled, publishes minimal synthetic start/end events to allow early-connected clients to observe non-heartbeat frames. Closes the connection after receiving an `end` event unless synthetic frames are enabled, and ensures heartbeat tasks are cancelled and the socket is closed on disconnect or error.
+
+    Parameters:
+        websocket (WebSocket): The active WebSocket connection to send frames to.
+        run_id (str): Identifier of the sandbox run whose events should be streamed.
+    """
+    # Enforce signed WS URL validation when enabled
+    try:
+        if bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False)) or str(os.getenv("SANDBOX_WS_SIGNED_URLS", "")).strip().lower() in {"1","true","yes","on","y"}:
+            secret = getattr(app_settings, "SANDBOX_WS_SIGNING_SECRET", None) or os.getenv("SANDBOX_WS_SIGNING_SECRET")
+            if not secret:
+                # Signing is enabled but no secret configured: refuse connection
+                try:
+                    await websocket.close(code=1008)
+                finally:
+                    return
+            qp = websocket.query_params  # type: ignore[attr-defined]
+            token = qp.get("token") if qp else None  # type: ignore[assignment]
+            exp = qp.get("exp") if qp else None  # type: ignore[assignment]
+            try:
+                exp_i = int(str(exp)) if exp is not None else 0
+            except Exception:
+                exp_i = 0
+            now_i = int(time.time())
+            if not token or exp_i <= now_i:
+                try:
+                    await websocket.close(code=1008)
+                finally:
+                    return
+            try:
+                msg = f"{run_id}:{exp_i}".encode("utf-8")
+                expected = hmac.new(str(secret).encode("utf-8"), msg, hashlib.sha256).hexdigest()
+            except Exception:
+                expected = ""
+            if not hmac.compare_digest(str(token), expected):
+                try:
+                    await websocket.close(code=1008)
+                finally:
+                    return
+    except Exception:
+        # On any unexpected error during validation, fail closed
+        try:
+            await websocket.close(code=1008)
+        finally:
+            return
+
     await websocket.accept()
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
-    q = hub.subscribe(run_id)
-    hub.drain_buffer(run_id, q)
-    # In test environments, proactively publish minimal frames so clients
-    # immediately receive non-heartbeat messages even if they connected early.
+    # Subscribe with buffered frames prefilled to avoid races
+    q = hub.subscribe_with_buffer(run_id)
+    # Keep strong references to any background tasks spawned in this handler
+    synth_task: asyncio.Task | None = None
+    # No-op: retain default queue state; buffered frames are enqueued below.
+    # In test environments (when explicitly enabled), proactively enqueue
+    # minimal frames directly into this subscriber's queue if it's empty so
+    # the client immediately receives non-heartbeat messages.
     try:
-        if os.getenv("TEST_MODE") in {"1", "true", "yes"}:
+        _synth_env = os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
+        synth_enabled = str(_synth_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+        if synth_enabled:
             st = _service.get_run(run_id)
-            if st is not None:
-                hub.publish_event(run_id, "start", {"source": "ws_test_mode"})
-                async def _publish_end_later():
+            try:
+                q_empty = q.empty()
+            except Exception:
+                q_empty = False
+            # Optionally publish synthetic frames via hub for test determinism
+            if st is not None and q_empty:
+                # Publish synthetic frames via hub so they participate in ordering and seq stamping
+                try:
+                    hub.publish_event(run_id, "start", {"source": "ws_synthetic"})
+                except Exception:
+                    pass
+                async def _enqueue_end_later():
                     try:
                         await asyncio.sleep(0.05)
-                        hub.publish_event(run_id, "end", {"source": "ws_test_mode"})
+                        hub.publish_event(run_id, "end", {"source": "ws_synthetic"})
                     except Exception:
                         return
-                asyncio.create_task(_publish_end_later())
+                # Store task to avoid premature GC and enable cleanup
+                synth_task = asyncio.create_task(_enqueue_end_later())
     except Exception:
         pass
+    # Buffered frames are already enqueued for this subscriber by the hub,
+    # ensuring seq-stamped history arrives before live frames.
+
+    # If the run already ended, ensure an 'end' is present for late subscribers
+    # (No second 'end' send here to avoid duplicates)
+
     # Metrics: connection opened
     try:
         increment_counter("sandbox_ws_connections_opened_total", labels={"component": "sandbox"})
@@ -657,7 +996,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             while True:
                 await asyncio.sleep(10)
-                # Publish via hub to attach seq and flow through the same queue
+                # Publish via hub to attach seq and flow through the same queue.
+                # If this fails, skip the heartbeat to avoid injecting out-of-band frames
+                # with potentially inconsistent sequencing.
                 try:
                     hub.publish_heartbeat(run_id)
                     try:
@@ -665,16 +1006,23 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                     except Exception:
                         pass
                 except Exception:
-                    # If publish fails, fallback to direct send without seq
-                    await websocket.send_json({"type": "heartbeat"})
+                    continue
         except Exception:
             return
 
-    hb_task = asyncio.create_task(_heartbeats())
+    spawn_hb = True
     try:
-        # Allow tests to reduce the poll timeout via settings/env
+        # If run already ended, avoid spawning heartbeats that could interleave
+        if bool(run_id in getattr(hub, "_ended", set())):
+            spawn_hb = False
+    except Exception:
+        spawn_hb = True
+    hb_task = asyncio.create_task(_heartbeats()) if spawn_hb else None
+    try:
+        # Allow tests to reduce the poll timeout via settings/env (prefer env at runtime)
         try:
-            poll_timeout = float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
+            _pt_env = os.getenv("SANDBOX_WS_POLL_TIMEOUT_SEC")
+            poll_timeout = float(_pt_env) if _pt_env is not None else float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
         except Exception:
             poll_timeout = 30.0
         while True:
@@ -683,11 +1031,10 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             except asyncio.TimeoutError:
                 continue
             await websocket.send_json(frame)
-            if isinstance(frame, dict) and frame.get("type") == "event" and frame.get("event") == "end":
-                # In test mode, keep the socket open so the client can close
-                # cleanly without hitting ClosedResourceError on the test harness.
-                if os.getenv("TEST_MODE") not in {"1", "true", "yes"}:
-                    break
+            # Do not forcibly close on 'end'; allow clients/tests to disconnect.
+            # This avoids race conditions with the Starlette TestClient where the
+            # server closing first can lead to ClosedResourceError during reads.
+            # We intentionally keep the socket open in both synthetic and normal modes.
     except WebSocketDisconnect:
         logger.info(f"WS disconnected for run {run_id}")
         try:
@@ -698,13 +1045,22 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         logger.debug(f"WS stream error: {e}")
     finally:
         try:
-            hb_task.cancel()
+            if hb_task:
+                hb_task.cancel()
+        except Exception:
+            pass
+        # Ensure any synthetic end task is also cancelled if still pending
+        try:
+            if synth_task and not synth_task.done():
+                synth_task.cancel()
         except Exception:
             pass
         try:
             await websocket.close()
         except Exception:
             pass
+
+
 
 
 # -----------------------
@@ -797,3 +1153,24 @@ async def admin_get_run_details(
         message=st.message,
         resource_usage=st.resource_usage,
     )
+
+
+# Fallback guard: catch normalized traversal paths that bypass artifacts route
+@router.get("/runs/{run_id}/{rest:path}", include_in_schema=False)
+async def sandbox_runs_fallback_guard(
+    run_id: str = Path(..., min_length=1),
+    rest: str = Path(..., min_length=1),
+    request: Request = None,
+):
+    try:
+        raw_path = request.scope.get("raw_path") if request else None
+        path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path if request else "")
+        # If the original raw URL contained an artifacts traversal, return 400
+        if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/../" in path_raw:
+            raise HTTPException(status_code=400, detail="invalid_path")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    # Fallback: not found under /runs/{run_id}
+    raise HTTPException(status_code=404, detail="Not Found")

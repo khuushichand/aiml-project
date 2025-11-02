@@ -25,28 +25,28 @@ logger = logger
 class AuthDatabaseConfig:
     """
     Centralized configuration helper for AuthNZ database backend selection.
-    
+
     Supports automatic detection from environment variables and provides
     consistent configuration across all AuthNZ modules.
     """
-    
+
     # Singleton instance
     _instance: Optional['AuthDatabaseConfig'] = None
     _user_db: Optional[UserDatabase] = None
-    
+
     def __new__(cls):
         """Ensure singleton pattern."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
-    
+
     def __init__(self):
         """Initialize configuration from environment and settings."""
         if not hasattr(self, '_initialized'):
             self.settings = get_settings()
             self._initialized = True
             self._detect_backend()
-    
+
     def _detect_backend(self):
         """Detect database backend from environment or settings."""
         # Always refresh settings snapshot in case reset_settings() was called
@@ -57,7 +57,7 @@ class AuthDatabaseConfig:
 
         # Check environment variable first
         self.backend_type = os.getenv("TLDW_USER_DB_BACKEND", "").lower()
-        
+
         # If not set, try to infer from DATABASE_URL
         if not self.backend_type:
             db_url = self.settings.DATABASE_URL
@@ -71,13 +71,13 @@ class AuthDatabaseConfig:
             else:
                 # Default to SQLite
                 self.backend_type = "sqlite"
-        
+
         logger.info(f"Detected database backend: {self.backend_type}")
-    
+
     def get_config(self) -> DatabaseConfig:
         """
         Get database configuration based on detected backend.
-        
+
         Returns:
             DatabaseConfig: Configuration for the selected backend
         """
@@ -85,11 +85,11 @@ class AuthDatabaseConfig:
             return self._get_postgresql_config()
         else:
             return self._get_sqlite_config()
-    
+
     def _get_sqlite_config(self) -> DatabaseConfig:
         """
         Get SQLite configuration.
-        
+
         Returns:
             DatabaseConfig: SQLite-specific configuration
         """
@@ -114,7 +114,7 @@ class AuthDatabaseConfig:
                     return str(Path(combined).resolve())
                 except Exception:
                     return combined
-            # Relative path — resolve against project root
+            # Relative path - resolve against project root
             return str((Path.cwd() / combined).resolve())
 
         if base_scheme in {"sqlite", "file", ""}:
@@ -134,20 +134,20 @@ class AuthDatabaseConfig:
             sqlite_foreign_keys=self._get_bool_env("TLDW_SQLITE_FOREIGN_KEYS", True),
             echo=self._get_bool_env("TLDW_DB_ECHO", False)
         )
-        
+
         logger.debug(f"SQLite config: path={sqlite_path}")
         return config
-    
+
     def _get_postgresql_config(self) -> DatabaseConfig:
         """
         Get PostgreSQL configuration.
-        
+
         Returns:
             DatabaseConfig: PostgreSQL-specific configuration
         """
         # Use DATABASE_URL or construct from components
         connection_string = os.getenv("DATABASE_URL", self.settings.DATABASE_URL)
-        
+
         # If not a full URL, try to construct from components
         if not connection_string.startswith(("postgresql://", "postgres://")):
             host = os.getenv("TLDW_PG_HOST", "localhost")
@@ -155,9 +155,9 @@ class AuthDatabaseConfig:
             database = os.getenv("TLDW_PG_DATABASE", "tldw_users")
             user = os.getenv("TLDW_PG_USER", "tldw")
             password = os.getenv("TLDW_PG_PASSWORD", "")
-            
+
             connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
-        
+
         config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
             connection_string=connection_string,
@@ -168,21 +168,21 @@ class AuthDatabaseConfig:
             pg_sslmode=os.getenv("TLDW_PG_SSLMODE", "prefer"),
             echo=self._get_bool_env("TLDW_DB_ECHO", False)
         )
-        
+
         # Mask password in log
         parsed = urlparse(connection_string)
         safe_url = f"{parsed.scheme}://{parsed.username}:***@{parsed.hostname}:{parsed.port}{parsed.path}"
         logger.debug(f"PostgreSQL config: url={safe_url}, pool_size={config.pool_size}")
-        
+
         return config
-    
+
     def get_user_database(self, client_id: str = "auth_service") -> UserDatabase:
         """
         Get or create UserDatabase instance with proper configuration.
-        
+
         Args:
             client_id: Client identifier for database operations
-            
+
         Returns:
             UserDatabase: Configured database instance
         """
@@ -191,23 +191,23 @@ class AuthDatabaseConfig:
             self._user_db = UserDatabase(config=config, client_id=client_id)
             logger.info(f"Created UserDatabase with {self.backend_type} backend")
         return self._user_db
-    
+
     def reset(self):
         """Reset configuration and database instance (mainly for testing)."""
         self._user_db = None
         # Ensure backend detection reflects updated environment/settings
         self.settings = get_settings()
         self._detect_backend()
-    
+
     @staticmethod
     def _get_bool_env(key: str, default: bool) -> bool:
         """
         Get boolean value from environment variable.
-        
+
         Args:
             key: Environment variable name
             default: Default value if not set
-            
+
         Returns:
             bool: Parsed boolean value
         """
@@ -217,11 +217,11 @@ class AuthDatabaseConfig:
         elif value in ("false", "0", "no", "off"):
             return False
         return default
-    
+
     def get_info(self) -> Dict[str, Any]:
         """
         Get configuration information for debugging/logging.
-        
+
         Returns:
             Dict with configuration details
         """
@@ -231,29 +231,29 @@ class AuthDatabaseConfig:
             "registration_enabled": self.settings.ENABLE_REGISTRATION,
             "require_registration_code": self.settings.REQUIRE_REGISTRATION_CODE
         }
-        
+
         if self.backend_type == "sqlite":
             info["database_path"] = self.settings.DATABASE_URL.replace("sqlite:///", "")
         else:
             parsed = urlparse(self.settings.DATABASE_URL)
             info["database_host"] = parsed.hostname
             info["database_name"] = parsed.path.lstrip("/")
-        
+
         return info
-    
+
     @classmethod
     def print_config(cls):
         """Print current configuration for debugging."""
         instance = cls()
         info = instance.get_info()
-        
+
         print("\n" + "="*60)
         print("AuthNZ Database Configuration")
         print("="*60)
-        
+
         for key, value in info.items():
             print(f"  {key:.<30} {value}")
-        
+
         print("="*60 + "\n")
 
 ########################################################################################################################
@@ -263,7 +263,7 @@ class AuthDatabaseConfig:
 def get_auth_db_config() -> AuthDatabaseConfig:
     """
     Get the AuthDatabaseConfig singleton instance.
-    
+
     Returns:
         AuthDatabaseConfig: Configuration instance
     """
@@ -272,10 +272,10 @@ def get_auth_db_config() -> AuthDatabaseConfig:
 def get_configured_user_database(client_id: str = "auth_service") -> UserDatabase:
     """
     Get a properly configured UserDatabase instance.
-    
+
     Args:
         client_id: Client identifier for database operations
-        
+
     Returns:
         UserDatabase: Configured database instance
     """
@@ -285,7 +285,7 @@ def get_configured_user_database(client_id: str = "auth_service") -> UserDatabas
 def get_backend_type() -> str:
     """
     Get the current database backend type.
-    
+
     Returns:
         str: "sqlite" or "postgresql"
     """
@@ -295,7 +295,7 @@ def get_backend_type() -> str:
 def is_postgresql() -> bool:
     """
     Check if using PostgreSQL backend.
-    
+
     Returns:
         bool: True if using PostgreSQL
     """
@@ -304,7 +304,7 @@ def is_postgresql() -> bool:
 def is_sqlite() -> bool:
     """
     Check if using SQLite backend.
-    
+
     Returns:
         bool: True if using SQLite
     """

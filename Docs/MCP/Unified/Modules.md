@@ -17,11 +17,11 @@
 
 ### Required methods
 
-- `on_initialize(self)` – set up resources using `self.config.settings`.
-- `on_shutdown(self)` – release or persist resources.
-- `check_health(self) -> Dict[str, bool]` – resilient health probes.
-- `get_tools(self) -> List[Dict[str, Any]]` – JSON schema describing the module tools.
-- `execute_tool(self, tool_name, arguments)` – dispatch execution logic.
+- `on_initialize(self)` - set up resources using `self.config.settings`.
+- `on_shutdown(self)` - release or persist resources.
+- `check_health(self) -> Dict[str, bool]` - resilient health probes.
+- `get_tools(self) -> List[Dict[str, Any]]` - JSON schema describing the module tools.
+- `execute_tool(self, tool_name, arguments)` - dispatch execution logic.
 
 ### Optional helpers
 
@@ -59,8 +59,8 @@ modules:
 
 ## Environment Variables
 
-- `MCP_MODULES_CONFIG` – override path to the YAML configuration (defaults to `tldw_Server_API/Config_Files/mcp_modules.yaml`).
-- `MCP_MODULES` – comma-separated definitions (`id=module.path:Class`), e.g. `MCP_MODULES="example=tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule"`.
+- `MCP_MODULES_CONFIG` - override path to the YAML configuration (defaults to `tldw_Server_API/Config_Files/mcp_modules.yaml`).
+- `MCP_MODULES` - comma-separated definitions (`id=module.path:Class`), e.g. `MCP_MODULES="example=tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule"`.
 - Optional accelerator: `MCP_ENABLE_MEDIA_MODULE=true` registers `MediaModule` when no YAML or explicit environment configuration is provided.
 
 ## Tool Execution Result

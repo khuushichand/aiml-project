@@ -70,4 +70,3 @@ def test_llamacpp_reranking_passages(mock_factory, client: TestClient):
     assert len(data["results"]) == 2
     # The first result should be highest score
     assert data["results"][0]["score"] >= data["results"][1]["score"]
-

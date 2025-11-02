@@ -65,8 +65,17 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     for cand in owners:
                         try:
                             limits = await get_limits_for_user(int(cand))
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to get limits for owner candidate {cand}; assuming unlimited concurrent_jobs: {e}"
+                            )
+                            limits = {"daily_minutes": 30.0, "concurrent_streams": 1, "concurrent_jobs": 0, "max_file_size_mb": 25}
+                        try:
                             max_jobs = int(limits.get("concurrent_jobs") or 0)
-                        except Exception:
+                        except (ValueError, TypeError) as e:
+                            logger.warning(
+                                f"Could not parse concurrent_jobs for owner candidate {cand}; assuming 0 (unlimited): {e}"
+                            )
                             max_jobs = 0
                         if max_jobs == 0:
                             owner_candidate = cand
@@ -88,6 +97,11 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                                     (DOMAIN, str(cand)),
                                 ).fetchone()
                                 cur_count = int(rowp[0]) if rowp else 0
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to count processing jobs for owner candidate {cand}; assuming 0: {e}"
+                            )
+                            cur_count = 0
                         finally:
                             try:
                                 conn2.close()
@@ -98,7 +112,8 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                             break
                     if owner_candidate is not None:
                         job = jm.acquire_next_job(domain=DOMAIN, queue="default", lease_seconds=lease_seconds, worker_id=worker_id, owner_user_id=str(owner_candidate))
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Owner-aware acquisition failed; falling back to default acquisition: {e}")
                 job = None
             if not job:
                 job = jm.acquire_next_job(domain=DOMAIN, queue="default", lease_seconds=lease_seconds, worker_id=worker_id)
@@ -113,8 +128,18 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             # Cross-process fairness: enforce concurrent processing cap across all workers
             acquired_slot = False
             try:
-                max_jobs = int((await get_limits_for_user(int(owner))).get("concurrent_jobs") or 0)
-            except Exception:
+                limits_owner = await get_limits_for_user(int(owner))
+            except Exception as e:
+                logger.warning(
+                    f"Failed to get limits for owner {owner}; assuming unlimited concurrent_jobs: {e}"
+                )
+                limits_owner = {"daily_minutes": 30.0, "concurrent_streams": 1, "concurrent_jobs": 0, "max_file_size_mb": 25}
+            try:
+                max_jobs = int(limits_owner.get("concurrent_jobs") or 0)
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    f"Could not parse concurrent_jobs for owner {owner}; assuming 0 (unlimited): {e}"
+                )
                 max_jobs = 0
             if max_jobs:
                 # Count current processing jobs for this owner in 'audio' domain
@@ -138,7 +163,10 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                             ).fetchone()
                             count = int(row[0]) if row else 0
                     conn.close()
-                except Exception:
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to count processing jobs for owner {owner}; assuming 0: {e}"
+                    )
                     count = 0
                 if count > max_jobs:
                     # Put job back with backoff to allow other owners to proceed
@@ -171,8 +199,10 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                 continue
             try:
                 await increment_jobs_started(int(owner))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"Failed to increment jobs started for owner {owner}: {e}"
+                )
             else:
                 acquired_slot = True
 
@@ -290,5 +320,5 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             try:
                 if acquired_slot:
                     await finish_job(int(owner))  # type: ignore[arg-type]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to release job slot: {e}")

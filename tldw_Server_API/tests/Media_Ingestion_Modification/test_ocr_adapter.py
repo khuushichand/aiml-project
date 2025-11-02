@@ -37,4 +37,3 @@ def test_tesseract_cli_ocr_invocation(monkeypatch):
     assert backend is not None
     text = backend.ocr_image(b"\x89PNG\r\n....")
     assert text == "Hello OCR"
-

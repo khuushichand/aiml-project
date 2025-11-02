@@ -25,6 +25,14 @@ def client_with_user(monkeypatch, tmp_path):
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
 
+    # Ensure a clean per-user DB for user 777 (default path used by settings)
+    try:
+        default_user_db = Path.cwd() / "Databases" / "user_databases" / "777" / "Media_DB_v2.db"
+        if default_user_db.exists():
+            default_user_db.unlink()
+    except Exception:
+        pass
+
     # Build a minimal app including only the Watchlists router to avoid heavy imports
     from fastapi import FastAPI
     from tldw_Server_API.app.core.config import API_V1_PREFIX
@@ -278,3 +286,18 @@ def test_channel_uppercase_videos_with_query_normalizes(client_with_user: TestCl
     assert r.status_code == 200, r.text
     assert r.headers.get("X-YouTube-Normalized") == "1"
     assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?channel_id=UCXYZZ"
+
+
+def test_channel_http_no_www_normalizes_to_https(client_with_user: TestClient):
+    c = client_with_user
+    r = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "YT No WWW",
+            "url": "http://youtube.com/channel/UC123NO",
+            "source_type": "rss",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("X-YouTube-Normalized") == "1"
+    assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?channel_id=UC123NO"

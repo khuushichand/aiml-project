@@ -5,7 +5,7 @@
             <span class="endpoint-method post">POST</span>
             <span class="endpoint-path">/api/v1/media/ingest-web-content</span>
         </h2>
-        <p>Friendly form — no JSON required. Fields map to IngestWebContentRequest.</p>
+        <p>Friendly form - no JSON required. Fields map to IngestWebContentRequest.</p>
         <div id="friendlyIngest_validation_summary" class="validation-summary" aria-live="polite"></div>
 
         <div class="columns">
@@ -270,15 +270,15 @@
     "scraping",
     "example"
   ],
-  "scrape_method": "individual",           
-  "url_level": 2,                           
-  "max_pages": 10,                          
-  "max_depth": 3,                           
+  "scrape_method": "individual",
+  "url_level": 2,
+  "max_pages": 10,
+  "max_depth": 3,
 
   "perform_analysis": true,
   "custom_prompt": "Summarize with bullet points.",
   "system_prompt": "You are an accurate summarizer.",
-  "api_name": null,                         
+  "api_name": null,
 
   "perform_translation": false,
   "translation_language": "en",
@@ -287,7 +287,7 @@
   "perform_confabulation_check_of_analysis": false,
 
   "perform_chunking": true,
-  "chunk_method": "words",                 
+  "chunk_method": "words",
   "use_adaptive_chunking": false,
   "use_multi_level_chunking": false,
   "chunk_language": "en",
@@ -295,7 +295,7 @@
   "chunk_overlap": 200,
 
   "use_cookies": false,
-  "cookies": null,                          
+  "cookies": null,
 
   "timestamp_option": true,
   "overwrite_existing": false,
@@ -328,9 +328,9 @@
         <div class="form-group">
             <label for="webScrapingProcessLegacy_payload">Payload (WebScrapingRequest JSON):</label>
             <textarea id="webScrapingProcessLegacy_payload" style="min-height: 280px;">{
-  "scrape_method": "Individual URLs",        
+  "scrape_method": "Individual URLs",
   "url_input": "https://example.com/one\nhttps://example.com/two",
-  "url_level": null,                          
+  "url_level": null,
   "max_pages": 10,
   "max_depth": 3,
   "summarize_checkbox": true,
@@ -341,7 +341,7 @@
   "system_prompt": null,
   "temperature": 0.7,
   "custom_cookies": [],
-  "mode": "persist"                          
+  "mode": "persist"
 }</textarea>
             <small>
                 scrape_method: one of "Individual URLs", "Sitemap", "URL Level", "Recursive Scraping". For "URL Level" provide url_level.
@@ -366,11 +366,11 @@
             <span class="endpoint-path">/api/v1/web-scraping/status</span>
         </h2>
         <p>Get web scraping service status and active jobs</p>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingStatus', 'GET', '/api/v1/web-scraping/status', 'none')">
             Check Status
         </button>
-        
+
         <pre id="webScrapingStatus_response"></pre>
     </div>
 </div>
@@ -382,16 +382,16 @@
             <span class="endpoint-path">/api/v1/web-scraping/job/{job_id}</span>
         </h2>
         <p>Get specific job details</p>
-        
+
         <div class="form-group">
             <label for="webScrapingJobGet_job_id">Job ID <span class="required">*</span>:</label>
             <input type="text" id="webScrapingJobGet_job_id" placeholder="Enter job ID">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingJobGet', 'GET', '/api/v1/web-scraping/job/{job_id}', 'none')">
             Get Job Details
         </button>
-        
+
         <pre id="webScrapingJobGet_response"></pre>
     </div>
 
@@ -401,16 +401,16 @@
             <span class="endpoint-path">/api/v1/web-scraping/job/{job_id}</span>
         </h2>
         <p>Cancel or delete a scraping job</p>
-        
+
         <div class="form-group">
             <label for="webScrapingJobDelete_job_id">Job ID <span class="required">*</span>:</label>
             <input type="text" id="webScrapingJobDelete_job_id" placeholder="Enter job ID">
         </div>
-        
+
         <button class="api-button btn-danger" onclick="if(confirm('Cancel this job?')) makeRequest('webScrapingJobDelete', 'DELETE', '/api/v1/web-scraping/job/{job_id}', 'none')">
             Cancel Job
         </button>
-        
+
         <pre id="webScrapingJobDelete_response"></pre>
     </div>
 
@@ -420,16 +420,16 @@
             <span class="endpoint-path">/api/v1/web-scraping/progress/{task_id}</span>
         </h2>
         <p>Get task progress information</p>
-        
+
         <div class="form-group">
             <label for="webScrapingProgress_task_id">Task ID <span class="required">*</span>:</label>
             <input type="text" id="webScrapingProgress_task_id" placeholder="Enter task ID">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingProgress', 'GET', '/api/v1/web-scraping/progress/{task_id}', 'none')">
             Check Progress
         </button>
-        
+
         <pre id="webScrapingProgress_response"></pre>
     </div>
 </div>
@@ -442,11 +442,11 @@
         </h2>
         <p>Initialize the web scraping service.</p>
         <small>No request body required. Uses server configuration.</small>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingInit', 'POST', '/api/v1/web-scraping/service/initialize', 'none')">
             Initialize Service
         </button>
-        
+
         <pre id="webScrapingInit_response"></pre>
     </div>
 
@@ -457,11 +457,11 @@
         </h2>
         <p>Shutdown the web scraping service.</p>
         <small>No request body required. Shuts down gracefully.</small>
-        
+
         <button class="api-button btn-danger" onclick="if(confirm('Shutdown web scraping service?')) makeRequest('webScrapingShutdown', 'POST', '/api/v1/web-scraping/service/shutdown', 'none')">
             Shutdown Service
         </button>
-        
+
         <pre id="webScrapingShutdown_response"></pre>
     </div>
 </div>
@@ -473,16 +473,16 @@
             <span class="endpoint-path">/api/v1/web-scraping/cookies/{domain}</span>
         </h2>
         <p>Get cookies for a specific domain</p>
-        
+
         <div class="form-group">
             <label for="webScrapingCookiesGet_domain">Domain <span class="required">*</span>:</label>
             <input type="text" id="webScrapingCookiesGet_domain" placeholder="example.com">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingCookiesGet', 'GET', '/api/v1/web-scraping/cookies/{domain}', 'none')">
             Get Cookies
         </button>
-        
+
         <pre id="webScrapingCookiesGet_response"></pre>
     </div>
 
@@ -492,12 +492,12 @@
             <span class="endpoint-path">/api/v1/web-scraping/cookies/{domain}</span>
         </h2>
         <p>Set cookies for a specific domain</p>
-        
+
         <div class="form-group">
             <label for="webScrapingCookiesSet_domain">Domain <span class="required">*</span>:</label>
             <input type="text" id="webScrapingCookiesSet_domain" placeholder="example.com">
         </div>
-        
+
         <div class="form-group">
             <label for="webScrapingCookiesSet_payload">Cookies (JSON):</label>
             <textarea id="webScrapingCookiesSet_payload" rows="8" placeholder='[{"name": "session", "value": "abc123", "domain": ".example.com"}]'>[
@@ -511,11 +511,11 @@
   }
 ]</textarea>
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingCookiesSet', 'POST', '/api/v1/web-scraping/cookies/{domain}', 'json')">
             Set Cookies
         </button>
-        
+
         <pre id="webScrapingCookiesSet_response"></pre>
     </div>
 </div>
@@ -527,16 +527,16 @@
             <span class="endpoint-path">/api/v1/web-scraping/duplicates/check</span>
         </h2>
         <p>Check for duplicate URLs in the database</p>
-        
+
         <div class="form-group">
             <label for="webScrapingDuplicates_url">URL to Check:</label>
             <input type="text" id="webScrapingDuplicates_url" placeholder="https://example.com/page" data-query="true">
         </div>
-        
+
         <button class="api-button" onclick="makeRequest('webScrapingDuplicates', 'GET', '/api/v1/web-scraping/duplicates/check', 'query')">
             Check Duplicates
         </button>
-        
+
         <pre id="webScrapingDuplicates_response"></pre>
     </div>
 </div>

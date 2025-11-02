@@ -4,7 +4,7 @@ Status: Active (MVP scaffold implemented)
 
 Owner: Core (LLM, Audio, MCP, AuthNZ, WebUI)
 
-Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2–3)
+Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2-3)
 
 ## Summary
 
@@ -114,7 +114,7 @@ Implementation notes:
 
 ## Tool Use Loop (Plan → Confirm → Act → Review)
 
-1. Persona drafts a short plan (1–3 steps max by default) with tools and inputs.
+1. Persona drafts a short plan (1-3 steps max by default) with tools and inputs.
 2. UI shows the plan for user confirmation (per step approvals allowed).
 3. On confirmation, server calls MCP tools with scoped tokens; streams results.
 4. Persona summarizes outcomes and proposes next steps.

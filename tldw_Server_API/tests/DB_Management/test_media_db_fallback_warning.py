@@ -83,4 +83,3 @@ def test_explicit_db_path_avoids_fallback_and_logs_no_warning(monkeypatch, tmp_p
     assert backend is not None
     # No fallback warning expected
     assert not any("falling back to default SQLite path" in s for s in logs)
-

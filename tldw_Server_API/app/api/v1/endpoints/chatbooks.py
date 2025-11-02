@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 from slowapi.util import get_remote_address
 
@@ -127,16 +128,16 @@ async def create_chatbook(
 ):
     """
     Create a chatbook from selected content.
-    
+
     This endpoint allows users to export their content (conversations, notes, characters, etc.)
     into a portable chatbook format. The operation can be run synchronously or asynchronously.
-    
+
     Args:
         request: Chatbook creation parameters
         background_tasks: FastAPI background tasks
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         CreateChatbookResponse with job ID (async) or file path (sync)
     """
@@ -150,28 +151,30 @@ async def create_chatbook(
         )
         if not valid:
             raise HTTPException(status_code=400, detail=error)
-        
+
         # Initialize quota manager (DB-backed)
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
-        
+
         # Check export quota
         allowed, message = await quota_manager.check_export_quota()
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
-        
+
         # Check concurrent jobs quota
         allowed, message = await quota_manager.check_concurrent_jobs()
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
-        
+
         # Convert content selections to use core ContentType enums
         content_selections = {}
         for content_type, ids in request_data.content_selections.items():
             # Handle both schema enums and strings robustly
             ct_val = content_type.value if hasattr(content_type, 'value') else str(content_type)
             content_selections[ContentType(ct_val)] = ids
-        
+
         # Create chatbook
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
         success, message, result = await service.create_chatbook(
             name=request_data.name,
             description=request_data.description,
@@ -183,9 +186,10 @@ async def create_chatbook(
             include_generated_content=request_data.include_generated_content,
             tags=request_data.tags,
             categories=request_data.categories,
-            async_mode=request_data.async_mode
+            async_mode=request_data.async_mode,
+            request_id=rid
         )
-        
+
         if success:
             if request_data.async_mode:
                 # Async mode - return job ID
@@ -217,7 +221,7 @@ async def create_chatbook(
                     job_id=result
                 )
             else:
-                # Sync mode — create a completed export job with a UUID as job_id
+                # Sync mode - create a completed export job with a UUID as job_id
                 import uuid
                 from datetime import datetime, timedelta
 
@@ -286,11 +290,13 @@ async def create_chatbook(
                 )
         else:
             raise HTTPException(status_code=400, detail=message)
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating chatbook for user {user.id}: {e}")
+        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
+            "Error creating chatbook for user %s: %s", user.id, e
+        )
         raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook")
 
 
@@ -307,54 +313,54 @@ async def import_chatbook(
 ):
     """
     Import a chatbook file.
-    
+
     This endpoint allows users to import content from a chatbook file. The operation
     can handle conflicts through various resolution strategies and can be run
     synchronously or asynchronously.
-    
+
     Args:
         file: The chatbook file to import (ZIP format)
         request: Import configuration
         background_tasks: FastAPI background tasks
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         ImportChatbookResponse with job ID (async) or import results (sync)
     """
     try:
         # Initialize quota manager (DB-backed)
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
-        
+
         # Check import quota
         allowed, message = await quota_manager.check_import_quota()
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
-        
+
         # Check concurrent jobs quota
         allowed, message = await quota_manager.check_concurrent_jobs()
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
-        
+
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
-        
+
         # Validate and sanitize filename
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
             raise HTTPException(status_code=400, detail=error)
-        
+
         # Check file size
         file.file.seek(0, 2)  # Seek to end
         file_size = file.file.tell()
         file.file.seek(0)  # Reset to beginning
-        
+
         # Check file size quota
         allowed, message = await quota_manager.check_file_size(file_size)
         if not allowed:
             raise HTTPException(status_code=413, detail=message)
-        
+
         # Save uploaded file to secure temp location with sanitized name
         import tempfile
         base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
@@ -398,7 +404,7 @@ async def import_chatbook(
 
         with open(temp_file, 'wb') as f:
             shutil.copyfileobj(file.file, f)
-        
+
         # Validate the uploaded ZIP file
         valid, error = ChatbookValidator.validate_zip_file(str(temp_file))
         if not valid:
@@ -411,7 +417,7 @@ async def import_chatbook(
             except Exception as m_err:
                 logger.debug(f"metrics increment failed (chatbooks import_invalid_upload_cleanup_failed): error={m_err}")
             raise HTTPException(status_code=400, detail=error)
-        
+
         # Convert content selections if provided (schema enum or string keys)
         content_selections = None
         if import_request.content_selections:
@@ -419,8 +425,10 @@ async def import_chatbook(
             for content_type, ids in import_request.content_selections.items():
                 ct_val = content_type.value if hasattr(content_type, 'value') else str(content_type)
                 content_selections[ContentType(ct_val)] = ids
-        
+
         # Import chatbook
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
         success, message, result = await service.import_chatbook(
             file_path=str(temp_file),
             content_selections=content_selections,
@@ -428,9 +436,10 @@ async def import_chatbook(
             prefix_imported=import_request.prefix_imported,
             import_media=import_request.import_media,
             import_embeddings=import_request.import_embeddings,
-            async_mode=import_request.async_mode
+            async_mode=import_request.async_mode,
+            request_id=rid
         )
-        
+
         if success:
             if import_request.async_mode:
                 # Async mode - return job ID
@@ -480,11 +489,13 @@ async def import_chatbook(
                 )
         else:
             raise HTTPException(status_code=400, detail=message)
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error importing chatbook for user {user.id}: {e}")
+        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
+            "Error importing chatbook for user %s: %s", user.id, e
+        )
         raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook")
     finally:
         # Cleanup uploaded file if not async
@@ -510,15 +521,15 @@ async def preview_chatbook(
 ):
     """
     Preview a chatbook without importing it.
-    
+
     This endpoint allows users to examine the contents of a chatbook file
     before deciding whether to import it.
-    
+
     Args:
         file: The chatbook file to preview (ZIP format)
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         PreviewChatbookResponse with manifest information
     """
@@ -526,20 +537,20 @@ async def preview_chatbook(
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
-        
+
         # Validate and sanitize filename
         valid, error, safe_filename = ChatbookValidator.validate_filename(file.filename)
         if not valid:
             raise HTTPException(status_code=400, detail=error)
-        
+
         # Check file size (limit to 100MB for preview)
         file.file.seek(0, 2)
         file_size = file.file.tell()
         file.file.seek(0)
-        
+
         if file_size > 100 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="File too large. Maximum size is 100MB")
-        
+
         # Save uploaded file to secure temp location with sanitized name
         import tempfile
         base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
@@ -598,7 +609,7 @@ async def preview_chatbook(
 
         # Preview chatbook
         manifest, error = service.preview_chatbook(str(temp_file))
-        
+
         # Cleanup temp file
         try:
             temp_file.unlink()
@@ -608,7 +619,7 @@ async def preview_chatbook(
                 increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "preview_cleanup_failed"})
             except Exception as m_err:
                 logger.debug(f"metrics increment failed (chatbooks preview_cleanup_failed): error={m_err}")
-        
+
         if manifest:
             # Convert manifest to response model
             # Coerce model enum to schema enum value safely, map legacy 1.0 -> 1.0.0
@@ -662,11 +673,13 @@ async def preview_chatbook(
             return PreviewChatbookResponse(manifest=manifest_response)
         else:
             return PreviewChatbookResponse(error=error)
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error previewing chatbook for user {user.id}: {e}")
+        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
+            "Error previewing chatbook for user %s: %s", user.id, e
+        )
         raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
 
 
@@ -679,29 +692,29 @@ async def list_export_jobs(
 ):
     """
     List all export jobs for the current user.
-    
+
     Args:
         limit: Maximum number of results
         offset: Offset for pagination
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         ListExportJobsResponse with list of export jobs
     """
     try:
         jobs = service.list_export_jobs()
-        
+
         # Apply pagination
         total = len(jobs)
         jobs = jobs[offset:offset + limit]
-        
+
         # Convert to response models
         job_responses = []
         for job in jobs:
             # Generate secure download URL based on job_id
             secure_download_url = f"/api/v1/chatbooks/download/{job.job_id}" if job.status == ExportStatus.COMPLETED else None
-            
+
             job_responses.append(ExportJobResponse(
                 job_id=job.job_id,
                 status=job.status,
@@ -718,9 +731,9 @@ async def list_export_jobs(
                 download_url=secure_download_url,  # Use secure URL based on job_id
                 expires_at=job.expires_at
             ))
-        
+
         return ListExportJobsResponse(jobs=job_responses, total=total)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -736,24 +749,24 @@ async def get_export_job(
 ):
     """
     Get status of a specific export job.
-    
+
     Args:
         job_id: The export job ID
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         ExportJobResponse with job details
     """
     try:
         job = service.get_export_job(job_id)
-        
+
         if not job:
             raise HTTPException(status_code=404, detail="Export job not found")
-        
+
         # Generate secure download URL based on job_id
         secure_download_url = f"/api/v1/chatbooks/download/{job.job_id}" if job.status == ExportStatus.COMPLETED else None
-        
+
         return ExportJobResponse(
             job_id=job.job_id,
             status=job.status,
@@ -770,7 +783,7 @@ async def get_export_job(
             download_url=secure_download_url,  # Use secure URL based on job_id
             expires_at=job.expires_at
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -787,23 +800,23 @@ async def list_import_jobs(
 ):
     """
     List all import jobs for the current user.
-    
+
     Args:
         limit: Maximum number of results
         offset: Offset for pagination
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         ListImportJobsResponse with list of import jobs
     """
     try:
         jobs = service.list_import_jobs()
-        
+
         # Apply pagination
         total = len(jobs)
         jobs = jobs[offset:offset + limit]
-        
+
         # Convert to response models
         job_responses = []
         for job in jobs:
@@ -824,9 +837,9 @@ async def list_import_jobs(
                 conflicts=job.conflicts,
                 warnings=job.warnings
             ))
-        
+
         return ListImportJobsResponse(jobs=job_responses, total=total)
-        
+
     except Exception as e:
         logger.error(f"Error listing import jobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -840,21 +853,21 @@ async def get_import_job(
 ):
     """
     Get status of a specific import job.
-    
+
     Args:
         job_id: The import job ID
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         ImportJobResponse with job details
     """
     try:
         job = service.get_import_job(job_id)
-        
+
         if not job:
             raise HTTPException(status_code=404, detail="Import job not found")
-        
+
         return ImportJobResponse(
             job_id=job.job_id,
             status=job.status,
@@ -872,7 +885,7 @@ async def get_import_job(
             conflicts=job.conflicts,
             warnings=job.warnings
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -891,12 +904,12 @@ async def download_chatbook(
 ):
     """
     Download an exported chatbook file by job ID.
-    
+
     Args:
         job_id: The export job ID
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         FileResponse with the chatbook file
     """
@@ -908,16 +921,16 @@ async def download_chatbook(
         is_ps_valid = backend == "prompt_studio" and job_id.isdigit()
         if not (is_uuid or is_ps_valid):
             raise HTTPException(status_code=400, detail="Invalid job ID format")
-        
+
         # Get job from service (validates ownership)
         job = service.get_export_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Export job not found")
-        
+
         # Verify job belongs to current user (double check)
         if job.user_id != str(user.id):
             raise HTTPException(status_code=403, detail="Access denied")
-        
+
         # Verify job is completed
         if job.status != ExportStatus.COMPLETED:
             raise HTTPException(status_code=400, detail=f"Export job is {job.status.value}, not completed")
@@ -951,17 +964,17 @@ async def download_chatbook(
             expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             if not hmac.compare_digest(expected, token):
                 raise HTTPException(status_code=403, detail="Invalid signature")
-        
+
         # Get secure file path from job
         if not job.output_path:
             raise HTTPException(status_code=404, detail="Export file not found")
-        
+
         file_path = Path(job.output_path).resolve()
-        
+
         # Verify file exists and is within secure storage
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=404, detail="Export file no longer exists")
-        
+
         # Additional path containment check - ensure file is in expected user directory
         # The file should be within the user's export directory
         expected_base = Path(service.export_dir).resolve()
@@ -989,10 +1002,10 @@ async def download_chatbook(
             except Exception:
                 pass
             raise HTTPException(status_code=403, detail="Access denied")
-        
+
         # Get filename from path
         filename = file_path.name
-        
+
         # Log successful download via unified audit service
         try:
             context = AuditContext(
@@ -1014,7 +1027,7 @@ async def download_chatbook(
             )
         except Exception:
             pass
-        
+
         # Build safe Content-Disposition (ASCII fallback + RFC 5987 filename*)
         def _safe_disp_parts(name: str) -> tuple[str, Optional[str]]:
             try:
@@ -1043,7 +1056,7 @@ async def download_chatbook(
             media_type="application/zip",
             headers=headers,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1059,13 +1072,13 @@ async def cleanup_expired_exports(
 ):
     """
     Clean up expired export files.
-    
+
     This endpoint removes export files that have passed their expiration date.
-    
+
     Args:
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         CleanupExpiredExportsResponse with count of deleted files
     """
@@ -1092,7 +1105,7 @@ async def cleanup_expired_exports(
         return CleanupExpiredExportsResponse(
             deleted_count=deleted_count
         )
-        
+
     except Exception as e:
         logger.error(f"Error cleaning up expired exports: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1107,12 +1120,12 @@ async def cancel_export_job(
 ):
     """
     Cancel an export job.
-    
+
     Args:
         job_id: The export job ID to cancel
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         Success message
     """
@@ -1132,7 +1145,7 @@ async def cancel_export_job(
         except Exception:
             pass
         return {"message": f"Export job {job_id} cancelled"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1149,12 +1162,12 @@ async def cancel_import_job(
 ):
     """
     Cancel an import job.
-    
+
     Args:
         job_id: The import job ID to cancel
         service: Chatbook service instance
         user: Current authenticated user
-        
+
     Returns:
         Success message
     """
@@ -1174,7 +1187,7 @@ async def cancel_import_job(
         except Exception:
             pass
         return {"message": f"Import job {job_id} cancelled"}
-        
+
     except HTTPException:
         raise
     except Exception as e:

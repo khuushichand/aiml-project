@@ -2,18 +2,30 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
+import { toBool } from '@/lib/authz';
 
+/**
+ * Render the application's top navigation header with logo, primary links, and user controls.
+ *
+ * The rendered header includes a logo linking to home, a set of navigation links, and a user area that
+ * shows the signed-in username or a Login link. The "Runs" navigation link is included only when the
+ * NEXT_PUBLIC_ENABLE_RUNS_LINK environment flag is enabled and, if NEXT_PUBLIC_RUNS_REQUIRE_ADMIN is set,
+ * only when the current user is determined to be an admin (checks multiple user fields and roles).
+ *
+ * @returns The header element containing the logo, navigation links, and user session controls.
+ */
 export function Header() {
   const router = useRouter();
   const { isAuthenticated, user, logout } = useAuth();
-  
+
   const handleLogout = () => {
     logout();
   };
-  
+
   const showRunsEnv = (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== '0' && (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== 'false';
-  const runsRequireAdmin = (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === '1' || (process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN ?? '').toString().toLowerCase() === 'true';
-  const userIsAdmin = !!((user as any)?.is_admin || (user as any)?.role === 'admin' || (user as any)?.roles?.includes?.('admin'));
+  const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
+  const userIsAdmin = useIsAdmin();
   const showRuns = showRunsEnv && (!runsRequireAdmin || userIsAdmin);
   const navLinks = [
     { href: '/', label: 'Home' },
@@ -28,7 +40,7 @@ export function Header() {
     { href: '/evaluations', label: 'Evals' },
     { href: '/config', label: 'Config' },
   ];
-  
+
   return (
     <header className="border-b border-gray-200 bg-white">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -39,7 +51,7 @@ export function Header() {
               TLDW
             </Link>
           </div>
-          
+
           {/* Navigation */}
           <nav className="hidden md:flex md:space-x-8">
             {navLinks.map((link) => (
@@ -57,7 +69,7 @@ export function Header() {
               </Link>
             ))}
           </nav>
-          
+
           {/* User menu */}
           <div className="flex items-center space-x-4">
             {isAuthenticated ? (

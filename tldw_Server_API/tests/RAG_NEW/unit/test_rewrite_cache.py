@@ -16,4 +16,3 @@ def test_rewrite_cache_put_get(tmp_path, monkeypatch):
     out = rc.get(q, intent="FACTUAL", corpus="ml")
     assert out is not None
     assert any("compute unified" in r for r in out)
-

@@ -497,7 +497,7 @@ The system comes with several pre-configured templates:
 
 - Classifier location: `classifier` may be top-level or under `chunking.config`. Both are supported for matching and validation.
 - Hierarchical options: `hierarchical` and `hierarchical_template` must be provided under `chunking.config` (top-level keys are ignored by the validator).
-- Operation schema: Pre/Post operations accept either `{operation, config}` or `{type, params}` — the processor supports both.
+- Operation schema: Pre/Post operations accept either `{operation, config}` or `{type, params}` - the processor supports both.
 - Apply overrides: You can override `method`, `max_size`, `overlap`, and other config via `override_options` on apply; these merge over template defaults.
 - Response shape: Use `include_metadata=true` to receive `{text, metadata}` objects instead of a plain list of strings.
 
@@ -621,10 +621,10 @@ response = requests.post(
         "text": """
         # Abstract
         This paper presents a novel approach...
-        
+
         # Introduction
         Recent advances in machine learning...
-        
+
         # Methodology
         We propose a three-stage approach...
         """
@@ -655,7 +655,7 @@ for doc in documents:
             "text": doc["text"]
         }
     )
-    
+
     if response.status_code == 200:
         result = response.json()
         print(f"Processed {doc['type']}: {result['metadata']['chunk_count']} chunks")

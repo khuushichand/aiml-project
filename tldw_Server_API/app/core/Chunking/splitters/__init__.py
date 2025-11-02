@@ -30,4 +30,3 @@ def get_sentence_splitter(name: str = "regex") -> SentenceSplitter:
     else:
         from .regex import RegexSentenceSplitter
         return RegexSentenceSplitter()
-

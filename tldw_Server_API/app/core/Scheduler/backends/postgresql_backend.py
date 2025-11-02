@@ -32,7 +32,7 @@ from ..config import SchedulerConfig
 class PostgreSQLBackend(QueueBackend):
     """
     PostgreSQL backend implementation with advanced features.
-    
+
     Leverages:
     - SKIP LOCKED for lock-free atomic dequeue
     - NOTIFY/LISTEN for real-time updates
@@ -40,11 +40,11 @@ class PostgreSQLBackend(QueueBackend):
     - Efficient bulk operations with unnest()
     - Partial indexes for performance
     """
-    
+
     def __init__(self, config: SchedulerConfig):
         """
         Initialize PostgreSQL backend.
-        
+
         Args:
             config: Scheduler configuration
         """
@@ -53,19 +53,19 @@ class PostgreSQLBackend(QueueBackend):
                 "asyncpg is required for PostgreSQL backend. "
                 "Install with: pip install asyncpg"
             )
-        
+
         self.config = config
         self.pool: Optional[Pool] = None
         self._listener_task: Optional[asyncio.Task] = None
         self._notifications: Dict[str, asyncio.Queue] = {}
-        
+
         # Parse connection string
         self.dsn = config.database_url
         if self.dsn.startswith('postgresql://'):
             self.dsn = self.dsn.replace('postgresql://', '')
         elif self.dsn.startswith('postgres://'):
             self.dsn = self.dsn.replace('postgres://', '')
-    
+
     async def connect(self) -> None:
         """
         Establish connection pool and set up database.
@@ -81,22 +81,22 @@ class PostgreSQLBackend(QueueBackend):
                 max_inactive_connection_lifetime=60.0,
                 command_timeout=60.0
             )
-            
+
             # Initialize schema
             await self._initialize_schema()
-            
+
             # Start listener for NOTIFY/LISTEN
             self._listener_task = asyncio.create_task(self._listen_for_notifications())
-            
+
             logger.info(
                 f"PostgreSQL backend connected: pool={self.config.db_pool_min_size}-"
                 f"{self.config.db_pool_max_size}"
             )
-            
+
         except Exception as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
             raise BackendError(f"Connection failed: {e}")
-    
+
     async def disconnect(self) -> None:
         """
         Close connection pool and cleanup.
@@ -107,13 +107,13 @@ class PostgreSQLBackend(QueueBackend):
                 await self._listener_task
             except asyncio.CancelledError:
                 pass
-        
+
         if self.pool:
             await self.pool.close()
             self.pool = None
-        
+
         logger.info("PostgreSQL backend disconnected")
-    
+
     async def _initialize_schema(self) -> None:
         """
         Create tables and indexes if they don't exist.
@@ -147,27 +147,27 @@ class PostgreSQLBackend(QueueBackend):
                     result JSONB,
                     metadata JSONB
                 );
-                
+
                 -- Partial indexes for efficient queries
                 CREATE INDEX IF NOT EXISTS idx_tasks_dequeue
                 ON tasks (queue_name, priority DESC, created_at)
                 WHERE status = 'queued' AND (scheduled_at IS NULL OR scheduled_at <= NOW());
-                
+
                 CREATE INDEX IF NOT EXISTS idx_tasks_status
                 ON tasks (status) WHERE status IN ('queued', 'running');
-                
+
                 CREATE INDEX IF NOT EXISTS idx_tasks_scheduled
                 ON tasks (scheduled_at) WHERE scheduled_at IS NOT NULL AND status = 'queued';
-                
+
                 CREATE INDEX IF NOT EXISTS idx_tasks_dependencies
                 ON tasks USING GIN (depends_on) WHERE depends_on IS NOT NULL;
-                
+
                 CREATE INDEX IF NOT EXISTS idx_tasks_lease
                 ON tasks (lease_expires_at) WHERE status = 'running';
-                
+
                 CREATE INDEX IF NOT EXISTS idx_tasks_worker
                 ON tasks (worker_id) WHERE worker_id IS NOT NULL;
-                
+
                 -- Leader election table
                 CREATE TABLE IF NOT EXISTS leader_election (
                     resource TEXT PRIMARY KEY,
@@ -175,7 +175,7 @@ class PostgreSQLBackend(QueueBackend):
                     expires_at TIMESTAMPTZ NOT NULL,
                     metadata JSONB
                 );
-                
+
                 -- External payload storage
                 CREATE TABLE IF NOT EXISTS payloads (
                     id TEXT PRIMARY KEY,
@@ -184,7 +184,7 @@ class PostgreSQLBackend(QueueBackend):
                     compressed BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
-                
+
                 -- Trigger for updated_at
                 CREATE OR REPLACE FUNCTION update_updated_at()
                 RETURNS TRIGGER AS $$
@@ -193,13 +193,13 @@ class PostgreSQLBackend(QueueBackend):
                     RETURN NEW;
                 END;
                 $$ LANGUAGE plpgsql;
-                
+
                 CREATE TRIGGER update_tasks_updated_at
                 BEFORE UPDATE ON tasks
                 FOR EACH ROW
                 EXECUTE FUNCTION update_updated_at();
             """)
-    
+
     async def enqueue(self, task: Task) -> str:
         """
         Add task to queue with idempotency support.
@@ -209,11 +209,11 @@ class PostgreSQLBackend(QueueBackend):
                 # Handle large payload
                 payload_ref = None
                 payload_data = task.payload
-                
+
                 if payload_data and len(json.dumps(payload_data)) > self.config.payload_threshold_bytes:
                     payload_ref = await self._store_external_payload(conn, task.id, payload_data)
                     payload_data = None
-                
+
                 # Insert with ON CONFLICT for idempotency and return canonical ID
                 row = await conn.fetchrow("""
                     INSERT INTO tasks (
@@ -232,39 +232,39 @@ class PostgreSQLBackend(QueueBackend):
                     task.max_retries, task.retry_delay, task.timeout,
                     json.dumps(task.metadata) if task.metadata else None
                 )
-                
+
                 # Notify listeners
                 await self._notify_queue(conn, task.queue_name or self.config.default_queue_name)
-                
+
                 # Return canonical ID (existing or newly inserted)
                 return row['id'] if row and 'id' in row else task.id
-                
+
             except Exception as e:
                 logger.error(f"Failed to enqueue task: {e}")
                 raise BackendError(f"Enqueue failed: {e}")
-    
+
     async def bulk_enqueue(self, tasks: List[Task]) -> List[str]:
         """
         Efficiently enqueue multiple tasks in a single transaction.
         """
         if not tasks:
             return []
-        
+
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 task_ids = []
-                
+
                 # Prepare data for bulk insert
                 values = []
                 for task in tasks:
                     # Handle large payloads
                     payload_ref = None
                     payload_data = task.payload
-                    
+
                     if payload_data and len(json.dumps(payload_data)) > self.config.payload_threshold_bytes:
                         payload_ref = await self._store_external_payload(conn, task.id, payload_data)
                         payload_data = None
-                    
+
                     values.append((
                         task.id, task.handler,
                         json.dumps(payload_data) if payload_data else None,
@@ -275,7 +275,7 @@ class PostgreSQLBackend(QueueBackend):
                         json.dumps(task.metadata) if task.metadata else None
                     ))
                     task_ids.append(task.id)
-                
+
                 # Bulk insert with ON CONFLICT
                 await conn.executemany("""
                     INSERT INTO tasks (
@@ -285,24 +285,24 @@ class PostgreSQLBackend(QueueBackend):
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     ON CONFLICT (idempotency_key) DO NOTHING
                 """, values)
-                
+
                 # Notify all affected queues
                 queues = set(t.queue_name or self.config.default_queue_name for t in tasks)
                 for queue in queues:
                     await self._notify_queue(conn, queue)
-                
+
                 return task_ids
-    
+
     async def dequeue_atomic(self, queue_name: str, worker_id: str) -> Optional[Task]:
         """
         Atomically dequeue next available task using SKIP LOCKED.
-        
+
         This is the crown jewel of PostgreSQL queuing - completely lock-free
         atomic dequeue that scales to thousands of workers.
         """
         lease_id = str(uuid.uuid4())
         lease_expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.lease_duration_seconds)
-        
+
         async with self.pool.acquire() as conn:
             # Single atomic query with SKIP LOCKED
             row = await conn.fetchrow("""
@@ -332,13 +332,13 @@ class PostgreSQLBackend(QueueBackend):
                 )
                 RETURNING *
             """, worker_id, lease_id, lease_expires, queue_name)
-            
+
             if not row:
                 return None
-            
+
             # Convert to Task object
             return await self._row_to_task(conn, row)
-    
+
     async def ack(self, task_id: str, result: Optional[Any] = None) -> bool:
         """
         Acknowledge task completion.
@@ -353,9 +353,9 @@ class PostgreSQLBackend(QueueBackend):
                     lease_expires_at = NULL
                 WHERE id = $2 AND status = 'running'
             """, json.dumps(result) if result else None, task_id)
-            
+
             return affected != "UPDATE 0"
-    
+
     async def nack(self, task_id: str, error: Optional[str] = None) -> bool:
         """
         Negative acknowledge - task failed but may be retried.
@@ -372,35 +372,35 @@ class PostgreSQLBackend(QueueBackend):
                     lease_expires_at = NULL,
                     worker_id = NULL,
                     scheduled_at = CASE
-                        WHEN retry_count < max_retries 
+                        WHEN retry_count < max_retries
                         THEN NOW() + INTERVAL '1 second' * retry_delay
                         ELSE NULL
                     END
                 WHERE id = $2 AND status = 'running'
                 RETURNING status, queue_name
             """, error, task_id)
-            
+
             if row and row['status'] == 'queued':
                 # Notify queue for retry
                 await self._notify_queue(conn, row['queue_name'])
-            
+
             return row is not None
-    
+
     async def renew_lease(self, task_id: str, lease_id: str) -> bool:
         """
         Renew task lease to prevent timeout.
         """
         new_expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.lease_duration_seconds)
-        
+
         async with self.pool.acquire() as conn:
             affected = await conn.execute("""
                 UPDATE tasks
                 SET lease_expires_at = $1
                 WHERE id = $2 AND lease_id = $3 AND status = 'running'
             """, new_expires, task_id, lease_id)
-            
+
             return affected != "UPDATE 0"
-    
+
     async def reclaim_expired_leases(self) -> int:
         """
         Reclaim tasks with expired leases.
@@ -417,14 +417,14 @@ class PostgreSQLBackend(QueueBackend):
                   AND lease_expires_at < NOW()
                 RETURNING queue_name
             """)
-            
+
             # Notify affected queues
             queues = set(row['queue_name'] for row in rows)
             for queue in queues:
                 await self._notify_queue(conn, queue)
-            
+
             return len(rows)
-    
+
     async def get_task(self, task_id: str) -> Optional[Task]:
         """
         Get task by ID.
@@ -442,7 +442,7 @@ class PostgreSQLBackend(QueueBackend):
                 "SELECT id FROM tasks WHERE idempotency_key = $1",
                 idempotency_key
             )
-    
+
     async def get_queue_size(self, queue_name: str) -> int:
         """
         Get number of queued tasks.
@@ -453,7 +453,7 @@ class PostgreSQLBackend(QueueBackend):
                 WHERE queue_name = $1 AND status = 'queued'
             """, queue_name)
             return result or 0
-    
+
     async def get_ready_tasks(self) -> List[str]:
         """
         Get IDs of tasks ready to run (dependencies satisfied).
@@ -462,10 +462,10 @@ class PostgreSQLBackend(QueueBackend):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 WITH dependency_status AS (
-                    SELECT 
+                    SELECT
                         t1.id,
                         t1.depends_on,
-                        CASE 
+                        CASE
                             WHEN t1.depends_on IS NULL THEN TRUE
                             WHEN NOT EXISTS (
                                 SELECT 1 FROM unnest(t1.depends_on) AS dep_id
@@ -483,25 +483,25 @@ class PostgreSQLBackend(QueueBackend):
                 )
                 SELECT id FROM dependency_status WHERE ready = TRUE
             """)
-            
+
             return [row['id'] for row in rows]
-    
+
     async def acquire_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
         """
         Try to acquire leadership using advisory locks.
         """
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-        
+
         async with self.pool.acquire() as conn:
             # Use advisory lock for atomic operation
             lock_id = hash(resource) % 2147483647  # Convert to valid int4
-            
+
             # Try to acquire advisory lock
             acquired = await conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
-            
+
             if not acquired:
                 return False
-            
+
             try:
                 # Check and update leader
                 result = await conn.fetchval("""
@@ -513,28 +513,28 @@ class PostgreSQLBackend(QueueBackend):
                        OR leader_election.leader_id = $2
                     RETURNING leader_id
                 """, resource, leader_id, expires_at)
-                
+
                 return result == leader_id
-                
+
             finally:
                 # Release advisory lock
                 await conn.execute("SELECT pg_advisory_unlock($1)", lock_id)
-    
+
     async def renew_leader(self, resource: str, leader_id: str, ttl: int) -> bool:
         """
         Renew leadership lease.
         """
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
-        
+
         async with self.pool.acquire() as conn:
             affected = await conn.execute("""
                 UPDATE leader_election
                 SET expires_at = $1
                 WHERE resource = $2 AND leader_id = $3
             """, expires_at, resource, leader_id)
-            
+
             return affected != "UPDATE 0"
-    
+
     async def release_leader(self, resource: str, leader_id: str) -> bool:
         """
         Release leadership.
@@ -544,37 +544,37 @@ class PostgreSQLBackend(QueueBackend):
                 DELETE FROM leader_election
                 WHERE resource = $1 AND leader_id = $2
             """, resource, leader_id)
-            
+
             return affected != "DELETE 0"
-    
+
     async def execute(self, query: str, *args) -> Any:
         """
         Execute raw query (for testing/debugging).
         """
         async with self.pool.acquire() as conn:
             return await conn.execute(query, *args)
-    
+
     async def _store_external_payload(self, conn: Connection, task_id: str, payload: Dict) -> str:
         """
         Store large payload externally.
         """
         payload_id = str(uuid.uuid4())
         data = json.dumps(payload).encode('utf-8')
-        
+
         # Optionally compress
         compressed = False
         if self.config.payload_compression and len(data) > 1024:
             import gzip
             data = gzip.compress(data)
             compressed = True
-        
+
         await conn.execute("""
             INSERT INTO payloads (id, task_id, data, compressed)
             VALUES ($1, $2, $3, $4)
         """, payload_id, task_id, data, compressed)
-        
+
         return payload_id
-    
+
     async def _load_external_payload(self, conn: Connection, payload_ref: str) -> Optional[Dict]:
         """
         Load externally stored payload.
@@ -582,18 +582,18 @@ class PostgreSQLBackend(QueueBackend):
         row = await conn.fetchrow("""
             SELECT data, compressed FROM payloads WHERE id = $1
         """, payload_ref)
-        
+
         if not row:
             return None
-        
+
         data = row['data']
-        
+
         if row['compressed']:
             import gzip
             data = gzip.decompress(data)
-        
+
         return json.loads(data.decode('utf-8'))
-    
+
     async def _row_to_task(self, conn: Connection, row: asyncpg.Record) -> Task:
         """
         Convert database row to Task object.
@@ -604,17 +604,17 @@ class PostgreSQLBackend(QueueBackend):
             payload = json.loads(row['payload'])
         elif row['payload_ref']:
             payload = await self._load_external_payload(conn, row['payload_ref'])
-        
+
         # Parse metadata
         metadata = None
         if row['metadata']:
             metadata = json.loads(row['metadata'])
-        
+
         # Parse result
         result = None
         if row['result']:
             result = json.loads(row['result'])
-        
+
         return Task(
             id=row['id'],
             handler=row['handler'],
@@ -640,13 +640,13 @@ class PostgreSQLBackend(QueueBackend):
             result=result,
             metadata=metadata
         )
-    
+
     async def _notify_queue(self, conn: Connection, queue_name: str) -> None:
         """
         Send NOTIFY for queue updates.
         """
         await conn.execute(f"NOTIFY queue_update, '{queue_name}'")
-    
+
     async def _listen_for_notifications(self) -> None:
         """
         Background task to listen for NOTIFY events.
@@ -654,12 +654,12 @@ class PostgreSQLBackend(QueueBackend):
         try:
             conn = await asyncpg.connect(self.dsn)
             await conn.add_listener('queue_update', self._handle_notification)
-            
+
             # Keep connection alive
             while True:
                 await asyncio.sleep(30)
                 await conn.fetchval("SELECT 1")  # Heartbeat
-                
+
         except asyncio.CancelledError:
             if conn:
                 await conn.remove_listener('queue_update', self._handle_notification)
@@ -667,7 +667,7 @@ class PostgreSQLBackend(QueueBackend):
             raise
         except Exception as e:
             logger.error(f"Notification listener error: {e}")
-    
+
     def _handle_notification(self, connection, pid, channel, payload):
         """
         Handle NOTIFY events.
@@ -676,29 +676,29 @@ class PostgreSQLBackend(QueueBackend):
         if payload in self._notifications:
             queue = self._notifications[payload]
             queue.put_nowait(True)
-    
+
     async def wait_for_queue(self, queue_name: str, timeout: float = None) -> bool:
         """
         Wait for queue activity (used by workers).
         """
         if queue_name not in self._notifications:
             self._notifications[queue_name] = asyncio.Queue()
-        
+
         queue = self._notifications[queue_name]
-        
+
         try:
             await asyncio.wait_for(queue.get(), timeout=timeout)
             return True
         except asyncio.TimeoutError:
             return False
-    
+
     def get_status(self) -> Dict[str, Any]:
         """
         Get backend status for monitoring.
         """
         if not self.pool:
             return {"status": "disconnected"}
-        
+
         return {
             "status": "connected",
             "pool_size": self.pool.get_size(),

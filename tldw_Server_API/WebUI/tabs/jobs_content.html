@@ -112,7 +112,7 @@
         </div>
 
         <h3>Response:</h3>
-        <div id="adminJobsPrune_summary" class="text-muted" style="margin-bottom:6px;">—</div>
+        <div id="adminJobsPrune_summary" class="text-muted" style="margin-bottom:6px;">-</div>
         <pre id="adminJobsPrune_result">---</pre>
     </div>
 
@@ -152,7 +152,7 @@
             </div>
         </div>
         <h3>Response:</h3>
-        <div id="adminJobsTTL_summary" class="text-muted" style="margin-bottom:6px;">—</div>
+        <div id="adminJobsTTL_summary" class="text-muted" style="margin-bottom:6px;">-</div>
         <pre id="adminJobsTTL_result">---</pre>
     </div>
 
@@ -177,7 +177,7 @@
             </div>
         </div>
         <h3>Response:</h3>
-        <div id="adminJobsRequeue_summary" class="text-muted" style="margin-bottom:6px;">—</div>
+        <div id="adminJobsRequeue_summary" class="text-muted" style="margin-bottom:6px;">-</div>
         <pre id="adminJobsRequeue_result">---</pre>
     </div>
 
@@ -209,7 +209,7 @@
                     <button class="btn btn-warning" id="btnAdminJobsQueueControl">Apply Queue Control</button>
                     <button class="btn btn-secondary" id="btnAdminJobsQueueStatus">Get Queue Status</button>
                 </div>
-                <div id="adminJobs_ctrl_status" class="text-muted">—</div>
+                <div id="adminJobs_ctrl_status" class="text-muted">-</div>
             </div>
             <div class="column">
                 <div class="form-group">
@@ -229,7 +229,7 @@
                 <div class="form-group">
                     <button class="btn btn-secondary" id="btnAdminJobsListAttachments">List Attachments</button>
                 </div>
-                <pre id="adminJobs_attach_list">—</pre>
+                <pre id="adminJobs_attach_list">-</pre>
             </div>
             <div class="column">
                 <div class="form-group">
@@ -245,7 +245,7 @@
                     <button class="btn btn-primary" id="btnAdminJobsUpsertSla">Upsert SLA</button>
                     <button class="btn btn-secondary" id="btnAdminJobsListSla">List SLA</button>
                 </div>
-                <pre id="adminJobs_sla_result">—</pre>
+                <pre id="adminJobs_sla_result">-</pre>
             </div>
         </div>
     </div>
@@ -276,7 +276,7 @@
                     <button class="btn btn-danger" id="btnAdminJobsCryptoExec">Execute (X-Confirm)</button>
                 </div>
                 <div id="adminJobs_crypto_errors" class="text-error" style="min-height:18px;"></div>
-                <pre id="adminJobs_crypto_result">—</pre>
+                <pre id="adminJobs_crypto_result">-</pre>
             </div>
         </div>
     </div>
@@ -542,7 +542,7 @@
                     <div class="form-group"><label>Limit</label><input type="number" id="rk_limit" value="500" min="1"></div>
                     <div class="form-group"><label>Type 'rotate' to confirm</label><input type="text" id="rk_confirm" placeholder="rotate"></div>
                     <div id="rk_errors" class="text-error" style="min-height:18px;"></div>
-                    <pre id="rk_result" style="max-height:200px; overflow:auto;">—</pre>
+                    <pre id="rk_result" style="max-height:200px; overflow:auto;">-</pre>
                   </div>
                 `;
                 const footer = `
@@ -752,7 +752,7 @@
                 const topbar = document.getElementById('adminJobs_topbar');
                 if (topbar) {
                     const ts = new Date().toLocaleString();
-                    topbar.textContent = `${dryRun ? 'Dry run:' : 'Pruned'} ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days${scope ? `, ${scope}` : ''}] — ${ts}`;
+                    topbar.textContent = `${dryRun ? 'Dry run:' : 'Pruned'} ${deleted} job(s) [${statuses.join(', ')} older than ${olderThanDays} days${scope ? `, ${scope}` : ''}] - ${ts}`;
                 }
                 if (summaryEl) summaryEl.textContent = dryRun
                     ? `Dry run: would prune ${deleted} job(s) matching filters`
@@ -763,7 +763,7 @@
                 const err = e && (e.response || e);
                 resultEl.textContent = JSON.stringify(err, null, 2);
                 Toast.error('Prune failed');
-                if (summaryEl) summaryEl.textContent = '—';
+                if (summaryEl) summaryEl.textContent = '-';
             } finally {
                 if (btn) btn.disabled = false;
                 Loading.hide(resultEl);
@@ -802,13 +802,13 @@
                 Toast.success(`TTL sweep affected ${affected} job(s)`);
                 const ts = new Date().toLocaleString();
                 const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
-                if (summaryEl) summaryEl.textContent = `TTL ${action} sweep affected ${affected} job(s) [${scope || 'unscoped'}] — ${ts}`;
+                if (summaryEl) summaryEl.textContent = `TTL ${action} sweep affected ${affected} job(s) [${scope || 'unscoped'}] - ${ts}`;
                 if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
             } catch (e) {
                 const err = e && (e.response || e);
                 resultEl.textContent = JSON.stringify(err, null, 2);
                 Toast.error('TTL sweep failed');
-                if (summaryEl) summaryEl.textContent = '—';
+                if (summaryEl) summaryEl.textContent = '-';
             } finally {
                 if (btn) btn.disabled = false;
                 Loading.hide(resultEl);
@@ -841,13 +841,13 @@
                 Toast.success(`${dryRun ? 'Would requeue' : 'Requeued'} ${affected} job(s)`);
                 const ts = new Date().toLocaleString();
                 const scope = [domain && `domain=${domain}`, queue && `queue=${queue}`, jobType && `job_type=${jobType}`].filter(Boolean).join(', ');
-                if (summaryEl) summaryEl.textContent = `${dryRun ? 'Dry run' : 'Requeued'} ${affected} quarantined job(s) [${scope || 'unscoped'}] — ${ts}`;
+                if (summaryEl) summaryEl.textContent = `${dryRun ? 'Dry run' : 'Requeued'} ${affected} quarantined job(s) [${scope || 'unscoped'}] - ${ts}`;
                 if (typeof adminFetchJobsStats === 'function') adminFetchJobsStats();
             } catch (e) {
                 const err = e && (e.response || e);
                 resultEl.textContent = JSON.stringify(err, null, 2);
                 Toast.error('Requeue failed');
-                if (summaryEl) summaryEl.textContent = '—';
+                if (summaryEl) summaryEl.textContent = '-';
             } finally {
                 if (btn) btn.disabled = false;
                 Loading.hide(resultEl);

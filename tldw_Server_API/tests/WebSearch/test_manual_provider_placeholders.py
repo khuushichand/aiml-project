@@ -52,4 +52,3 @@ def test_search_web_searx_manual() -> None:
 @pytest.mark.skip(reason="Requires live network access and provider credentials.")
 def test_search_web_yandex_manual() -> None:
     pytest.skip("Manual provider test placeholder; invoke with real credentials when needed.")
-

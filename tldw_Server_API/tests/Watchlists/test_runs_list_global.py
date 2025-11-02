@@ -74,4 +74,3 @@ def test_runs_list_q_search_pagination_and_isolation(monkeypatch):
         assert glb.status_code == 200
         assert glb.json()["total"] == 0
         assert glb.json()["items"] == []
-

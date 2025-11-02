@@ -69,8 +69,8 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
 
 # --- API Endpoints ---
 
-@router.post("/import", response_model=CharacterImportResponse, 
-             summary="Import character card", tags=["characters"], 
+@router.post("/import", response_model=CharacterImportResponse,
+             summary="Import character card", tags=["characters"],
              status_code=status.HTTP_201_CREATED)
 async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
@@ -79,13 +79,13 @@ async def import_character_endpoint(
 ):
     """
     Import a character card from a file.
-    
+
     Supports:
     - Image files (PNG, WEBP) with embedded character data
     - JSON files (including Character Card V3 format)
     - Markdown files
     - Plain text files with JSON content
-    
+
     For JSON data, you can upload a .json file or a text file containing JSON.
     """
     try:
@@ -95,18 +95,18 @@ async def import_character_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Uploaded file is empty"
             )
-        
+
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_import")
         rate_limiter.check_import_size(len(file_content_bytes))
-        
+
         # Check character count limit
         existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
-        
+
         logger.info(f"API: Importing character from file: {character_file.filename}")
-        
+
         # import_and_save_character_from_file handles all file types including JSON
         inferred_type = None
         try:
@@ -122,13 +122,13 @@ async def import_character_endpoint(
         success, message, char_id = import_and_save_character_from_file(
             db, file_content=file_content_bytes, file_type=inferred_type
         )
-        
+
         if not success or not char_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=message or "Failed to import character"
             )
-        
+
         # Retrieve the imported character
         imported_char = db.get_character_card_by_id(char_id)
         if not imported_char:
@@ -138,7 +138,7 @@ async def import_character_endpoint(
             )
 
         logger.info(f"Character '{imported_char.get('name', 'Unknown')}' imported successfully (ID: {char_id})")
-        
+
         return CharacterImportResponse(
             id=char_id,
             name=imported_char.get('name', 'Unknown'),
@@ -225,11 +225,11 @@ async def create_new_character_endpoint(
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_create")
-        
+
         # Check character count limit
         existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
-        
+
         # The Pydantic model CharacterCreate ensures 'name' is present.
         # The interop function create_new_character_from_data handles image_base64 etc.
         # and calls db.add_character_card.
@@ -263,7 +263,7 @@ async def create_new_character_endpoint(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
 
 
-@router.get("/filter", response_model=List[CharacterResponse], 
+@router.get("/filter", response_model=List[CharacterResponse],
             summary="Filter characters by tags", tags=["characters"])
 async def filter_characters_by_tags(
     tags: List[str] = Query([], description="List of tags to filter by"),
@@ -274,14 +274,14 @@ async def filter_characters_by_tags(
 ):
     """
     Filter characters by tags.
-    
+
     Args:
         tags: List of tags to filter by
         match_all: If True, require all tags; if False, match any tag
         limit: Maximum results
         offset: Pagination offset
         db: Database instance
-        
+
     Returns:
         List of characters matching the tag criteria
     """
@@ -290,10 +290,10 @@ async def filter_characters_by_tags(
         if not tags:
             results = db.list_character_cards(limit=limit, offset=offset)
             return [_convert_db_char_to_response_model(char) for char in results]
-        
+
         # Get all characters (we'll filter in memory for now)
         all_characters = db.list_character_cards(limit=1000, offset=0)
-        
+
         filtered = []
         for char in all_characters:
             char_tags = char.get('tags', [])
@@ -304,10 +304,10 @@ async def filter_characters_by_tags(
                 except Exception as e:
                     logger.debug(f"Failed to decode character tags JSON; skipping tags. error={e}")
                     char_tags = []
-            
+
             if not char_tags:
                 continue
-                
+
             # Check tag matching
             if match_all:
                 # All specified tags must be present
@@ -317,12 +317,12 @@ async def filter_characters_by_tags(
                 # Any specified tag must be present
                 if any(tag in char_tags for tag in tags):
                     filtered.append(char)
-        
+
         # Apply pagination
         paginated = filtered[offset:offset+limit]
-        
+
         return [_convert_db_char_to_response_model(char) for char in paginated]
-        
+
     except Exception as e:
         logger.error(f"Error filtering characters by tags: {e}", exc_info=True)
         raise HTTPException(
@@ -533,20 +533,20 @@ async def create_world_book(
             recursive_scanning=world_book.recursive_scanning,
             enabled=world_book.enabled
         )
-        
+
         created_book = service.get_world_book(world_book_id)
         if not created_book:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve world book after creation"
             )
-        
+
         # Add entry count
         entries = service.get_entries(world_book_id, enabled_only=False)
         created_book['entry_count'] = len(entries)
-        
+
         return WorldBookResponse(**created_book)
-        
+
     except InputError as e:
         logger.warning(f"Input error creating world book: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -572,17 +572,17 @@ async def get_world_book(
     try:
         service = WorldBookService(db)
         book = service.get_world_book(world_book_id)
-        
+
         if not book:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
-        
+
         # Get entries
         entries = service.get_entries(world_book_id, enabled_only=False)
         book['entry_count'] = len(entries)
-        
+
         # Convert entries to response models
         entry_responses = []
         for entry in entries:
@@ -590,12 +590,12 @@ async def get_world_book(
             entry_dict['created_at'] = book['created_at']  # Use book's timestamp as fallback
             entry_dict['last_modified'] = book['last_modified']
             entry_responses.append(WorldBookEntryResponse(**entry_dict))
-        
+
         return WorldBookWithEntries(
             **book,
             entries=entry_responses
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -616,7 +616,7 @@ async def update_world_book(
     """Update a world book."""
     try:
         service = WorldBookService(db)
-        
+
         # Check if exists
         existing = service.get_world_book(world_book_id)
         if not existing:
@@ -624,7 +624,7 @@ async def update_world_book(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
-        
+
         # Update
         success = service.update_world_book(
             world_book_id=world_book_id,
@@ -635,20 +635,20 @@ async def update_world_book(
             recursive_scanning=update_data.recursive_scanning,
             enabled=update_data.enabled
         )
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update world book"
             )
-        
+
         # Get updated book
         updated_book = service.get_world_book(world_book_id)
         entries = service.get_entries(world_book_id, enabled_only=False)
         updated_book['entry_count'] = len(entries)
-        
+
         return WorldBookResponse(**updated_book)
-        
+
     except HTTPException:
         raise
     except ConflictError as e:
@@ -672,7 +672,7 @@ async def delete_world_book(
     """Delete a world book."""
     try:
         service = WorldBookService(db)
-        
+
         # Check if exists and get name
         book = service.get_world_book(world_book_id)
         if not book:
@@ -680,22 +680,22 @@ async def delete_world_book(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
-        
+
         book_name = book['name']
         success = service.delete_world_book(world_book_id, hard_delete=hard_delete)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete world book"
             )
-        
+
         delete_type = "permanently deleted" if hard_delete else "soft-deleted"
         return DeletionResponse(
             message=f"World book '{book_name}' (ID: {world_book_id}) {delete_type}",
             character_id=world_book_id  # Reusing field name from character deletion
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -718,7 +718,7 @@ async def add_world_book_entry(
     """Add an entry to a world book."""
     try:
         service = WorldBookService(db)
-        
+
         # Check if world book exists
         book = service.get_world_book(world_book_id)
         if not book:
@@ -726,7 +726,7 @@ async def add_world_book_entry(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
-        
+
         entry_id = service.add_entry(
             world_book_id=world_book_id,
             keywords=entry.keywords,
@@ -738,17 +738,17 @@ async def add_world_book_entry(
             whole_word_match=entry.whole_word_match,
             metadata=entry.metadata
         )
-        
+
         # Get the created entry
         entries = service.get_entries(world_book_id, enabled_only=False)
         created_entry = next((e for e in entries if (getattr(e, 'id', None) == entry_id) or (isinstance(e, dict) and e.get('id') == entry_id) or (hasattr(e, 'get') and e.get('id') == entry_id)), None)
-        
+
         if not created_entry:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve entry after creation"
             )
-        
+
         if hasattr(created_entry, 'to_api_dict'):
             entry_dict = created_entry.to_api_dict()
         elif hasattr(created_entry, '_d'):
@@ -759,7 +759,7 @@ async def add_world_book_entry(
         entry_dict['last_modified'] = book['last_modified']
 
         return WorldBookEntryResponse(**entry_dict)
-        
+
     except HTTPException:
         raise
     except InputError as e:
@@ -783,7 +783,7 @@ async def list_world_book_entries(
     """List all entries in a world book."""
     try:
         service = WorldBookService(db)
-        
+
         # Check if world book exists
         book = service.get_world_book(world_book_id)
         if not book:
@@ -791,9 +791,9 @@ async def list_world_book_entries(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
-        
+
         entries = service.get_entries(world_book_id, enabled_only=enabled_only)
-        
+
         # Convert to response models
         entry_responses = []
         for entry in entries:
@@ -806,13 +806,13 @@ async def list_world_book_entries(
             entry_dict['created_at'] = book['created_at']
             entry_dict['last_modified'] = book['last_modified']
             entry_responses.append(WorldBookEntryResponse(**entry_dict))
-        
+
         return EntryListResponse(
             entries=entry_responses,
             total=len(entry_responses),
             world_book_id=world_book_id
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -833,7 +833,7 @@ async def update_world_book_entry(
     """Update a world book entry."""
     try:
         service = WorldBookService(db)
-        
+
         success = service.update_entry(
             entry_id=entry_id,
             keywords=update_data.keywords,
@@ -845,24 +845,24 @@ async def update_world_book_entry(
             whole_word_match=update_data.whole_word_match,
             metadata=update_data.metadata
         )
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Entry with ID {entry_id} not found"
             )
-        
+
         # Find the updated entry
         # We need to search through all world books to find this entry
         all_entries = service.get_entries(enabled_only=False)
         updated_entry = next((e for e in all_entries if (getattr(e, 'id', None) == entry_id) or (hasattr(e, 'get') and e.get('id') == entry_id)), None)
-        
+
         if not updated_entry:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve entry after update"
             )
-        
+
         # Get the world book for timestamps
         # Resolve world book id and entry dict from hybrid entry
         wb_id_resolved = getattr(updated_entry, 'world_book_id', None)
@@ -877,9 +877,9 @@ async def update_world_book_entry(
             entry_dict = dict(updated_entry)
         entry_dict['created_at'] = book['created_at'] if book else datetime.utcnow()
         entry_dict['last_modified'] = book['last_modified'] if book else datetime.utcnow()
-        
+
         return WorldBookEntryResponse(**entry_dict)
-        
+
     except HTTPException:
         raise
     except InputError as e:
@@ -902,20 +902,20 @@ async def delete_world_book_entry(
     """Delete a world book entry."""
     try:
         service = WorldBookService(db)
-        
+
         success = service.delete_entry(entry_id)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Entry with ID {entry_id} not found"
             )
-        
+
         return DeletionResponse(
             message=f"World book entry (ID: {entry_id}) deleted",
             character_id=entry_id  # Reusing field name
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -944,9 +944,9 @@ async def attach_world_book_to_character(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Character with ID {character_id} not found"
             )
-        
+
         service = WorldBookService(db)
-        
+
         # Check if world book exists
         book = service.get_world_book(attachment.world_book_id)
         if not book:
@@ -954,31 +954,31 @@ async def attach_world_book_to_character(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {attachment.world_book_id} not found"
             )
-        
+
         success = service.attach_to_character(
             character_id=character_id,
             world_book_id=attachment.world_book_id,
             enabled=attachment.enabled,
             priority=attachment.priority
         )
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to attach world book to character"
             )
-        
+
         # Get entry count
         entries = service.get_entries(attachment.world_book_id, enabled_only=False)
         book['entry_count'] = len(entries)
-        
+
         return CharacterWorldBookResponse(
             **book,
             world_book_id=book.get('id', attachment.world_book_id),
             attachment_enabled=attachment.enabled,
             attachment_priority=attachment.priority
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -999,20 +999,20 @@ async def detach_world_book_from_character(
     """Detach a world book from a character."""
     try:
         service = WorldBookService(db)
-        
+
         success = service.detach_from_character(world_book_id, character_id)
-        
+
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Attachment between character {character_id} and world book {world_book_id} not found"
             )
-        
+
         return DeletionResponse(
             message=f"World book {world_book_id} detached from character {character_id}",
             character_id=world_book_id  # Reusing field name
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -1039,10 +1039,10 @@ async def get_character_world_books(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Character with ID {character_id} not found"
             )
-        
+
         service = WorldBookService(db)
         books = service.get_character_world_books(character_id, enabled_only=enabled_only)
-        
+
         # Add entry counts and convert to response models
         response_books = []
         for book in books:
@@ -1052,9 +1052,9 @@ async def get_character_world_books(
             book_dict['entry_count'] = len(entries)
             book_dict['world_book_id'] = book_dict.get('id')
             response_books.append(CharacterWorldBookResponse(**book_dict))
-        
+
         return response_books
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -1076,7 +1076,7 @@ async def process_context_with_world_info(
     """Process text to find and inject relevant world info."""
     try:
         service = WorldBookService(db)
-        
+
         result = service.process_context(
             text=request.text,
             world_book_ids=request.world_book_ids,
@@ -1131,7 +1131,7 @@ async def process_context_with_world_info(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unexpected world book processing result.",
         )
-        
+
     except CharactersRAGDBError as e:
         logger.error(f"DB error processing context: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -1151,7 +1151,7 @@ async def import_world_book(
     """Import a world book from external format."""
     try:
         service = WorldBookService(db)
-        
+
         world_book_id = service.import_world_book(
             data={
                 "world_book": import_data.world_book,
@@ -1159,7 +1159,7 @@ async def import_world_book(
             },
             merge_on_conflict=import_data.merge_on_conflict
         )
-        
+
         # Get the imported/merged book
         book = service.get_world_book(world_book_id)
         if not book:
@@ -1167,14 +1167,14 @@ async def import_world_book(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve world book after import"
             )
-        
+
         return WorldBookImportResponse(
             world_book_id=world_book_id,
             name=book['name'],
             entries_imported=len(import_data.entries),
             merged=import_data.merge_on_conflict and book['version'] > 1
         )
-        
+
     except InputError as e:
         logger.warning(f"Input error importing world book: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -1198,16 +1198,16 @@ async def export_world_book(
     """Export a world book to external format."""
     try:
         service = WorldBookService(db)
-        
+
         export_data = service.export_world_book(world_book_id)
-        
+
         return WorldBookExport(
             world_book=export_data['world_book'],
             entries=export_data['entries'],
             export_date=datetime.utcnow(),
             format_version="1.0"
         )
-        
+
     except InputError as e:
         logger.warning(f"World book {world_book_id} not found for export: {e}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -1230,29 +1230,29 @@ async def get_world_book_statistics(
     """Get statistics for a world book."""
     try:
         service = WorldBookService(db)
-        
+
         book = service.get_world_book(world_book_id)
         if not book:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"World book with ID {world_book_id} not found"
             )
-        
+
         entries = service.get_entries(world_book_id, enabled_only=False)
-        
+
         # Calculate statistics
         enabled_entries = sum(1 for e in entries if e.enabled)
         disabled_entries = len(entries) - enabled_entries
         total_keywords = sum(len(e.keywords) for e in entries)
         regex_entries = sum(1 for e in entries if e.regex_match)
         case_sensitive_entries = sum(1 for e in entries if e.case_sensitive)
-        
+
         priorities = [e.priority for e in entries]
         average_priority = sum(priorities) / len(priorities) if priorities else 0.0
-        
+
         total_content_length = sum(len(e.content) for e in entries)
         estimated_tokens = service._estimate_tokens(" ".join(e.content for e in entries))
-        
+
         return WorldBookStatistics(
             world_book_id=world_book_id,
             name=book['name'],
@@ -1266,7 +1266,7 @@ async def get_world_book_statistics(
             total_content_length=total_content_length,
             estimated_tokens=estimated_tokens
         )
-        
+
     except HTTPException:
         raise
     except CharactersRAGDBError as e:
@@ -1288,10 +1288,10 @@ async def bulk_entry_operations(
     """Perform bulk operations on world book entries."""
     try:
         service = WorldBookService(db)
-        
+
         affected_count = 0
         failed_ids = []
-        
+
         for entry_id in operation.entry_ids:
             try:
                 if operation.operation == "delete":
@@ -1304,27 +1304,27 @@ async def bulk_entry_operations(
                     success = service.update_entry(entry_id, priority=operation.priority)
                 else:
                     success = False
-                
+
                 if success:
                     affected_count += 1
                 else:
                     failed_ids.append(entry_id)
-                    
+
             except Exception as e:
                 logger.warning(f"Failed to perform {operation.operation} on entry {entry_id}: {e}")
                 failed_ids.append(entry_id)
-        
+
         message = f"Operation '{operation.operation}' completed: {affected_count} entries affected"
         if failed_ids:
             message += f", {len(failed_ids)} failed"
-        
+
         return BulkOperationResponse(
             success=len(failed_ids) == 0,
             affected_count=affected_count,
             failed_ids=failed_ids,
             message=message
         )
-        
+
     except CharactersRAGDBError as e:
         logger.error(f"DB error performing bulk operation: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -1348,16 +1348,16 @@ async def export_character(
 ):
     """
     Export a character in various formats.
-    
+
     Args:
         character_id: ID of character to export
         format: Export format (v3 for Character Card V3, v2 for V2, json for raw)
         include_world_books: Whether to include world book data
         db: Database instance
-        
+
     Returns:
         Character data in requested format
-        
+
     Raises:
         HTTPException: 404 if character not found
     """
@@ -1369,7 +1369,7 @@ async def export_character(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Character with ID {character_id} not found"
             )
-        
+
         # Build export data based on format
         if format == "v3":
             # Character Card V3 format
@@ -1412,7 +1412,7 @@ async def export_character(
         else:
             # Raw JSON format
             export_data = character
-        
+
         # Add world books if requested
         if include_world_books:
             world_books = db.get_character_world_books(character_id)
@@ -1424,16 +1424,16 @@ async def export_character(
                         entries = db.get_world_book_entries(wb['world_book_id'])
                         wb_data['entries'] = entries or []
                         export_data["world_books"].append(wb_data)
-        
+
         # Add character image if present
         if character.get('image'):
             import base64
             export_data["character_image"] = base64.b64encode(character['image']).decode('utf-8')
-        
+
         logger.info(f"Exported character {character_id} in format {format}")
-        
+
         return export_data
-        
+
     except HTTPException:
         raise
     except Exception as e:

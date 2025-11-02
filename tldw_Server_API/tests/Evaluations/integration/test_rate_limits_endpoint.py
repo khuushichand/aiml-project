@@ -55,4 +55,3 @@ def test_get_rate_limits_shape():
     ]:
         assert k in rem, f"Missing remaining key: {k}"
         assert isinstance(rem[k], int)
-

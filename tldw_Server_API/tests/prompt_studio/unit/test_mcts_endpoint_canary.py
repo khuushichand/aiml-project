@@ -62,4 +62,3 @@ def test_create_mcts_optimization_canary(prompt_studio_dual_backend_client, monk
     assert data
     assert (data.get("optimization") or {}).get("id") or data.get("id")
     assert data.get("job_id") is not None or True  # some modes may not queue immediately in tests
-

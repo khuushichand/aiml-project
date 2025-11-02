@@ -2,7 +2,7 @@
 
 ## Overview
 
-Extracts content and metadata from EPUB files using different strategies, optionally chunks and summarizes. Returns a structured result; DB‑agnostic.
+Extracts content and metadata from EPUB files using different strategies, optionally chunks and summarizes. Returns a structured result; DB-agnostic.
 
 ## Primary Function
 

@@ -1,4 +1,4 @@
-# MCP Rate Limits – Operations Tuning Guide
+# MCP Rate Limits - Operations Tuning Guide
 
 This guide explains how to tune MCP Unified rate limits in production.
 
@@ -7,21 +7,21 @@ This guide explains how to tune MCP Unified rate limits in production.
 MCP provides:
 - A global rate limiter (RPM + burst) for all requests
 - Per-category limiters (e.g., `ingestion`, `read`) applied per tool
-- Config‑driven tool→category mapping via JSON env or YAML file
-- Optional Redis backend for multi‑node deployments
+- Config-driven tool→category mapping via JSON env or YAML file
+- Optional Redis backend for multi-node deployments
 
 ## Key Environment Variables
 
 Global:
-- `MCP_RATE_LIMIT_ENABLED` – Enable/disable limiter (default on)
-- `MCP_RATE_LIMIT_RPM` – Global requests per minute
-- `MCP_RATE_LIMIT_BURST` – Allowed burst tokens
+- `MCP_RATE_LIMIT_ENABLED` - Enable/disable limiter (default on)
+- `MCP_RATE_LIMIT_RPM` - Global requests per minute
+- `MCP_RATE_LIMIT_BURST` - Allowed burst tokens
 
-Distributed (multi‑node):
+Distributed (multi-node):
 - `MCP_RATE_LIMIT_USE_REDIS=1`
 - `MCP_REDIS_URL=redis://host:6379/0`
 
-Category‑specific (optional):
+Category-specific (optional):
 - `MCP_RATE_LIMIT_RPM_INGESTION` / `MCP_RATE_LIMIT_BURST_INGESTION`
 - `MCP_RATE_LIMIT_RPM_READ` (burst falls back to global burst)
 
@@ -34,9 +34,9 @@ Sample YAML (checked in):
 
 ## Recommended Defaults
 
-- Ingestion: RPM 20–60, burst 3–10 (depending on workload and backend capacity)
-- Read: RPM 120–600, burst 10–50 (depending on client needs)
-- Redis: enable in any horizontally‑scaled environment
+- Ingestion: RPM 20-60, burst 3-10 (depending on workload and backend capacity)
+- Read: RPM 120-600, burst 10-50 (depending on client needs)
+- Redis: enable in any horizontally-scaled environment
 
 ## Change Management
 
@@ -60,11 +60,10 @@ Sample YAML (checked in):
 
 ## Security Notes
 
-- Keep the Prometheus endpoint admin‑gated by default; only make it public (`MCP_PROMETHEUS_PUBLIC=1`) behind internal networks or ingress auth.
+- Keep the Prometheus endpoint admin-gated by default; only make it public (`MCP_PROMETHEUS_PUBLIC=1`) behind internal networks or ingress auth.
 
 ## References
 
 - MCP README (Rate Limits section): `tldw_Server_API/app/core/MCP_unified/README.md`
 - Tool mapping file example: `tldw_Server_API/Config_Files/mcp_tool_categories.yaml`
 - Metrics Cheatsheet: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
-

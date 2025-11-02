@@ -8,4 +8,3 @@ Be concise and faithful to the transcript content.
 
 Changelog:
 - v1.0: Initial transcription analysis summary prompt.
-

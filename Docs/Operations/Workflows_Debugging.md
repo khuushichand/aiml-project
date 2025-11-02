@@ -6,9 +6,9 @@ Targeted troubleshooting tips for Workflows runs, artifacts, webhooks, and human
 
 Set environment flags before starting the server:
 
-- `WORKFLOWS_DEBUG=1` – broad debug logs for endpoints and engine
-- `WORKFLOWS_ARTIFACTS_DEBUG=1` – artifact endpoints (IDs, file paths, Range parsing, containment decisions)
-- `WORKFLOWS_DLQ_DEBUG=1` – webhook DLQ list/replay endpoints and worker
+- `WORKFLOWS_DEBUG=1` - broad debug logs for endpoints and engine
+- `WORKFLOWS_ARTIFACTS_DEBUG=1` - artifact endpoints (IDs, file paths, Range parsing, containment decisions)
+- `WORKFLOWS_DLQ_DEBUG=1` - webhook DLQ list/replay endpoints and worker
 
 Check application logs for lines prefixed with `Workflows:` or `Artifacts:` hints.
 
@@ -69,4 +69,3 @@ Debug checklist:
 - Ensure `DATABASE_URL_WORKFLOWS` is consistent across app/test contexts.
 - SQLite: watch for `database is locked`; reduce concurrent writers or move to Postgres for heavier loads.
 - Postgres: monitor connection pool saturation and autovacuum on `workflow_events`.
-

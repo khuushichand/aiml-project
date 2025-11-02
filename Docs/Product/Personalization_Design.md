@@ -4,7 +4,7 @@ Status: Active (MVP scaffold implemented)
 
 Owner: Core (RAG, LLM, AuthNZ)
 
-Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2–3)
+Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2-3)
 
 ## Summary
 
@@ -18,7 +18,7 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 - Storage: per-user SQLite `Personalization.db` with `usage_events`, `topic_profiles`, `semantic_memories` (episodic stub present).
 - Event logging: best-effort `UsageEventLogger` integrated into chat, TTS, audio transcription, media processing (videos, audios, ebooks, documents, pdfs), and web scraping endpoints.
 - API endpoints (scaffolded and functional): opt-in, purge, profile, preferences, memories list/add/delete; explanations placeholder.
-- Consolidation service: background loop + admin trigger; current implementation upserts topic scores from recent event tags. In‑memory last-tick status is available.
+- Consolidation service: background loop + admin trigger; current implementation upserts topic scores from recent event tags. In-memory last-tick status is available.
 - RAG integration: scorer/context builder stubs exist; blending weights and “why” tracing to be iterated.
 - WebUI: Personalization tab (preview) for viewing profile/weights and adding/listing memories; tab visibility follows server capabilities.
 - Tests: basic endpoint CRUD, feature flag presence, and usage-event logging across relevant media/audio/web endpoints.
@@ -102,14 +102,14 @@ Chroma (per-user collections):
 
 - Consolidation Service
   - Location: `tldw_Server_API/app/services/personalization_consolidation.py`
-  - Schedule: Periodic (e.g., every 30–60 min) and on-demand API trigger.
+  - Schedule: Periodic (e.g., every 30-60 min) and on-demand API trigger.
   - Steps:
     - Embed recent events (title, tags, brief content fingerprint).
     - Incremental clustering → update `TopicProfile` + Chroma centroid.
     - Summarize frequent patterns into `PersonalMemorySemantic` (LLM-assisted, rate limited).
     - Move highlights into `PersonalMemoryEpisodic` for short-term recall.
   - MVP behavior (implemented): compute tag-frequency topic scores from recent events; upsert into `topic_profiles`.
-  - Ops: maintains in‑memory `last_ticks` per user for status; graceful start/stop with app lifecycle.
+  - Ops: maintains in-memory `last_ticks` per user for status; graceful start/stop with app lifecycle.
 
 - Personalization Scorer (RAG)
   - Location: `tldw_Server_API/app/core/RAG/personalization_scorer.py`
@@ -118,7 +118,7 @@ Chroma (per-user collections):
 
 - Chat Context Builder (LLM)
   - Location: `tldw_Server_API/app/core/LLM_Calls/context_builders/personal_context.py`
-  - Behavior: Given a chat input, embed intent; fetch top-k semantic memories; add concise profile summary (<300 chars) and selected memories (<3–5) to the system preamble.
+  - Behavior: Given a chat input, embed intent; fetch top-k semantic memories; add concise profile summary (<300 chars) and selected memories (<3-5) to the system preamble.
 
 ## API Design
 
