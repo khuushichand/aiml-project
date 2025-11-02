@@ -18,8 +18,8 @@ It covers quick paths for both cloud-hosted and local backends, plus verificatio
   - Windows: install from ffmpeg.org and ensure it’s in PATH
 - Start the server
   - `python -m uvicorn tldw_Server_API.app.main:app --reload`
-  - API: http://127.0.0.1:8000/docs
-  - WebUI: http://127.0.0.1:8000/webui/
+  - API: <http://127.0.0.1:8000/docs>
+  - WebUI: <http://127.0.0.1:8000/webui/>
 
 Auth quick note
 - Single-user mode: server prints an API key on startup; or set `SINGLE_USER_API_KEY`.
@@ -165,7 +165,7 @@ Troubleshooting
 ---
 
 ## Verifying Setup via WebUI
-- Open http://127.0.0.1:8000/webui/
+- Open <http://127.0.0.1:8000/webui/>
 - Tabs:
   - Audio → Transcription (STT): upload a short clip and transcribe
   - Audio → TTS: enter text, pick a voice/model, and synthesize
