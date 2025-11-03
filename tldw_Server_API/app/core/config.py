@@ -693,7 +693,8 @@ def load_settings():
         or _sbx_get("ws_synthetic_frames_for_tests", "false")
         or "false"
     )
-    SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0"])
+    # Advertise spec 1.1 support by default (backward-compatible with 1.0)
+    SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0", "1.1"])
     SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
         os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"
     )
@@ -1439,6 +1440,70 @@ def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
         return max(1, int(str(v)))
     except Exception:
         return default
+
+
+# ----------------------------
+# Resource Governor Settings
+# ----------------------------
+def _as_int(val: object, default: int) -> int:
+    try:
+        return int(str(val))
+    except Exception:
+        return default
+
+
+def rg_policy_store(default: str = "file") -> str:
+    v = os.getenv("RG_POLICY_STORE")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("ResourceGovernor", "policy_store", fallback=default) if cp else default
+        except Exception:
+            v = default
+    s = str(v).strip().lower()
+    return s if s in ("file", "db") else default
+
+
+def rg_policy_reload_enabled(default: bool = True) -> bool:
+    v = os.getenv("RG_POLICY_RELOAD_ENABLED")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("ResourceGovernor", "policy_reload_enabled", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return _as_bool(v, default)
+
+
+def rg_policy_reload_interval_sec(default: int = 10) -> int:
+    v = os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("ResourceGovernor", "policy_reload_interval_sec", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return max(1, _as_int(v, default))
+
+
+def rg_policy_path_default() -> str:
+    try:
+        base = Path(__file__).resolve().parents[3]
+        return str(base / "Config_Files" / "resource_governor_policies.yaml")
+    except Exception:
+        return "resource_governor_policies.yaml"
+
+
+def rg_policy_path() -> str:
+    v = os.getenv("RG_POLICY_PATH")
+    if v:
+        return v
+    try:
+        cp = load_comprehensive_config()
+        p = cp.get("ResourceGovernor", "policy_path", fallback=rg_policy_path_default()) if cp else rg_policy_path_default()
+        return p
+    except Exception:
+        return rg_policy_path_default()
 
 
 @lru_cache(maxsize=1)

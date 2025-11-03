@@ -2,14 +2,27 @@
 
 This module provides robust, extensible text chunking for ingestion, RAG, embeddings, analytics, and downstream tasks. It includes a strategy registry, hierarchical chunking, and a template system that now supports learning rules from a “seed” document.
 
-## Overview
+## 1. Current Feature Set
+
+- Multi-method chunking: words, sentences, paragraphs, tokens, semantic, json, xml, ebook_chapters, propositions, rolling_summarize, structure_aware, code/code_ast
+- Hierarchical chunking: section/block tree + flattening with ancestry preservation
+- Template pipeline: preprocessing → chunking → postprocessing, plus classifier/auto-apply and seed-driven rule learning
+- Streaming chunking helpers for large inputs with overlap semantics per method
+- Language autodetection with script hints; explicit language override supported per call
+- Exact span metadata: start/end offsets, indices, relative position; token mapping where available
+- Safe regex handling: compile guards and ambiguity warnings for user-provided patterns
+- Metrics hooks and cache with tunable thresholds; graceful no-op when Metrics is unavailable
+
+## 2. Technical Details of Features
+
+### Overview
 - Entry point: `Chunker` in `chunker.py` with unified APIs: `process_text`, `chunk_text`, `chunk_text_with_metadata`, `chunk_file_stream`, `chunk_text_hierarchical_tree`, `flatten_hierarchical`, `chunk_text_hierarchical_flat`. Built-in methods include: `words`, `sentences`, `paragraphs`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `fixed_size`, `structure_aware`, `code` (Python AST or heuristic), and `code_ast` (explicit AST routing).
 - Template pipeline: `TemplateProcessor` and `TemplateManager` in `templates.py`.
 - Built-in templates: JSON files under `template_library/`, seeded into DB by `template_initialization.py`.
 - Seed-driven templates: boundary rules learned from example (“seed/template”) documents via `TemplateLearner`.
 - Where used: API endpoints (`api/v1/endpoints/chunking.py`, `api/v1/endpoints/chunking_templates.py`), media and scraping services (`app/services/document_processing_service.py`, `app/services/enhanced_web_scraping_service.py`, `app/services/xml_processing_service.py`), and RAG pipelines.
 
-## Layout
+### Module Layout
 - `base.py` - core types and interfaces (`ChunkingMethod`, `ChunkResult`, `ChunkerConfig`, `BaseChunkingStrategy`)
 - `chunker.py` - orchestrator, strategy registry, hierarchical helpers
 - `strategies/` - implementation of strategies (words, sentences, tokens, structure-aware, semantic, etc.)
@@ -17,7 +30,7 @@ This module provides robust, extensible text chunking for ingestion, RAG, embedd
 - `template_initialization.py` - seeds built-in templates to DB
 - `template_library/` - built-in template JSONs (auto-loaded/seeded)
 
-## Public API (Chunker)
+### Public API (Chunker)
 - `process_text(text, options=None, *, tokenizer_name_or_path=None, llm_call_func=None, llm_config=None) -> List[Dict]`
   - End-to-end path. Returns list items `{"text": str, "metadata": dict}` with normalized fields such as `chunk_index`, `total_chunks`, `chunk_method`, `max_size`, `overlap`, `language`, `start_offset`, `end_offset`, `relative_position`, `paragraph_kind`, and optional `start_time`/`end_time` when `timecode_map` is supplied.
   - Supports `options` keys (see “Options” below). Handles adaptive sizing, hierarchical paragraph detection, timecode mapping, and content hashing.
@@ -172,13 +185,13 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
   - In hierarchical mode, the `tokens` method uses strategy metadata to map local spans to global offsets; if metadata is unavailable, a bounded fallback is used.
   - Grapheme safety: All strategies clamp `end_char` to a grapheme boundary. In non-strict mode, only non-visible trailing marks/selectors are absorbed. In strict mode (`strict_grapheme_end_expansion = true`), ZWJ sequences and emoji modifiers are also absorbed to preserve visual stability at chunk boundaries.
 
-## Tokens Strategy Notes
+### Tokens Strategy Notes
 - `TokenChunkingStrategy.chunk_with_metadata(...)` now emits precise character offsets when possible:
   - Transformers fast tokenizers: uses `offset_mapping` for exact spans.
   - tiktoken: decodes each token and maps via a monotonic, rolling pointer.
   - Fallback tokenizer: approximates tokens via word windows, with precise char spans and approximate `token_count`.
 
-## Streaming Overlap Semantics
+### Streaming Overlap Semantics
 
 The streaming helpers emit chunks incrementally and carry context across read buffers:
 
@@ -195,14 +208,14 @@ Behavior by method and overlap:
 
 In both cases, the boundary join uses a method-aware separator to avoid token fragmentation (a space for `words`, newlines for structure-heavy kinds). If you need exact source fidelity, prefer `chunk_text_with_metadata` or `process_text`, which normalize returned text to original spans by `start_offset`/`end_offset`.
 
-## Language Autodetection
+### Language Autodetection
 
 `process_text(..., options={"language": "auto"})` triggers lightweight script-based detection when the language is not supplied (also the default). Detected codes include:
 - zh (CJK), ja (Hiragana/Katakana), th (Thai), hi (Devanagari/Hindi), ru (Cyrillic/Russian), ko (Hangul/Korean), ar (Arabic).
 
 These hints choose sensible tokenizers/splitters for strategies. You can always set `language` explicitly per call.
 
-## Configuration (config.txt)
+### Configuration (config.txt)
 Add these optional keys under a new `[Chunking]` section. Environment variables with the same names in UPPERCASE override file values.
 
 - max_streaming_flush_threshold_chars: Cap for streaming buffer size when chunking very large files.
@@ -229,11 +242,56 @@ Behavior (JSON):
   - Subsequent chunks include `{ "data": [...], "__meta_ref__": "<id>" }` (for a list) or the analogous dict form.
   - When `output_format = 'text'`, these objects are rendered via `_json_to_text`.
 
-## Strategies (Built-in)
+### Strategies (Built-in)
 - `words`, `sentences`, `paragraphs`, `fixed_size`, `tokens`, `semantic`, `json`, `xml`, `ebook_chapters`, `propositions`, `rolling_summarize`, `structure_aware`, `code` (Python AST / heuristic based on `code_mode`), `code_ast` (force AST).
   - See `strategies/` submodules for implementation and method-specific options.
 
-## Caching and Metrics
+### Caching and Metrics
+
+## 3. Developer Guide for Contributors
+
+### Related Endpoints
+- Chunking API router (mounted under `/api/v1/chunking`):
+  - `/chunk_text` JSON endpoint: tldw_Server_API/app/api/v1/endpoints/chunking.py:62
+  - `/chunk_file` multipart endpoint: tldw_Server_API/app/api/v1/endpoints/chunking.py:401
+  - `/capabilities` listing: tldw_Server_API/app/api/v1/endpoints/chunking.py:570
+- Templates API router: `prefix="/chunking/templates"` (mounted under `/api/v1`):
+  - Router declaration: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:34
+  - Diagnostics: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:85
+  - List: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:99
+  - Get by name: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:137
+  - Create: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:177
+  - Update: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:270
+  - Delete: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:318
+  - Apply (process text): tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:647
+  - Validate config: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:769
+  - Match (classifier-based): tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:973
+
+Note: Line numbers refer to the current repo state and may shift with refactors.
+
+### Related Schemas
+- Chunking requests/responses: tldw_Server_API/app/api/v1/schemas/chunking_schema.py:1
+- Template payloads: tldw_Server_API/app/api/v1/schemas/chunking_templates_schemas.py:1
+
+### Related Tests (selection)
+- End-to-end embeddings with different chunking methods: tldw_Server_API/tests/e2e/test_embeddings_e2e.py:338
+- Chunking worker and property-based invariants: tldw_Server_API/tests/Embeddings/test_chunking_property_based.py:1
+- Embeddings orchestrator metrics snapshot includes chunking stage: tldw_Server_API/tests/Embeddings/test_orchestrator_summary_endpoint.py:101
+- Media processing flows toggling perform_chunking: tldw_Server_API/tests/Media/test_json_document_processing.py:20
+- Template endpoints lint guard: tldw_Server_API/tests/lint/test_no_dict_usage.py:10
+
+### Extending Chunking
+- Add a new strategy under `strategies/` implementing the `BaseChunkingStrategy` interface (see base.py). Register it via `Chunker.register_strategy` or in the registry map in `chunker.py`.
+- Keep label cardinality and options minimal; document new options and include default values and validation.
+- If strategy requires LLM calls, wire via `llm_call_func` with server-determined model/key; follow the `rolling_summarize` pattern in the endpoints (provider selection, limits).
+- For templates, encode method config under `{"chunking": {"method": ..., "config": {...}}}` with optional `preprocessing`, `postprocessing`, and `classifier` blocks.
+
+### Safety and Performance
+- Regex safety: use `regex_safety` helpers for any user-provided patterns; keep length limits strict.
+- Offsets/grapheme boundaries: ensure `start_offset`/`end_offset` reflect visually stable splits; prefer tokenizer `offset_mapping` when available.
+- Streaming overlap: preserve method-specific deduplication logic at buffer boundaries; avoid fragmenting graphemes.
+- Metrics: Emit counters/histograms via Metrics registry if available; never break execution when Metrics is unavailable.
+
 - Config: `ChunkerConfig(enable_cache=True, cache_size=100, min_text_length_to_cache=0, max_text_length_to_cache=2_000_000)`.
 - LRU cache keyed by text + parameters. Cache skips extremely short or very large texts based on thresholds.
 - Metrics hooks are no-ops when Metrics module is unavailable; otherwise counters/histograms are emitted around processing and caching paths.

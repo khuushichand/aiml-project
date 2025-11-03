@@ -32,7 +32,7 @@
                     <span class="status-dot"></span> Kokoro
                 </span>
             </div>
-            <button class="btn-small" onclick="checkTTSProviderStatus()">
+            <button class="btn-small" id="tts_provider_status_refresh">
                 <i class="icon-refresh"></i> Refresh Status
             </button>
         </div>
@@ -41,7 +41,7 @@
         <div class="info-box" style="margin-top:10px;">
             <i class="icon-info"></i>
             <span>
-                First time using TTS? Run the <a href="/webui/setup.html" target="_blank">Setup Wizard</a> to install dependencies and configure providers (OpenAI keys, local models like Kokoro).
+                First time using TTS? Run the <a href="/setup" target="_blank">Setup Wizard</a> to install dependencies and configure providers (OpenAI keys, local models like Kokoro).
                 See the quick guide: <a href="/docs-static/Getting-Started-STT_and_TTS.md" target="_blank">Getting Started — STT/TTS</a>.
             </span>
         </div>
@@ -61,7 +61,7 @@
                 <!-- Provider Selection -->
                 <div class="form-group">
                     <label for="audioTTS_provider">Provider:</label>
-                    <select id="audioTTS_provider" onchange="updateTTSProviderOptions()">
+                    <select id="audioTTS_provider">
                         <optgroup label="Commercial APIs">
                             <option value="openai">OpenAI</option>
                             <option value="elevenlabs">ElevenLabs</option>
@@ -96,7 +96,7 @@
                             <option value="nova">Nova</option>
                             <option value="shimmer">Shimmer</option>
                         </select>
-                        <button class="btn-small" type="button" onclick="loadProviderVoices()" title="Load voices from provider">
+                        <button class="btn-small" type="button" id="audioTTS_voices_refresh" title="Load voices from provider">
                             <i class="icon-download"></i> Load Voices
                         </button>
                     </div>
@@ -155,7 +155,7 @@
                 </div>
                 <div id="voiceRefInfo" style="display: none;">
                     <audio id="voiceRefPlayer" controls style="width: 100%;"></audio>
-                    <button class="btn-small" onclick="clearVoiceReference()">Clear</button>
+                    <button class="btn-small" id="audioTTS_voice_clear">Clear</button>
                     <div class="voice-analysis" id="voiceAnalysis"></div>
                 </div>
                 <div class="quick-record">
@@ -163,15 +163,15 @@
                         <span class="help-tip" title="Record a clean, mono clip of 3-15 seconds in a quiet environment. Avoid background noise and overlapping speakers. The recording overrides file selection.">?</span>
                     </label>
                         <div class="record-controls">
-                            <button class="btn-small" id="audioTTS_rec_start" onclick="startAudioTTSRecording()">Record</button>
-                            <button class="btn-small" id="audioTTS_rec_stop" onclick="stopAudioTTSRecording()" disabled>Stop</button>
-                            <button class="btn-small" id="audioTTS_rec_clear" onclick="clearAudioTTSRecording()" disabled>Clear</button>
+                            <button class="btn-small" id="audioTTS_rec_start">Record</button>
+                            <button class="btn-small" id="audioTTS_rec_stop" disabled>Stop</button>
+                            <button class="btn-small" id="audioTTS_rec_clear" disabled>Clear</button>
                             <span id="audioTTS_rec_status" class="text-muted">Idle (recording overrides file)</span>
                             <span id="audioTTS_recording_badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
                         </div>
                         <!-- Recording Settings (collapsible) -->
                         <div class="rec-settings" style="margin-top:8px;">
-                            <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="toggleAudioTTSRecSettings()">
+                            <div class="rec-settings-header" id="audioTTS_rec_settings_toggle" style="cursor:pointer; font-size:0.95em; color:#555;">
                                 <span id="rec-settings-caret-audioTTS">▸</span> Recording Settings
                             </div>
                             <div id="rec-settings-audioTTS" class="rec-settings-body" style="display:none; margin-top:6px;">
@@ -183,11 +183,10 @@
                                         min="3"
                                         max="60"
                                         style="width:64px;"
-                                        title="3-15 seconds recommended. Longer clips increase CPU usage and latency."
-                                        onchange="try{ window._audioRecMaxSec = Math.max(3, Math.min(60, parseInt(this.value||'15',10))); localStorage.setItem('audio_tts_rec_max_seconds', String(window._audioRecMaxSec)); }catch(_){}" />
+                                        title="3-15 seconds recommended. Longer clips increase CPU usage and latency." />
                                     <span class="help-tip" title="3-15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                 </label>
-                                <small style="margin-left:8px;"><a href="#" onclick="resetAudioTTSRecMax(); return false;">Reset</a></small>
+                                <small style="margin-left:8px;"><a href="#" id="audioTTS_rec_max_reset">Reset</a></small>
                             </div>
                         </div>
                         <audio id="audioTTS_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
@@ -314,13 +313,13 @@
 
         <!-- Action Buttons -->
         <div class="button-group">
-            <button class="api-button primary" onclick="generateTTS()">
+            <button class="api-button primary" id="audioTTS_generate_btn">
                 <i class="icon-play"></i> Generate Speech
             </button>
-            <button class="api-button secondary" onclick="stopTTS()" id="stopButton" style="display: none;">
+            <button class="api-button secondary" id="stopButton" style="display: none;">
                 <i class="icon-stop"></i> Stop
             </button>
-            <button class="api-button secondary" onclick="downloadAudio()" id="downloadButton" style="display: none;">
+            <button class="api-button secondary" id="downloadButton" style="display: none;">
                 <i class="icon-download"></i> Download
             </button>
         </div>
@@ -388,7 +387,7 @@
         <div class="info-box" style="margin-top:10px;">
             <i class="icon-info"></i>
             <span>
-                New to STT? Use the <a href="/webui/setup.html" target="_blank">Setup Wizard</a> to install/enable faster‑whisper or NeMo, and verify FFmpeg is available.
+                New to STT? Use the <a href="/setup" target="_blank">Setup Wizard</a> to install/enable faster‑whisper or NeMo, and verify FFmpeg is available.
                 Quick guide: <a href="/docs-static/Getting-Started-STT_and_TTS.md" target="_blank">Getting Started — STT/TTS</a>.
             </span>
         </div>
@@ -403,15 +402,15 @@
                             <span class="help-tip" title="Record a clean mono clip of 3-30 seconds in a quiet environment. Avoid background noise and overlapping speakers. Recording overrides file selection.">?</span>
                         </label>
                         <div class="record-controls">
-                            <button class="btn-small" id="fileTrans_rec_start" onclick="startFileTransRecording()">Record</button>
-                            <button class="btn-small" id="fileTrans_rec_stop" onclick="stopFileTransRecording()" disabled>Stop</button>
-                            <button class="btn-small" id="fileTrans_rec_clear" onclick="clearFileTransRecording()" disabled>Clear</button>
+                            <button class="btn-small" id="fileTrans_rec_start">Record</button>
+                            <button class="btn-small" id="fileTrans_rec_stop" disabled>Stop</button>
+                            <button class="btn-small" id="fileTrans_rec_clear" disabled>Clear</button>
                             <span id="fileTrans_rec_status" class="text-muted">Idle (recording overrides file)</span>
                             <span id="fileTrans_recording_badge" class="badge" style="display:none; background:#28a745; color:#fff;">Using recorded sample</span>
                         </div>
                         <!-- Recording Settings (collapsible) -->
                         <div class="rec-settings" style="margin-top:8px;">
-                            <div class="rec-settings-header" style="cursor:pointer; font-size:0.95em; color:#555;" onclick="toggleFileTransRecSettings()">
+                            <div class="rec-settings-header" id="fileTrans_rec_settings_toggle" style="cursor:pointer; font-size:0.95em; color:#555;">
                                 <span id="rec-settings-caret-fileTrans">▸</span> Recording Settings
                             </div>
                             <div id="rec-settings-fileTrans" class="rec-settings-body" style="display:none; margin-top:6px;">
@@ -423,11 +422,10 @@
                                         min="3"
                                         max="60"
                                         style="width:64px;"
-                                        title="3-15 seconds recommended. Longer clips increase CPU usage and latency."
-                                        onchange="try{ window._fileTransRecMaxSec = Math.max(3, Math.min(60, parseInt(this.value||'15',10))); localStorage.setItem('file_trans_rec_max_seconds', String(window._fileTransRecMaxSec)); }catch(_){}" />
+                                        title="3-15 seconds recommended. Longer clips increase CPU usage and latency." />
                                     <span class="help-tip" title="3-15 seconds recommended. Longer clips increase CPU usage and latency.">?</span>
                                 </label>
-                                <small style="margin-left:8px;"><a href="#" onclick="resetFileTransRecMax(); return false;">Reset</a></small>
+                                <small style="margin-left:8px;"><a href="#" id="fileTrans_rec_max_reset">Reset</a></small>
                             </div>
                         </div>
                         <audio id="fileTrans_rec_playback" controls style="width: 100%; display: none; margin-top: 6px;"></audio>
@@ -500,7 +498,7 @@
                                 <option value="huggingface">HuggingFace</option>
                                 <option value="local">Local</option>
                             </select>
-                            <button class="btn-small" type="button" onclick="refreshEmbeddingProviders()" title="Refresh providers and models">
+                            <button class="btn-small" type="button" id="fileSegRefreshProviders" title="Refresh providers and models">
                                 <i class="icon-refresh"></i> Refresh
                             </button>
                         </div>
@@ -516,8 +514,8 @@
         </div>
 
         <div class="button-group">
-            <button class="api-button" onclick="audioFileTranscribeRun()">Transcribe</button>
-            <button class="api-button secondary" onclick="audioFileTranscribeClear()">Clear</button>
+            <button class="api-button" id="fileTrans_run_btn">Transcribe</button>
+            <button class="api-button secondary" id="fileTrans_clear_btn">Clear</button>
         </div>
 
         <h3>Transcription</h3>

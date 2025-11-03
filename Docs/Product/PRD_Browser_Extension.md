@@ -114,6 +114,453 @@ References:
 - RAG endpoints: `tldw_Server_API/app/api/v1/endpoints/rag_unified.py:664, 1110, 1174`
 - Health endpoints: `tldw_Server_API/app/api/v1/endpoints/health.py:97, 110`
 
+### Auth & Tokens
+- Token response shape: `access_token`, `refresh_token`, `token_type=bearer`, `expires_in` (seconds). Reference: `tldw_Server_API/app/api/v1/schemas/auth_schemas.py:181`.
+- Refresh rotation: if refresh call returns a `refresh_token`, replace the stored value (treat as authoritative).
+- Prefer header auth over cookies: use `Authorization: Bearer` or `X-API-KEY`; CSRF middleware is present but skipped for Bearer/X-API-KEY flows. Reference: `tldw_Server_API/app/main.py:2396`.
+- Service worker lifecycle: on background start, check for a stored refresh token and proactively refresh the access token (single-flight), so UI works after suspension/restart without prompting.
+
+#### Background: Single‑Flight Refresh (MV3 example)
+```ts
+// background.ts (MV3 service worker)
+
+type TokenResponse = {
+  access_token: string;
+  refresh_token?: string;
+  token_type: 'bearer';
+  expires_in: number; // seconds
+};
+
+let serverUrl = '';
+let authMode: 'single_user' | 'multi_user' = 'multi_user';
+
+// Ephemeral in-memory access token + expiry
+let accessToken: string | null = null;
+let accessExpiresAt = 0; // epoch ms
+
+// Single-flight guard
+let refreshInFlight: Promise<string> | null = null;
+
+async function getRefreshToken(): Promise<string | null> {
+  const { refresh_token } = await chrome.storage.local.get('refresh_token');
+  return (refresh_token as string) || null;
+}
+
+async function setTokens(tr: TokenResponse) {
+  accessToken = tr.access_token;
+  // Renew slightly early
+  accessExpiresAt = Date.now() + Math.max(0, (tr.expires_in - 30) * 1000);
+  if (tr.refresh_token) {
+    await chrome.storage.local.set({ refresh_token: tr.refresh_token });
+  }
+}
+
+function isAccessValid(): boolean {
+  return !!accessToken && Date.now() < accessExpiresAt;
+}
+
+async function refreshAccessTokenSingleFlight(): Promise<string> {
+  if (isAccessValid()) return accessToken!;
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const rt = await getRefreshToken();
+    if (!rt) throw new Error('No refresh token');
+    const res = await fetch(`${serverUrl}/api/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: rt }),
+    });
+    if (!res.ok) {
+      // Clear tokens on hard failure
+      await chrome.storage.local.remove('refresh_token');
+      accessToken = null; accessExpiresAt = 0;
+      throw new Error(`Refresh failed: ${res.status}`);
+    }
+    const body = (await res.json()) as TokenResponse;
+    await setTokens(body);
+    return accessToken!;
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+
+  return refreshInFlight;
+}
+
+export async function bgFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers || {});
+
+  // Attach auth
+  if (authMode === 'single_user') {
+    // X-API-KEY for single-user mode (store separately)
+    const { api_key } = await chrome.storage.local.get('api_key');
+    if (api_key) headers.set('X-API-KEY', api_key as string);
+  } else {
+    // Ensure access token is fresh
+    const token = await refreshAccessTokenSingleFlight();
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  // Correlation header
+  headers.set('X-Request-ID', crypto.randomUUID());
+
+  let res = await fetch(input, { ...init, headers });
+  if (res.status === 401 && authMode === 'multi_user') {
+    try {
+      const token = await refreshAccessTokenSingleFlight();
+      headers.set('Authorization', `Bearer ${token}`);
+      res = await fetch(input, { ...init, headers });
+    } catch (_) {
+      // Bubble up 401 after failed refresh
+    }
+  }
+  return res;
+}
+
+// On SW start: auto-refresh so UI is ready
+chrome.runtime.onStartup.addListener(async () => {
+  try { await refreshAccessTokenSingleFlight(); } catch { /* no-op */ }
+});
+
+// Also attempt onInstalled (first install/update)
+chrome.runtime.onInstalled.addListener(async () => {
+  try { await refreshAccessTokenSingleFlight(); } catch { /* no-op */ }
+});
+```
+
+### Streaming & SSE
+- Chat SSE: set `Accept: text/event-stream`; keep the service worker alive via a long‑lived `Port` from the side panel/popup; recognize `[DONE]` and release reader/locks.
+- RAG stream (NDJSON): tolerate heartbeats/blank lines and partial chunks; reassemble safe JSON boundaries before parse.
+- Cancellation: use `AbortController`; expect network to close within ≈200ms after abort.
+
+Note:
+- `/api/v1/rag/search/stream` requires `enable_generation=true` in the request body; otherwise the server returns HTTP 400.
+- Default retrieval knobs are `search_mode="hybrid"` and `top_k=10` unless overridden. Discover the server’s current defaults and ranges via `GET /api/v1/rag/capabilities`.
+
+#### Background: Chat SSE Reader (MV3 example)
+```ts
+export async function streamChatSSE(
+  url: string,
+  body: unknown,
+  opts: {
+    headers?: HeadersInit;
+    signal?: AbortSignal;
+    port?: chrome.runtime.Port; // Long-lived port from UI to keep SW alive
+    onDelta?: (text: string) => void;
+    onDone?: () => void;
+  } = {}
+) {
+  const controller = opts.signal ? null : new AbortController();
+  const signal = opts.signal ?? controller!.signal;
+
+  const headers = new Headers(opts.headers || {});
+  headers.set('Accept', 'text/event-stream');
+  headers.set('Content-Type', 'application/json');
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body ?? {}),
+    signal,
+    // credentials not needed for header auth; keep simple
+  });
+  if (!res.ok || !res.body) throw new Error(`SSE failed: ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const eventBlock = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        // Join all data: lines per SSE spec
+        const dataLines = eventBlock
+          .split('\n')
+          .filter(l => l.startsWith('data:'))
+          .map(l => l.slice(5).trim());
+        if (dataLines.length === 0) continue;
+        const dataStr = dataLines.join('\n');
+        if (dataStr === '[DONE]') {
+          opts.onDone?.();
+          return; // normal termination
+        }
+        try {
+          const obj = JSON.parse(dataStr);
+          const delta = obj?.choices?.[0]?.delta?.content ?? '';
+          if (delta) {
+            opts.onDelta?.(delta);
+            opts.port?.postMessage({ type: 'chat-delta', data: delta });
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    }
+    opts.onDone?.();
+  } finally {
+    try { reader.releaseLock(); } catch { /* no-op */ }
+    // Caller may disconnect the port when UI is done
+  }
+
+  return {
+    cancel: () => controller?.abort(),
+  };
+}
+```
+
+#### Background: RAG NDJSON Reader (MV3 example)
+```ts
+export async function streamRagNDJSON(
+  url: string,
+  body: unknown,
+  opts: {
+    headers?: HeadersInit;
+    signal?: AbortSignal;
+    port?: chrome.runtime.Port;
+    onEvent?: (obj: any) => void;
+  } = {}
+) {
+  const controller = opts.signal ? null : new AbortController();
+  const signal = opts.signal ?? controller!.signal;
+
+  const headers = new Headers(opts.headers || {});
+  headers.set('Accept', 'application/x-ndjson');
+  headers.set('Content-Type', 'application/json');
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body ?? {}),
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`NDJSON failed: ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue; // tolerate heartbeats/blank lines
+        try {
+          const obj = JSON.parse(line);
+          opts.onEvent?.(obj);
+          opts.port?.postMessage({ type: 'rag-event', data: obj });
+        } catch {
+          // Partial or invalid JSON; prepend back to buffer (rare)
+          buffer = line + '\n' + buffer;
+          break;
+        }
+      }
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* no-op */ }
+  }
+
+  return {
+    cancel: () => controller?.abort(),
+  };
+}
+```
+
+#### Quick Examples (curl)
+```bash
+# RAG streaming (JWT)
+curl -sN "http://127.0.0.1:8000/api/v1/rag/search/stream" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/x-ndjson" \
+  -d '{"query":"What is machine learning?","top_k":5,"enable_generation":true}'
+
+# RAG simple (Single-user API key)
+curl -s "http://127.0.0.1:8000/api/v1/rag/simple?query=vector%20databases" \
+  -H "X-API-KEY: $API_KEY" | jq .
+```
+
+### Media & Audio Details
+- STT multipart fields: `file` (UploadFile), `model` (default `whisper-1`), optional `language`, `prompt`, `response_format`, and TreeSeg controls (`segment`, `seg_*`). Allowed mimetypes include wav/mp3/m4a/ogg/opus/webm/flac; default max size ≈25MB (tiered). Reference: `tldw_Server_API/app/api/v1/endpoints/audio.py:464`.
+- TTS JSON body: `model`, `input` (text), `voice`, `response_format` (e.g., mp3, wav), optional `stream` boolean. Response sets `Content-Disposition: attachment; filename=speech.<format>`. Reference: `tldw_Server_API/app/api/v1/endpoints/audio.py:272`.
+- Voices catalog: `GET /api/v1/audio/voices/catalog?provider=...` returns mapping of provider→voices; filter via `provider`. Reference: `tldw_Server_API/app/api/v1/endpoints/audio.py:1131`.
+- Media timeouts: adopt endpoint-specific timeouts similar to WebUI defaults (videos/audios ~10m, docs/pdfs ~5m). Reference: `tldw_Server_API/WebUI/js/api-client.js:290`.
+
+#### Quick Examples (curl)
+```bash
+# STT (JWT)
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@/abs/path/to/audio.wav" \
+  -F "model=whisper-1" \
+  -F "language=en" \
+  -F "response_format=json"
+
+# STT (Single-user API key)
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/transcriptions" \
+  -H "X-API-KEY: $API_KEY" \
+  -F "file=@/abs/path/to/audio.m4a" \
+  -F "model=whisper-1" \
+  -F "response_format=json" \
+  -F "segment=true" -F "seg_K=6"
+
+# TTS (JWT)
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1","input":"Hello world","voice":"alloy","response_format":"mp3","stream":false}' \
+  --output speech.mp3
+
+# TTS (Single-user API key)
+curl -X POST "http://127.0.0.1:8000/api/v1/audio/speech" \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1","input":"Testing TTS","voice":"alloy","response_format":"wav"}' \
+  --output speech.wav
+
+# Voices catalog (JWT)
+curl -s "http://127.0.0.1:8000/api/v1/audio/voices/catalog" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+
+# Voices catalog (Single-user API key, filtered)
+curl -s "http://127.0.0.1:8000/api/v1/audio/voices/catalog?provider=elevenlabs" \
+  -H "X-API-KEY: $API_KEY" | jq .
+```
+
+### Rate Limits & Backoff
+- Typical limits (subject to server config): RAG search ≈ 30/min, RAG batch ≈ 10/min, STT ≈ 20/min, TTS ≈ 10/min. Back off on 429 and honor the `Retry-After` header.
+- Show user-friendly retry timing (e.g., countdown) based on `Retry-After`. Avoid infinite retries on 5xx/network; cap attempts and use exponential backoff with jitter.
+
+References:
+- RAG limits: `tldw_Server_API/app/api/v1/endpoints/rag_unified.py` (limit_search 30/min, limit_batch 10/min)
+- STT limit: `tldw_Server_API/app/api/v1/endpoints/audio.py:461` (20/min)
+- TTS limit: `tldw_Server_API/app/api/v1/endpoints/audio.py` (10/min)
+
+Example (bounded backoff wrapper, MV3 background):
+```ts
+export async function backoffFetch(
+  input: RequestInfo,
+  init: RequestInit = {},
+  opts: { maxRetries?: number; baseDelayMs?: number } = {}
+): Promise<Response> {
+  const maxRetries = opts.maxRetries ?? 2; // keep small to avoid user surprise
+  const base = opts.baseDelayMs ?? 300;
+  let attempt = 0;
+  // Copy headers so we can mutate between retries
+  const headers = new Headers(init.headers || {});
+
+  while (true) {
+    let res: Response | null = null;
+    try {
+      res = await fetch(input, { ...init, headers });
+    } catch (e) {
+      // Network error: retry with backoff (bounded)
+      if (attempt >= maxRetries) throw e;
+      const jitter = 0.8 + Math.random() * 0.4;
+      await new Promise(r => setTimeout(r, Math.pow(2, attempt) * base * jitter));
+      attempt++; continue;
+    }
+
+    if (res.status === 429) {
+      // Honor Retry-After
+      const ra = res.headers.get('Retry-After');
+      const waitSec = ra ? Math.max(0, parseInt(ra, 10)) : Math.pow(2, attempt) * (base / 1000);
+      // Emit UI hint: next retry time (optional message bus)
+      // port?.postMessage({ type: 'retry-after', seconds: waitSec });
+      if (attempt >= maxRetries) return res; // surface to UI if we’ve already retried
+      await new Promise(r => setTimeout(r, waitSec * 1000));
+      attempt++; continue;
+    }
+
+    if (res.status >= 500 && res.status < 600) {
+      if (attempt >= maxRetries) return res; // bubble to UI
+      const jitter = 0.8 + Math.random() * 0.4;
+      await new Promise(r => setTimeout(r, Math.pow(2, attempt) * base * jitter));
+      attempt++; continue;
+    }
+
+    return res; // 2xx/3xx/4xx (non-429) -> caller handles
+  }
+}
+```
+
+#### Backoff + Auth Wrapper (centralized)
+```ts
+// Uses single-flight refresh + backoffFetch for rate limits and transient errors
+export async function apiFetch(
+  input: RequestInfo,
+  init: RequestInit = {},
+  opts: { backoff?: { maxRetries?: number; baseDelayMs?: number } } = {}
+): Promise<Response> {
+  const headers = new Headers(init.headers || {});
+  if (!headers.has('X-Request-ID')) headers.set('X-Request-ID', crypto.randomUUID());
+
+  // Attach auth
+  if (authMode === 'single_user') {
+    const { api_key } = await chrome.storage.local.get('api_key');
+    if (api_key) headers.set('X-API-KEY', api_key as string);
+  } else {
+    const token = await refreshAccessTokenSingleFlight();
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const doFetch = () => backoffFetch(input, { ...init, headers }, opts.backoff);
+
+  // First attempt with current token/key and bounded backoff
+  let res = await doFetch();
+
+  // On 401, attempt a single refresh + retry (multi-user only)
+  if (res.status === 401 && authMode === 'multi_user') {
+    try {
+      const token = await refreshAccessTokenSingleFlight();
+      headers.set('Authorization', `Bearer ${token}`);
+      res = await doFetch();
+    } catch {
+      // Return original 401 if refresh fails
+    }
+  }
+  return res;
+}
+
+// Note: For SSE/NDJSON streaming, use the streaming helpers to initiate the
+// connection (optional single attempt with backoff on connect). Do not auto-retry
+// mid-stream to avoid duplicating streamed content.
+```
+
+### Notes/Prompts Concurrency & Shapes
+- Notes optimistic concurrency: `PUT/PATCH/DELETE /api/v1/notes/{id}` require the `expected-version` header. On HTTP 409, refetch the note to get the latest `version` and retry the operation with the updated header. Reference: `tldw_Server_API/app/api/v1/endpoints/notes.py:347`.
+- Notes search: `GET /api/v1/notes/search/?query=...` with optional `limit`, `offset`, `include_keywords`. Returns a list of notes (NoteResponse). The notes list endpoint (`GET /api/v1/notes/`) returns an object with `notes/items/results` aliases for back‑compat along with `count/limit/offset/total`. Reference: `tldw_Server_API/app/api/v1/endpoints/notes.py:480`.
+- Prompts keywords: create via `POST /api/v1/prompts/keywords/` with JSON `{ "keyword_text": "..." }`. Reference: `tldw_Server_API/app/api/v1/endpoints/prompts.py:240`.
+
+#### Quick Examples (curl)
+```bash
+# Notes search (JWT)
+curl -s "http://127.0.0.1:8000/api/v1/notes/search/?query=project&limit=5&include_keywords=true" \
+  -H "Authorization: Bearer $TOKEN" | jq .
+
+# Notes update with optimistic locking (X-API-KEY)
+NOTE_ID="abc123"
+CURR=$(curl -s "http://127.0.0.1:8000/api/v1/notes/$NOTE_ID" -H "X-API-KEY: $API_KEY")
+VER=$(echo "$CURR" | jq -r .version)
+curl -s -X PUT "http://127.0.0.1:8000/api/v1/notes/$NOTE_ID" \
+  -H "X-API-KEY: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "expected-version: $VER" \
+  -d '{"title":"Updated Title"}' | jq .
+
+# Prompts keyword create (JWT)
+curl -s -X POST "http://127.0.0.1:8000/api/v1/prompts/keywords/" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"keyword_text":"writing"}' | jq .
+```
+
 ### Chat
 - Support `stream: true|false`, model selection, and OpenAI‑compatible request fields.
 - Pause/cancel active streams; display partial tokens.

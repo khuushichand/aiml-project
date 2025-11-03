@@ -312,7 +312,13 @@
                     <span class="api-status-text">Checking...</span>
                 </div>
                 <span id="dlq-badge" class="badge" title="Total DLQ depth">DLQ: 0</span>
-                <a href="/webui/setup.html" class="badge" title="Open Setup Wizard" style="text-decoration:none;">Setup</a>
+                <a href="/setup" class="badge" title="Open Setup Wizard" style="text-decoration:none;">Setup</a>
+                <span id="reqid-badge" class="badge" title="Last X-Request-ID" style="display:none;">RID: -</span>
+                <span id="trace-badge" class="badge" title="Last traceparent/X-Trace-Id" style="display:none;">Trace: -</span>
+                <label id="advanced-toggle-wrapper" class="badge" style="cursor:pointer; user-select:none;">
+                    <input type="checkbox" id="toggle-advanced" style="margin-right:6px; vertical-align:middle;">
+                    <span id="advanced-toggle-label" style="vertical-align:middle;">Show Advanced Panels</span>
+                </label>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
                     🌙
                 </button>
@@ -336,6 +342,9 @@
         <nav class="top-tab-container" role="navigation" aria-label="Main navigation">
             <!-- Row 1: Core Features -->
             <div class="top-tab-buttons top-tab-row" role="tablist">
+                <button class="top-tab-button" data-toptab="simple" id="top-tab-simple" role="tab" aria-selected="false">
+                    Simple
+                </button>
                 <button class="top-tab-button" data-toptab="general" role="tab" aria-selected="false">
                     General
                 </button>
@@ -427,6 +436,14 @@
                 </button>
             </div>
         </nav>
+
+        <div id="simple-subtabs" class="sub-tab-row" role="navigation" aria-label="Simple sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabSimpleLanding" role="tab">
+                    Quick Actions
+                </button>
+            </div>
+        </div>
 
         <!-- Sub Level Tab Rows -->
         <div id="flashcards-subtabs" class="sub-tab-row" role="navigation" aria-label="Flashcards sub-navigation">
@@ -926,31 +943,38 @@
                                     <button id="toggleApiKeyVisibility" type="button" class="btn btn-secondary btn-sm" title="Show/Hide token">Show</button>
                                     <button id="copyApiKeyBtn" type="button" class="btn btn-secondary btn-sm" title="Copy API token">Copy</button>
                                 </div>
-                                <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
-                            </div>
-                        </div>
+                        <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
                     </div>
+                </div>
+            </div>
 
-                    <div class="columns">
-                        <div class="column">
-                            <div class="form-group">
-                                <label>
-                                    <input type="checkbox" id="preferApiKeyInMultiUser" />
-                                    Prefer X-API-KEY header in multi-user mode (SQLite)
-                                </label>
-                                <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
-                            </div>
-                        </div>
-                        <div class="column">
-                            <div class="form-group">
-                                <label>
-                                    <input type="checkbox" id="includeTokenInCurl" />
-                                    Include auth token in generated cURL commands
-                                </label>
-                                <small>When disabled (default), cURL masks tokens as [REDACTED].</small>
-                            </div>
-                        </div>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="preferApiKeyInMultiUser" />
+                            Prefer X-API-KEY header in multi-user mode (SQLite)
+                        </label>
+                        <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
                     </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="includeTokenInCurl" />
+                            Include auth token in generated cURL commands
+                        </label>
+                        <small>When disabled (default), cURL masks tokens as [REDACTED].</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <div class="help-inline" style="font-size: 0.9em; color: var(--color-text-muted);">
+                    Extensions streaming tip: if a browser extension calls the API (including text/event-stream), add its origin to ALLOWED_ORIGINS. See the CORS guidance.
+                    <a href="/webui/CORS-SOLUTION.md#browser-extensions--streaming" target="_blank" rel="noopener">Read CORS & Extensions</a>
+                </div>
+            </div>
 
                     <div class="form-group mt-3">
                         <h3>Quick Actions</h3>
@@ -989,6 +1013,176 @@
                 </div>
             </div>
 
+            <!-- Simple Landing (Quick Actions) -->
+            <div id="tabSimpleLanding" class="tab-content" role="tabpanel">
+                <div class="endpoint-section">
+                    <h2>Quick Actions</h2>
+                    <p class="text-muted">A streamlined panel for common tasks. Toggle "Show Advanced Panels" in the header to access full controls.</p>
+                </div>
+                <div class="columns">
+                    <!-- Ingest File/URL -->
+                    <div class="column">
+                        <div class="endpoint-section" id="simpleIngest">
+                            <h3>Ingest File or URL</h3>
+                            <div class="form-group">
+                                <label for="simpleIngest_media_type">Media Type</label>
+                                <select id="simpleIngest_media_type">
+                                    <option value="document">Document</option>
+                                    <option value="pdf">PDF</option>
+                                    <option value="video">Video</option>
+                                    <option value="audio">Audio</option>
+                                    <option value="ebook">eBook</option>
+                                    <option value="web">Web (scrape)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="simpleIngest_url_group">
+                                <label for="simpleIngest_url">URL</label>
+                                <input type="url" id="simpleIngest_url" placeholder="https://example.com/article-or-media">
+                            </div>
+                            <div class="form-group" id="simpleIngest_file_group">
+                                <label for="simpleIngest_file">File</label>
+                                <input type="file" id="simpleIngest_file">
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleIngest_model">Analysis Model (optional)</label>
+                                <select id="simpleIngest_model" class="llm-model-select">
+                                    <option value="">Use default</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleIngest_seed">Seed Prompt (optional)</label>
+                                <textarea id="simpleIngest_seed" rows="2" placeholder="Give the analysis a goal or persona for better results"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleIngest_system">System Prompt (optional)</label>
+                                <textarea id="simpleIngest_system" rows="2" placeholder="System instructions to guide analysis"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="simpleIngest_perform_analysis" checked> Perform Analysis</label>
+                                <label style="margin-left:12px;"><input type="checkbox" id="simpleIngest_chunking" checked> Chunk Content</label>
+                            </div>
+                            <!-- Web scraping options (visible when Media Type = Web) -->
+                            <div id="simpleIngest_web_opts" style="display:none; border-top:1px dashed var(--color-border); padding-top:8px; margin-top:8px;">
+                                <div class="form-group">
+                                    <label for="simpleIngest_scrape_method">Scrape Method</label>
+                                    <select id="simpleIngest_scrape_method">
+                                        <option value="individual">Individual URLs</option>
+                                        <option value="url_level">URL Level</option>
+                                        <option value="recursive_scraping">Recursive Scraping</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" id="simpleIngest_web_url_group">
+                                    <label for="simpleIngest_web_url">Start URL</label>
+                                    <input type="url" id="simpleIngest_web_url" placeholder="https://example.com/">
+                                </div>
+                                <div class="form-group" id="simpleIngest_url_level_group" style="display:none;">
+                                    <label for="simpleIngest_url_level">URL Level</label>
+                                    <input type="number" id="simpleIngest_url_level" value="2" min="1">
+                                </div>
+                                <div class="columns" id="simpleIngest_recursive_group" style="display:none;">
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label for="simpleIngest_max_pages">Max Pages</label>
+                                            <input type="number" id="simpleIngest_max_pages" value="10" min="1">
+                                        </div>
+                                    </div>
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label for="simpleIngest_max_depth">Max Depth</label>
+                                            <input type="number" id="simpleIngest_max_depth" value="3" min="1">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="columns">
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label for="simpleIngest_crawl_strategy">Crawl Strategy</label>
+                                            <select id="simpleIngest_crawl_strategy">
+                                                <option value="">(default)</option>
+                                                <option value="best_first">best_first</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label>
+                                                <input type="checkbox" id="simpleIngest_include_external"> Include external links
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="api-button" id="simpleIngest_submit">Ingest</button>
+                                <button class="btn btn-secondary" id="simpleIngest_clear">Clear</button>
+                            </div>
+                            <div id="simpleIngest_job" class="text-small" style="margin-top:8px; display:none;"></div>
+                            <h4>Response</h4>
+                            <pre id="simpleIngest_response">---</pre>
+                        </div>
+                    </div>
+
+                    <!-- Chat quick box -->
+                    <div class="column">
+                        <div class="endpoint-section" id="simpleChat">
+                            <h3>Chat</h3>
+                            <div class="form-group">
+                                <label for="simpleChat_model">Model</label>
+                                <select id="simpleChat_model" class="llm-model-select">
+                                    <option value="">Use default</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="simpleChat_save"> Save to DB</label>
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleChat_input">Message</label>
+                                <textarea id="simpleChat_input" rows="3" placeholder="Ask anything..."></textarea>
+                            </div>
+                            <div class="btn-group">
+                                <button class="api-button" id="simpleChat_send">Send</button>
+                            </div>
+                            <h4>Answer</h4>
+                            <pre id="simpleChat_response">---</pre>
+                        </div>
+                    </div>
+
+                    <!-- Search content -->
+                    <div class="column">
+                        <div class="endpoint-section" id="simpleSearch">
+                            <h3>Search Content</h3>
+                            <div class="form-group">
+                                <label for="simpleSearch_q">Query</label>
+                                <input type="text" id="simpleSearch_q" placeholder="Keywords or phrase">
+                            </div>
+                            <div class="columns" style="align-items:flex-end; gap:12px;">
+                                <div class="column">
+                                    <div class="form-group">
+                                        <label for="simpleSearch_rpp">Results per page</label>
+                                        <input type="number" id="simpleSearch_rpp" value="10" min="1" max="100">
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div class="form-group">
+                                        <div class="btn-group">
+                                            <button class="btn btn-secondary" id="simpleSearch_prev" disabled>Prev</button>
+                                            <button class="btn btn-secondary" id="simpleSearch_next" disabled>Next</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div id="simpleSearch_pageinfo" class="text-muted" style="min-width:140px; text-align:right;"></div>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="api-button" id="simpleSearch_run">Search</button>
+                            </div>
+                            <div id="simpleSearch_results" style="margin-top:8px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- No search results message -->
             <div id="no-search-results">
                 <p>No endpoints match your search.</p>
@@ -1003,14 +1197,9 @@
     <script src="js/components.js"></script>
     <script src="js/api-client.js"></script>
     <script src="js/endpoint-helper.js"></script>
-    <script src="js/chat-ui.js"></script>
-    <script src="js/streaming-transcription.js"></script> <!-- WebSocket streaming transcription -->
-    <script src="js/tts.js"></script> <!-- TTS functionality -->
-    <script src="js/tts-loader.js"></script> <!-- TTS content loader -->
-    <script src="js/dictionaries.js"></script> <!-- Chat Dictionaries UI -->
-    <script src="js/tab-functions.js"></script> <!-- Load tab functions before main.js -->
-    <script src="js/components_explain.js"></script> <!-- Agentic Explain Panel renderer -->
-    <script src="js/main.js"></script>
+    <script src="js/tab-functions.js"></script> <!-- Keep legacy functions while migrating handlers -->
     <script src="js/legacy-helpers.js"></script>
+    <script src="js/module-loader.js"></script>
+    <script src="js/main.js"></script>
 </body>
 </html>

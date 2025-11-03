@@ -218,12 +218,17 @@ def _lazy_import_numpy():
 
 def _lazy_import_silero_vad():
     """
-    Load and cache the Silero VAD model and its utility functions from the torch hub.
+    Load and cache the Silero VAD model and its utility functions from torch.hub.
 
-    This function configures a torch hub cache directory (derived from TORCH_HOME or TORCH_HUB), attempts to load the Silero VAD package via torch.hub.load, validates the returned (model, utils) tuple, and stores them in module-level cache variables for reuse. On failure the cache is left unset and the function returns (None, None).
+    Configures the torch hub cache directory using `TORCH_HOME` (defaulting to `~/.cache/torch`), then calls
+    `torch.hub.set_dir(...)` to ensure downloads/caches go to a predictable location. Attempts to load the
+    Silero VAD package via `torch.hub.load`, validates the returned `(model, utils)` tuple, and stores them in
+    module-level cache variables for reuse. On failure the cache is left unset and the function returns `(None, None)`.
 
     Returns:
-        tuple: `(model, utils)` on success where `utils` is a sequence whose first five items are, in order, `get_speech_timestamps`, `save_audio`, `read_audio`, `VADIterator`, and `collect_chunks`; `(None, None)` if loading or validation fails.
+        tuple: `(model, utils)` on success where `utils` is a sequence whose first five items are, in order,
+        `get_speech_timestamps`, `save_audio`, `read_audio`, `VADIterator`, and `collect_chunks`; `(None, None)`
+        if loading or validation fails.
     """
     global _silero_vad_model, _silero_vad_utils
 
@@ -245,11 +250,10 @@ def _lazy_import_silero_vad():
         logger.info("Loading Silero VAD model from torch hub...")
 
         # Configure torch hub cache directory
-        # Prefer TORCH_HOME (root), fallback to default; allow explicit TORCH_HUB as hub dir
+        # Prefer TORCH_HOME (root), fallback to default
         default_home_dir = Path.home() / '.cache' / 'torch'
         torch_home = Path(os.environ.get('TORCH_HOME', str(default_home_dir)))
-        # If TORCH_HUB is set, treat it as explicit hub dir; otherwise derive from TORCH_HOME
-        hub_dir = Path(os.environ.get('TORCH_HUB', str(torch_home / 'hub')))
+        hub_dir = torch_home / 'hub'
         hub_dir.mkdir(parents=True, exist_ok=True)
         try:
             # Ensure torch uses the directory we just created

@@ -10,7 +10,7 @@
       <div class="column">
         <h3>Decks</h3>
         <div class="form-group">
-          <button class="api-button" onclick="flashListDecks()">List Decks</button>
+          <button class="api-button" id="fc_list_decks_btn">List Decks</button>
         </div>
         <div class="form-group">
           <label for="fc_new_deck_name">New Deck Name</label>
@@ -21,7 +21,7 @@
           <input id="fc_new_deck_desc" type="text" placeholder="Short description" />
         </div>
         <div class="form-group">
-          <button class="api-button primary" onclick="flashCreateDeck()">Create Deck</button>
+          <button class="api-button primary" id="fc_create_deck_btn">Create Deck</button>
         </div>
         <div class="form-group">
           <label for="fc_manage_deck_select">Deck</label>
@@ -70,17 +70,17 @@
         </div>
         <div class="form-group">
           <div class="btn-group">
-            <button class="api-button" onclick="flashListCards()">List Cards</button>
-            <button class="api-button" onclick="flashPrevPage()">Prev</button>
-            <button class="api-button" onclick="flashNextPage()">Next</button>
+            <button class="api-button" id="fc_list_cards_btn">List Cards</button>
+            <button class="api-button" id="fc_prev_btn">Prev</button>
+            <button class="api-button" id="fc_next_btn">Next</button>
           </div>
           <span id="fc_page_info" class="text-muted" style="margin-left:8px;"></span>
         </div>
         <div class="form-group">
           <div class="btn-group">
-            <button class="api-button" onclick="flashSelectPage(true)">Select Page</button>
-            <button class="api-button" onclick="flashSelectPage(false)">Clear Selection</button>
-            <button class="api-button" onclick="flashBulkDeleteSelected()">Bulk Delete</button>
+            <button class="api-button" id="fc_select_page_btn">Select Page</button>
+            <button class="api-button" id="fc_clear_page_btn">Clear Selection</button>
+            <button class="api-button" id="fc_bulk_delete_btn">Bulk Delete</button>
           </div>
         </div>
         <div class="form-group">
@@ -89,14 +89,14 @@
               <label for="fc_bulk_deck">Set Deck for Selected</label>
               <div style="display:flex; gap:8px; align-items:center;">
                 <input id="fc_bulk_deck" type="number" placeholder="Deck ID" style="width:120px;" />
-                <button class="api-button" onclick="flashBulkSetDeck()">Set Deck</button>
+                <button class="api-button" id="fc_bulk_set_deck_btn">Set Deck</button>
               </div>
             </div>
             <div class="column">
               <label for="fc_bulk_tags">Tags for Selected</label>
               <div style="display:flex; gap:8px; align-items:center;">
                 <input id="fc_bulk_tags" type="text" placeholder="tag1,tag2" />
-                <button class="api-button" onclick="flashBulkSetTags()">Set Tags</button>
+                <button class="api-button" id="fc_bulk_set_tags_btn">Set Tags</button>
               </div>
               <div style="margin-top:4px; display:flex; gap:12px; align-items:center;">
                 <label><input type="checkbox" id="fc_bulk_tags_append" /> Append (union) instead of replace</label>
@@ -134,14 +134,14 @@
           <input id="fc_notes" type="text" placeholder="optional" />
         </div>
         <div class="form-group">
-          <button class="api-button primary" onclick="flashCreateCard()">Create Card</button>
+          <button class="api-button primary" id="fc_create_card_btn">Create Card</button>
         </div>
       </div>
     </div>
 
     <div class="form-group">
       <h3>Results</h3>
-      <div id="fc_selection_bar" style="display:none; margin-bottom:8px;"></div>
+      <div id="fc_selection_bar" style="display:none; margin-bottom:8px;" aria-live="polite"></div>
       <div id="fc_cards_container" class="json-viewer-content" style="overflow:auto;"></div>
       <pre id="fc_manage_result" class="json-viewer" style="margin-top:8px;"></pre>
     </div>
@@ -163,11 +163,11 @@
           <select id="fc_review_deck"></select>
         </div>
         <div class="form-group">
-          <button class="api-button" onclick="flashLoadDueCard()">Load Due Card</button>
+          <button class="api-button" id="fc_load_due_btn">Load Due Card</button>
         </div>
         <div class="form-group">
           <div id="fc_card_front" class="json-viewer-content" style="min-height:3rem;" aria-live="polite"></div>
-          <button class="api-button secondary" id="fc_reveal_btn" onclick="flashRevealBack()" disabled>Reveal</button>
+          <button class="api-button secondary" id="fc_reveal_btn" disabled>Reveal</button>
           <div id="fc_card_back" class="json-viewer-content" style="min-height:3rem; display:none;"></div>
         </div>
         <div class="form-group">
@@ -176,10 +176,10 @@
         </div>
         <div class="form-group">
           <div class="btn-group">
-            <button class="api-button" onclick="flashReviewRate(1)">Again (1)</button>
-            <button class="api-button" onclick="flashReviewRate(2)">Hard (2)</button>
-            <button class="api-button" onclick="flashReviewRate(3)">Good (3)</button>
-            <button class="api-button" onclick="flashReviewRate(4)">Easy (4)</button>
+            <button class="api-button" id="fc_rate_again">Again (1)</button>
+            <button class="api-button" id="fc_rate_hard">Hard (2)</button>
+            <button class="api-button" id="fc_rate_good">Good (3)</button>
+            <button class="api-button" id="fc_rate_easy">Easy (4)</button>
           </div>
         </div>
       </div>
@@ -220,7 +220,7 @@
           </div>
         </div>
         <div class="form-group">
-          <button class="api-button primary" onclick="flashImportTSV()">Import</button>
+          <button class="api-button primary" id="fc_import_tsv_btn">Import</button>
         </div>
         <div class="form-group">
           <pre id="fc_import_result" class="json-viewer"></pre>
@@ -261,7 +261,7 @@
           </label>
         </div>
         <div class="form-group">
-          <button class="api-button" onclick="flashExport()">Export</button>
+          <button class="api-button" id="fc_export_btn">Export</button>
         </div>
 
         <hr />
@@ -270,7 +270,7 @@
           <input id="fc_import_json_file" type="file" accept="application/json,.json,.jsonl" />
         </div>
         <div class="form-group">
-          <button class="api-button" onclick="flashImportJSONFile()">Import JSON</button>
+          <button class="api-button" id="fc_import_json_btn">Import JSON</button>
         </div>
         <div class="form-group">
           <pre id="fc_import_json_result" class="json-viewer"></pre>
@@ -290,7 +290,7 @@
           </select>
         </div>
         <div class="form-group">
-          <button class="api-button" onclick="flashGenFetchItems()">Fetch Items</button>
+          <button class="api-button" id="fc_gen_fetch_btn">Fetch Items</button>
         </div>
         <div id="fc_gen_items" class="json-viewer-content" style="max-height:240px; overflow:auto;"></div>
       </div>
@@ -314,13 +314,13 @@
           <select id="fc_gen_model" class="llm-model-select"></select>
         </div>
         <div class="form-group">
-          <button class="api-button primary" onclick="flashGenerateFromSelection()">Generate Draft Cards</button>
+          <button class="api-button primary" id="fc_gen_generate_btn">Generate Draft Cards</button>
         </div>
         <div class="form-group">
           <pre id="fc_gen_preview" class="json-viewer"></pre>
         </div>
         <div class="form-group">
-          <button class="api-button" onclick="flashGenerateImportDraft()">Import Draft Cards</button>
+          <button class="api-button" id="fc_gen_import_btn">Import Draft Cards</button>
         </div>
       </div>
     </div>

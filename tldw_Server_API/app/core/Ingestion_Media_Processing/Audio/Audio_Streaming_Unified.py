@@ -491,10 +491,14 @@ class StreamingDiarizer:
                     except Exception as wave_err:
                         logger.warning(f"wave module persistence failed: {wave_err}")
                         self._persist_method = None
+                        # Disable further attempts to persist for this session
+                        self.store_audio = False
                         return None
         except Exception as persist_err:
             logger.error(f"Audio persistence failed: {persist_err}")
             self._persist_method = None
+            # Disable further attempts to persist for this session
+            self.store_audio = False
             return None
 
     @property
@@ -1592,19 +1596,34 @@ async def handle_unified_websocket(
                                     "speakers": speakers,
                                     "persistence_method": getattr(diarizer, "persistence_method", None),
                                 })
-                                # Emit structured warning when persistence requested but unavailable
-                                try:
-                                    if (
-                                        config.diarization_store_audio
-                                        and (audio_path is None or not audio_path)
-                                    ):
+                            # Emit structured warning when persistence requested but unavailable
+                            try:
+                                if (
+                                    config.diarization_store_audio
+                                    and (audio_path is None or not audio_path)
+                                ):
+                                    await websocket.send_json({
+                                        "type": "warning",
+                                        "warning_type": "audio_persistence_unavailable",
+                                        "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
+                                    })
+                                # Emit detailed status for persistence state
+                                if config.diarization_store_audio:
+                                    _method = getattr(diarizer, "persistence_method", None)
+                                    if audio_path and _method and _method != "soundfile":
                                         await websocket.send_json({
-                                            "type": "warning",
-                                            "warning_type": "audio_persistence_unavailable",
-                                            "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
+                                            "type": "status",
+                                            "state": "diarization_persist_degraded",
+                                            "persistence_method": _method,
                                         })
-                                except Exception:
-                                    pass
+                                    elif (not audio_path) or (_method is None):
+                                        await websocket.send_json({
+                                            "type": "status",
+                                            "state": "diarization_persist_disabled",
+                                            "persistence_method": _method,
+                                        })
+                            except Exception:
+                                pass
                         except Exception as diar_err:
                             logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
 

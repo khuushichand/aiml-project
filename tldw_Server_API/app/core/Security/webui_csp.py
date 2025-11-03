@@ -92,12 +92,22 @@ class WebUICSPMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         try:
             # Legacy WebUI relies on inline scripts and event handlers.
-            # Allow inline scripts for both /webui and /setup to avoid CSP blocks.
-            # Once the WebUI is refactored to avoid inline handlers, this can
-            # be tightened back to only /setup or removed entirely.
+            # WebUI: allow inline; default to NO eval outside dev (env can enable).
+            # Setup: keep permissive (allow inline + eval) while gating ensures access control.
             allow_inline_scripts = path.startswith("/setup") or path.startswith("/webui")
-            # Eval allowed unless TLDW_WEBUI_NO_EVAL=1
-            allow_eval = os.getenv("TLDW_WEBUI_NO_EVAL", "0") not in ("1", "true", "TRUE")
+            if path.startswith("/setup"):
+                allow_eval = True
+            else:
+                # Eval policy for /webui
+                prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+                no_eval_env = os.getenv("TLDW_WEBUI_NO_EVAL")
+                if prod_flag:
+                    if no_eval_env is not None:
+                        allow_eval = no_eval_env.strip().lower() not in {"1", "true", "yes", "on", "y"}
+                    else:
+                        allow_eval = False
+                else:
+                    allow_eval = (no_eval_env or "0").strip().lower() not in {"1", "true", "yes", "on", "y"}
             response.headers.setdefault(
                 "Content-Security-Policy",
                 _build_webui_csp(nonce, allow_inline_scripts=allow_inline_scripts, allow_eval=allow_eval),

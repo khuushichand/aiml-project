@@ -11,6 +11,7 @@ Dashboards (JSON):
 - `security-dashboard.json` - HTTP status, p95 latency, headers, quotas, uploads
 - `rag-reranker-dashboard.json` - RAG reranker guardrails (timeouts, exceptions, budget, docs scored)
 - `rag-quality-dashboard.json` - Nightly eval faithfulness/coverage trends (dataset-labeled)
+- `streaming-dashboard.json` - Streaming observability (SSE/WS): latencies, idle timeouts, ping failures, SSE queue depth
 
 Exemplars
 - Redacted payload exemplars for debugging failed adaptive checks are written to `Databases/observability/rag_payload_exemplars.jsonl` by default.

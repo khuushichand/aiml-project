@@ -91,35 +91,37 @@
                     <span id="installStatusState" class="status-badge">Idle</span>
                 </div>
                 <p id="installStatusMessage" class="install-status-message"></p>
-                <ul id="installStatusSteps" class="install-status-steps"></ul>
-                <div id="installStatusErrors" class="install-status-errors" role="alert" hidden></div>
+                <div id="installStatusLog" class="install-status-log"></div>
             </div>
         </section>
 
-        <section class="setup-section">
+        <section id="verifySection" class="setup-section">
             <div class="section-heading">
-                <h2>Account Verification</h2>
+                <h2>Verify Access</h2>
                 <p>If you just created an account, you can verify it locally during setup. Provide an access token (JWT) or an API key.</p>
             </div>
-            <div class="columns">
-                <div class="column">
+            <div class="verify-grid">
+                <div class="verify-field">
                     <label for="verifyToken">Access Token (JWT):</label>
                     <input type="password" id="verifyToken" placeholder="Paste access token or leave blank if using API key" />
                 </div>
-                <div class="column">
+                <div class="verify-field">
                     <label for="verifyApiKey">API Key (X-API-KEY):</label>
-                    <input type="password" id="verifyApiKey" placeholder="Paste API key if using SQLite multi-user" />
+                    <input type="password" id="verifyApiKey" placeholder="Paste API key or leave blank if using JWT" />
                 </div>
             </div>
-            <div class="action-row">
-                <button id="selfVerifyBtn" class="btn primary" type="button">Verify My Account</button>
-                <span id="selfVerifyMsg" class="action-message" role="status"></span>
+            <div class="verify-actions">
+                <button id="verifySubmit" class="btn primary" type="button">Verify</button>
+                <span id="verifyMsg" class="verify-msg" role="status" aria-live="polite"></span>
             </div>
             <script>
-                document.getElementById('selfVerifyBtn').addEventListener('click', async () => {
+                document.getElementById('verifySubmit').addEventListener('click', async () => {
+                    const msg = document.getElementById('verifyMsg');
+                    msg.textContent = 'Verifying…';
+                    msg.style.color = '';
+
                     const tokenInput = document.getElementById('verifyToken');
                     const apiKeyInput = document.getElementById('verifyApiKey');
-                    const msg = document.getElementById('selfVerifyMsg');
 
                     // Try to populate token from localStorage if empty
                     if (tokenInput && !tokenInput.value) {

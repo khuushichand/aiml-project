@@ -150,16 +150,20 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
     - Store: reports effective `store_mode` and a basic connectivity check in cluster mode.
     - Redis: reports whether WS fan-out is enabled and connected.
     """
+    import time as _time
     from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
     store_info: dict = {"mode": None, "healthy": True}
+    timings: dict = {}
     try:
         mode = str(get_store_mode())
         store_info["mode"] = mode
         if mode == "cluster":
             try:
                 st = get_store()
+                t0 = _time.perf_counter()
                 # Minimal smoke call to exercise connectivity
                 _ = int(st.count_runs())
+                timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
                 store_info["healthy"] = True
             except Exception as e:
                 store_info["healthy"] = False
@@ -169,11 +173,57 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
         store_info["error"] = str(e)
     # Redis status via hub
     try:
-        redis_status = get_hub().get_redis_status()  # type: ignore[attr-defined]
+        hub = get_hub()  # type: ignore[attr-defined]
+        redis_status = hub.get_redis_status()
+        if redis_status.get("enabled") and redis_status.get("connected"):
+            pong = hub.ping_redis()
+            redis_status["ping_ms"] = pong.get("ms")
+            timings["redis_ping_ms"] = pong.get("ms")
     except Exception:
         redis_status = {"enabled": False}
     ok = bool(store_info.get("healthy", True)) and (True if not redis_status.get("enabled") else bool(redis_status.get("connected")))
-    return {"ok": ok, "store": store_info, "redis": redis_status}
+    return {"ok": ok, "store": store_info, "redis": redis_status, "timings": timings}
+
+
+@router.get("/health/public", summary="Public sandbox health probe (no auth)")
+async def sandbox_health_public() -> dict:
+    """Public variant of the sandbox health endpoint; does not require auth.
+
+    Reports the same payload as /sandbox/health, including store mode, connectivity,
+    Redis fan-out status and ping timings when available.
+    """
+    import time as _time
+    from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
+    store_info: dict = {"mode": None, "healthy": True}
+    timings: dict = {}
+    try:
+        mode = str(get_store_mode())
+        store_info["mode"] = mode
+        if mode == "cluster":
+            try:
+                st = get_store()
+                t0 = _time.perf_counter()
+                _ = int(st.count_runs())
+                timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
+                store_info["healthy"] = True
+            except Exception as e:
+                store_info["healthy"] = False
+                store_info["error"] = str(e)
+    except Exception as e:
+        store_info["healthy"] = False
+        store_info["error"] = str(e)
+    # Redis status via hub (no auth required)
+    try:
+        hub = get_hub()  # type: ignore[attr-defined]
+        redis_status = hub.get_redis_status()
+        if redis_status.get("enabled") and redis_status.get("connected"):
+            pong = hub.ping_redis()
+            redis_status["ping_ms"] = pong.get("ms")
+            timings["redis_ping_ms"] = pong.get("ms")
+    except Exception:
+        redis_status = {"enabled": False}
+    ok = bool(store_info.get("healthy", True)) and (True if not redis_status.get("enabled") else bool(redis_status.get("connected")))
+    return {"ok": ok, "store": store_info, "redis": redis_status, "timings": timings}
 
 
 @router.post("/sessions", response_model=SandboxSession, summary="Create a short-lived sandbox session")

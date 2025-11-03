@@ -1,100 +1,63 @@
-# Security Module
+## 1. Descriptive of Current Feature Set
 
-This document summarises the server-side security controls implemented in
-`tldw_Server_API/app/core/Security` and adjacent modules. The focus is on
-hardening outbound network access, HTTP responses, identity propagation, and
-secret handling.
+- Purpose: Central security controls for outbound network policy (SSRF guard), HTTP hardening headers, request ID propagation, CSP for the WebUI, URL validation for endpoints, and secret management.
+- Capabilities:
+  - Egress policy enforcement (allowlist/denylist, private IP blocking, port restrictions) with per-tenant helpers.
+  - Hardened HTTP response headers (CSP, Permissions-Policy, HSTS opt-in, referrer policy, remove Server header).
+  - Request ID middleware (sanitizes incoming X-Request-ID, generates UUID when invalid; propagates via response and request.state).
+  - CSP nonce and relaxed policies for WebUI and API docs; WebUI remote access guard with IP allowlists.
+  - Secret management: retrieval, validation, caching (e.g., single-user API key, JWT secret) via config sources.
+- Related Endpoints/Middleware Wiring:
+  - Middlewares added in `main.py`: RequestID, WebUI CSP, WebUI access guard, SecurityHeaders — see tldw_Server_API/app/main.py:2429, tldw_Server_API/app/main.py:2498, tldw_Server_API/app/main.py:2503, tldw_Server_API/app/main.py:2512.
+  - URL validation helper used by endpoints (e.g., web scraping duplicate check): tldw_Server_API/app/api/v1/endpoints/web_scraping.py:320.
+- Related Schemas: N/A (security uses middleware and utility functions rather than Pydantic models).
 
-## Module Layout
+## 2. Technical Details of Features
 
-```
-tldw_Server_API/app/core/Security/
-├── egress.py              # Outbound URL policy (SSRF protection)
-├── middleware.py          # Hardened security headers
-├── request_id_middleware.py  # Sanitised X-Request-ID propagation
-├── secret_manager.py      # Centralised secret retrieval and validation
-└── url_validation.py      # FastAPI-facing URL validator (wraps egress policy)
-```
+- Egress/SSRF
+  - Policy eval: `evaluate_url_policy(url)` returns `URLPolicyResult(allowed, reason)`: tldw_Server_API/app/core/Security/egress.py:146.
+  - Helpers: `is_url_allowed`, `is_url_allowed_for_tenant`, `is_webhook_url_allowed_for_tenant` (env-based allow/deny, per-tenant overrides), scheme/port checks, DNS resolution with private IP guard (IPv4/IPv6).
+  - Env knobs: `EGRESS_ALLOWLIST`, `EGRESS_DENYLIST`, `WORKFLOWS_EGRESS_ALLOWLIST`, `WORKFLOWS_EGRESS_DENYLIST`, `WORKFLOWS_EGRESS_BLOCK_PRIVATE`, `WORKFLOWS_EGRESS_ALLOWED_PORTS`, `WORKFLOWS_EGRESS_PROFILE`.
+  - Endpoint-friendly wrapper: `assert_url_safe(url)` — tldw_Server_API/app/core/Security/url_validation.py:6.
 
-## HTTP Hardening
+- HTTP Hardening
+  - `SecurityHeadersMiddleware` sets default CSP/permissions, removes `Server`, adds HSTS when `SECURITY_ENABLE_HSTS=true` and request is HTTPS (incl. `X-Forwarded-Proto: https`): tldw_Server_API/app/core/Security/middleware.py:86.
+  - Path-scoped CSP:
+    - WebUI (`/webui`, `/setup`): relaxed CSP; nonce-aware when `request.state.csp_nonce` present.
+    - API docs (`/docs`, `/redoc`): relaxed CSP allowing inline/eval and optional HTTPS CDNs.
+    - Else: strict default CSP.
+  - `WebUICSPMiddleware` injects a per-request CSP nonce and tailored policy for WebUI: tldw_Server_API/app/core/Security/webui_csp.py:72.
+  - `WebUIAccessGuardMiddleware` enforces WebUI remote access policy and IP allowlists: tldw_Server_API/app/core/Security/webui_access_guard.py:74.
 
-- **SecurityHeadersMiddleware** applies a conservative header set:
-  - `X-Content-Type-Options: nosniff`
-  - `X-Frame-Options: DENY`
-  - `Content-Security-Policy` (self-only resources, form-action restrictions,
-    `upgrade-insecure-requests`)
-  - `Permissions-Policy` (disables high-risk browser capabilities)
-  - `Referrer-Policy: strict-origin-when-cross-origin`
-  - `X-Permitted-Cross-Domain-Policies: none`
-  - Removes the `Server` header to avoid fingerprinting
-  - HSTS is opt-in; set `SECURITY_ENABLE_HSTS=true` to emit the header when the
-    request is served over HTTPS (including `X-Forwarded-Proto: https` deployments)
+- Request ID Propagation
+  - `RequestIDMiddleware` validates/sanitizes `X-Request-ID`, stores value on `request.state.request_id`, and returns header in responses: tldw_Server_API/app/core/Security/request_id_middleware.py:34.
 
-  The middleware is the canonical implementation; legacy imports in
-  `app/core/AuthNZ/security_headers.py` now re-export this version. Optional
-  development mode loosens HSTS and framing requirements for local debugging.
+- Secret Management
+  - `SecretManager` provides typed getters/validation for secrets (JWT, OAuth, single-user API key) with source precedence and caching: tldw_Server_API/app/core/Security/secret_manager.py:76.
+  - Single-user mode requires explicit `SINGLE_USER_API_KEY` with strong length; no hard-coded defaults.
 
-- **RequestIDMiddleware** now sanitises incoming `X-Request-ID` values. Any
-  value longer than 128 characters, or containing characters outside
-  `[A-Za-z0-9._:-]`, is replaced with a freshly generated UUIDv4. The cleaned ID
-  is stored on `request.state.request_id` and echoed back in the response.
+## 3. Developer-Related/Relevant Information for Contributors
 
-## Egress Controls
-
-- `egress.is_url_allowed` enforces outbound allowlisting and IP hygiene:
-  - Schemes limited to HTTP/HTTPS
-  - Optimised allowlist matching (exact match or subdomain) sourced from
-    `WORKFLOWS_EGRESS_ALLOWLIST`
-  - Private/reserved address blocking covers IPv4, IPv6, and IPv4-mapped IPv6
-    addresses (configurable through `WORKFLOWS_EGRESS_BLOCK_PRIVATE`)
-  - Unresolvable hosts are rejected when private blocking is active
-
-- `url_validation.assert_url_safe` simply calls the shared evaluator and raises
-  a 400 error with the reason string, keeping FastAPI endpoints aligned with the
-  core egress policy.
-
-## Secret Management
-
-- `secret_manager.SecretManager` owns retrieval, validation, and caching for all
-  runtime secrets. The single-user API key configuration was hardened:
-  - `single_user_api_key` is now marked as required with a 24-character minimum
-  - No baked-in defaults; the server refuses to start in single-user mode until
-    `SINGLE_USER_API_KEY` (or legacy `API_KEY`) is explicitly configured
-  - Production health checks surface missing or weak secrets via
-    `/api/v1/health` and the audit pipeline
-
-- For local development, run the AuthNZ bootstrap helper to generate fresh
-  secrets:
-
-  ```bash
-  python -m tldw_Server_API.app.core.AuthNZ.initialize  # choose "Generate secure keys"
-  ```
-
-## Configuration Reference
-
-| Setting | Purpose |
-| --- | --- |
-| `SINGLE_USER_API_KEY` | Required for single-user mode authentication |
-| `WORKFLOWS_EGRESS_ALLOWLIST` | Optional comma-separated domain allowlist |
-| `WORKFLOWS_EGRESS_BLOCK_PRIVATE` | Controls private/reserved address blocking (default `true`) |
-| `SINGLE_USER_TEST_API_KEY` | Optional deterministic key for automated tests |
-| `SECURITY_ENABLE_HSTS` | Enable HSTS response header generation (default `false`) |
-
-## Testing Coverage
-
-- `tests/Security/test_egress.py` exercises allowlist matching and IPv4-mapped
-  IPv6 blocking.
-- `tests/Security/test_request_id_middleware.py` verifies sanitisation and
-  header propagation.
-- `tests/Security/test_security_headers_middleware.py` validates the presence
-  (and conditional omission) of the hardened header set.
-
-## Operational Notes
-
-- Keep the security middleware enabled in production. Disable only for specific
-  debug scenarios.
-- When deploying behind a reverse proxy/ingress controller, ensure HSTS is
-  emitted exactly once-either by the proxy or by the application. The middleware
-  respects `X-Forwarded-Proto` to avoid false positives.
-- Review egress allowlists whenever adding outbound integrations. The default
-  behaviour is intentionally conservative.
+- Folder Structure
+  - `egress.py`: URL policy evaluation and env-driven allow/deny controls.
+  - `middleware.py`: security headers + CSP strategies.
+  - `webui_csp.py`: CSP nonce injection for WebUI.
+  - `webui_access_guard.py`: remote access guard for WebUI.
+  - `request_id_middleware.py`: request ID sanitization and echo.
+  - `secret_manager.py`: secret sources, types, validation.
+  - `url_validation.py`: endpoint helper to assert URL safety.
+- Extension Points
+  - When adding outbound integrations, call `evaluate_url_policy` or `assert_url_safe` before any HTTP call.
+  - Prefer centralized `SecurityHeadersMiddleware`; if you need per-route CSP overrides, set `response.headers["Content-Security-Policy"]` explicitly for that route.
+- Tests
+  - Security headers: tldw_Server_API/tests/Security/test_security_headers_middleware.py:1
+  - Request ID: tldw_Server_API/tests/Security/test_request_id_middleware.py:1
+  - Egress policy (core + global env): tldw_Server_API/tests/Security/test_egress.py:1, tldw_Server_API/tests/Security/test_egress_global_env.py:1
+  - Downstream enforcement examples: tldw_Server_API/tests/WebScraping/test_scraping_module.py:1
+- Local Dev Tips
+  - Set `SECURITY_ENABLE_HSTS=false` for local dev behind non-HTTPS proxies.
+  - Use `WORKFLOWS_EGRESS_ALLOWLIST` to limit outbound access when testing integrations.
+- Operational Notes
+  - Keep security middlewares enabled in production; they’re added in `main.py` during normal runs.
+  - When behind a proxy/ingress, ensure HSTS is emitted only once (proxy vs app). Middleware respects `X-Forwarded-Proto`.
+  - Review and maintain egress allowlists as integrations evolve.

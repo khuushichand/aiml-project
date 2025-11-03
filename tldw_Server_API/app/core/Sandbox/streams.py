@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import json
 import os
 import uuid
+import time
 
 from loguru import logger
 from tldw_Server_API.app.core.config import settings as app_settings
@@ -142,8 +143,7 @@ class RunStreamHub:
                 # fire-and-forget; swallow errors
                 self._redis_client.publish(self._redis_channel, data)
         except Exception as e:
-            logger.debug(f"redis publish failed: {e}
-")
+            logger.debug(f"redis publish failed: {e}")
 
     def _publish_local(self, run_id: str, frame: dict) -> None:
         with self._lock:
@@ -542,6 +542,22 @@ class RunStreamHub:
             "channel": self._redis_channel,
             "connected": bool(self._redis_enabled and self._redis_client is not None),
         }
+
+    def ping_redis(self) -> dict:
+        """Ping Redis and return timing information.
+
+        Returns a dict with keys: ok (bool), ms (float|None), error (str|None).
+        If Redis is disabled or no client is present, returns ok=False.
+        """
+        if not (self._redis_enabled and self._redis_client is not None):
+            return {"ok": False, "ms": None, "error": None}
+        try:
+            t0 = time.perf_counter()
+            self._redis_client.ping()
+            dt = (time.perf_counter() - t0) * 1000.0
+            return {"ok": True, "ms": float(dt), "error": None}
+        except Exception as e:  # pragma: no cover (network flake)
+            return {"ok": False, "ms": None, "error": str(e)}
 
 
 _HUB = RunStreamHub()

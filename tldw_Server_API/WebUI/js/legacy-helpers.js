@@ -42,6 +42,74 @@
         }
     }
 
+    // ------------------------------
+    // Inline Jobs feedback for long-running requests
+    // ------------------------------
+    const __lrJobStreams = new Map(); // endpointId -> { handle, timer }
+    function startJobFeedbackFor(endpointId, containerEl) {
+        try {
+            const host = containerEl && containerEl.parentElement ? containerEl.parentElement : document.body;
+            let box = document.getElementById(`${endpointId}_job_inline`);
+            if (!box) {
+                box = document.createElement('div');
+                box.id = `${endpointId}_job_inline`;
+                box.className = 'text-small';
+                box.style.marginTop = '6px';
+                box.innerHTML = '<div style="padding:6px; background: var(--color-surface-alt); border:1px solid var(--color-border); border-radius:6px;">'
+                    + '<strong>Live job activity</strong><div id="'+endpointId+'_je" style="max-height:120px; overflow:auto; margin-top:6px;"></div>'
+                    + '<div id="'+endpointId+'_js" class="text-muted" style="margin-top:6px;"></div>'
+                    + '</div>';
+                host.appendChild(box);
+            }
+            const listId = `${endpointId}_je`;
+            const statsId = `${endpointId}_js`;
+            const domainWhitelist = new Set(['media','webscrape','web_scrape','webscraping']);
+            const handle = apiClient.streamSSE('/api/v1/jobs/events/stream', {
+                onEvent: (obj) => {
+                    if (!obj || !domainWhitelist.has(String(obj.domain))) return;
+                    const list = document.getElementById(listId);
+                    if (!list) return;
+                    const line = document.createElement('div');
+                    const dqt = [obj.domain, obj.queue, obj.job_type].filter(Boolean).join('/');
+                    const jid = obj.job_id || '-';
+                    const ev = obj.event || '';
+                    line.textContent = `${new Date().toLocaleTimeString()} · ${ev} · ${dqt} · id:${jid}`;
+                    list.appendChild(line);
+                    while (list.children.length > 20) list.removeChild(list.firstChild);
+                    list.scrollTop = list.scrollHeight;
+                },
+                timeout: 600000
+            });
+            const timer = setInterval(async () => {
+                try {
+                    // Sum media and webscrape domains only
+                    const agg = { processing: 0, queued: 0 };
+                    for (const dom of ['media','webscrape']) {
+                        try {
+                            const res = await apiClient.get('/api/v1/jobs/stats', { domain: dom });
+                            const arr = Array.isArray(res) ? res : (res && res.data) ? res.data : [];
+                            agg.processing += arr.reduce((a, r) => a + (r.processing || 0), 0);
+                            agg.queued += arr.reduce((a, r) => a + (r.queued || 0), 0);
+                        } catch (_) { /* ignore per-domain errors */ }
+                    }
+                    const el = document.getElementById(statsId);
+                    if (el) el.textContent = `processing=${agg.processing} queued=${agg.queued}`;
+                } catch (_) { /* ignore */ }
+            }, 10000);
+            __lrJobStreams.set(endpointId, { handle, timer });
+        } catch (_) { /* ignore */ }
+    }
+    function stopJobFeedbackFor(endpointId) {
+        try {
+            const rec = __lrJobStreams.get(endpointId);
+            if (rec) {
+                try { if (rec.handle && rec.handle.abort) rec.handle.abort(); } catch (_) {}
+                try { if (rec.timer) clearInterval(rec.timer); } catch (_) {}
+                __lrJobStreams.delete(endpointId);
+            }
+        } catch (_) { /* ignore */ }
+    }
+
     async function makeRequest(endpointId, method, path, bodyType = 'none', queryParams = {}) {
         const responseArea = document.getElementById(`${endpointId}_response`);
         const curlEl = document.getElementById(`${endpointId}_curl`);
@@ -60,7 +128,7 @@
             const longRunningPaths = [
                 'process-videos', 'process-audios', 'process-ebooks',
                 'process-documents', 'process-pdfs', 'mediawiki/ingest-dump',
-                'mediawiki/process-dump', 'ingest-web-content'
+                'mediawiki/process-dump', 'ingest-web-content', 'media/add'
             ];
             const isLongRunning = longRunningPaths.some((p) => path.includes(p));
 
@@ -71,6 +139,8 @@
                     + 'This operation may take several minutes depending on the file size and processing options.<br>'
                     + 'Please do not refresh the page or close this tab.'
                     + '</div>';
+                // Hook job feedback inline
+                startJobFeedbackFor(endpointId, responseArea);
             } else {
                 Loading.show(responseArea.parentElement, 'Sending request...');
                 responseArea.textContent = '';
@@ -351,6 +421,7 @@
             }
         } finally {
             Loading.hide(responseArea.parentElement);
+            try { stopJobFeedbackFor(endpointId); } catch (_) {}
         }
     }
 

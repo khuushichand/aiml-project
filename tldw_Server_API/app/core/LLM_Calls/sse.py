@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, Iterable, Optional
+from loguru import logger
 
 _SSE_CONTROL_PREFIXES = ("event:", "id:", "retry:")
 
@@ -64,8 +65,16 @@ def normalize_provider_line(line: str) -> Optional[str]:
     lower = stripped.lower()
     for prefix in _SSE_CONTROL_PREFIXES:
         if lower.startswith(prefix):
+            try:
+                logger.debug(f"Dropping provider control line: {stripped}")
+            except Exception:
+                pass
             return None
     if stripped.startswith(":"):
+        try:
+            logger.debug(f"Dropping provider comment line: {stripped}")
+        except Exception:
+            pass
         return None
 
     if stripped.startswith("data:"):

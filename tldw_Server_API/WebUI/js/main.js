@@ -43,6 +43,9 @@ class WebUI {
         // Apply capability-based visibility (hide experimental tabs dynamically)
         this.applyFeatureVisibilityFromServer();
 
+        // Initialize Simple/Advanced mode toggle and default visibility
+        this.initSimpleAdvancedToggle();
+
         // If opened via file://, show guidance banner
         if (window.location.protocol === 'file:') {
             try {
@@ -55,6 +58,55 @@ class WebUI {
         }
 
         console.log('WebUI initialized successfully');
+    }
+
+    updateCorrelationBadge(meta) {
+        try {
+            const rid = (meta && meta.requestId) ? String(meta.requestId) : '';
+            const trace = (meta && (meta.traceparent || meta.traceId)) ? String(meta.traceparent || meta.traceId) : '';
+            const ridEl = document.getElementById('reqid-badge');
+            const trEl = document.getElementById('trace-badge');
+            if (ridEl) {
+                if (rid) {
+                    const short = rid.length > 8 ? rid.slice(0, 8) : rid;
+                    ridEl.textContent = `RID: ${short}`;
+                    ridEl.title = `Last X-Request-ID: ${rid}`;
+                    ridEl.style.display = '';
+                } else {
+                    ridEl.style.display = 'none';
+                }
+            }
+            if (trEl) {
+                if (trace) {
+                    const shortT = trace.length > 12 ? trace.slice(0, 12) + '…' : trace;
+                    trEl.textContent = `Trace: ${shortT}`;
+                    trEl.title = `Last traceparent/X-Trace-Id: ${trace}`;
+                    trEl.style.display = '';
+                } else {
+                    trEl.style.display = 'none';
+                }
+            }
+            // Also update correlation snippets in endpoint sections
+            try {
+                const preEls = document.querySelectorAll('.endpoint-section pre[id$="_response"]');
+                preEls.forEach((pre) => {
+                    let box = pre.nextElementSibling;
+                    if (!(box && box.classList && box.classList.contains('correlation-snippet'))) {
+                        box = document.createElement('div');
+                        box.className = 'correlation-snippet';
+                        box.style.marginTop = '6px';
+                        box.style.color = 'var(--color-text-muted)';
+                        box.style.fontSize = '0.85em';
+                        try { box.setAttribute('aria-live', 'polite'); } catch(_){}
+                        pre.parentNode.insertBefore(box, pre.nextSibling);
+                    }
+                    const shortReq = rid && rid.length > 12 ? rid.slice(0, 12) + '…' : (rid || '-');
+                    const shortTr = trace && trace.length > 24 ? trace.slice(0, 24) + '…' : (trace || '-');
+                    box.textContent = `Correlation: X-Request-ID=${shortReq}  trace=${shortTr}`;
+                    box.title = `X-Request-ID=${rid || '-'}  traceparent/X-Trace-Id=${trace || '-'}`;
+                });
+            } catch (_) { /* ignore */ }
+        } catch (e) { /* ignore */ }
     }
 
     async applyFeatureVisibilityFromServer() {
@@ -86,6 +138,64 @@ class WebUI {
             // Non-fatal
             console.debug('Capability visibility fetch failed:', e);
         }
+    }
+
+    initSimpleAdvancedToggle() {
+        try {
+            const toggle = document.getElementById('toggle-advanced');
+            const label = document.getElementById('advanced-toggle-label');
+            if (!toggle || !label) return;
+
+            // Determine default visibility: single-user -> hide advanced by default
+            let saved = Utils.getFromStorage('show-advanced-panels');
+            let defaultShow = true;
+            try {
+                if (window.apiClient && (window.apiClient.authMode === 'single-user')) {
+                    defaultShow = false;
+                }
+            } catch (_) {}
+            const show = (typeof saved === 'boolean') ? saved : defaultShow;
+            toggle.checked = !!show;
+
+            const apply = () => {
+                const wantShow = !!toggle.checked;
+                this.setAdvancedPanelsVisible(wantShow);
+                Utils.saveToStorage('show-advanced-panels', wantShow);
+                if (!wantShow) {
+                    const allowed = new Set(['simple', 'general']);
+                    const current = this.activeTopTabButton ? this.activeTopTabButton.dataset.toptab : '';
+                    if (!allowed.has(current || '')) {
+                        const btn = document.getElementById('top-tab-simple');
+                        if (btn) this.activateTopTab(btn);
+                    }
+                }
+            };
+
+            toggle.addEventListener('change', apply);
+            apply();
+        } catch (e) { /* ignore */ }
+    }
+
+    setAdvancedPanelsVisible(visible) {
+        try {
+            const allowed = new Set(['simple', 'general']);
+            document.querySelectorAll('.top-tab-button').forEach((btn) => {
+                const t = btn.dataset.toptab;
+                if (!t) return;
+                if (allowed.has(t)) { btn.style.display = ''; return; }
+                btn.style.display = visible ? '' : 'none';
+            });
+            // Hide corresponding subtab rows when advanced hidden
+            const rows = document.querySelectorAll('.sub-tab-row');
+            rows.forEach((row) => {
+                const id = row.id || '';
+                if (!id) return;
+                const t = id.endsWith('-subtabs') ? id.slice(0, -8) : id;
+                if (['chat', 'media', 'rag', 'workflows', 'prompts', 'notes', 'watchlists', 'persona', 'personalization', 'evaluations', 'keywords', 'embeddings', 'research', 'chatbooks', 'audio', 'admin', 'mcp'].includes(t)) {
+                    row.style.display = visible ? '' : 'none';
+                }
+            });
+        } catch (e) { /* ignore */ }
     }
 
     loadTheme() {
@@ -192,6 +302,21 @@ class WebUI {
         // Get content ID and load group
         const contentId = tabButton.dataset.contentId;
         const loadGroup = tabButton.dataset.loadGroup;
+        // Infer group for loader when tabs have no explicit loadGroup
+        let loaderGroup = loadGroup;
+        if (!loaderGroup && contentId) {
+            if (contentId.startsWith('tabSimple')) loaderGroup = 'simple';
+            else if (contentId.startsWith('tabChat')) loaderGroup = 'chat';
+            else if (contentId.startsWith('tabAudio')) loaderGroup = 'audio';
+            else if (contentId.startsWith('tabPrompts')) loaderGroup = 'prompts';
+            else if (contentId.startsWith('tabRAG')) loaderGroup = 'rag';
+            else if (contentId.startsWith('tabEvals') || contentId.startsWith('tabEvaluations')) loaderGroup = 'evaluations';
+            else if (contentId.startsWith('tabKeywords')) loaderGroup = 'keywords';
+            else if (contentId.startsWith('tabJobs')) loaderGroup = 'jobs';
+            else if (contentId.startsWith('tabMedia')) loaderGroup = 'media';
+            else if (contentId.startsWith('tabMaintenance')) loaderGroup = 'maintenance';
+            else if (contentId.startsWith('tabAuth')) loaderGroup = 'auth';
+        }
         try { if (contentId) this.activeSubTabButton.setAttribute('aria-controls', contentId); } catch (e) { /* ignore */ }
 
         // Load content if not already loaded
@@ -217,6 +342,20 @@ class WebUI {
             }
         }
 
+        // Ensure per-group scripts are loaded on demand (keeps initial bundle small)
+        try {
+            if (loaderGroup && window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
+                await window.ModuleLoader.ensureGroupScriptsLoaded(loaderGroup);
+            }
+        } catch (e) {
+            console.debug('ModuleLoader ensureGroupScriptsLoaded failed for', loaderGroup, e);
+            try {
+                if (typeof Toast !== 'undefined' && Toast) {
+                    Toast.warning(`Some features may be unavailable for ${loaderGroup} (script load failed)`);
+                }
+            } catch (_) {}
+        }
+
         // Show the content
         this.showContent(contentId);
 
@@ -230,6 +369,9 @@ class WebUI {
 
         if (contentId === 'tabChatCompletions' && typeof initializeChatCompletionsTab === 'function') {
             initializeChatCompletionsTab();
+        }
+        if (contentId === 'tabSimpleLanding' && typeof window.initializeSimpleLanding === 'function') {
+            window.initializeSimpleLanding();
         }
         if (contentId === 'tabWebScrapingIngest' && typeof initializeWebScrapingIngestTab === 'function') {
             initializeWebScrapingIngestTab();
@@ -248,6 +390,10 @@ class WebUI {
             initializeDictionariesTab();
         }
 
+        if (contentId && contentId.startsWith('tabAudio') && typeof bindAudioTabHandlers === 'function') {
+            bindAudioTabHandlers();
+        }
+
         // Flashcards tab
         if (contentId && contentId.startsWith('tabFlashcards') && typeof initializeFlashcardsTab === 'function') {
             initializeFlashcardsTab(contentId);
@@ -261,7 +407,9 @@ class WebUI {
             'tabEvalsOpenAI', 'tabEvalsGEval',
             'tabWebScrapingIngest', 'tabMultiItemAnalysis',
             // Flashcards Import panel includes a model selector for generation
-            'tabFlashcardsImport'
+            'tabFlashcardsImport',
+            // Simple landing has model selects
+            'tabSimpleLanding'
         ];
 
         if (tabsWithModelSelection.includes(contentId)) {
@@ -421,6 +569,16 @@ class WebUI {
         // Try to restore previously active tab
         const savedTopTab = Utils.getFromStorage('active-top-tab');
         const savedSubTab = Utils.getFromStorage('active-sub-tab');
+
+        // Prefer Simple when advanced panels are hidden
+        try {
+            const showAdv = Utils.getFromStorage('show-advanced-panels');
+            const advVisible = (typeof showAdv === 'boolean') ? showAdv : (window.apiClient?.authMode !== 'single-user');
+            if (!advVisible) {
+                const btn = document.getElementById('top-tab-simple');
+                if (btn) { this.activateTopTab(btn); return; }
+            }
+        } catch (_) {}
 
         if (savedTopTab) {
             const tabButton = document.querySelector(`.top-tab-button[data-toptab="${savedTopTab}"]`);

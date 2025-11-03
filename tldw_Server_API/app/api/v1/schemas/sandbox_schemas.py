@@ -21,7 +21,7 @@ class SandboxRuntimeInfo(BaseModel):
     queue_ttl_sec: Optional[int] = Field(default=None, description="Maximum time a run may remain queued before being dropped")
     workspace_cap_mb: Optional[int] = Field(default=None, description="Default workspace size cap (MB)")
     artifact_ttl_hours: Optional[int] = Field(default=None, description="Default artifact retention (hours)")
-    supported_spec_versions: List[str] = Field(default_factory=lambda: ["1.0"])
+    supported_spec_versions: List[str] = Field(default_factory=lambda: ["1.0"], description="Supported spec versions (e.g., ['1.0','1.1'] when 1.1 features are enabled)")
     interactive_supported: Optional[bool] = Field(default=None, description="Whether stdin-over-WS interactive runs are supported")
     egress_allowlist_supported: Optional[bool] = Field(default=None, description="Whether egress allowlisting is supported by the runtime")
     store_mode: Optional[str] = Field(default=None, description="Current store backend mode (memory|sqlite|cluster)")
@@ -81,14 +81,14 @@ class SandboxRunCreateRequest(BaseModel):
     network_policy: Optional[Literal["deny_all", "allowlist"]] = Field(default=None)
     files: Optional[List[RunFile]] = Field(default=None, description="Inline small files to write before run")
     capture_patterns: Optional[List[str]] = Field(default=None, description="Glob patterns for artifact capture")
-    # Spec 1.1: interactive stdin over WS
-    interactive: Optional[bool] = Field(default=None, description="Enable interactive mode with stdin over WS")
+    # Spec 1.1: interactive stdin over WS (backward compatible; ignored when runtime does not support it)
+    interactive: Optional[bool] = Field(default=None, description="Enable interactive mode with stdin over WS (spec 1.1)")
     stdin_max_bytes: Optional[int] = Field(default=None, ge=0, description="Max total stdin bytes across connection(s)")
     stdin_max_frame_bytes: Optional[int] = Field(default=None, ge=0, description="Max bytes per stdin frame")
     stdin_bps: Optional[int] = Field(default=None, ge=0, description="Approximate stdin bytes-per-second rate limit")
     stdin_idle_timeout_sec: Optional[int] = Field(default=None, ge=0, description="Close WS after this many seconds of stdin inactivity")
-    # Optional resume hint for clients; WS also supports from_seq query parameter
-    resume_from_seq: Optional[int] = Field(default=None, ge=0, description="If provided, client suggests resuming WS from this sequence number")
+    # Spec 1.1: Optional resume hint for clients; WS also supports a 'from_seq' query parameter on /runs/{id}/stream
+    resume_from_seq: Optional[int] = Field(default=None, ge=0, description="Suggest resuming WS from this sequence number (spec 1.1)")
 
 
 class SandboxRun(BaseModel):
@@ -123,7 +123,7 @@ class SandboxRunStatus(BaseModel):
     message: Optional[str] = None
     resource_usage: Optional[Dict[str, int]] = Field(default=None, description="Resource usage summary when available")
     estimated_start_time: Optional[datetime] = None
-    log_stream_url: Optional[str] = Field(default=None, description="Optional WS URL (signed or unsigned) to stream logs for this run")
+    log_stream_url: Optional[str] = Field(default=None, description="Optional WS URL (signed or unsigned) to stream logs; may include from_seq query (spec 1.1)")
 
 
 class ArtifactInfo(BaseModel):

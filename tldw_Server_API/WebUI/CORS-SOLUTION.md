@@ -16,8 +16,8 @@ The WebUI is now served directly from the FastAPI server at the same origin, com
 
 ### Method 1: Automatic (Recommended)
 ```bash
-cd tldw_Server_API/WebUI
-./Start-WebUI-SameOrigin.sh
+# From repo root
+./start-webui.sh
 ```
 This script will:
 - Check if the API server is running
@@ -45,7 +45,7 @@ This script will:
 ### Option 1: Environment Variable (Recommended)
 ```bash
 export SINGLE_USER_API_KEY='your-api-key-here'
-./Start-WebUI-SameOrigin.sh
+./start-webui.sh
 ```
 
 ### Option 2: Manual Entry
@@ -58,10 +58,11 @@ If you must serve the WebUI from a different origin, you need to configure CORS 
 ```python
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],  # Specific origin
+    allow_origins=["http://localhost:8080"],  # Specific origin (add more as needed)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "traceparent", "X-Trace-Id"],
 )
 ```
 
@@ -109,3 +110,16 @@ The CORS issue has been solved by serving the WebUI directly from the FastAPI se
 **http://localhost:8000/webui/**
 
 No additional configuration needed! 🎉
+
+## Browser Extensions & Streaming
+
+If you are building a browser extension that calls the API (especially with Server-Sent Events via `Accept: text/event-stream`), add the extension origin to allowed CORS origins. In development:
+
+```bash
+# Example: allow a Chrome extension id (replace with your extension id)
+export ALLOWED_ORIGINS='["chrome-extension://abcd1234efgh5678", "http://localhost:8080", "http://127.0.0.1:8080"]'
+```
+
+Notes:
+- The server exposes `X-Request-ID`, `traceparent`, and `X-Trace-Id` headers for correlation. Ensure `expose_headers` includes these (already set by default when CORS is enabled).
+- Background/service worker fetches avoid most UX friction, but CORS still applies: the origin must be explicitly allowed.

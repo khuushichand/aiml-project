@@ -5,51 +5,26 @@ A browser-based interface for testing and interacting with the TLDW Server API. 
 ## Quick Start
 
 ### Prerequisites
-- TLDW Server API running (default: `http://localhost:8000`)
+- TLDW Server API (default: `http://localhost:8000`)
 - Modern web browser (Chrome, Firefox, Safari, Edge)
-- Python 3.x (for serving the WebUI)
 
-### Starting the WebUI
+### Starting the WebUI (Same-Origin, Recommended)
 
-1. **Start the API Server** (in one terminal):
+1. From the project root, launch the server and WebUI together:
    ```bash
-   cd /path/to/tldw_server
-   # Set your API key (if using single-user mode)
+   # Optionally set your API key (single-user mode)
    export SINGLE_USER_API_KEY="your-secret-api-key"
-   python -m uvicorn tldw_Server_API.app.main:app --reload
-   ```
-   The API will be available at http://localhost:8000
-
-2. **Start the WebUI** (in another terminal):
-
-   **Option A: With Auto-Configuration (Recommended)**
-   ```bash
-   cd tldw_Server_API/WebUI
-   # The script will auto-detect SINGLE_USER_API_KEY from environment
-   ./Start-WebUI.sh
+   ./start-webui.sh
    ```
 
-   **Option B: Manual Configuration**
-   ```bash
-   cd tldw_Server_API/WebUI
-   python3 -m http.server 8080
-   # You'll need to enter the API key manually in the UI
+2. Open your browser to:
+   ```
+   http://localhost:8000/webui/
    ```
 
-   **Option C: With Custom API URL**
-   ```bash
-   cd tldw_Server_API/WebUI
-   export API_URL="http://your-server:8000"
-   export SINGLE_USER_API_KEY="your-api-key"
-   ./Start-WebUI.sh
-   ```
-
-3. **Open your browser** and navigate to:
-   ```
-   http://localhost:8080
-   ```
-
-⚠️ **Important**: Do NOT open `index.html` directly in your browser (file:// protocol) as this will cause CORS errors. Always use an HTTP server.
+Notes:
+- The script gates first‑time setup at `/setup` and then serves the WebUI at `/webui/` on the same origin, avoiding CORS issues.
+- If the API server is already running, you can simply visit `http://localhost:8000/webui/` directly.
 
 ## Overview
 
@@ -165,7 +140,7 @@ WebUI/
 ├── index.html                 # Main application entry point
 ├── api-endpoints-config.json  # API endpoint documentation
 ├── webui-config.json         # Auto-generated configuration (gitignored)
-├── Start-WebUI.sh            # Start script with auto-configuration
+├── (root)/start-webui.sh     # Recommended launcher (in repo root)
 ├── test-ui.sh                # Testing and verification script
 ├── css/
 │   └── styles.css            # Application styles with theme support
@@ -243,6 +218,13 @@ Notes:
 - The response will include `metadata.hard_citations` (per-sentence citations with `doc_id` and `start/end` offsets) and `metadata.numeric_fidelity` (present/missing/source_numbers).
 - In production mode (`tldw_production=true`) or when `RAG_GUARDRAILS_STRICT=true`, the server defaults to enabling numeric fidelity and hard citations; you can still tighten behavior per request.
 
+## Performance & Maintainability
+
+- Per‑tab script loading: heavy JS is now loaded on demand when a tab is activated (audio, chat, prompts, etc.). This reduces initial load and keeps the code modular.
+- Inline handler migration: tabs are being refactored to remove inline `onclick` and related attributes. Newer panels (e.g., Flashcards → Manage) use delegated listeners bound in JS.
+- CSP tightening: once all inline handlers are removed, `unsafe-inline` can be dropped for `/webui` in CSP. Until then, inline use is minimized.
+- node_modules: do not commit `WebUI/node_modules` (already ignored). If any slipped into history, consider a history prune in a separate maintenance task. Local dev can run `npm i` inside `WebUI/` for tests (vitest), but this folder is not required at runtime.
+
 ### RAG Streaming Tip: Contexts and "Why These Sources"
 
 The streaming endpoint `POST /api/v1/rag/search/stream` now emits early context information, followed by reasoning and incremental answer chunks. Events are NDJSON lines:
@@ -268,7 +250,7 @@ The WebUI now supports automatic configuration when running alongside a TLDW ser
    - `SINGLE_USER_API_KEY`: Your API authentication token
    - `API_URL`: Custom API server URL (optional, defaults to http://localhost:8000)
 
-2. **Auto-Detection**: When using `Start-WebUI.sh`, the script will:
+2. **Auto-Detection**: When using `start-webui.sh` (repo root), the script will:
    - Check for `SINGLE_USER_API_KEY` in environment
    - Generate a `webui-config.json` file automatically
    - Pre-populate the API key in the UI
@@ -310,7 +292,7 @@ If not using auto-configuration:
 **"404 Not Found" errors**
 - Check you're using the correct ports:
   - API: http://localhost:8000
-  - WebUI: http://localhost:8080 (or your chosen port)
+  - WebUI: http://localhost:8000/webui/
 
 **Tabs not loading**
 - Clear browser cache: Ctrl+Shift+R (Windows/Linux) or Cmd+Shift+R (Mac)

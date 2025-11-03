@@ -9,7 +9,7 @@ https://arxiv.org/abs/2501.05366
 https://github.com/ItsArnavSh/gitfindr
 https://exa.ai/
 https://huggingface.co/Menlo/Lucy-gguf
-
+https://github.com/glacier-creative-git/knowledge-graph-traversal-semantic-rag-research
 https://ii.inc/web/blog/post/ii-search
 https://ii.inc/web/blog/post/ii-researcher
 https://github.com/Intelligent-Internet/ii-researcher

@@ -247,6 +247,95 @@ async function audioTTSGenerate() {
     }
 }
 
+// Helper wrappers for migrated buttons
+function _audioTTSGenerateBtnHandler() {
+    try {
+        if (typeof window.generateTTS === 'function') return window.generateTTS();
+    } catch (_) {}
+    return audioTTSGenerate();
+}
+
+function _audioTTSStopBtnHandler(e) {
+    try {
+        if (typeof window.stopTTS === 'function') return window.stopTTS();
+    } catch (_) {}
+    try { if (e) e.preventDefault(); } catch(_){}
+    try { if (_audioTTSAbort) _audioTTSAbort.abort(); } catch(_){}
+}
+
+function _audioTTSDownloadBtnHandler() {
+    try {
+        if (typeof window.downloadAudio === 'function') return window.downloadAudio();
+    } catch (_) {}
+    try {
+        const player = document.getElementById('audioTTS_player');
+        if (player && player.src) {
+            const a = document.createElement('a');
+            a.href = player.src;
+            a.download = 'tts_output';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    } catch (_) {}
+}
+
+function bindAudioTabHandlers() {
+    // TTS provider and status
+    const provSel = document.getElementById('audioTTS_provider');
+    if (provSel && !provSel._b) { provSel._b = true; provSel.addEventListener('change', () => { try { updateTTSProviderOptions(); } catch(_){} }); }
+    const provRefresh = document.getElementById('tts_provider_status_refresh');
+    if (provRefresh && !provRefresh._b) { provRefresh._b = true; provRefresh.addEventListener('click', () => { try { checkTTSProviderStatus(); } catch(_){} }); }
+    const voicesBtn = document.getElementById('audioTTS_voices_refresh');
+    if (voicesBtn && !voicesBtn._b) { voicesBtn._b = true; voicesBtn.addEventListener('click', () => { try { loadProviderVoices(); } catch(_){} }); }
+
+    // TTS actions
+    const genBtn = document.getElementById('audioTTS_generate_btn');
+    if (genBtn && !genBtn._b) { genBtn._b = true; genBtn.addEventListener('click', _audioTTSGenerateBtnHandler); }
+    const stopBtn = document.getElementById('stopButton');
+    if (stopBtn && !stopBtn._b) { stopBtn._b = true; stopBtn.addEventListener('click', _audioTTSStopBtnHandler); }
+    const dlBtn = document.getElementById('downloadButton');
+    if (dlBtn && !dlBtn._b) { dlBtn._b = true; dlBtn.addEventListener('click', _audioTTSDownloadBtnHandler); }
+    const clearRef = document.getElementById('audioTTS_voice_clear');
+    if (clearRef && !clearRef._b) { clearRef._b = true; clearRef.addEventListener('click', () => { try { clearVoiceReference(); } catch(_){} }); }
+
+    // TTS recording controls
+    const recStart = document.getElementById('audioTTS_rec_start');
+    const recStop = document.getElementById('audioTTS_rec_stop');
+    const recClear = document.getElementById('audioTTS_rec_clear');
+    if (recStart && !recStart._b) { recStart._b = true; recStart.addEventListener('click', () => { try { startAudioTTSRecording(); } catch(_){} }); }
+    if (recStop && !recStop._b) { recStop._b = true; recStop.addEventListener('click', () => { try { stopAudioTTSRecording(); } catch(_){} }); }
+    if (recClear && !recClear._b) { recClear._b = true; recClear.addEventListener('click', () => { try { clearAudioTTSRecording(); } catch(_){} }); }
+    const recTog = document.getElementById('audioTTS_rec_settings_toggle');
+    if (recTog && !recTog._b) { recTog._b = true; recTog.addEventListener('click', () => { try { toggleAudioTTSRecSettings(); } catch(_){} }); }
+    const recMax = document.getElementById('audioTTS_rec_max');
+    if (recMax && !recMax._b) { recMax._b = true; recMax.addEventListener('change', () => { try { window._audioRecMaxSec = Math.max(3, Math.min(60, parseInt(recMax.value||'15',10))); localStorage.setItem('audio_tts_rec_max_seconds', String(window._audioRecMaxSec)); } catch(_){} }); }
+    const recReset = document.getElementById('audioTTS_rec_max_reset');
+    if (recReset && !recReset._b) { recReset._b = true; recReset.addEventListener('click', (e) => { e.preventDefault(); try { resetAudioTTSRecMax(); } catch(_){} }); }
+
+    // File transcription recording
+    const fStart = document.getElementById('fileTrans_rec_start');
+    const fStop = document.getElementById('fileTrans_rec_stop');
+    const fClear = document.getElementById('fileTrans_rec_clear');
+    if (fStart && !fStart._b) { fStart._b = true; fStart.addEventListener('click', () => { try { startFileTransRecording(); } catch(_){} }); }
+    if (fStop && !fStop._b) { fStop._b = true; fStop.addEventListener('click', () => { try { stopFileTransRecording(); } catch(_){} }); }
+    if (fClear && !fClear._b) { fClear._b = true; fClear.addEventListener('click', () => { try { clearFileTransRecording(); } catch(_){} }); }
+    const fTog = document.getElementById('fileTrans_rec_settings_toggle');
+    if (fTog && !fTog._b) { fTog._b = true; fTog.addEventListener('click', () => { try { toggleFileTransRecSettings(); } catch(_){} }); }
+    const fMax = document.getElementById('fileTrans_rec_max');
+    if (fMax && !fMax._b) { fMax._b = true; fMax.addEventListener('change', () => { try { window._fileTransRecMaxSec = Math.max(3, Math.min(60, parseInt(fMax.value||'15',10))); localStorage.setItem('file_trans_rec_max_seconds', String(window._fileTransRecMaxSec)); } catch(_){} }); }
+    const fReset = document.getElementById('fileTrans_rec_max_reset');
+    if (fReset && !fReset._b) { fReset._b = true; fReset.addEventListener('click', (e) => { e.preventDefault(); try { resetFileTransRecMax(); } catch(_){} }); }
+
+    // File transcription actions
+    const segProvRefresh = document.getElementById('fileSegRefreshProviders');
+    if (segProvRefresh && !segProvRefresh._b) { segProvRefresh._b = true; segProvRefresh.addEventListener('click', () => { try { refreshEmbeddingProviders(); } catch(_){} }); }
+    const runBtn = document.getElementById('fileTrans_run_btn');
+    if (runBtn && !runBtn._b) { runBtn._b = true; runBtn.addEventListener('click', () => { try { audioFileTranscribeRun(); } catch(_){} }); }
+    const clrBtn = document.getElementById('fileTrans_clear_btn');
+    if (clrBtn && !clrBtn._b) { clrBtn._b = true; clrBtn.addEventListener('click', () => { try { audioFileTranscribeClear(); } catch(_){} }); }
+}
+
 // ============================================================================
 // Flashcards Tab Functions
 // ============================================================================
@@ -289,6 +378,40 @@ function initializeFlashcardsTab(contentId) {
                 inp.addEventListener('input', debounced);
             }
         });
+
+        // Manage tab buttons (delegated to avoid inline handlers)
+        const bindBtn = (id, handler) => {
+            const el = document.getElementById(id);
+            if (el && !el._fcBound) { el._fcBound = true; el.addEventListener('click', handler); }
+        };
+        bindBtn('fc_list_decks_btn', () => flashListDecks());
+        bindBtn('fc_create_deck_btn', () => flashCreateDeck());
+        bindBtn('fc_list_cards_btn', () => flashListCards());
+        bindBtn('fc_prev_btn', () => flashPrevPage());
+        bindBtn('fc_next_btn', () => flashNextPage());
+        bindBtn('fc_select_page_btn', () => flashSelectPage(true));
+        bindBtn('fc_clear_page_btn', () => flashSelectPage(false));
+        bindBtn('fc_bulk_delete_btn', () => flashBulkDeleteSelected());
+        bindBtn('fc_bulk_set_deck_btn', () => flashBulkSetDeck());
+        bindBtn('fc_bulk_set_tags_btn', () => flashBulkSetTags());
+        bindBtn('fc_create_card_btn', () => flashCreateCard());
+
+        // Review tab buttons
+        bindBtn('fc_load_due_btn', () => flashLoadDueCard());
+        const reveal = document.getElementById('fc_reveal_btn');
+        if (reveal && !reveal._fcBound) { reveal._fcBound = true; reveal.addEventListener('click', () => flashRevealBack()); }
+        bindBtn('fc_rate_again', () => flashReviewRate(1));
+        bindBtn('fc_rate_hard', () => flashReviewRate(2));
+        bindBtn('fc_rate_good', () => flashReviewRate(3));
+        bindBtn('fc_rate_easy', () => flashReviewRate(4));
+
+        // Import/Export tab buttons
+        bindBtn('fc_import_tsv_btn', () => flashImportTSV());
+        bindBtn('fc_export_btn', () => flashExport());
+        bindBtn('fc_import_json_btn', () => flashImportJSONFile());
+        bindBtn('fc_gen_fetch_btn', () => flashGenFetchItems());
+        bindBtn('fc_gen_generate_btn', () => flashGenerateFromSelection());
+        bindBtn('fc_gen_import_btn', () => flashGenerateImportDraft());
     } catch (e) {
         console.debug('initializeFlashcardsTab failed:', e);
     }
@@ -487,14 +610,15 @@ function flashRenderCardsList(resp) {
                 `<td>${_fcRenderTagEditor(tags)}</td>`+
                 `<td>${Utils.escapeHtml(due || '')}</td>`+
                 `<td>
-                    <button class="btn btn-secondary btn-sm" onclick="flashUpdateCard('${Utils.escapeHtml(uuid)}')">Update</button>
-                    <button class="btn btn-secondary btn-sm" onclick="flashDeleteCard('${Utils.escapeHtml(uuid)}')">Delete</button>
+                    <button class="btn btn-secondary btn-sm fc-update-btn" data-uuid="${Utils.escapeHtml(uuid)}">Update</button>
+                    <button class="btn btn-secondary btn-sm fc-delete-btn" data-uuid="${Utils.escapeHtml(uuid)}">Delete</button>
                 </td>`+
                 `</tr>`;
         }
         html += '</tbody></table>';
         cont.innerHTML = html;
         _fcBindTagEditors();
+        _fcBindRowActions();
         // Bind master select
         try {
             const master = cont.querySelector('.fc-master-select');
@@ -740,11 +864,46 @@ function _fcUpdateSelectionBar() {
         if (count <= 0) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
         let html = `<span>${count} selected.</span> `;
         if (!_fcSelectionAll && _fcLastTotal && _fcSelection.size < _fcLastTotal) {
-            html += `<a href="#" onclick="flashSelectAllResults(); return false;">Select all ${_fcLastTotal} results</a> · `;
+            html += `<a href="#" class="fc-select-all-results">Select all ${_fcLastTotal} results</a> · `;
         }
-        html += `<a href="#" onclick="flashClearSelection(); return false;">Clear selection</a>`;
+        html += `<a href="#" class="fc-clear-selection">Clear selection</a>`;
         bar.innerHTML = html;
         bar.style.display = 'block';
+    } catch (_) {}
+}
+
+function _fcBindRowActions() {
+    try {
+        const cont = document.getElementById('fc_cards_container');
+        if (cont && !cont._fcRowDelegated) {
+            cont._fcRowDelegated = true;
+            cont.addEventListener('click', (e) => {
+                const t = e.target;
+                if (!(t && t.classList)) return;
+                if (t.classList.contains('fc-update-btn')) {
+                    const uuid = t.getAttribute('data-uuid');
+                    if (uuid) flashUpdateCard(uuid);
+                } else if (t.classList.contains('fc-delete-btn')) {
+                    const uuid = t.getAttribute('data-uuid');
+                    if (uuid) flashDeleteCard(uuid);
+                }
+            });
+        }
+        const bar = document.getElementById('fc_selection_bar');
+        if (bar && !bar._fcDelegated) {
+            bar._fcDelegated = true;
+            bar.addEventListener('click', (e) => {
+                const a = e.target.closest('a');
+                if (!a) return;
+                if (a.classList.contains('fc-select-all-results')) {
+                    e.preventDefault();
+                    flashSelectAllResults();
+                } else if (a.classList.contains('fc-clear-selection')) {
+                    e.preventDefault();
+                    flashClearSelection();
+                }
+            });
+        }
     } catch (_) {}
 }
 
@@ -3487,14 +3646,17 @@ async function makeChatCompletionsRequest() {
                 }
             });
             responseEl.textContent += '\n\n[Stream Complete]';
+            try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
         } else {
             // Handle regular response
             const response = await apiClient.post('/api/v1/chat/completions', payload);
             responseEl.textContent += '\nResponse:\n' + JSON.stringify(response, null, 2);
+            try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
         }
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
         console.error('Chat completions error:', error);
+        try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
     }
 }
 

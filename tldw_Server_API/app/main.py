@@ -740,6 +740,70 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             logger.debug(f"App Startup: RBAC single-user seed ensure skipped: {_e}")
 
+        # Initialize ResourceGovernor policy loader (file or DB store)
+        try:
+            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                default_policy_loader as _rg_default_loader,
+                db_policy_loader as _rg_db_loader,
+                PolicyReloadConfig as _RGReloadCfg,
+                PolicyLoader as _RGPolicyLoader,
+            )
+            from tldw_Server_API.app.core.config import (
+                rg_policy_store as _rg_store_sel,
+                rg_policy_reload_interval_sec as _rg_reload_interval,
+                rg_policy_reload_enabled as _rg_reload_enabled,
+                rg_policy_path as _rg_policy_path,
+            )
+            _store_mode = _rg_store_sel()
+            if _store_mode == "db":
+                try:
+                    from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import AuthNZPolicyStore as _RGDBStore
+                    _store = _RGDBStore()
+                    _interval = _rg_reload_interval()
+                    rg_loader = _rg_db_loader(_store, _RGReloadCfg(enabled=True, interval_sec=_interval))
+                    logger.info("ResourceGovernor policy loader configured for AuthNZ DB store")
+                except Exception as _rg_db_err:
+                    logger.warning(f"Failed to configure DB-backed policy store, falling back to file: {_rg_db_err}")
+                    rg_loader = _rg_default_loader()
+                    _store_mode = "file"
+            else:
+                # File-based policy store: use config-driven path and reload settings
+                _enabled = _rg_reload_enabled()
+                _interval = _rg_reload_interval()
+                _path = _rg_policy_path()
+                rg_loader = _RGPolicyLoader(_path, _RGReloadCfg(enabled=_enabled, interval_sec=_interval))
+                _store_mode = "file"
+
+            await rg_loader.load_once()
+            try:
+                if _rg_reload_enabled():
+                    await rg_loader.start_auto_reload()
+            except Exception as _rg_reload_err:
+                logger.debug(f"Policy auto-reload not started: {_rg_reload_err}")
+            app.state.rg_policy_loader = rg_loader
+            app.state.rg_policy_store = _store_mode
+            try:
+                snap = rg_loader.get_snapshot()
+                app.state.rg_policy_version = int(getattr(snap, "version", 0) or 0)
+                app.state.rg_policy_count = len(getattr(snap, "policies", {}) or {})
+            except Exception:
+                app.state.rg_policy_version = 0
+                app.state.rg_policy_count = 0
+
+            # Keep version fresh on reloads
+            try:
+                def _on_rg_change(snap):
+                    try:
+                        app.state.rg_policy_version = int(getattr(snap, "version", 0) or 0)
+                        app.state.rg_policy_count = len(getattr(snap, "policies", {}) or {})
+                    except Exception:
+                        pass
+                rg_loader.add_on_change(_on_rg_change)
+            except Exception:
+                pass
+        except Exception as _rg_err:
+            logger.warning(f"ResourceGovernor policy loader initialization skipped: {_rg_err}")
+
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
         session_manager = await get_session_manager()
@@ -2371,6 +2435,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"], # Must include OPTIONS, GET, POST, DELETE etc.
         allow_headers=["*"],
+        expose_headers=["X-Request-ID", "traceparent", "X-Trace-Id"],
     )
 
     # Ensure OpenAPI schema is consumable across common local origins (helpful when docs are
@@ -2389,6 +2454,7 @@ else:
                     response.headers.setdefault("Access-Control-Allow-Origin", "*")
                 response.headers.setdefault("Access-Control-Allow-Methods", "GET, OPTIONS")
                 response.headers.setdefault("Access-Control-Allow-Headers", "*")
+                response.headers.setdefault("Access-Control-Expose-Headers", "X-Request-ID, traceparent, X-Trace-Id")
         except Exception:
             pass
         return response
@@ -2668,7 +2734,9 @@ if WEBUI_DIR.exists():
 else:
     logger.warning(f"WebUI directory not found at {WEBUI_DIR}")
 
-SETUP_PAGE_PATH = WEBUI_DIR / "setup.html"
+# Keep Setup UI HTML outside the /webui static mount to avoid bypassing the
+# /setup gating via direct file access.
+SETUP_PAGE_PATH = BASE_DIR / "Setup_UI" / "setup.html"
 
 
 async def serve_setup_page():
@@ -2989,7 +3057,16 @@ except Exception as _metrics_rt_err:
 
 # Health check (registered conditionally below)
 async def health_check():
-    return {"status": "healthy"}
+    body = {"status": "healthy"}
+    try:
+        rgv = getattr(app.state, "rg_policy_version", None)
+        if rgv is not None:
+            body["rg_policy_version"] = int(rgv)
+            body["rg_policy_store"] = getattr(app.state, "rg_policy_store", None)
+            body["rg_policy_count"] = getattr(app.state, "rg_policy_count", None)
+    except Exception:
+        pass
+    return body
 
 # Readiness check (verifies critical dependencies) - registered conditionally below
 async def readiness_check():
@@ -3060,6 +3137,16 @@ async def readiness_check():
             "provider_health": provider_health,
             "otel_available": bool(OTEL_AVAILABLE),
         }
+        try:
+            rgv = getattr(app.state, "rg_policy_version", None)
+            if rgv is not None:
+                body["rg_policy"] = {
+                    "version": int(rgv),
+                    "store": getattr(app.state, "rg_policy_store", None),
+                    "policies": getattr(app.state, "rg_policy_count", None),
+                }
+        except Exception:
+            pass
         from fastapi.responses import JSONResponse as _JR
         return _JR(body, status_code=(200 if ready else 503))
     except Exception as e:

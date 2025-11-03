@@ -160,6 +160,31 @@ Additional endpoint behavior to note:
 - Non-stream responses include `tldw_conversation_id` in the JSON body for client-side state tracking.
 - Streaming responses send a `stream_start` event and normalized `data:` deltas; periodic heartbeats keep connections alive; a `stream_end` event is emitted on success.
 
+### Streaming Example (Unified SSE with Metrics Labels)
+
+When using the unified streaming abstraction, instantiate `SSEStream` with optional labels to tag emitted metrics (low-cardinality keys like `component` and `endpoint` are recommended):
+
+```python
+from fastapi.responses import StreamingResponse
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+async def chat_stream_endpoint():
+    stream = SSEStream(
+        heartbeat_interval_s=10,
+        heartbeat_mode="data",
+        labels={"component": "chat", "endpoint": "chat_stream"},
+    )
+
+    async def gen():
+        # feed stream in background (e.g., provider-normalized lines or deltas)
+        async for line in stream.iter_sse():
+            yield line
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+```
+
+
 ## Rate Limiting
 
 - Global SlowAPI middleware (production) provides coarse IP-based limits.

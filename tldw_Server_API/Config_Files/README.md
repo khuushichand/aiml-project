@@ -309,6 +309,58 @@ VibeVoice:
 - `max_bytes` (int|null): log rotation size
 - `backup_count` (int): rotated files kept
 
+## [HTTP-Client]
+- Centralized outbound HTTP client configuration (applies to helpers in `tldw_Server_API.app.core.http_client`).
+- Defaults are secure-by-default and can be overridden via environment variables.
+
+- Timeouts
+  - `HTTP_CONNECT_TIMEOUT` (float, default `5.0` seconds)
+  - `HTTP_READ_TIMEOUT` (float, default `30.0` seconds)
+  - `HTTP_WRITE_TIMEOUT` (float, default `30.0` seconds)
+  - `HTTP_POOL_TIMEOUT` (float, default `30.0` seconds)
+
+- Connection limits
+  - `HTTP_MAX_CONNECTIONS` (int, default `100`)
+  - `HTTP_MAX_KEEPALIVE_CONNECTIONS` (int, default `20`)
+
+- Retries & backoff
+  - `HTTP_RETRY_ATTEMPTS` (int, default `3`)
+  - `HTTP_BACKOFF_BASE_MS` (int, default `250`)
+  - `HTTP_BACKOFF_CAP_S` (int, default `30`)
+  - Retries on: 408, 429, 500, 502, 503, 504, and connect/read timeouts. Honors `Retry-After`.
+
+- Redirects & proxies
+  - `HTTP_MAX_REDIRECTS` (int, default `5`)
+  - `HTTP_TRUST_ENV` (bool, default `false`) — when false, system proxies are ignored
+  - `PROXY_ALLOWLIST` (csv of hosts or URLs; deny-by-default)
+
+- JSON & headers
+  - `HTTP_JSON_MAX_BYTES` (int, optional) — maximum allowed JSON response size for helpers that enable this guard
+  - `HTTP_DEFAULT_USER_AGENT` (string, default `tldw_server/<version> httpx`)
+
+- Transport & TLS
+  - `HTTP3_ENABLED` (bool, default `false`) — HTTP/3 (QUIC) behind a flag (depends on stack support)
+  - `TLS_ENFORCE_MIN_VERSION` (bool, default `false`) — optional TLS min version enforcement
+  - `TLS_MIN_VERSION` (str, default `1.2`)
+  - `TLS_CERT_PINS_SPKI_SHA256` (csv of SPKI SHA-256 pins; optional certificate pinning)
+
+- Egress & SSRF policy
+  - All helpers evaluate the central egress policy (`app/core/Security/egress.py`) before any network I/O and on each redirect hop, and validate proxies.
+  - Denies unsupported schemes, disallowed ports, denylisted hosts, and private/reserved IPs by default. See `WORKFLOWS_EGRESS_*` env keys in that module for allow/deny behavior.
+
+- Observability
+  - Structured logs redact sensitive headers and may include `request_id`, `method`, `host`, `status`, `duration_ms`.
+  - Metrics (if telemetry enabled): `http_client_requests_total`, `http_client_request_duration_seconds`, `http_client_retries_total`, `http_client_egress_denials_total`.
+  - When tracing is active, `traceparent` header is injected automatically where supported.
+
+Example (Python)
+```
+from tldw_Server_API.app.core.http_client import create_async_client, afetch_json
+
+async with create_async_client() as client:
+    data = await afetch_json(method="GET", url="https://api.example.com/items", client=client)
+```
+
 ## [Moderation]
 - `enabled` (bool)
 - `input_enabled|output_enabled` (bool)

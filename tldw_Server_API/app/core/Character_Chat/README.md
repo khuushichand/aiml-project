@@ -1,12 +1,18 @@
 # Character Chat Module (Developer Guide)
 
-The Character Chat subsystem is the backbone for persona-driven conversations in **tldw_server**. It covers character card import/export, conversation persistence, lorebook (“world book”) injection, dynamic chat dictionary replacements, and the rate limiting necessary to operate these features safely in multi-user deployments.
+## 1. Current Feature Set
 
-This document orients contributors to the current code layout, major responsibilities, and integration touch points.
+The Character Chat subsystem powers persona-driven conversations in tldw_server. It provides:
+- Character cards lifecycle: import/export across common formats (PNG/WEBP with embedded JSON, JSON/Markdown, Card v1/v2/v3)
+- Conversations and messages: session creation, message history, edits, search, ranking, and exports
+- Lorebooks (world books): per-user knowledge injected via keyword rules; bulk entry ops; context processing
+- Chat dictionaries: pattern-based replacements with token budgets, import/export (Markdown/JSON), statistics
+- Rate limiting and quotas: per-user guardrails for imports, creation, messages; Redis-backed with in-memory fallback
+- Per-user storage: all state in `ChaChaNotes.db` (SQLite by default, Postgres supported)
 
----
+## 2. Technical Details of Features
 
-## High-Level Responsibilities
+### High-Level Responsibilities
 | Concern | Implementation |
 | --- | --- |
 | Character card lifecycle | `modules/character_io.py`, `modules/character_db.py`, `ccv3_parser.py` |
@@ -20,7 +26,7 @@ All persistence flows through `ChaChaNotes_DB` (per-user SQLite/Postgres wrapper
 
 ---
 
-## Module Layout & Entry Points
+### Module Layout & Entry Points
 ```
 Character_Chat/
 ├── Character_Chat_Lib_facade.py    # Facade exposing modular helpers under a single import path
@@ -42,7 +48,7 @@ Character_Chat/
 
 ---
 
-## Data & Persistence Model
+### Data & Persistence Model
 - Storage is handled by `CharactersRAGDB` (`ChaChaNotes_DB`), which produces per-user SQLite (default) or Postgres databases located under `Databases/user_databases/<user_id>/ChaChaNotes.db`.
 - Tables include `character_cards`, `conversations`, `messages`, `world_books`, `world_book_entries`, `chat_dictionary_groups`, and `chat_dictionary_entries`.
 - All functions accept an explicit `CharactersRAGDB` instance (dependency-injected in FastAPI endpoints). There is no global state or implicit connections.
@@ -52,7 +58,7 @@ For schema details inspect `tldw_Server_API/app/core/DB_Management/ChaChaNotes_D
 
 ---
 
-## Character Card Import & Export
+### Character Card Import & Export
 The import pipeline (in `modules/character_io.py`) supports:
 - Embedded metadata inside PNG/WEBP (`extract_json_from_image_file`).
 - JSON/Markdown cards from TavernAI, SillyTavern, Pygmalion, Text Generation WebUI, Alpaca, and Character Card spec v1/v2/v3.
@@ -122,7 +128,7 @@ Unit tests validating this behaviour live in `tldw_Server_API/tests/unit/test_ch
 
 ---
 
-## API Integration Touch Points
+### API Integration Touch Points
 The Character Chat module is consumed across several FastAPI routers:
 - `characters_endpoint.py` - card CRUD, import/export, world book management.
 - `character_chat_sessions.py` - conversation creation & metadata updates.
@@ -133,7 +139,7 @@ Each endpoint resolves the per-user `CharactersRAGDB` via `get_chacha_db_for_use
 
 ---
 
-## Testing Strategy
+### Testing Strategy
 Relevant suites:
 - `tldw_Server_API/tests/Characters/test_character_chat_lib.py` - large unit suite covering helper behaviour.
 - `tldw_Server_API/tests/Characters/test_ccv3_parser.py` - verifies v3 parsing.
@@ -152,7 +158,50 @@ Most tests rely on fixtures that stub `CharactersRAGDB` and set `TEST_MODE=1` to
 
 ---
 
-## Extending the Module
+## 3. Developer Guide for Contributors
+
+### Related Endpoints
+- Characters (mounted under `/api/v1/characters`):
+  - Import character: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:72
+  - List characters: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:188
+  - Create character: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:217
+  - Filter by tags: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:236
+  - Search characters: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:519
+  - Update character: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:396
+  - Delete character: tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:452
+  - World books (create/list/update/delete/process/import/export/stats): see router block starting at tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py:541 and below
+- Chat Sessions (mounted under `/api/v1/chats`):
+  - Create session: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:150
+  - Get session: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:285
+  - Get context: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:341
+  - Prepare completion: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:432
+  - List sessions: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:865
+  - Update session: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:937
+  - Delete session: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:1018
+  - Export session: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:1112
+- Messages (mounted under `/api/v1`):
+  - Send message: tldw_Server_API/app/api/v1/endpoints/character_messages.py:141
+  - Get messages: tldw_Server_API/app/api/v1/endpoints/character_messages.py:287
+  - Get message: tldw_Server_API/app/api/v1/endpoints/character_messages.py:539
+  - Update message: tldw_Server_API/app/api/v1/endpoints/character_messages.py:586
+  - Delete message: tldw_Server_API/app/api/v1/endpoints/character_messages.py:669
+  - Search messages: tldw_Server_API/app/api/v1/endpoints/character_messages.py:735
+- Chat Dictionaries (mounted under `/api/v1/chat`):
+  - Create/list/export/import/statistics endpoints begin at: tldw_Server_API/app/api/v1/endpoints/chat.py:1681
+
+Note: Line numbers reflect the current repository state and may change after refactors.
+
+### Related Schemas
+- Characters: tldw_Server_API/app/api/v1/schemas/character_schemas.py:1
+- World books: tldw_Server_API/app/api/v1/schemas/world_book_schemas.py:1
+- Chat dictionaries: tldw_Server_API/app/api/v1/schemas/chat_dictionary_schemas.py:1
+
+### Related Tests (selection)
+- Core helpers: tldw_Server_API/tests/Characters/test_character_chat_lib.py:1
+- Character Card v3 parsing: tldw_Server_API/tests/Characters/test_ccv3_parser.py:1
+- Newer property/unit tests: tldw_Server_API/tests/Character_Chat_NEW/
+- Chat dictionary API: tldw_Server_API/tests/Chat/unit/test_chat_dictionary_endpoints.py:1
+- Rate limiter: tldw_Server_API/tests/unit/test_character_rate_limiter.py:1
 1. **Prefer the modular files** (`modules/*.py`). Keep the facade updated if you rename or move functions that legacy imports still reference.
 2. **Schema changes** must be mirrored in `ChaChaNotes_DB` migrations; avoid ad-hoc SQL in this module.
 3. **Preserve placeholder semantics**. Any new message or text field should run through `replace_placeholders` where end users expect templated values.
@@ -162,7 +211,7 @@ Most tests rely on fixtures that stub `CharactersRAGDB` and set `TEST_MODE=1` to
 
 ---
 
-## Quick Reference
+### Quick Reference
 - **Import character**: `import_and_save_character_from_file(db, file_content=..., file_type=...)`
 - **Create conversation**: `start_new_chat_session(db, character_id, title)`
 - **Run dictionary transform**: `ChatDictionaryService(db).process_text(text, token_budget=2048)`

@@ -1,6 +1,6 @@
 # Unified Metrics and Telemetry Module
 
-## Overview
+## 1. Current Feature Set
 
 The Metrics module provides comprehensive observability for the tldw_server application through:
 - **OpenTelemetry Integration**: Industry-standard telemetry with support for metrics, traces, and logs
@@ -81,7 +81,16 @@ export ENABLE_TRACING=true
 export METRICS_SAMPLE_RATE=1.0
 ```
 
-## Architecture
+## 2. Technical Details of Features
+
+### Wiring and App Integration
+
+- Telemetry initialization at startup: `tldw_Server_API/app/main.py:684`
+- HTTP request metrics middleware: `tldw_Server_API/app/main.py:2506` adds `HTTPMetricsMiddleware`
+- Prometheus scrape endpoint: `tldw_Server_API/app/main.py:2701` (`/metrics`)
+- JSON metrics endpoint: `tldw_Server_API/app/main.py:2758` (`/api/v1/metrics`)
+
+### Architecture
 
 ### Components
 
@@ -109,7 +118,7 @@ export METRICS_SAMPLE_RATE=1.0
    - Resource monitoring
    - LLM usage tracking
 
-## Available Metrics
+### Metric Catalog (Built-ins)
 
 ### HTTP Metrics
 - `http_requests_total` - Total HTTP requests (counter)
@@ -147,7 +156,101 @@ export METRICS_SAMPLE_RATE=1.0
 - `circuit_breaker_state` - Circuit breaker state (gauge)
 - `circuit_breaker_trips_total` - Circuit breaker trips (counter)
 
-## Decorators
+### Streaming Metrics
+- SSE
+  - `sse_enqueue_to_yield_ms` (histogram, milliseconds)
+    - Measures time from enqueue to generator yield for SSE lines
+    - Labels: `transport="sse"`, optional stream labels (e.g., `component`, `endpoint`)
+  - `sse_queue_high_watermark` (gauge)
+    - Max observed queue depth for the SSE stream
+    - Labels: `transport="sse"`, optional stream labels
+- WebSocket
+  - `ws_send_latency_ms` (histogram, milliseconds)
+    - Time to complete `send_json` writes
+    - Labels: `transport="ws"`, `kind in {event,json,error,done,ping}`; optional stream labels
+  - `ws_pings_total` (counter)
+    - Number of ping frames sent
+    - Labels: `transport="ws"`, optional stream labels
+  - `ws_ping_failures_total` (counter)
+    - Number of ping send failures
+    - Labels: `transport="ws"`, optional stream labels
+  - `ws_idle_timeouts_total` (counter)
+    - Number of WebSocket connections closed due to idle timeout
+    - Labels: `transport="ws"`, optional stream labels
+
+Labels guidance
+- Keep labels low-cardinality. Recommended: `component` (chat, audio, mcp, embeddings) and `endpoint` (route name).
+- Avoid per-user or per-connection labels; rely on aggregates.
+
+Sample PromQL
+- 95th percentile WS send latency by component:
+  - `histogram_quantile(0.95, sum(rate(ws_send_latency_ms_bucket{kind!="ping"}[5m])) by (le, component))`
+- SSE enqueue→yield p95:
+  - `histogram_quantile(0.95, sum(rate(sse_enqueue_to_yield_ms_bucket[5m])) by (le, component))`
+- Idle timeouts per 5m by endpoint:
+  - `sum(rate(ws_idle_timeouts_total[5m])) by (endpoint)`
+- Ping failure rate:
+  - `sum(rate(ws_ping_failures_total[5m])) by (component)`
+
+## Grafana Panels (Examples)
+
+Below are minimal panel JSON snippets you can paste into a Grafana dashboard JSON model or use in the UI's JSON editor. Adjust `datasource`, `title`, and `expr` to your environment.
+
+### Time series: WS send latency p95 by component
+```json
+{
+  "type": "timeseries",
+  "title": "WS Send Latency p95 (by component)",
+  "datasource": { "type": "prometheus", "uid": "YOUR_DS_UID" },
+  "targets": [
+    {
+      "expr": "histogram_quantile(0.95, sum(rate(ws_send_latency_ms_bucket{kind!\u003d\"ping\"}[5m])) by (le, component))",
+      "legendFormat": "{{component}}"
+    }
+  ],
+  "fieldConfig": {
+    "defaults": { "unit": "ms" },
+    "overrides": []
+  }
+}
+```
+
+### Stat: WS idle timeouts by endpoint (5m rate)
+```json
+{
+  "type": "stat",
+  "title": "WS Idle Timeouts (5m)",
+  "datasource": { "type": "prometheus", "uid": "YOUR_DS_UID" },
+  "targets": [
+    {
+      "expr": "sum(rate(ws_idle_timeouts_total[5m])) by (endpoint)",
+      "legendFormat": "{{endpoint}}"
+    }
+  ],
+  "options": { "reduceOptions": { "calcs": ["last"] } }
+}
+```
+
+### Time series: SSE enqueue→yield p95 by component
+```json
+{
+  "type": "timeseries",
+  "title": "SSE Enqueue→Yield p95 (by component)",
+  "datasource": { "type": "prometheus", "uid": "YOUR_DS_UID" },
+  "targets": [
+    {
+      "expr": "histogram_quantile(0.95, sum(rate(sse_enqueue_to_yield_ms_bucket[5m])) by (le, component))",
+      "legendFormat": "{{component}}"
+    }
+  ],
+  "fieldConfig": {
+    "defaults": { "unit": "ms" },
+    "overrides": []
+  }
+}
+```
+
+### Decorators
 
 ### @track_metrics
 
@@ -219,7 +322,7 @@ async def get_cached_embedding(text: str):
     pass
 ```
 
-## Tracing
+### Tracing
 
 ### Basic Tracing
 
@@ -258,7 +361,7 @@ manager.inject_context(headers)
 response = await httpx.get(url, headers=headers)
 ```
 
-## Integration Examples
+### Integration Examples
 
 ### FastAPI Endpoint
 
@@ -319,9 +422,9 @@ async def rag_search(query: str):
     return documents
 ```
 
-## Monitoring Setup
+### Monitoring Setup
 
-### Prometheus Configuration
+#### Prometheus Configuration
 
 ```yaml
 # prometheus.yml
@@ -332,7 +435,7 @@ scrape_configs:
     metrics_path: '/metrics'
 ```
 
-### Grafana Dashboard
+#### Grafana Dashboard
 
 Import the dashboard from `dashboards/tldw_server_dashboard.json`:
 
@@ -342,7 +445,7 @@ Import the dashboard from `dashboards/tldw_server_dashboard.json`:
 4. Select your Prometheus datasource
 5. Click Import
 
-### Jaeger Setup (for tracing)
+#### Jaeger Setup (for tracing)
 
 ```bash
 # Run Jaeger all-in-one
@@ -399,9 +502,9 @@ def metric_threshold_alert(metric_name: str, value: float, labels: dict):
 registry.add_callback("error_rate", metric_threshold_alert)
 ```
 
-## Performance Considerations
+### Performance Considerations
 
-### Sampling
+#### Sampling
 
 For high-volume services, use sampling:
 
@@ -416,7 +519,7 @@ async def high_volume_endpoint():
     # Process request
 ```
 
-### Batching
+#### Batching
 
 Metrics are automatically batched by OpenTelemetry:
 - Default export interval: 60 seconds
@@ -428,16 +531,16 @@ export METRICS_EXPORT_INTERVAL_MS=30000  # 30 seconds
 export TRACES_EXPORT_BATCH_SIZE=1024
 ```
 
-### Overhead
+#### Overhead
 
 Typical overhead:
 - Metrics collection: <1ms per operation
 - Tracing: 1-2ms per span
 - Memory: ~100MB for typical workload
 
-## Troubleshooting
+### Troubleshooting
 
-### Metrics Not Appearing
+#### Metrics Not Appearing
 
 1. Check OpenTelemetry is installed:
 ```python
@@ -456,13 +559,13 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 ```
 
-### High Memory Usage
+#### High Memory Usage
 
 1. Reduce metric cardinality (fewer unique label combinations)
 2. Decrease export interval
 3. Use sampling for high-volume metrics
 
-### Traces Not Connected
+#### Traces Not Connected
 
 1. Ensure trace context propagation:
 ```python
@@ -473,9 +576,9 @@ print(request.headers.get("traceparent"))
 2. Verify service name matches across services
 3. Check time synchronization between services
 
-## Migration from Legacy Metrics
+### Migration from Legacy Metrics
 
-### From metrics_logger.py
+#### From metrics_logger.py
 
 ```python
 # Old way
@@ -489,7 +592,7 @@ increment_counter("events_total", labels={"type": "click"})
 observe_histogram("duration_seconds", 0.5)
 ```
 
-### From Evaluation Metrics
+#### From Evaluation Metrics
 
 ```python
 # Old way
@@ -503,7 +606,7 @@ increment_counter("evaluations_total", labels={"type": "rag", "status": "success
 observe_histogram("evaluation_duration_seconds", duration)
 ```
 
-## Best Practices
+### Best Practices
 
 1. **Use consistent naming**: Follow Prometheus naming conventions
    - Use `_total` suffix for counters
@@ -524,6 +627,60 @@ observe_histogram("evaluation_duration_seconds", duration)
 6. **Document metrics**: Include description and unit in metric definition
 
 7. **Set up alerts**: Define SLOs and alert on violations
+
+## 3. Developer Guide for Contributors
+
+### Module Layout
+- `tldw_Server_API/app/core/Metrics/metrics_manager.py`: registry, metric definitions (`MetricDefinition`, `MetricType`), export helpers
+- `tldw_Server_API/app/core/Metrics/telemetry.py`: OpenTelemetry SDK setup (resources, exporters, batching, env flags)
+- `tldw_Server_API/app/core/Metrics/traces.py`: tracer provider, context propagation, span helpers
+- `tldw_Server_API/app/core/Metrics/decorators.py`: `@track_metrics`, `@measure_latency`, `@count_calls`, `@track_llm_usage`, `@cache_metrics`
+- `tldw_Server_API/app/core/Metrics/http_middleware.py`: `HTTPMetricsMiddleware` for per-route request count/latency
+- `tldw_Server_API/app/core/Metrics/logger_config.py`: logging integration and metrics-safe logger setup
+- `tldw_Server_API/app/core/Metrics/metrics_logger.py`: legacy compatibility helpers (migrate to registry helpers)
+
+### Adding New Metrics
+- Prefer counter names with `_total`, durations with `_seconds`, sizes with `_bytes`
+- Keep label cardinality low (e.g., bucket provider/model; avoid user IDs)
+- Register via `get_metrics_registry().register(...)` or rely on auto-registration in decorators
+- Add alert-friendly buckets for histograms used in SLOs
+- Document the metric in this README under “Metric Catalog” if it’s a stable surface
+
+Example:
+```python
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, MetricType
+reg = get_metrics_registry()
+reg.register(
+    name="my_feature_latency_seconds",
+    mtype=MetricType.HISTOGRAM,
+    description="Latency of my feature",
+    unit="seconds",
+    buckets=[0.05,0.1,0.25,0.5,1,2,5]
+)
+```
+
+### Related Endpoints / Schemas / Tests
+- Endpoints
+  - Core metrics (Prometheus): `tldw_Server_API/app/main.py:2701`
+  - Core metrics (JSON): `tldw_Server_API/app/main.py:2758`
+  - Embeddings service metrics (admin): `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py:2608`
+  - Evaluations metrics endpoint: `tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:878`
+  - Media ingestion metrics usage: `tldw_Server_API/app/api/v1/endpoints/media.py:3733`, `tldw_Server_API/app/api/v1/endpoints/media.py:4680`
+  - Chat request metrics usage: `tldw_Server_API/app/api/v1/endpoints/chat.py:708`, `tldw_Server_API/app/api/v1/endpoints/chat.py:3082`
+  - HTTP middleware class: `tldw_Server_API/app/core/Metrics/http_middleware.py:10`
+- Schemas
+  - N/A (metrics are exported via Prometheus and JSON; no dedicated Pydantic schemas)
+- Tests
+  - Metrics endpoints smoke: `tldw_Server_API/tests/Monitoring/test_metrics_endpoints.py:18`
+  - Auto-registration via decorator: `tldw_Server_API/tests/Monitoring/test_metrics_autoregistration.py:31`
+  - Embeddings metrics contract: `tldw_Server_API/tests/Embeddings/test_metrics_golden_contract.py:12`
+  - Orchestrator export text format: `tldw_Server_API/tests/Embeddings/test_orchestrator_metrics_export.py:16`
+  - Redis factory metrics hooks: `tldw_Server_API/tests/Infrastructure/test_redis_factory_metrics.py:34`
+
+### Local Development Tips
+- In tests, `OTEL_SDK_DISABLED=true` is set by default; JSON metrics still work
+- Enable Prometheus client by installing `prometheus-client` when running embeddings tests
+- Dev flags: `ENABLE_METRICS=1`, `ENABLE_TRACING=1`, `OTEL_SERVICE_NAME=tldw_server`
 
 ## Support
 

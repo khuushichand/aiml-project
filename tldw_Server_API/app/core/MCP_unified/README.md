@@ -1,5 +1,59 @@
 # MCP Unified Module - Production Ready
 
+## 1. Descriptive of Current Feature Set
+
+- Purpose: Secure, production-ready Model Context Protocol (MCP) server with HTTP + WebSocket transport, JWT/RBAC, rate limiting, idempotency, module system, and Prometheus metrics.
+- Capabilities:
+  - Protocol: JSON-RPC 2.0 over WS/HTTP, tool execution, modules registry, resources/prompts discovery.
+  - Security: Auth modes (AuthNZ JWT, MCP JWT, API keys), RBAC, rate limits, input validation, optional mTLS via proxy.
+  - Operations: Health, status, module health, metrics (JSON + Prometheus), circuit breakers, runtime tuning.
+  - Deployment: Env-first config, Redis-backed limiters, Postgres/SQLite backends.
+- Inputs/Outputs:
+  - Inputs: JSON-RPC requests (HTTP or WS) encapsulated as `MCPRequest`.
+  - Outputs: `MCPResponse` for single/batch requests; JSON metrics/status payloads; Prometheus text.
+- Related Endpoints (selected; mounted under `/api/v1/mcp`):
+  - WebSocket `/ws`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:206
+  - POST `/request`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:252
+  - POST `/request/batch`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:366
+  - GET `/status`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:453
+  - GET `/metrics`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:476
+  - GET `/metrics/prometheus`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:499
+  - POST `/tools/execute`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:622
+  - GET `/modules` and `/modules/health`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:711, 757
+  - GET `/resources` and `/prompts`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:792, 838
+  - POST `/auth/token` and `/auth/refresh`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:886, 968
+  - GET `/health`: tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py:1014
+- Related Schemas/Types:
+  - `MCPRequest`, `MCPResponse`, `RequestContext`: tldw_Server_API/app/core/MCP_unified/protocol.py:58, 90, 106
+  - Server facade: `MCPServer`: tldw_Server_API/app/core/MCP_unified/server.py:108
+
+## 2. Technical Details of Features
+
+- Architecture & Components
+  - Core server (`server.py`), protocol (`protocol.py`), auth/RBAC/rate limiter modules, module system (`modules/`), monitoring (`monitoring/metrics.py`).
+  - Circuit breakers and runtime controls per module (concurrency limits, backoff, idempotency cache).
+  - WS hardening: header/subprotocol auth, origin allowlist, query auth disabled by default.
+- Data & Storage
+  - Optional Postgres + Redis; SQLite defaults supported for local/offline.
+- Configuration
+  - Env-first configuration; secure defaults; test/development knobs gated.
+- Security
+  - JWT-based auth (AuthNZ tokens preferred), API keys, RBAC, schema validation, and SSRF/egress enforcement delegated where applicable.
+- Observability
+  - JSON metrics + Prometheus endpoint; health/status routes; request/operation counters.
+
+## 3. Developer-Related/Relevant Information for Contributors
+
+- Quick Start & Environment: See “🚀 Quick Start” below for env vars, dependencies, running tests, and starting the server.
+- Folder Structure: See “📁 Directory Structure”.
+- Endpoints: See “📊 API Endpoints” with WS/HTTP examples and auth modes.
+- Monitoring & Health: See “📈 Monitoring”.
+- Security Hardening: See “🔐 Production Hardening” and “🛡️ Security Checklist”.
+- Adding Modules: See “➕ Adding Modules (Autoload)” and authoring guide in Docs.
+- Tests: `tldw_Server_API/app/core/MCP_unified/tests/*` (unit/integration/security). Run with `pytest -m ...` markers.
+
+---
+
 ## Overview
 A secure, production-ready Model Context Protocol implementation that consolidates MCP v1 and v2 with enterprise-grade features.
 

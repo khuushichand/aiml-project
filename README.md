@@ -40,6 +40,7 @@
 - [Credits](#credits)
 - [About](#about)
 - [Roadmap & Privacy](#roadmap--privacy)
+ - [HTTP Client & Egress](#http-client--egress)
 
 ## Overview
 
@@ -232,6 +233,33 @@ Legend
 | Legacy WebUI (/webui) | Working | Feature-frozen legacy | [code](tldw_Server_API/WebUI/) |
 
 </details>
+
+## HTTP Client & Egress
+
+- All outbound HTTP calls are being consolidated on a unified `http_client` layer with security, retries, and observability baked in.
+- Egress policy is enforced before I/O, on each redirect hop, and for proxies. Private/reserved IPs are blocked by default.
+
+Key configuration (env)
+- Timeouts: `HTTP_CONNECT_TIMEOUT`, `HTTP_READ_TIMEOUT`, `HTTP_WRITE_TIMEOUT`, `HTTP_POOL_TIMEOUT`
+- Limits: `HTTP_MAX_CONNECTIONS`, `HTTP_MAX_KEEPALIVE_CONNECTIONS`
+- Retries: `HTTP_RETRY_ATTEMPTS`, `HTTP_BACKOFF_BASE_MS`, `HTTP_BACKOFF_CAP_S`
+- Redirects/Proxies: `HTTP_MAX_REDIRECTS`, `HTTP_TRUST_ENV`, `PROXY_ALLOWLIST`
+- JSON & Headers: `HTTP_JSON_MAX_BYTES`, `HTTP_DEFAULT_USER_AGENT`
+- Transport/TLS: `HTTP3_ENABLED`, `TLS_ENFORCE_MIN_VERSION`, `TLS_MIN_VERSION`, `TLS_CERT_PINS_SPKI_SHA256`
+- Egress policy: see `tldw_Server_API/app/core/Security/egress.py` (allow/deny/private IP envs)
+
+Basic usage
+```
+from tldw_Server_API.app.core.http_client import afetch_json, create_async_client
+
+async def fetch_items():
+    async with create_async_client() as client:
+        return await afetch_json(method="GET", url="https://api.example.com/items", client=client)
+```
+
+Notes
+- HTTP/2 is preferred, with automatic downgrade when `h2` is not installed. HTTP/3 is available behind a flag when supported.
+- Structured logs redact sensitive headers; metrics are exported when telemetry is configured.
 
 
 ## Architecture & Repo Layout
