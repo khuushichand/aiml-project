@@ -10,6 +10,15 @@ import asyncio
 from typing import Optional, Iterable, Tuple
 
 import httpx
+from loguru import logger
+
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as _create_async_client,
+    afetch_json,
+    adownload,
+    afetch,
+    RetryPolicy,
+)
 
 
 DEFAULT_TIMEOUT: float = 120.0
@@ -39,8 +48,12 @@ def redact_cmd_args(args: Iterable[str], sensitive_flags: Tuple[str, ...] = ("--
 
 
 def create_async_client(timeout: Optional[float] = None) -> httpx.AsyncClient:
-    """Create a configured httpx AsyncClient with sane defaults."""
-    return httpx.AsyncClient(timeout=timeout or DEFAULT_TIMEOUT)
+    """Create a configured AsyncClient via central factory.
+
+    Uses centralized defaults (trust_env=False, HTTP/2 if available).
+    """
+    to = httpx.Timeout(timeout or DEFAULT_TIMEOUT)
+    return _create_async_client(timeout=to)
 
 
 async def request_json(
@@ -53,33 +66,23 @@ async def request_json(
     retries: int = DEFAULT_RETRIES,
     backoff: float = DEFAULT_BACKOFF,
 ):
-    """Perform an HTTP request with simple retries and return parsed JSON.
+    """Perform an HTTP request and return parsed JSON via central helpers.
 
-    Retries on network errors and 5xx status codes.
+    Uses centralized egress enforcement, retries, and backoff.
     """
-    attempt = 0
-    while True:
-        try:
-            resp = await client.request(method.upper(), url, json=json, headers=headers)
-            if 500 <= resp.status_code < 600 and attempt < retries:
-                attempt += 1
-                await asyncio.sleep(backoff * attempt)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            status = getattr(e.response, "status_code", None)
-            if status and status >= 500 and attempt < retries:
-                attempt += 1
-                await asyncio.sleep(backoff * attempt)
-                continue
-            raise
-        except httpx.RequestError:
-            if attempt < retries:
-                attempt += 1
-                await asyncio.sleep(backoff * attempt)
-                continue
-            raise
+    # Map legacy semantics (attempts = 1 + retries)
+    attempts = max(1, int(retries)) + 1
+    # Convert legacy backoff seconds to ms base with a reasonable cap
+    backoff_ms = max(50, int(backoff * 1000))
+    policy = RetryPolicy(attempts=attempts, backoff_base_ms=backoff_ms)
+    return await afetch_json(
+        method=method,
+        url=url,
+        client=client,
+        headers=headers,
+        json=json,
+        retry=policy,
+    )
 
 
 async def wait_for_http_ready(
@@ -99,10 +102,10 @@ async def wait_for_http_ready(
             for path in paths:
                 url = base_url.rstrip("/") + "/" + path.lstrip("/")
                 try:
-                    resp = await client.get(url)
+                    resp = await afetch(method="GET", url=url, client=client)
                     if resp.status_code < 500:
                         return True
-                except httpx.RequestError:
+                except Exception:
                     # Not ready yet
                     pass
             await asyncio.sleep(interval)
@@ -127,37 +130,16 @@ async def async_stream_download(
     backoff: float = DEFAULT_BACKOFF,
     chunk_size: int = 8192,
 ) -> None:
-    """Download a file via streaming with basic retry/backoff.
+    """Download a file via centralized downloader with safety checks.
 
-    Overwrites existing file at `dest_path` on success. Removes partial
-    file if an error occurs.
+    Uses atomic rename and optional resume (disabled). On failure, partial
+    files are removed by the downloader.
     """
-    attempt = 0
-    while True:
-        try:
-            async with create_async_client(timeout=300.0) as client:
-                async with client.stream("GET", url, follow_redirects=True) as resp:
-                    resp.raise_for_status()
-                    tmp_path = dest_path + ".part"
-                    with open(tmp_path, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size):
-                            if chunk:
-                                f.write(chunk)
-                    # Move temp to final name
-                    import os
-                    if os.path.exists(dest_path):
-                        os.remove(dest_path)
-                    os.replace(tmp_path, dest_path)
-                    return
-        except (httpx.HTTPError, Exception):
-            # Cleanup partial
-            import os
-            try:
-                os.remove(dest_path + ".part")
-            except Exception:
-                pass
-            if attempt < retries:
-                attempt += 1
-                await asyncio.sleep(backoff * attempt)
-                continue
-            raise
+    attempts = max(1, int(retries)) + 1
+    backoff_ms = max(50, int(backoff * 1000))
+    policy = RetryPolicy(attempts=attempts, backoff_base_ms=backoff_ms)
+    try:
+        await adownload(url=url, dest=dest_path, retry=policy)
+    except Exception as e:
+        logger.error(f"Download failed for {url}: {e}")
+        raise

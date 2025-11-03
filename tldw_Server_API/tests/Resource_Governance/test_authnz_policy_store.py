@@ -5,7 +5,7 @@ import pytest
 
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
 from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import AuthNZPolicyStore
-from tldw_Server_API.app.core.Resource_Governance.seed_helpers import seed_rg_policies_sqlite
+from tldw_Server_API.app.core.Resource_Governance.seed_helpers import seed_rg_policies_sqlite, seed_rg_policies_postgres
 
 
 @pytest.mark.asyncio
@@ -57,3 +57,33 @@ async def test_authnz_policy_store_sqlite(tmp_path, monkeypatch):
     # updated_at should be a float epoch seconds
     assert isinstance(updated_at, float)
 
+
+@pytest.mark.asyncio
+async def test_authnz_policy_store_postgres(test_db_pool):
+    # Seed policies into Postgres using provided pool
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    await seed_rg_policies_postgres(
+        test_db_pool,
+        [
+            {
+                "id": "ingress.default",
+                "payload": {"requests": {"rpm": 1000, "burst": 1.0}},
+                "version": 3,
+                "updated_at": now,
+            },
+            {
+                "id": "tenant",
+                "payload": {"enabled": False},
+                "version": 1,
+                "updated_at": now - timedelta(minutes=1),
+            },
+        ],
+    )
+
+    store = AuthNZPolicyStore()
+    version, policies, tenant, updated_at = await store.get_latest_policy()
+    assert version >= 3
+    assert policies.get("ingress.default", {}).get("requests", {}).get("rpm") == 1000
+    assert tenant.get("enabled") is False
+    assert isinstance(updated_at, float)

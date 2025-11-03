@@ -35,7 +35,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | RAG | tldw_Server_API/app/core/RAG | Complete |  | Standardized to 3-section format |
 | RateLimiting | tldw_Server_API/app/core/RateLimiting | Complete |  | Standardized to 3-section format |
 | Sandbox | tldw_Server_API/app/core/Sandbox | Scaffolded |  |  |
-| Scheduler | tldw_Server_API/app/core/Scheduler | Scaffolded |  |  |
+| Scheduler | tldw_Server_API/app/core/Scheduler | Complete |  | Standardized to 3-section format |
 | Search_and_Research | tldw_Server_API/app/core/Search_and_Research | Complete |  | Standardized to 3-section format |
 | Security | tldw_Server_API/app/core/Security | Complete |  | Standardized to 3-section format |
 | Setup | tldw_Server_API/app/core/Setup | Scaffolded |  |  |
@@ -48,7 +48,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | Watchlists | tldw_Server_API/app/core/Watchlists | Complete |  | Standardized to 3-section format |
 | Web_Scraping | tldw_Server_API/app/core/Web_Scraping | Complete |  | Standardized to 3-section format |
 | WebSearch | tldw_Server_API/app/core/WebSearch | Complete |  | Standardized to 3-section format |
-| Workflows | tldw_Server_API/app/core/Workflows | Scaffolded |  |  |
+| Workflows | tldw_Server_API/app/core/Workflows | Complete |  | Standardized to 3-section format |
 | Writing | tldw_Server_API/app/core/Writing | Scaffolded |  |  |
 
 Notes:

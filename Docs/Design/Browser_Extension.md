@@ -136,6 +136,79 @@ Endpoint Mapping (server truth)
 - Chats (resource model; optional v1 scope)
   - /api/v1/chats/* (create/list/get/update/delete sessions; messages CRUD; complete/stream where available)
 
+Watchlists (v1 optional)
+- Sources
+  - POST /api/v1/watchlists/sources               (create)
+  - GET  /api/v1/watchlists/sources               (list)
+  - GET  /api/v1/watchlists/sources/export        (export OPML)
+  - POST /api/v1/watchlists/sources/import        (import OPML)
+  - GET  /api/v1/watchlists/sources/{id}          (get)
+  - PATCH/DELETE /api/v1/watchlists/sources/{id}  (update/delete)
+- Tags & Groups
+  - GET  /api/v1/watchlists/tags                  (list tags)
+  - POST /api/v1/watchlists/groups                (create group)
+  - GET  /api/v1/watchlists/groups                (list groups)
+  - PATCH/DELETE /api/v1/watchlists/groups/{id}   (update/delete)
+- Jobs
+  - POST /api/v1/watchlists/jobs                  (create)
+  - GET  /api/v1/watchlists/jobs                  (list)
+  - GET  /api/v1/watchlists/jobs/{id}             (get)
+  - PATCH/DELETE /api/v1/watchlists/jobs/{id}     (update/delete)
+  - POST /api/v1/watchlists/jobs/{id}/filters:add (append filters)
+  - PATCH /api/v1/watchlists/jobs/{id}/filters    (replace filters)
+  - POST /api/v1/watchlists/jobs/{id}/preview     (dry-run preview)
+  - POST /api/v1/watchlists/jobs/{id}/run         (trigger run)
+- Runs
+  - GET  /api/v1/watchlists/jobs/{id}/runs        (list by job)
+  - GET  /api/v1/watchlists/runs                  (list all)
+  - GET  /api/v1/watchlists/runs/{run_id}         (get)
+  - GET  /api/v1/watchlists/runs/{run_id}/details (stats + logs)
+  - GET  /api/v1/watchlists/runs/{run_id}/tallies.csv (filter tallies)
+- Items & Outputs
+  - GET  /api/v1/watchlists/items                 (list scraped items; filters)
+  - GET  /api/v1/watchlists/items/{item_id}       (get)
+  - PATCH /api/v1/watchlists/items/{item_id}      (update flags)
+  - POST /api/v1/watchlists/outputs               (render output)
+  - GET  /api/v1/watchlists/outputs               (list outputs)
+  - GET  /api/v1/watchlists/outputs/{id}          (get output metadata)
+  - GET  /api/v1/watchlists/outputs/{id}/download (download)
+- Templates
+  - GET  /api/v1/watchlists/templates             (list)
+  - GET  /api/v1/watchlists/templates/{name}      (get)
+  - POST /api/v1/watchlists/templates             (create/update)
+  - DELETE /api/v1/watchlists/templates/{name}    (delete)
+
+Schema Notes
+- Notes optimistic concurrency
+  - Update: `PATCH /api/v1/notes/{id}` or `PUT /api/v1/notes/{id}` requires header `expected-version: <int>`.
+  - Delete: `DELETE /api/v1/notes/{id}` requires header `expected-version: <int>`.
+  - On version mismatch: returns 409 conflict with details; clients should reload and retry.
+- Flashcards import limits
+  - Environment caps: `FLASHCARDS_IMPORT_MAX_LINES` (default 10000), `FLASHCARDS_IMPORT_MAX_LINE_LENGTH` (default 32768 bytes), `FLASHCARDS_IMPORT_MAX_FIELD_LENGTH` (default 8192 bytes).
+  - Optional query overrides (admin only): `max_lines`, `max_line_length`, `max_field_length` can lower (not raise) env caps.
+  - Formats: TSV/CSV (default tab delimiter). Fields include Deck, Front, Back, Notes, Extra, ModelType (basic|basic_reverse|cloze), Reverse (bool), Tags (comma/semicolon separated).
+
+Example Requests
+- Chat (streaming)
+  - Request: `POST /api/v1/chat/completions` with JSON body including `stream: true`.
+  - Example body:
+    `{ "model": "openai/gpt-4o-mini", "stream": true, "messages": [{"role":"user","content":"Summarize https://example.com"}] }`
+  - Headers: `Accept: text/event-stream` for SSE; server emits NDJSON/SSE lines ending with `[DONE]`.
+- RAG (streaming)
+  - Request: `POST /api/v1/rag/search/stream`
+  - Body minimal: `{ "query": "impact of CRISPR on gene therapy", "enable_generation": true, "top_k": 5 }`
+  - Stream events: `delta` (answer tokens), optional `claims_overlay`, and final summary. Content-type `application/x-ndjson` or SSE with `data:` lines.
+- Media add (persist)
+  - `POST /api/v1/media/add` with JSON `{ "url": "https://example.com/article" }`
+- Media process (no DB)
+  - JSON URL: `POST /api/v1/media/process-pdfs` with `{ "urls": ["https://host/file.pdf"] }`
+  - File upload: multipart to `/api/v1/media/process-pdfs` with `files=@/path/file.pdf`.
+- STT (multipart)
+  - `POST /api/v1/audio/transcriptions`
+  - Fields: `file=@/path/audio.wav`, `model=whisper-1`, optional `language=en`, `response_format=json`.
+  - Example cURL: `curl -X POST "$BASE/api/v1/audio/transcriptions" -H "Authorization: Bearer TOKEN" -F "file=@/abs/audio.wav" -F "model=whisper-1" -F "language=en"`
+
+
 AuthNZ & Headers
 - Modes: single_user (X-API-KEY) and multi_user (Authorization: Bearer <JWT>)
 - Background-only header injection; never expose tokens to content scripts.

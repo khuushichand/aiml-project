@@ -284,6 +284,8 @@ function bindAudioTabHandlers() {
     // TTS provider and status
     const provSel = document.getElementById('audioTTS_provider');
     if (provSel && !provSel._b) { provSel._b = true; provSel.addEventListener('change', () => { try { updateTTSProviderOptions(); } catch(_){} }); }
+    // Ensure initial options reflect current provider
+    try { if (provSel) updateTTSProviderOptions(); } catch(_){}
     const provRefresh = document.getElementById('tts_provider_status_refresh');
     if (provRefresh && !provRefresh._b) { provRefresh._b = true; provRefresh.addEventListener('click', () => { try { checkTTSProviderStatus(); } catch(_){} }); }
     const voicesBtn = document.getElementById('audioTTS_voices_refresh');

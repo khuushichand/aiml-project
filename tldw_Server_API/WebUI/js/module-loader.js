@@ -40,6 +40,13 @@
       'js/auth-permissions.js',
     ],
     simple: ['js/simple-mode.js'],
+    // Placeholders (documenting groups that intentionally load no extra scripts)
+    flashcards: [],
+    webscraping: [],
+    llamacpp: [],
+    health: [],
+    mcp: [],
+    sync: [],
     // other groups can be added as needed
   };
 

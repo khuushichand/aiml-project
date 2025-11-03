@@ -197,15 +197,30 @@ class HTTPConnectionPool:
         """
         async with self._lock:
             if provider not in self._pools:
-                client = httpx.AsyncClient(
-                    limits=httpx.Limits(
+                # Use centralized factory for consistent trust_env/http2/limits
+                try:
+                    from tldw_Server_API.app.core.http_client import create_async_client
+                    limits = httpx.Limits(
                         max_connections=self.max_connections,
                         max_keepalive_connections=self.max_keepalive_connections,
-                        keepalive_expiry=self.keepalive_expiry
-                    ),
-                    timeout=httpx.Timeout(self.timeout),
-                    base_url=base_url
-                )
+                        keepalive_expiry=self.keepalive_expiry,
+                    )
+                    client = create_async_client(
+                        timeout=httpx.Timeout(self.timeout),
+                        base_url=base_url,
+                        limits=limits,
+                    )
+                except Exception:
+                    # Fallback to direct httpx client if factory unavailable
+                    client = httpx.AsyncClient(
+                        limits=httpx.Limits(
+                            max_connections=self.max_connections,
+                            max_keepalive_connections=self.max_keepalive_connections,
+                            keepalive_expiry=self.keepalive_expiry,
+                        ),
+                        timeout=httpx.Timeout(self.timeout),
+                        base_url=base_url,
+                    )
 
                 self._pools[provider] = client
                 self._pool_metrics[provider] = ResourceMetrics(
