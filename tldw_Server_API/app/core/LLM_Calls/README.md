@@ -1,36 +1,87 @@
-LLM Calls Module
+# LLM Calls Module
 
-Purpose
-- Unified client functions for calling commercial and local LLM providers.
-- Normalizes requests and responses to an OpenAI-compatible shape where possible.
-- Provides consistent error mapping via ChatAPIError subclasses for clean API responses.
+## 1. Descriptive of Current Feature Set
 
-Key Files
-- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py` - commercial providers
-- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls_Local.py` - local/OpenAI-compatible servers + native local engines
-- `tldw_Server_API/app/core/LLM_Calls/huggingface_api.py` - HF async client for GGUF discovery/download
-- `tldw_Server_API/app/core/LLM_Calls/Local_Summarization_Lib.py` - local summarization helpers
-- `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py` - summarization utilities
+- Purpose: Unified client interface for commercial and local LLM providers used by the Chat API and internal services. Normalizes requests/responses to OpenAI-compatible shapes and standardizes streaming (SSE) and error handling.
+- Capabilities:
+  - Providers (commercial): OpenAI, Anthropic, Cohere, DeepSeek, Google (Gemini), Qwen, Groq, HuggingFace (OpenAI-compatible), Mistral, OpenRouter, Moonshot, Z.AI, Bedrock (via compatible endpoint).
+  - Providers (local): local-llm, llama.cpp, Kobold, Oobabooga, TabbyAPI, vLLM, Aphrodite, Ollama, custom OpenAI-compatible gateways.
+  - OpenAI-compatible chat semantics, tools/tool_choice passthrough where supported.
+  - Streaming normalization to SSE frames; non-stream returns OpenAI-like dicts.
+  - Strict OpenAI-compat mode for local gateways to drop non-standard fields.
+  - Summarization helpers for media/chunking workflows.
+- Inputs/Outputs:
+  - Input: OpenAI-style `messages` list with optional `tools`, `tool_choice`, and provider options (temperature, top_p, max_tokens, …).
+  - Output: Non-streaming returns OpenAI-style object; streaming yields `data: …\n\n` lines (OpenAI delta chunks) with a final `[DONE]`.
+  - Errors map to `ChatAPIError` subclasses for clean HTTP responses.
+- Related Endpoints:
+  - POST `/api/v1/chat/completions` — tldw_Server_API/app/api/v1/endpoints/chat.py:592
+  - Chat message formatting helpers for completions — tldw_Server_API/app/api/v1/endpoints/character_messages.py:295
+  - Media summarization uses general/local summarizers — tldw_Server_API/app/api/v1/endpoints/media.py:540
+- Related Schemas:
+  - `ChatCompletionRequest` — tldw_Server_API/app/api/v1/schemas/chat_request_schemas.py:274
+  - Chat validators/utilities — tldw_Server_API/app/api/v1/schemas/chat_validators.py:1
 
-Supported Providers (commercial)
-- OpenAI, Anthropic, Cohere, DeepSeek, Google (Gemini), Qwen, Groq, HuggingFace (OpenAI-compatible endpoints),
-  Mistral, OpenRouter, Moonshot, Z.AI, (Bedrock via OpenAI-compatible endpoint)
+## 2. Technical Details of Features
 
-Common Usage
-- All chat functions accept `input_data` as OpenAI-style messages `[{'role': 'user'|'assistant'|'system', 'content': ...}]`.
-- Where supported, `system_message` is prepended as a `system` role message when provided.
-- Most functions support `streaming=True|False`. Streaming returns an iterator of SSE lines or normalized deltas.
-- Errors are raised as `ChatAPIError` subclasses from `tldw_Server_API.app.core.Chat.Chat_Deps`.
+- Architecture & Data Flow:
+  - Commercial providers: `LLM_API_Calls.py` — tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py:1
+  - Local/compatible providers: `LLM_API_Calls_Local.py` — tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls_Local.py:1
+  - Routing/dispatch: `core/Chat/provider_config.py` maps provider name → handler — tldw_Server_API/app/core/Chat/provider_config.py:1
+  - Streaming: `streaming.py` and `sse.py` normalize lines to SSE — tldw_Server_API/app/core/LLM_Calls/streaming.py:1, tldw_Server_API/app/core/LLM_Calls/sse.py:1
+  - Retries: `http_helpers.create_session_with_retries` — tldw_Server_API/app/core/LLM_Calls/http_helpers.py:1
+- Key Functions (entry points):
+  - `chat_with_openai`, `chat_with_anthropic`, `chat_with_cohere`, `chat_with_groq`, `chat_with_openrouter`, `chat_with_deepseek`, `chat_with_mistral`, `chat_with_google`, `chat_with_qwen`, `chat_with_bedrock`, `chat_with_moonshot`, `chat_with_zai` — LLM_API_Calls.py
+  - `chat_with_local_llm`, `chat_with_llama`, `chat_with_kobold`, `chat_with_oobabooga`, `chat_with_tabbyapi`, `chat_with_vllm`, `chat_with_aphrodite`, `chat_with_ollama`, `chat_with_custom_openai(_2)` — LLM_API_Calls_Local.py
+  - Async variants available for select providers (OpenAI, Groq, Anthropic, OpenRouter).
+- Dependencies:
+  - Internal: Chat error classes (Chat_Deps), provider_config dispatch, config loader, streaming helpers, summarization libs.
+  - External: `requests`, `httpx`; optional SDKs per provider when required by gateways.
+- Configuration:
+  - Provider sections in config.txt (e.g., `openai_api`, `anthropic_api`, `openrouter_api`): `api_key`, `model`, `api_base_url`, `api_timeout`, `api_retries`, `api_retry_delay`.
+  - Env overrides: `OPENAI_API_BASE_URL` and similar per provider; `TEST_MODE=true` adjusts defaults.
+  - Strict OpenAI-compat (local gateways): set `strict_openai_compat=true` in the provider section or env `LOCAL_LLM_STRICT_OPENAI_COMPAT=1|true|yes|on`.
+- Concurrency & Performance:
+  - Streaming via `requests` or `httpx.AsyncClient` depending on handler; SSE normalized and `[DONE]` appended once.
+  - Retry/backoff on 429/5xx via `http_helpers` (sync) and light async retry helpers.
+  - Endpoint-level rate limits enforced in Chat API; provider calls should respect timeouts.
+- Error Handling:
+  - Maps HTTP/network errors to `ChatAuthenticationError`, `ChatBadRequestError`, `ChatRateLimitError`, `ChatProviderError`, `ChatAPIError`.
+  - Streaming iteration errors are surfaced as SSE `{ "error": { message, type } }` frames.
+- Security:
+  - Secrets are never logged. Payloads are summarized (counts/types) instead of raw content; only keys are logged.
+  - AuthNZ is enforced at the endpoint; this layer does not add auth beyond provider headers.
 
-Streaming Semantics
-- Streaming responses are normalized to SSE. Expect lines prefixed with `data: ` and terminated by a blank line.
-- Some providers yield raw `data:` lines (already SSE-compatible); others are converted to OpenAI-like chunks.
+## 3. Developer-Related/Relevant Information for Contributors
 
-Configuration
-- Provider config is loaded via `load_and_log_configs()` and uses sections like `openai_api`, `anthropic_api`, etc.
-- Typical keys: `api_key`, `model`, `api_base_url`, `temperature`, `top_p`, `max_tokens`, `streaming`,
-  `api_timeout`, `api_retries`, `api_retry_delay`.
-- Environment variables can override base URLs for testing; see usage of e.g. `OPENAI_API_BASE_URL`.
+- Folder Structure:
+  - `LLM_API_Calls.py` (commercial), `LLM_API_Calls_Local.py` (local/gateways), `streaming.py`, `sse.py`, `http_helpers.py`, `huggingface_api.py`, summarization libs.
+- Extension Points:
+  - Add a provider function in the appropriate file and register it in `core/Chat/provider_config.py` (both sync and async tables if available).
+  - Map generic params → provider params via `PROVIDER_PARAM_MAP` in `provider_config.py`.
+  - For streaming endpoints, ensure provider stream is normalized using `normalize_provider_line()` and finalize via `finalize_stream()`.
+- Coding Patterns:
+  - Use OpenAI-style messages; prepend `system_message` where supported.
+  - Keep network calls resilient with retries (sync) and budgeted timeouts.
+  - Never log secrets or raw user content; use summarizers like `_summarize_messages`.
+- Tests:
+  - Strict compat filters: tldw_Server_API/tests/LLM_Calls/test_local_llm_strict_filter.py:1, test_vllm_strict_filter.py:1, test_ollama_strict_filter.py:1, test_tabbyapi_strict_filter.py:1, test_llamacpp_strict_filter.py:1, test_aphrodite_strict_filter.py:1
+  - WebUI providers list/health: tldw_Server_API/tests/Chat_NEW/unit/test_llm_providers_diagnostics_ui.py:14, test_llm_providers_health.py:27
+  - End-to-end chat/streaming assertions reside under Chat tests.
+- Local Dev Tips:
+  - Endpoint: `POST /api/v1/chat/completions` with `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}`.
+  - For local servers (LM Studio/Jan/Ollama), set the base URL env (e.g., `OPENAI_API_BASE_URL=http://localhost:1234/v1`) and enable strict mode if needed.
+  - Use `TEST_MODE=true` to default provider to `local-llm` during tests.
+- Pitfalls & Gotchas:
+  - Some local gateways reject unknown keys; enable strict filtering to drop non-standard fields.
+  - Provider tools/tool_choice semantics differ; ensure mapping and gating are correct per provider.
+  - Long-running streams must handle transport errors by emitting SSE error frames and a single `[DONE]` sentinel.
+- Roadmap/TODOs:
+  - Unify sync/async call paths and migrate providers to consistent async with timeouts.
+  - Expand provider unit tests (DeepSeek/Google/Groq) and add tool-calling coverage.
+  - Reduce duplication by extracting common request/stream scaffolding.
+
+---
 
 Example (OpenAI)
 ```python
@@ -43,48 +94,9 @@ resp = chat_with_openai(
 print(resp["choices"][0]["message"]["content"])
 ```
 
-Error Handling
-- Provider errors map to:
-  - `ChatAuthenticationError` (401/403)
-  - `ChatBadRequestError` (400/404/422)
-  - `ChatRateLimitError` (429)
-  - `ChatProviderError` (5xx + network issues)
-  - `ChatAPIError` (fallback)
-
-Security
-- Secrets are never logged. Some legacy logs used masked fragments; these have been replaced with generic messages.
-- Do not add logging of API keys or request bodies that include sensitive content.
-
-Testing
-- See `tldw_Server_API/tests/LLM_Calls/test_llm_providers.py` for provider tests and
-  `tests/Character_Chat/test_complete_v2_streaming_e2e_mock.py` for streaming normalization.
-
-Adding a Provider
-- Pattern to follow (see `chat_with_openai`):
-  - Resolve config (api key, model, retry/timeout) with function arguments overriding config.
-  - Build OpenAI-style `messages` payload (prepend `system_message` as needed).
-  - Support `streaming` and non-streaming; normalize streaming to SSE.
-  - Map HTTP errors to ChatAPIError subclasses.
-  - Keep logs high-level; never log secrets; optionally log payload keys (not full content).
-
-Current Improvement Backlog (low-risk, incremental)
-- Reduce duplication by extracting a small request helper for retries and streaming.
-- Standardize SSE normalization across providers (identical end format).
-- Add per-provider docstrings summarizing supported parameters and differences.
-- Expand unit tests for remaining providers (DeepSeek, Google, Groq, etc.).
-- Convert synchronous HTTP calls to `httpx` async where endpoints support non-blocking usage.
-
 Strict OpenAI-Compatible Mode (Local Providers)
 - Some OpenAI-compatible local servers reject unknown/non-standard fields (e.g., `top_k`).
-- A strict filtering option is available per local provider to drop non-standard keys from the payload.
-  - Config key: `strict_openai_compat` (boolean)
-  - When `true`, only standard OpenAI Chat Completions keys are sent:
-    `messages, model, temperature, top_p, max_tokens, n, stop, presence_penalty, frequency_penalty, logit_bias,
-     seed, response_format, tools, tool_choice, logprobs, top_logprobs, user, stream`.
-- Supported sections:
-  - `local_llm`, `llama_api`, `ooba_api`, `tabby_api`, `vllm_api`, `aphrodite_api`, `ollama_api`.
-- Environment variable for `local_llm`:
-  - `LOCAL_LLM_STRICT_OPENAI_COMPAT=1|true|yes|on`
+- Enable `strict_openai_compat` in the provider section or set `LOCAL_LLM_STRICT_OPENAI_COMPAT=1|true|yes|on`.
 
 Example (local_llm excerpt):
 ```ini
@@ -92,7 +104,3 @@ Example (local_llm excerpt):
 ; ...
 strict_openai_compat = true
 ```
-
-See tests for usage examples:
-- `tests/LLM_Calls/test_local_llm_strict_filter.py`
-- `tests/LLM_Calls/test_vllm_strict_filter.py`

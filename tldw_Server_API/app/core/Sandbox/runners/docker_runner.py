@@ -9,11 +9,14 @@ from loguru import logger
 from ..models import RunSpec, RunStatus, RunPhase
 from ..streams import get_hub
 from tldw_Server_API.app.core.config import settings as app_settings
+from .network_policy import expand_allowlist_to_targets, apply_egress_rules_atomic, delete_rules_by_label
 import tempfile
 import subprocess
 from datetime import datetime, timedelta
 import threading
 import time
+import socket
+import json
 
 
 def docker_available() -> bool:
@@ -59,11 +62,15 @@ class DockerRunner:
     # Track active containers per run for cancellation
     _active_lock = threading.RLock()
     _active_cid: dict[str, str] = {}
+    _egress_net: dict[str, Optional[str]] = {}
+    _egress_label: dict[str, str] = {}
 
     @classmethod
     def cancel_run(cls, run_id: str) -> bool:
         with cls._active_lock:
             cid = cls._active_cid.get(run_id)
+            net = cls._egress_net.get(run_id)
+            label = cls._egress_label.get(run_id, f"tldw-run-{run_id[:12]}")
         if not cid:
             return False
         # TERM -> grace -> KILL semantics
@@ -101,6 +108,30 @@ class DockerRunner:
         finally:
             with cls._active_lock:
                 cls._active_cid.pop(run_id, None)
+                cls._egress_net.pop(run_id, None)
+                cls._egress_label.pop(run_id, None)
+        # Cleanup egress rules and network if present
+        try:
+            try:
+                out = subprocess.check_output(["iptables", "-S", "DOCKER-USER"], text=True)
+                for line in out.splitlines():
+                    if label in line:
+                        parts = line.strip().split()
+                        if parts and parts[0] in {"-A", "-I"}:
+                            parts[0] = "-D"
+                            try:
+                                subprocess.run(["iptables"] + parts, check=False)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            if net:
+                try:
+                    subprocess.run(["docker", "network", "rm", net], check=False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Do not publish WS end here; service layer will publish to avoid duplicates
         return True
 
@@ -185,26 +216,28 @@ class DockerRunner:
 
         # Step 1: docker create
         cmd: List[str] = ["docker", "create"]
-        # Network policy
+        # Network policy and (optional) granular allowlist enforcement
+        egress_net_name: Optional[str] = None
+        egress_label = f"tldw-run-{run_id[:12]}"
         net_policy = (spec.network_policy or "deny_all").lower()
+        granular = self._truthy(os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT") or str(getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "false")))
+        enforced = self._truthy(os.getenv("SANDBOX_EGRESS_ENFORCEMENT") or str(getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "false")))
         if net_policy == "deny_all":
             cmd += ["--network", "none"]
         elif net_policy == "allowlist":
-            # Opt-in allowlist enforcement: coarse-grained for now.
-            # When SANDBOX_EGRESS_ENFORCEMENT is enabled, we currently enforce
-            # a strict no-egress policy (network=none). Granular host/IP allowlisting
-            # requires host-level networking controls not yet implemented here.
-            try:
-                enforced = os.getenv("SANDBOX_EGRESS_ENFORCEMENT")
-                if enforced is None:
-                    enforced = str(getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "false"))
-                if str(enforced).strip().lower() in {"1", "true", "yes", "on", "y"}:
-                    logger.info("Sandbox Docker egress allowlist enforcement active: applying network=none (coarse deny-all)")
-                    cmd += ["--network", "none"]
-                else:
-                    logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; using default bridge network")
-            except Exception:
-                logger.debug("Sandbox Docker egress allowlist check failed; proceeding without enforcement")
+            if enforced and granular:
+                # Create a per-run user network (best-effort) to improve isolation
+                try:
+                    egress_net_name = f"tldw_sbx_{run_id[:12]}"
+                    subprocess.run(["docker", "network", "create", egress_net_name], check=False)
+                    cmd += ["--network", egress_net_name]
+                except Exception as e:
+                    logger.debug(f"egress allowlist: network create failed, falling back to default bridge: {e}")
+            elif enforced and not granular:
+                logger.info("Sandbox Docker egress allowlist (coarse): applying network=none")
+                cmd += ["--network", "none"]
+            else:
+                logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; using default bridge network")
         # Resources
         try:
             pids_limit = int(getattr(app_settings, "SANDBOX_PIDS_LIMIT", 256))
@@ -284,7 +317,9 @@ class DockerRunner:
         # Run in shell to ensure environment and path; safely quote user command
         import shlex
         user_cmd = " ".join(shlex.quote(x) for x in list(spec.command))
-        shell_str = f"mkdir -p /workspace && exec {user_cmd}"
+        # In granular enforcement mode, add a short delay to allow host iptables to be applied
+        delay_prefix = "sleep 1 && " if (net_policy == "allowlist" and enforced and granular) else ""
+        shell_str = f"mkdir -p /workspace && {delay_prefix}exec {user_cmd}"
         cmd += ["sh", "-lc", shell_str]
 
         logger.info(f"Starting docker run: {' '.join(cmd)}")
@@ -338,6 +373,8 @@ class DockerRunner:
         try:
             with DockerRunner._active_lock:
                 DockerRunner._active_cid[run_id] = cid
+                DockerRunner._egress_net[run_id] = egress_net_name
+                DockerRunner._egress_label[run_id] = egress_label
         except Exception:
             pass
 
@@ -440,6 +477,36 @@ class DockerRunner:
             except Exception:
                 pass
             raise RuntimeError(f"docker start failed: {e}")
+
+        # If granular egress allowlist is enabled, inspect container IP and apply host iptables rules
+        container_ip: Optional[str] = None
+        if net_policy == "allowlist" and enforced and granular:
+            try:
+                info = subprocess.check_output(["docker", "inspect", cid, "--format", "{{json .NetworkSettings.Networks}}"], text=True, timeout=3)
+                networks = json.loads(info or "{}")
+                if egress_net_name and egress_net_name in networks:
+                    container_ip = (networks.get(egress_net_name) or {}).get("IPAddress")
+                if not container_ip:
+                    # fallback: any network IP
+                    for v in (networks or {}).values():
+                        if v and v.get("IPAddress"):
+                            container_ip = v.get("IPAddress")
+                            break
+            except Exception as e:
+                logger.debug(f"egress allowlist: docker inspect for IP failed: {e}")
+            # Resolve allowlist with wildcard/suffix support and apply atomically
+            try:
+                raw = os.getenv("SANDBOX_EGRESS_ALLOWLIST") or getattr(app_settings, "SANDBOX_EGRESS_ALLOWLIST", "")
+            except Exception:
+                raw = ""
+            allow_targets: List[str] = expand_allowlist_to_targets(raw)
+            try:
+                if container_ip:
+                    apply_egress_rules_atomic(container_ip, allow_targets, egress_label)
+                else:
+                    logger.debug("egress allowlist: no container IP found; skipping iptables application")
+            except Exception as e:
+                logger.debug(f"egress allowlist: iptables apply failed: {e}")
 
         # Publish start event
         try:
@@ -633,6 +700,20 @@ class DockerRunner:
             subprocess.check_call(["docker", "rm", "-f", cid])
         except Exception:
             pass
+        # Cleanup per-run network and iptables rules
+        try:
+            if net_policy == "allowlist" and enforced and granular:
+                # Delete iptables rules matching our label
+                try:
+                    delete_rules_by_label(egress_label)
+                except Exception:
+                    pass
+                # Remove dedicated network if we created one
+                if egress_net_name:
+                    try:
+                        subprocess.run(["docker", "network", "rm", egress_net_name], check=False)
+                    except Exception:
+                        pass
         return RunStatus(
             id="",
             phase=phase,

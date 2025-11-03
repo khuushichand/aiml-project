@@ -43,3 +43,18 @@ def test_egress_allowlist_supported_when_enforced(monkeypatch) -> None:
         docker = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "docker"), None)
         assert docker is not None
         assert docker.get("egress_allowlist_supported") is True
+
+
+def test_runtimes_notes_reflect_granular_allowlist() -> None:
+    os.environ.setdefault("TEST_MODE", "1")
+    os.environ["SANDBOX_STORE_BACKEND"] = "memory"
+    os.environ["SANDBOX_EGRESS_ENFORCEMENT"] = "true"
+    os.environ["SANDBOX_EGRESS_GRANULAR_ENFORCEMENT"] = "true"
+    clear_config_cache()
+    with TestClient(app) as client:
+        r = client.get("/api/v1/sandbox/runtimes")
+        assert r.status_code == 200
+        data = r.json()
+        docker = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "docker"), None)
+        assert docker is not None
+        assert isinstance(docker.get("notes"), str) and "Granular egress allowlist" in docker["notes"]

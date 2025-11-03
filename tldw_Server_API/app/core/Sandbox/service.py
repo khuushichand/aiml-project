@@ -95,6 +95,14 @@ class SandboxService:
             store_mode = "unknown"
         # Whether we have active enforcement for egress allowlisting (Docker only for now)
         egress_supported = bool(self.policy.cfg.egress_enforcement)
+        granular = False
+        try:
+            granular = bool(self.policy.cfg.egress_enforcement) and (
+                str(getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+                or str(os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT") or "").strip().lower() in {"1", "true", "yes", "on", "y"}
+            )
+        except Exception:
+            granular = False
         return [
             {
                 "name": "docker",
@@ -112,7 +120,11 @@ class SandboxService:
                 "interactive_supported": False,
                 "egress_allowlist_supported": bool(egress_supported),
                 "store_mode": store_mode,
-                "notes": None,
+                "notes": (
+                    "Granular egress allowlist (CIDR, hostname) enforced via host iptables (DOCKER-USER) with DNS pinning"
+                    if bool(egress_supported and granular)
+                    else ("Egress allowlist enforced as deny-all (network=none)" if bool(egress_supported) else None)
+                ),
             },
             {
                 "name": "firecracker",
@@ -128,9 +140,24 @@ class SandboxService:
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
                 "interactive_supported": False,
-                "egress_allowlist_supported": False,
+                "egress_allowlist_supported": bool(
+                    egress_supported and (
+                        str(getattr(app_settings, "SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+                        or str(os.getenv("SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT") or "").strip().lower() in {"1", "true", "yes", "on", "y"}
+                    )
+                ),
                 "store_mode": store_mode,
-                "notes": "Direct integration preferred; ignite is EOL",
+                "notes": (
+                    "Granular egress allowlist enforced via VM tap/bridge + host firewall (planned)"
+                    if bool(
+                        egress_supported
+                        and (
+                            str(getattr(app_settings, "SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+                            or str(os.getenv("SANDBOX_FIRECRACKER_EGRESS_GRANULAR_ENFORCEMENT") or "").strip().lower() in {"1", "true", "yes", "on", "y"}
+                        )
+                    )
+                    else "Allowlist enforcement uses deny-all fallback currently; granular Firecracker egress isolation planned"
+                ),
             },
         ]
 

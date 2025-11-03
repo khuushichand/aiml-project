@@ -274,9 +274,8 @@ class JobManager:
             listed = {d.strip().lower() for d in raw.split(",") if d.strip()}
             if dom.lower() in listed:
                 return "DESC"
-            # Sensible default: chatbooks uses higher numeric priority first
-            if dom.lower() == "chatbooks":
-                return "DESC"
+            # Default behavior across domains (including 'chatbooks'):
+            # lower numeric value means higher priority -> ASC
             return "ASC"
         except Exception:
             return "ASC"

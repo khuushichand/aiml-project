@@ -1,5 +1,125 @@
 # RAG Module - Unified Pipeline Architecture
 
+## 1. Descriptive of Current Feature Set
+
+- Purpose: Unified Retrieval-Augmented Generation for search/QA across user content (media, notes, characters, chats) via a single parameterized pipeline. No external presets or config files required.
+- Capabilities:
+  - Multi-database retrieval (Media DB, Notes/Characters/Chats)
+  - Hybrid search (SQLite FTS5 + vector), optional reranking (FlashRank, CE, LLM, two-tier)
+  - Query expansion (acronym, synonym, domain, entity), spell-check
+  - Semantic and adaptive cache; connection pooling
+  - Citations (APA/MLA/Chicago/Harvard/IEEE), optional chunk-level mapping
+  - Guardrails (hard-citation coverage, numeric fidelity, injection filtering)
+  - Answer generation from retrieved context; post-verification with adaptive repair/rerun
+  - Batch processing; analytics/monitoring/observability (optional)
+  - Agentic pipeline variant for extractive, tool-aided reading
+- Inputs/Outputs:
+  - Input: `UnifiedRAGRequest` (query + optional toggles for retrieval, rerank, citations, guardrails, generation, batch, analytics)
+  - Output: `UnifiedRAGResponse` (documents, timings, metadata, citations, generated_answer, cache_hit, errors, security_report)
+  - Streaming: NDJSON events `delta`, `claims_overlay`, `final_claims` when `enable_generation=true`
+- Related Endpoints:
+  - POST `/api/v1/rag/search` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:664
+  - POST `/api/v1/rag/search/stream` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1174
+  - GET `/api/v1/rag/simple` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1110
+  - GET `/api/v1/rag/advanced` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1375
+  - GET `/api/v1/rag/capabilities` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:283
+  - GET `/api/v1/rag/features` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1439
+  - GET `/api/v1/rag/health/simple` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1521
+  - GET `/api/v1/rag/vlm/backends` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:644
+  - POST `/api/v1/rag/ablate` — tldw_Server_API/app/api/v1/endpoints/rag_unified.py:167
+- Related Schemas:
+  - `UnifiedRAGRequest` — tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:41
+  - `UnifiedRAGResponse` — tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:1110
+  - `UnifiedBatchRequest` — tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:1230
+  - `UnifiedBatchResponse` — tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:1433
+
+## 2. Technical Details of Features
+
+- Architecture & Data Flow:
+  - Entry point: `unified_rag_pipeline()` — tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:1
+  - Retrieval: `MultiDatabaseRetriever` with `RetrievalConfig` — tldw_Server_API/app/core/RAG/rag_service/database_retrievers.py:1
+  - Query expansion: acronym/synonym/domain/entity — tldw_Server_API/app/core/RAG/rag_service/query_expansion.py:1
+  - Vector stores: factory/adapters (ChromaDB, pgvector) — tldw_Server_API/app/core/RAG/rag_service/vector_stores/:1
+  - Reranking: FlashRank, Cross-Encoder, LLM, two-tier — tldw_Server_API/app/core/RAG/rag_service/advanced_reranking.py:1
+  - Citations/metadata: `citations.py`, parent/sibling context — tldw_Server_API/app/core/RAG/rag_service/citations.py:1, parent_retrieval.py:1
+  - Guardrails: injection filtering, hard-citations, numeric fidelity — tldw_Server_API/app/core/RAG/rag_service/guardrails.py:1
+  - Generation/streaming: `generation.py` (stream helper) — tldw_Server_API/app/core/RAG/rag_service/generation.py:1
+  - Agentic mode: `agentic_rag_pipeline`, `AgenticConfig` — tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py:1
+  - Analytics/metrics/observability: analytics_system, metrics_collector, observability
+- Key Classes/Functions (start here):
+  - `unified_rag_pipeline`, `unified_batch_pipeline` — rag_service/unified_pipeline.py:1
+  - `MultiDatabaseRetriever` — rag_service/database_retrievers.py:1
+  - `HybridReranker` and two-tier calibration — rag_service/advanced_reranking.py:1
+  - `UnifiedRAGRequest`/`UnifiedRAGResponse` — api/v1/schemas/rag_schemas_unified.py:41,1110
+- Dependencies:
+  - Internal: `DB_Management` (Media_DB_v2, ChaChaNotes_DB), `Embeddings` (ChromaDB), `Chunking`, `Security`
+  - External (optional): transformers cross-encoder, FlashRank, llama.cpp GGUF rerankers, pgvector/ChromaDB
+- Data Models & DB:
+  - SQLite FTS5 for keyword search; vector stores via factory (ChromaDB default; pgvector if configured)
+  - Per-user DB adapters preferred in production: `MediaDatabase`, `CharactersRAGDB`
+- Configuration (env/config.txt; request-level params override defaults):
+  - Rerank: `RAG_TRANSFORMERS_RERANKER_MODEL`, `RAG_LLM_RERANK_TIMEOUT_SEC`, `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`, `RAG_LLM_RERANK_MAX_DOCS`
+  - Calibration/gating: `RAG_MIN_RELEVANCE_PROB`, `RAG_SENTINEL_MARGIN`
+  - Verification: `RAG_NLI_MODEL` or `RAG_NLI_MODEL_PATH`
+  - Adaptive post-check: `RAG_ADAPTIVE_TIME_BUDGET_SEC`, `RAG_ADAPTIVE_ADVANCED_REWRITES`
+  - VLM/table defaults: `VLM_TABLE_MODEL_NAME`, `VLM_TABLE_REVISION`, `VLM_TABLE_THRESHOLD`
+  - Telemetry: `ENABLE_TRACING` (OTEL/Prom scrape handled in main config)
+  - Safety: `tldw_production=true` disables raw-SQL fallbacks; adapters required
+- Concurrency & Performance:
+  - Batch concurrency limits; streaming generation with incremental overlays
+  - Time/document budgets for LLM reranking and post-verification
+  - Connection pooling, semantic caching with adaptive thresholds
+  - Rate limits: search 30/min, read 60/min, batch 10/min (see limiter config in endpoint)
+- Error Handling:
+  - HTTP 400 for invalid requests (e.g., streaming without generation), HTTP 500 for internal failures
+  - Custom exceptions — tldw_Server_API/app/core/RAG/exceptions.py:1
+  - Resilience (circuit breakers, retries) available in internal services
+- Security:
+  - AuthNZ: RBAC and token scopes enforced on `/search` — see `rbac_rate_limit("rag.search")` and `require_token_scope` in endpoints
+  - PII/content filtering guardrails, strict adapter requirement in production
+
+## 3. Developer-Related/Relevant Information for Contributors
+
+- Folder Structure:
+  - Module: this README, CAPABILITIES/STATUS/DEPRECATION notes, `exceptions.py`, `rag_custom_metrics.py`
+  - Core: `rag_service/` (unified_pipeline, retrievers, reranking, cache, guardrails, generation, vector_stores, analytics, types)
+  - Archive: `ARCHIVE/` (legacy pipelines and docs)
+- Extension Points:
+  - Vector stores: add adapter under `rag_service/vector_stores/` and register in `factory.py`
+  - Reranking: add strategy in `advanced_reranking.py`, wire in unified pipeline
+  - Query expansion: implement strategy in `query_expansion.py` and include in hybrid registry
+  - Retrieval sources: extend `MultiDatabaseRetriever` with new datastore adapter
+- Coding Patterns:
+  - Use DI: pass DB adapters (`MediaDatabase`, `CharactersRAGDB`) rather than raw paths in production
+  - Logging via `loguru`; avoid logging secrets or raw SQL
+  - Async I/O throughout; respect budget/timeout knobs; rate limiting via shared limiter
+- Tests:
+  - Unit: tldw_Server_API/tests/RAG_NEW/test_unified_pipeline.py:2
+  - E2E: tldw_Server_API/tests/e2e/test_search_features.py:9, tldw_Server_API/tests/e2e/test_search_rag_quality_gates.py:108
+  - Reranker endpoints (llama.cpp): tldw_Server_API/tests/LLamaCpp/test_llamacpp_reranking_endpoints.py:28
+  - Fixtures: tldw_Server_API/tests/fixtures/contextual_fixtures.py:14
+  - Run: `python -m pytest -m "integration" -v` or full suite with coverage
+- Local Dev Tips:
+  - Start server: `uvicorn tldw_Server_API.app.main:app --reload`
+  - Minimal call: `POST /api/v1/rag/search {"query": "What is ML?", "top_k": 5}`
+  - Streaming: `POST /api/v1/rag/search/stream` with `enable_generation=true`
+  - Try simple/advanced presets at `/simple` and `/advanced`
+- Pitfalls & Gotchas:
+  - In production (`tldw_production=true`), you must pass DB adapters; raw SQL fallback is disabled
+  - LLM reranking can be costly; tune docs/time budgets; use two-tier for quality and control
+  - Hard-citation gate and NLI thresholds may abstain on low support; override via request when needed
+  - Ensure embeddings exist for vector search; hybrid mode will still use FTS when absent
+- Roadmap/TODOs:
+  - Broader observability tracing and dashboards; finalize two-tier calibration defaults
+  - Expand chunk-level citation coverage; continue agentic-table late chunking integration
+  - See IMPLEMENTATION_STATUS.md and DEPRECATION_NOTICE.md for current migration items
+
+---
+
+## Detailed Reference
+
+The sections below provide detailed usage, examples, and advanced topics.
+
 ## Overview
 
 The RAG (Retrieval-Augmented Generation) module provides intelligent search and question-answering capabilities for the tldw_server application. It uses a **unified pipeline architecture** where ALL features are accessible through a single function with explicit parameters - no configuration files, no presets, just direct parameter control.

@@ -1,0 +1,56 @@
+# Core Module README Refresh Tracker
+
+Purpose: Track standardization of README files across `tldw_Server_API/app/core/<Module>` using a common template. Status values: Scaffolded | Existing (Review/Update) | Complete.
+
+| Module | Path | Status | Owner | Notes |
+|---|---|---|---|---|
+| Audit | tldw_Server_API/app/core/Audit | Existing (Review/Update) |  | Preserve existing content; align with template |
+| AuthNZ | tldw_Server_API/app/core/AuthNZ | Existing (Review/Update) |  |  |
+| Character_Chat | tldw_Server_API/app/core/Character_Chat | Existing (Review/Update) |  |  |
+| Chat | tldw_Server_API/app/core/Chat | Existing (Review/Update) |  |  |
+| Chatbooks | tldw_Server_API/app/core/Chatbooks | Existing (Review/Update) |  |  |
+| Chunking | tldw_Server_API/app/core/Chunking | Existing (Review/Update) |  |  |
+| Claims_Extraction | tldw_Server_API/app/core/Claims_Extraction | Scaffolded |  |  |
+| Collections | tldw_Server_API/app/core/Collections | Scaffolded |  |  |
+| DB_Management | tldw_Server_API/app/core/DB_Management | Scaffolded |  |  |
+| Embeddings | tldw_Server_API/app/core/Embeddings | Complete |  | Standardized to 3-section format |
+| Evaluations | tldw_Server_API/app/core/Evaluations | Existing (Review/Update) |  |  |
+| External_Sources | tldw_Server_API/app/core/External_Sources | Scaffolded |  |  |
+| Flashcards | tldw_Server_API/app/core/Flashcards | Scaffolded |  |  |
+| Infrastructure | tldw_Server_API/app/core/Infrastructure | Scaffolded |  |  |
+| Ingestion_Media_Processing | tldw_Server_API/app/core/Ingestion_Media_Processing | Complete |  | Standardized to 3-section format |
+| Jobs | tldw_Server_API/app/core/Jobs | Scaffolded |  |  |
+| LLM_Calls | tldw_Server_API/app/core/LLM_Calls | Complete |  | Standardized to 3-section format |
+| Local_LLM | tldw_Server_API/app/core/Local_LLM | Scaffolded |  |  |
+| Logging | tldw_Server_API/app/core/Logging | Scaffolded |  |  |
+| MCP_unified | tldw_Server_API/app/core/MCP_unified | Existing (Review/Update) |  |  |
+| Metrics | tldw_Server_API/app/core/Metrics | Existing (Review/Update) |  |  |
+| Moderation | tldw_Server_API/app/core/Moderation | Scaffolded |  |  |
+| Monitoring | tldw_Server_API/app/core/Monitoring | Scaffolded |  |  |
+| Notes | tldw_Server_API/app/core/Notes | Scaffolded |  |  |
+| Notifications | tldw_Server_API/app/core/Notifications | Scaffolded |  |  |
+| Persona | tldw_Server_API/app/core/Persona | Scaffolded |  |  |
+| PrivilegeMaps | tldw_Server_API/app/core/PrivilegeMaps | Scaffolded |  |  |
+| Prompt_Management | tldw_Server_API/app/core/Prompt_Management | Scaffolded |  |  |
+| RAG | tldw_Server_API/app/core/RAG | Complete |  | Standardized to 3-section format |
+| RateLimiting | tldw_Server_API/app/core/RateLimiting | Scaffolded |  |  |
+| Sandbox | tldw_Server_API/app/core/Sandbox | Scaffolded |  |  |
+| Scheduler | tldw_Server_API/app/core/Scheduler | Scaffolded |  |  |
+| Search_and_Research | tldw_Server_API/app/core/Search_and_Research | Scaffolded |  |  |
+| Security | tldw_Server_API/app/core/Security | Existing (Review/Update) |  |  |
+| Setup | tldw_Server_API/app/core/Setup | Scaffolded |  |  |
+| Sync | tldw_Server_API/app/core/Sync | Scaffolded |  |  |
+| Third_Party | tldw_Server_API/app/core/Third_Party | Scaffolded |  |  |
+| Tools | tldw_Server_API/app/core/Tools | Scaffolded |  |  |
+| TTS | tldw_Server_API/app/core/TTS | Existing (Review/Update) |  |  |
+| Usage | tldw_Server_API/app/core/Usage | Scaffolded |  |  |
+| Utils | tldw_Server_API/app/core/Utils | Scaffolded |  |  |
+| Watchlists | tldw_Server_API/app/core/Watchlists | Scaffolded |  |  |
+| Web_Scraping | tldw_Server_API/app/core/Web_Scraping | Scaffolded |  |  |
+| WebSearch | tldw_Server_API/app/core/WebSearch | Scaffolded |  |  |
+| Workflows | tldw_Server_API/app/core/Workflows | Scaffolded |  |  |
+| Writing | tldw_Server_API/app/core/Writing | Scaffolded |  |  |
+
+Notes:
+- “Existing (Review/Update)” indicates a README is present and should be aligned with the template for consistency.
+- “Scaffolded” indicates a README.md has been created from the template and needs content filled in by a contributor.
