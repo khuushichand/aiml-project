@@ -28,6 +28,7 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
+      RUN_JOBS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -106,6 +107,7 @@ jobs:
       POSTGRES_TEST_PASSWORD: tldw
       TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
+      RUN_JOBS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11

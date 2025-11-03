@@ -69,6 +69,11 @@ class CircuitBreaker:
         self.stats = CircuitBreakerStats()
         self._state_changed_at = time.time()
         self._lock = asyncio.Lock()
+        # Number of in-flight calls admitted while in CLOSED/HALF_OPEN.
+        # We use this to ensure concurrent calls respect the failure threshold
+        # so that at most `failure_threshold` failing calls can slip through
+        # before the breaker trips open under contention.
+        self._inflight_permits: int = 0
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """
@@ -86,14 +91,33 @@ class CircuitBreaker:
             CircuitOpenError: If circuit is open
             TimeoutError: If call times out
         """
+        permit_acquired = False
         async with self._lock:
-            # Check circuit state
+            # Check circuit state and gate entry under contention
             if self.state == CircuitState.OPEN:
                 if self._should_attempt_reset():
                     self._transition_to_half_open()
                 else:
                     self.stats.rejected_calls += 1
                     raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
+
+            # In CLOSED state, pessimistically cap concurrent entries to the
+            # remaining allowance before tripping the breaker. This ensures
+            # that when many calls fail concurrently, only up to
+            # `failure_threshold` of them are executed; later ones are
+            # rejected and will observe the OPEN state right after.
+            if self.state == CircuitState.CLOSED:
+                remaining = self.config.failure_threshold - self.stats.consecutive_failures - self._inflight_permits
+                if remaining <= 0:
+                    self.stats.rejected_calls += 1
+                    raise CircuitOpenError(
+                        f"Circuit breaker {self.name} temporarily rejecting due to concurrent pressure"
+                    )
+                self._inflight_permits += 1
+                permit_acquired = True
+
+            # In HALF_OPEN we allow calls (no extra gating here); failures will
+            # immediately re-open the breaker in _on_failure.
 
         # Attempt the call
         self.stats.total_calls += 1
@@ -130,6 +154,12 @@ class CircuitBreaker:
             # Unexpected exception, don't count as circuit failure
             logger.warning(f"Unexpected exception in circuit breaker {self.name}: {e}")
             raise
+        finally:
+            if permit_acquired:
+                async with self._lock:
+                    # Release our admission permit
+                    if self._inflight_permits > 0:
+                        self._inflight_permits -= 1
 
     async def _on_success(self):
         """Handle successful call."""

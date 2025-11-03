@@ -217,6 +217,7 @@ jobs:
       - name: Run full test suite (Linux + PG) - exclude Jobs and E2E
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            --ignore=tldw_Server_API/tests/Jobs \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-linux-${{ matrix.python }}.xml
         shell: bash
@@ -373,6 +374,7 @@ jobs:
       - name: Run full test suite - exclude Jobs and E2E
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            --ignore=tldw_Server_API/tests/Jobs \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-${{ matrix.os }}-3.12.xml
         shell: bash

@@ -57,6 +57,30 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
 
+# Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.
+# This ensures general CI workflows never run Jobs tests; the dedicated
+# jobs-suite workflow sets RUN_JOBS=1 to include them.
+import pytest as _pytest_jobs_gate
+
+@_pytest_jobs_gate.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):  # pragma: no cover - collection-time behavior
+    try:
+        run_jobs = str(os.getenv("RUN_JOBS", "")).lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        run_jobs = False
+    if run_jobs:
+        return
+    skip_jobs = _pytest_jobs_gate.mark.skip(reason="Jobs tests run only in the jobs-suite CI workflow")
+    jobs_markers = {"jobs", "pg_jobs", "pg_jobs_stress"}
+    for item in items:
+        try:
+            if any(m.name in jobs_markers for m in item.iter_markers()):
+                item.add_marker(skip_jobs)
+        except Exception:
+            # Never break collection on marker inspection
+            pass
+
+
 # Bump file-descriptor limit for macOS/Linux test runs to avoid spurious
 # 'Too many open files' and SQLite 'unable to open database file' errors
 # caused by module-level TestClient instances in some test modules.
