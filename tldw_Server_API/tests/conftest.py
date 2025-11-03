@@ -188,6 +188,56 @@ def pg_eval_params():
         except Exception:
             return False
     reached = False
+
+    # Helper to ensure the target database exists once the server is reachable
+    def _ensure_db_exists(cfg_dict) -> None:  # pragma: no cover - env dependent
+        try:
+            # Prefer psycopg v3 if available
+            try:
+                import psycopg  # type: ignore
+                base_conn = psycopg.connect(
+                    host=cfg_dict["host"],
+                    port=int(cfg_dict["port"]),
+                    dbname="postgres",
+                    user=cfg_dict["user"],
+                    password=cfg_dict.get("password") or None,
+                    autocommit=True,
+                    connect_timeout=3,
+                )
+                try:
+                    with base_conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (cfg_dict["database"],))
+                        if cur.fetchone() is None:
+                            cur.execute(f'CREATE DATABASE "{cfg_dict["database"]}"')
+                finally:
+                    base_conn.close()
+                return
+            except Exception:
+                pass
+            # Fallback to psycopg2
+            try:
+                import psycopg2  # type: ignore
+                base_conn = psycopg2.connect(
+                    host=cfg_dict["host"],
+                    port=int(cfg_dict["port"]),
+                    database="postgres",
+                    user=cfg_dict["user"],
+                    password=cfg_dict.get("password") or None,
+                )
+                base_conn.autocommit = True
+                try:
+                    with base_conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (cfg_dict["database"],))
+                        if cur.fetchone() is None:
+                            cur.execute(f'CREATE DATABASE "{cfg_dict["database"]}"')
+                finally:
+                    base_conn.close()
+            except Exception:
+                # If drivers are missing or creation fails (permissions), let tests handle schema creation
+                pass
+        except Exception:
+            # Silent best-effort; do not block tests
+            pass
     # Try psycopg (v3) first
     try:  # pragma: no cover - optional dependency
         import psycopg  # type: ignore
@@ -255,39 +305,18 @@ def pg_eval_params():
                             reached = True
                             break
                         time.sleep(1)
-                    # Ensure target DB exists
+                    # Ensure target DB exists (best-effort)
                     if reached:
-                        try:
-                            import psycopg  # type: ignore
-                            base_conn = psycopg.connect(host=cfg["host"], port=int(cfg["port"]), dbname="postgres", user=cfg["user"], password=cfg.get("password") or None, autocommit=True, connect_timeout=3)
-                            try:
-                                with base_conn.cursor() as cur:
-                                    cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (cfg["database"],))
-                                    if cur.fetchone() is None:
-                                        cur.execute(f'CREATE DATABASE "{cfg["database"]}"')
-                            finally:
-                                base_conn.close()
-                        except Exception:
-                            try:
-                                import psycopg2  # type: ignore
-                                base_conn = psycopg2.connect(host=cfg["host"], port=int(cfg["port"]), database="postgres", user=cfg["user"], password=cfg.get("password") or None)
-                                base_conn.autocommit = True
-                                try:
-                                    with base_conn.cursor() as cur:
-                                        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (cfg["database"],))
-                                        if cur.fetchone() is None:
-                                            cur.execute(f'CREATE DATABASE "{cfg["database"]}"')
-                                finally:
-                                    base_conn.close()
-                            except Exception:
-                                # If we cannot ensure the DB exists due to missing drivers, rely on tests that create schemas to error clearly
-                                pass
+                        _ensure_db_exists(cfg)
             except Exception:
                 # Ignore docker start errors and fall through to skip
                 pass
 
     if not reached:
         pytest.skip("Postgres not reachable at configured/default location (docker not started or unavailable)")
+    else:
+        # When reachable, ensure the specific target database exists (best-effort)
+        _ensure_db_exists(cfg)
     return cfg
     # Stop Evaluations connection pool maintenance thread and close connections
     try:
