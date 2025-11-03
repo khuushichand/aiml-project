@@ -215,6 +215,13 @@ class DockerRunner:
 
         # Step 1: docker create
         cmd: List[str] = ["docker", "create"]
+        # Keep STDIN open for interactive runs
+        try:
+            interactive = bool(getattr(spec, "interactive", None))
+        except Exception:
+            interactive = False
+        if interactive:
+            cmd += ["-i"]
         # Network policy and (optional) granular allowlist enforcement
         egress_net_name: Optional[str] = None
         egress_label = f"tldw-run-{run_id[:12]}"
@@ -552,6 +559,75 @@ class DockerRunner:
         tlog = threading.Thread(target=_pump_logs, daemon=True)
         tlog.start()
 
+        # If interactive, start stdin pump using docker exec to forward bytes to PID 1 stdin
+        stdin_thread = None
+        if interactive:
+            def _pump_stdin():
+                from tldw_Server_API.app.core.Sandbox.streams import get_hub as _get_hub
+                import queue as _queue
+                q = _get_hub().get_stdin_queue(run_id)
+                proc = None
+                try:
+                    # Use sh -lc to write to /proc/1/fd/0 continuously until stdin closes
+                    proc = subprocess.Popen([
+                        "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
+                    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    while True:
+                        try:
+                            # Periodically check if container is still running
+                            try:
+                                chunk = q.get(timeout=0.25)
+                            except _queue.Empty:
+                                if not DockerRunner._is_container_running(cid):
+                                    break
+                                continue
+                            if not chunk:
+                                continue
+                            if proc.poll() is not None:
+                                # Restart exec if it exited unexpectedly while container runs
+                                if DockerRunner._is_container_running(cid):
+                                    proc = subprocess.Popen([
+                                        "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
+                                    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                else:
+                                    break
+                            try:
+                                if proc.stdin is not None:
+                                    proc.stdin.write(chunk)
+                                    proc.stdin.flush()
+                            except BrokenPipeError:
+                                # Attempt to reopen if container is alive
+                                if DockerRunner._is_container_running(cid):
+                                    try:
+                                        proc = subprocess.Popen([
+                                            "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
+                                        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    except Exception:
+                                        break
+                                else:
+                                    break
+                        except Exception:
+                            # On any unexpected error, exit the pump loop
+                            break
+                finally:
+                    try:
+                        if proc is not None:
+                            try:
+                                if proc.stdin:
+                                    proc.stdin.close()
+                            except Exception:
+                                pass
+                            # Best-effort terminate; proc should exit when stdin closes
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+            stdin_thread = threading.Thread(target=_pump_stdin, daemon=True)
+            stdin_thread.start()
+
         # Wait for container to finish
         timeout_sec = spec.timeout_sec or 300
         try:
@@ -619,6 +695,12 @@ class DockerRunner:
             tlog.join(timeout=1)
         except Exception:
             pass
+        # Ensure stdin thread is finished as well
+        if stdin_thread is not None:
+            try:
+                stdin_thread.join(timeout=0.5)
+            except Exception:
+                pass
 
         finished = datetime.utcnow()
         # Resolve image digest (best-effort)

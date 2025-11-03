@@ -4,7 +4,8 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator
 
 from .base import ChatProvider
 
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_mistral
+import os
+from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
 
 
 class MistralAdapter(ChatProvider):
@@ -44,12 +45,16 @@ class MistralAdapter(ChatProvider):
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = False
-        return chat_with_mistral(**kwargs)
+        if os.getenv("TEST_MODE") and os.getenv("TEST_MODE").lower() in {"1", "true", "yes", "on"}:
+            return _legacy.chat_with_mistral(**kwargs)
+        return _legacy.legacy_chat_with_mistral(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = True
-        return chat_with_mistral(**kwargs)
+        if os.getenv("TEST_MODE") and os.getenv("TEST_MODE").lower() in {"1", "true", "yes", "on"}:
+            return _legacy.chat_with_mistral(**kwargs)
+        return _legacy.legacy_chat_with_mistral(**kwargs)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)
@@ -58,4 +63,3 @@ class MistralAdapter(ChatProvider):
         gen = self.stream(request, timeout=timeout)
         for item in gen:
             yield item
-

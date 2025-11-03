@@ -45,7 +45,10 @@ if not _ORIG_OPENAI_API_BASE and _SET_MOCK_OPENAI_KEY:
 if "API_BEARER" in os.environ:
     del os.environ["API_BEARER"]
 
-from tldw_Server_API.app.main import app
+def _get_app():
+    # Lazy import to avoid heavy app imports during collection for tests that don't need Chat fixtures
+    from tldw_Server_API.app.main import app as _app
+    return _app
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -149,11 +152,13 @@ def preserve_app_state():
     global _original_dependency_overrides
 
     # Store the original state at the beginning of the test session
+    app = _get_app()
     _original_dependency_overrides = app.dependency_overrides.copy()
 
     yield
 
     # Restore the original state at the end of the test session
+    app = _get_app()
     app.dependency_overrides = _original_dependency_overrides.copy()
 
     # Restore OpenAI environment variables if we set test defaults
@@ -175,6 +180,7 @@ def reset_app_overrides():
     global _original_dependency_overrides
 
     # Reset to original state before each test
+    app = _get_app()
     if _original_dependency_overrides is not None:
         app.dependency_overrides = _original_dependency_overrides.copy()
     else:
@@ -186,6 +192,7 @@ def reset_app_overrides():
     yield
 
     # Clean up after each test
+    app = _get_app()
     if _original_dependency_overrides is not None:
         app.dependency_overrides = _original_dependency_overrides.copy()
     else:

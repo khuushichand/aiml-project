@@ -34,6 +34,9 @@ class RunStreamHub:
         # Interactive stdin caps and state per run
         self._stdin_cfg: dict[str, dict] = {}
         self._stdin_state: dict[str, dict] = {}
+        # Inbound stdin data queues per run (producer: WS handler; consumer: runner)
+        import queue as _queue  # local import to avoid global in non-stdin contexts
+        self._stdin_queues: dict[str, _queue.Queue] = {}
         # Optional Redis fan-out (cross-worker broadcast)
         self._redis_enabled: bool = False
         self._redis_client = None
@@ -425,6 +428,43 @@ class RunStreamHub:
             st = self._stdin_state.get(run_id) or {}
             return float(st.get("last_input")) if st.get("last_input") is not None else None
 
+    # -----------------
+    # Stdin data piping
+    # -----------------
+    def push_stdin(self, run_id: str, data: bytes) -> None:
+        """Queue raw stdin bytes for a run.
+
+        The WebSocket handler should call consume_stdin() to enforce caps before
+        calling push_stdin(); this method simply enqueues the (possibly truncated)
+        bytes for the runner-side pump to write to the process.
+        """
+        if not data:
+            return
+        with self._lock:
+            try:
+                import queue as _queue
+                q = self._stdin_queues.get(run_id)
+                if q is None:
+                    q = _queue.Queue()
+                    self._stdin_queues[run_id] = q
+            except Exception:
+                return
+            try:
+                q.put_nowait(bytes(data))
+            except Exception:
+                # Best-effort; drop on overflow
+                pass
+
+    def get_stdin_queue(self, run_id: str):
+        """Return the thread-safe Queue for stdin bytes for a run (create if absent)."""
+        with self._lock:
+            import queue as _queue
+            q = self._stdin_queues.get(run_id)
+            if q is None:
+                q = _queue.Queue()
+                self._stdin_queues[run_id] = q
+            return q
+
     def close(self, run_id: str) -> None:
         # Use publish_event so end-event deduplication applies
         self.publish_event(run_id, "end", {})
@@ -454,6 +494,11 @@ class RunStreamHub:
             self._ended.discard(run_id)
             # Clear sequence counter
             self._seq.pop(run_id, None)
+            # Drop stdin queues and state
+            try:
+                self._stdin_queues.pop(run_id, None)
+            except Exception:
+                pass
 
     # -----------------
     # Redis fan-out (optional)

@@ -17,45 +17,17 @@ from __future__ import annotations
 
 from typing import Optional, Tuple, Dict, Any, List
 import re
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from urllib.parse import quote as urlquote
+from tldw_Server_API.app.core.http_client import fetch
 
 
 ABS_URL = "https://vixra.org/abs/{vid}"
 PDF_BASE = "https://vixra.org/pdf/{suffix}"
 
 
-def _mk_session():
+def _try_pdf(url: str) -> Optional[str]:
     try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "HEAD"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({
-            "Accept": "text/html,application/pdf,application/json",
-            "User-Agent": "tldw_server/1.0 (+https://github.com/)",
-        })
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
-
-
-def _try_pdf(session, url: str) -> Optional[str]:
-    try:
-        # httpx.Client supports allow_redirects on head as well
-        r = session.head(url, timeout=15, allow_redirects=True)
+        r = fetch(method="HEAD", url=url, timeout=15, allow_redirects=True)
         if r.status_code == 200:
             ct = (r.headers.get("content-type") or "").lower()
             if "pdf" in ct or url.lower().endswith(".pdf"):
@@ -64,11 +36,11 @@ def _try_pdf(session, url: str) -> Optional[str]:
     except Exception:
         return None
 
-
-def _extract_pdf_from_abs(session, abs_url: str) -> Optional[str]:
+def _extract_pdf_from_abs(abs_url: str) -> Optional[str]:
     try:
-        r = session.get(abs_url, timeout=20)
-        r.raise_for_status()
+        r = fetch(method="GET", url=abs_url, timeout=20)
+        if r.status_code >= 400:
+            return None
         text = r.text or ""
         m = re.search(r"href=\"(/pdf/[A-Za-z0-9\./v_-]+?\.pdf)\"", text, re.IGNORECASE)
         if m:
@@ -86,29 +58,27 @@ def get_vixra_by_id(vid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         vid = (vid or "").strip()
         if not vid:
             return None, "Invalid viXra ID"
-        session = _mk_session()
-
         # Try common PDF patterns
         candidates = [PDF_BASE.format(suffix=f"{vid}.pdf")]
         for n in range(1, 6):
             candidates.append(PDF_BASE.format(suffix=f"{vid}v{n}.pdf"))
         pdf_url = None
         for url in candidates:
-            pdf_url = _try_pdf(session, url)
+            pdf_url = _try_pdf(url)
             if pdf_url:
                 break
         # Fetch abstract page for metadata enrichment and PDF fallback
         abs_url = ABS_URL.format(vid=vid)
         html = None
         try:
-            r_abs = session.get(abs_url, timeout=20)
+            r_abs = fetch(method="GET", url=abs_url, timeout=20)
             if r_abs.status_code == 200:
                 html = r_abs.text or None
-        except requests.RequestException:
+        except Exception:
             html = None
 
         if not pdf_url:
-            pdf_url = _extract_pdf_from_abs(session, abs_url)
+            pdf_url = _extract_pdf_from_abs(abs_url)
 
         title = None
         authors = None
@@ -141,24 +111,23 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> Tuple[Option
     try:
         if not term or not term.strip():
             return [], 0, None
-        session = _mk_session()
         q = term.strip()
         # Candidate search endpoints observed historically
         candidates = [
-            f"https://vixra.org/find/?search={requests.utils.quote(q)}",
-            f"https://vixra.org/?search={requests.utils.quote(q)}",
-            f"https://vixra.org/?find={requests.utils.quote(q)}",
+            f"https://vixra.org/find/?search={urlquote(q)}",
+            f"https://vixra.org/?search={urlquote(q)}",
+            f"https://vixra.org/?find={urlquote(q)}",
         ]
         html = None
         url_used = None
         for url in candidates:
             try:
-                r = session.get(url, timeout=20)
+                r = fetch(method="GET", url=url, timeout=20)
                 if r.status_code == 200 and r.text:
                     html = r.text
                     url_used = url
                     break
-            except requests.RequestException:
+            except Exception:
                 continue
         if not html:
             return [], 0, "viXra search failed to fetch results"
@@ -183,10 +152,10 @@ def search(term: str, page: int = 1, results_per_page: int = 10) -> Tuple[Option
             better_title = None
             pub_date = None
             try:
-                r_abs = session.get(abs_url, timeout=12)
+                r_abs = fetch(method="GET", url=abs_url, timeout=12)
                 if r_abs.status_code == 200 and r_abs.text:
                     better_title, authors, pub_date = _parse_abs_details(r_abs.text)
-            except requests.RequestException:
+            except Exception:
                 pass
             item = {
                 "id": vid,

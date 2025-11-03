@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 
 
 class AuthNZPolicyStore:
@@ -18,9 +18,18 @@ class AuthNZPolicyStore:
     as documented in the PRD. If the table is missing, returns an empty policy set.
     """
 
+    def __init__(self, pool: Optional[DatabasePool] = None):
+        """Initialize the policy store.
+
+        Args:
+            pool: Optional DatabasePool to use (for testing/DI). If not provided,
+                  the global `get_db_pool()` is used on each call.
+        """
+        self._pool: Optional[DatabasePool] = pool
+
     async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float]:
         try:
-            pool = await get_db_pool()
+            pool = self._pool or await get_db_pool()
         except Exception as e:
             logger.warning("AuthNZPolicyStore: failed to get DB pool: {}", e)
             # Fallback to empty snapshot with current time
@@ -93,4 +102,3 @@ class AuthNZPolicyStore:
         if not latest_updated:
             latest_updated = time.time()
         return max_version, policies, tenant, latest_updated
-

@@ -44,7 +44,7 @@ async def test_authnz_policy_store_sqlite(tmp_path, monkeypatch):
         ],
     )
 
-    store = AuthNZPolicyStore()
+    store = AuthNZPolicyStore(pool=pool)
     version, policies, tenant, updated_at = await store.get_latest_policy()
 
     # Validate snapshot
@@ -81,7 +81,7 @@ async def test_authnz_policy_store_postgres(test_db_pool):
         ],
     )
 
-    store = AuthNZPolicyStore()
+    store = AuthNZPolicyStore(pool=test_db_pool)
     version, policies, tenant, updated_at = await store.get_latest_policy()
     assert version >= 3
     assert policies.get("ingress.default", {}).get("requests", {}).get("rpm") == 1000

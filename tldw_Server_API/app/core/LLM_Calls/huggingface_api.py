@@ -11,7 +11,7 @@ import httpx
 from loguru import logger
 from tldw_Server_API.app.core.config import load_and_log_configs
 import json
-from tldw_Server_API.app.core.http_client import create_async_client, afetch, afetch_json, adownload, RetryPolicy
+from tldw_Server_API.app.core.http_client import create_async_client, RetryPolicy
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -104,21 +104,27 @@ class HuggingFaceAPI:
             params["filter"] = filters
 
         attempts = max(1, int(self.api_retries)) + 1
-        policy = RetryPolicy(attempts=attempts, backoff_base_ms=int(self.api_retry_delay * 1000))
+        backoff_ms = int(self.api_retry_delay * 1000)
         async with create_async_client(timeout=self.api_timeout) as client:
-            try:
-                data = await afetch_json(
-                    method="GET",
-                    url=f"{self.API_BASE}/models",
-                    client=client,
-                    headers=self.headers,
-                    params=params,
-                    retry=policy,
-                )
-                return data
-            except Exception as e:
-                logger.error(f"Error searching models: {e}")
-                return []
+            last_exc: Optional[Exception] = None
+            for attempt in range(attempts):
+                try:
+                    resp = await client.get(
+                        f"{self.API_BASE}/models",
+                        headers=self.headers,
+                        params=params,
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+                except Exception as e:
+                    last_exc = e
+                    if attempt + 1 >= attempts:
+                        break
+                    # simple decorrelated backoff
+                    delay = max(0.001, (backoff_ms / 1000.0))
+                    await asyncio.sleep(delay)
+            logger.error(f"Error searching models: {last_exc}")
+            return []
 
     async def get_model_info(self, repo_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -131,20 +137,24 @@ class HuggingFaceAPI:
             Model information dictionary or None if error
         """
         attempts = max(1, int(self.api_retries)) + 1
-        policy = RetryPolicy(attempts=attempts, backoff_base_ms=int(self.api_retry_delay * 1000))
+        backoff_ms = int(self.api_retry_delay * 1000)
         async with create_async_client(timeout=self.api_timeout) as client:
-            try:
-                data = await afetch_json(
-                    method="GET",
-                    url=f"{self.API_BASE}/models/{repo_id}",
-                    client=client,
-                    headers=self.headers,
-                    retry=policy,
-                )
-                return data
-            except Exception as e:
-                logger.error(f"Error getting model info for {repo_id}: {e}")
-                return None
+            last_exc: Optional[Exception] = None
+            for attempt in range(attempts):
+                try:
+                    resp = await client.get(
+                        f"{self.API_BASE}/models/{repo_id}",
+                        headers=self.headers,
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+                except Exception as e:
+                    last_exc = e
+                    if attempt + 1 >= attempts:
+                        break
+                    await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))
+            logger.error(f"Error getting model info for {repo_id}: {last_exc}")
+            return None
 
     async def list_model_files(self, repo_id: str, path: str = "") -> List[Dict[str, Any]]:
         """
@@ -158,23 +168,28 @@ class HuggingFaceAPI:
             List of file information dictionaries
         """
         attempts = max(1, int(self.api_retries)) + 1
-        policy = RetryPolicy(attempts=attempts, backoff_base_ms=int(self.api_retry_delay * 1000))
+        backoff_ms = int(self.api_retry_delay * 1000)
         async with create_async_client(timeout=self.api_timeout) as client:
-            try:
-                files = await afetch_json(
-                    method="GET",
-                    url=f"{self.API_BASE}/models/{repo_id}/tree/main",
-                    client=client,
-                    headers=self.headers,
-                    retry=policy,
-                )
-                if path:
-                    files = [f for f in files if f.get("path", "").startswith(path)]
-                gguf_files = [f for f in files if f.get("path", "").endswith(".gguf")]
-                return gguf_files
-            except Exception as e:
-                logger.error(f"Error listing files for {repo_id}: {e}")
-                return []
+            last_exc: Optional[Exception] = None
+            for attempt in range(attempts):
+                try:
+                    resp = await client.get(
+                        f"{self.API_BASE}/models/{repo_id}/tree/main",
+                        headers=self.headers,
+                    )
+                    resp.raise_for_status()
+                    files = resp.json()
+                    if path:
+                        files = [f for f in files if f.get("path", "").startswith(path)]
+                    gguf_files = [f for f in files if f.get("path", "").endswith(".gguf")]
+                    return gguf_files
+                except Exception as e:
+                    last_exc = e
+                    if attempt + 1 >= attempts:
+                        break
+                    await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))
+            logger.error(f"Error listing files for {repo_id}: {last_exc}")
+            return []
 
     async def get_download_url(self, repo_id: str, filename: str, revision: str = "main") -> Optional[str]:
         """
@@ -222,37 +237,63 @@ class HuggingFaceAPI:
         temp_file = destination.with_suffix(".tmp")
 
         attempts = max(1, int(self.api_retries)) + 1
-        policy = RetryPolicy(attempts=attempts, backoff_base_ms=int(self.api_retry_delay * 1000))
+        backoff_ms = int(self.api_retry_delay * 1000)
 
-        # HEAD for size
         try:
             async with create_async_client(timeout=self.api_timeout) as client:
-                head_resp = await afetch(method="HEAD", url=url, client=client, headers=self.headers, retry=policy)
-                total_size = int(head_resp.headers.get("content-length", 0))
-        except Exception as e:
-            logger.error(f"HEAD failed for {filename}: {e}")
-            return False
+                # HEAD for size
+                total_size = 0
+                last_exc: Optional[Exception] = None
+                for attempt in range(attempts):
+                    try:
+                        head_resp = await client.head(url, headers=self.headers)
+                        total_size = int(head_resp.headers.get("content-length", 0))
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        if attempt + 1 >= attempts:
+                            logger.error(f"HEAD failed for {filename}: {last_exc}")
+                            return False
+                        await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))
 
-        if destination.exists() and total_size > 0 and destination.stat().st_size == total_size:
-            logger.info(f"File {filename} already exists with correct size, skipping download")
-            return True
+                if destination.exists() and total_size > 0 and destination.stat().st_size == total_size:
+                    logger.info(f"File {filename} already exists with correct size, skipping download")
+                    return True
 
-        try:
-            await adownload(url=url, dest=destination)
-            if progress_callback and total_size:
-                progress_callback(total_size, total_size)
-            logger.info(f"Successfully downloaded {filename} to {destination}")
-            return True
-        except Exception as e:
-            logger.error(f"Error downloading {filename}: {e}")
-            # Ensure temp is removed if created by other means
-            if temp_file.exists():
+                # Stream download
                 try:
-                    temp_file.unlink()
-                except Exception:
-                    pass
-            return False
-
+                    async with client.stream("GET", url, headers=self.headers) as resp:
+                        resp.raise_for_status()
+                        with open(temp_file, "wb") as f:
+                            downloaded = 0
+                            async for chunk in resp.aiter_bytes(chunk_size):
+                                if not chunk:
+                                    continue
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                if progress_callback and total_size:
+                                    try:
+                                        progress_callback(min(downloaded, total_size), total_size)
+                                    except Exception:
+                                        pass
+                        temp_file.replace(destination)
+                        # Final progress callback to ensure completion state
+                        if progress_callback and total_size and downloaded < total_size:
+                            try:
+                                progress_callback(total_size, total_size)
+                            except Exception:
+                                pass
+                        logger.info(f"Successfully downloaded {filename} to {destination}")
+                        return True
+                except Exception as e:
+                    logger.error(f"Error downloading {filename}: {e}")
+                    try:
+                        if temp_file.exists():
+                            temp_file.unlink()
+                    except Exception:
+                        pass
+                    return False
+        
     async def get_model_readme(self, repo_id: str) -> Optional[str]:
         """
         Get the README content for a model.
@@ -266,23 +307,30 @@ class HuggingFaceAPI:
         url = f"{self.BASE_URL}/{repo_id}/raw/main/README.md"
 
         attempts = max(1, int(self.api_retries)) + 1
-        policy = RetryPolicy(attempts=attempts, backoff_base_ms=int(self.api_retry_delay * 1000))
+        backoff_ms = int(self.api_retry_delay * 1000)
         async with create_async_client(timeout=self.api_timeout) as client:
             # Try README.md
             try:
-                resp = await afetch(method="GET", url=url, client=client, headers=self.headers, retry=policy)
+                resp = await client.get(url, headers=self.headers)
                 if resp.status_code < 400:
                     return resp.text
             except Exception:
                 pass
             # Fallback README (no extension)
             alt = f"{self.BASE_URL}/{repo_id}/raw/main/README"
-            try:
-                resp = await afetch(method="GET", url=alt, client=client, headers=self.headers, retry=policy)
-                if resp.status_code < 400:
-                    return resp.text
-            except Exception as e:
-                logger.debug(f"No README found for {repo_id}: {e}")
+            last_exc: Optional[Exception] = None
+            for attempt in range(attempts):
+                try:
+                    resp = await client.get(alt, headers=self.headers)
+                    if resp.status_code < 400:
+                        return resp.text
+                    else:
+                        last_exc = Exception(f"status={resp.status_code}")
+                except Exception as e:
+                    last_exc = e
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))
+            logger.debug(f"No README found for {repo_id}: {last_exc}")
             return None
 
     async def get_model_config(self, repo_id: str) -> Optional[Dict[str, Any]]:
@@ -298,14 +346,20 @@ class HuggingFaceAPI:
         url = f"{self.BASE_URL}/{repo_id}/raw/main/config.json"
 
         attempts = max(1, int(self.api_retries)) + 1
-        policy = RetryPolicy(attempts=attempts, backoff_base_ms=int(self.api_retry_delay * 1000))
+        backoff_ms = int(self.api_retry_delay * 1000)
         async with create_async_client(timeout=self.api_timeout) as client:
-            try:
-                data = await afetch_json(method="GET", url=url, client=client, headers=self.headers, retry=policy)
-                return data
-            except Exception as e:
-                logger.debug(f"No config.json found for {repo_id}: {e}")
-                return None
+            last_exc: Optional[Exception] = None
+            for attempt in range(attempts):
+                try:
+                    resp = await client.get(url, headers=self.headers)
+                    resp.raise_for_status()
+                    return resp.json()
+                except Exception as e:
+                    last_exc = e
+                    if attempt + 1 < attempts:
+                        await asyncio.sleep(max(0.001, (backoff_ms / 1000.0)))
+            logger.debug(f"No config.json found for {repo_id}: {last_exc}")
+            return None
 
     async def search_gguf_models(
         self,

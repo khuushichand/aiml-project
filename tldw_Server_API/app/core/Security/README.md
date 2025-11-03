@@ -27,6 +27,7 @@
     - API docs (`/docs`, `/redoc`): relaxed CSP allowing inline/eval and optional HTTPS CDNs.
     - Else: strict default CSP.
   - `WebUICSPMiddleware` injects a per-request CSP nonce and tailored policy for WebUI: tldw_Server_API/app/core/Security/webui_csp.py:72.
+  - WebUI CSP eval policy: `TLDW_WEBUI_NO_EVAL` takes precedence. If present and truthy (`1|true|yes|on|y`, case-insensitive), `'unsafe-eval'` is DISABLED. If present and falsy, eval is allowed. If unset, default is no eval in production (`ENVIRONMENT|APP_ENV|ENV in {prod, production}`) and allow eval otherwise.
   - `WebUIAccessGuardMiddleware` enforces WebUI remote access policy and IP allowlists: tldw_Server_API/app/core/Security/webui_access_guard.py:74.
 
 - Request ID Propagation

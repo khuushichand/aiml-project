@@ -14,7 +14,6 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
     chat_with_mistral, chat_with_huggingface, chat_with_google,
     chat_with_qwen, chat_with_bedrock, chat_with_moonshot, chat_with_zai,
-    chat_with_openai_async, chat_with_groq_async, chat_with_anthropic_async, chat_with_openrouter_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     openai_chat_handler,
@@ -28,6 +27,10 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     huggingface_chat_handler,
     custom_openai_chat_handler,
     custom_openai_2_chat_handler,
+    openai_chat_handler_async,
+    anthropic_chat_handler_async,
+    groq_chat_handler_async,
+    openrouter_chat_handler_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -75,10 +78,11 @@ corresponding handler functions (e.g., `chat_with_openai`). This is used by
 
 # Optional async handlers. When present, the orchestrator can invoke these without blocking threads.
 ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
-    'openai': chat_with_openai_async,
-    'groq': chat_with_groq_async,
-    'anthropic': chat_with_anthropic_async,
-    'openrouter': chat_with_openrouter_async,
+    # Adapter-backed async shims with feature-flag fallback to legacy async handlers
+    'openai': openai_chat_handler_async,
+    'groq': groq_chat_handler_async,
+    'anthropic': anthropic_chat_handler_async,
+    'openrouter': openrouter_chat_handler_async,
 }
 
 # 2. Parameter mapping for each provider

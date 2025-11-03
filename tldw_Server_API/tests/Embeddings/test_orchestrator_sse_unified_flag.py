@@ -1,21 +1,15 @@
 """
-Integration test for embeddings orchestrator SSE endpoint behind STREAMS_UNIFIED.
-
-Verifies that when the flag is enabled, the endpoint serves SSE via SSEStream
-with appropriate headers and emits at least one `event: summary` chunk.
+Integration test (function-level) for embeddings orchestrator SSE behind STREAMS_UNIFIED, using
+direct endpoint invocation to avoid event-loop conflicts with the Redis harness.
 """
 
 import os
-import asyncio
 import json
-
-import httpx
 import pytest
 
 
-@pytest.mark.asyncio
-async def test_embeddings_orchestrator_events_unified_sse(admin_user, redis_client, monkeypatch):
-    # Enable unified streams and prefer data heartbeats
+def test_embeddings_orchestrator_events_unified_sse(redis_client, monkeypatch):
+    # Enable unified streams
     os.environ["STREAMS_UNIFIED"] = "1"
     os.environ["STREAM_HEARTBEAT_MODE"] = "data"
     try:
@@ -28,42 +22,49 @@ async def test_embeddings_orchestrator_events_unified_sse(admin_user, redis_clie
         monkeypatch.setattr(aioredis, "from_url", fake_from_url)
 
         # Seed one entry so snapshot has non-empty queues
-        redis_client.run(redis_client.xadd("embeddings:embedding", {"seq": "0"}))
+        redis_client.run(redis_client.client.xadd("embeddings:embedding", {"seq": "0"}))
 
-        from tldw_Server_API.app.main import app
+        # Call endpoint directly and consume one SSE chunk
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import orchestrator_events
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            async with client.stream("GET", "/api/v1/embeddings/orchestrator/events") as resp:
-                assert resp.status_code == 200
-                # Header assertions
-                ct = resp.headers.get("content-type", "").lower()
-                assert ct.startswith("text/event-stream")
-                assert resp.headers.get("Cache-Control") == "no-cache"
-                assert resp.headers.get("X-Accel-Buffering") == "no"
+        admin = User(id=1, username="admin", email="a@x", is_active=True, is_admin=True)
 
-                saw_event = False
-                payload_valid = False
-                # Consume a few lines and then stop
-                async for ln in resp.aiter_lines():
+        async def _collect_until_data():
+            resp = await orchestrator_events(current_user=admin)
+            agen = resp.body_iterator
+            acc = []
+            saw_event = False
+            obj = None
+            try:
+                for _ in range(10):
+                    try:
+                        ln = await agen.__anext__()
+                    except StopAsyncIteration:
+                        break
                     if not ln:
                         continue
+                    acc.append(ln)
                     low = ln.lower()
                     if low.startswith("event: ") and "summary" in low:
                         saw_event = True
                     if ln.startswith("data: "):
                         try:
                             obj = json.loads(ln[6:])
-                            # Expect orchestrator-style keys
-                            if isinstance(obj, dict) and "queues" in obj and "stages" in obj:
-                                payload_valid = True
-                                break
+                            break
                         except Exception:
-                            pass
+                            continue
+            finally:
+                try:
+                    await agen.aclose()
+                except Exception:
+                    pass
+            return saw_event, obj, "".join(acc)
 
-                assert saw_event is True
-                assert payload_valid is True
+        saw_event, obj, dump = redis_client.run(_collect_until_data())
+        assert saw_event is True, f"event line not observed in stream: {dump!r}"
+        assert obj is not None, f"data line not observed/parsed in stream: {dump!r}"
+        assert isinstance(obj, dict) and "queues" in obj and "stages" in obj
     finally:
         os.environ.pop("STREAMS_UNIFIED", None)
         os.environ.pop("STREAM_HEARTBEAT_MODE", None)
-

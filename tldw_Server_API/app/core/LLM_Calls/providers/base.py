@@ -141,3 +141,34 @@ def apply_tool_choice(payload: Dict[str, Any], tools: Optional[list], tool_choic
         # Never fail due to helper
         pass
 
+
+class EmbeddingsProvider(ABC):
+    """Abstract base for embeddings providers.
+
+    Implementations should return OpenAI-compatible embeddings responses or
+    a plain list/array of floats when used as a library.
+    """
+
+    name: str = "embeddings_provider"
+
+    @abstractmethod
+    def capabilities(self) -> Dict[str, Any]:
+        """Return provider capability flags and hints.
+
+        Example keys:
+        - dimensions_default: Optional[int]
+        - max_batch_size: Optional[int]
+        - default_timeout_seconds: int
+        """
+
+    @abstractmethod
+    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Create embeddings for given input(s).
+
+        Request shape should accept keys similar to OpenAI's API:
+        - input: Union[str, List[str]]
+        - model: str
+        - api_key: Optional[str]
+        - user: Optional[str]
+        - encoding_format: Optional[str]
+        """

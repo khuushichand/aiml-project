@@ -552,14 +552,23 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Backend selection (env):
   - `RG_BACKEND`: `memory` (default) or `redis`
   - `RG_REDIS_FAIL_MODE`: `fail_closed` (default) | `fail_open` | `fallback_memory`
+- Policy route_map precedence:
+  - When `RG_POLICY_STORE=db` is in use, policies (limits) load from the DB store but `route_map` is currently sourced from the YAML file and merged into the snapshot. If both DB and file provide mappings in the future, file route_map takes precedence unless otherwise documented.
+  - When `RG_POLICY_STORE=file`, both policies and route_map come from the YAML file at `RG_POLICY_PATH`.
 - Proxy/IP scoping (env):
   - `RG_TRUSTED_PROXIES`: comma-separated CIDRs of reverse proxies
   - `RG_CLIENT_IP_HEADER`: trusted header name (e.g., `X-Forwarded-For` or `CF-Connecting-IP`)
 - Metrics cardinality (env):
-  - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`); when true, metrics may include a hashed entity label
+ - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`); when true, metrics may include a hashed entity label
 - Test mode precedence:
   - `RG_TEST_BYPASS` overrides Resource Governor behavior when set; otherwise falls back to `TLDW_TEST_MODE`
  - `RG_ENABLE_SIMPLE_MIDDLEWARE`: `true|false` to enable the minimal pre-check middleware for `requests` category using route tags/path mapping.
+
+#### Simple Middleware (opt‑in)
+- Resolution order: path-based mapping (`route_map.by_path`) first, then tag-based mapping (`route_map.by_tag`). Wildcards like `/api/v1/chat/*` match by prefix.
+- Entity derivation: prefers authenticated user (`user:{id}`), then API key id/hash (`api_key:{id|hash}`), then trusted proxy IP header via `RG_CLIENT_IP_HEADER` when `RG_TRUSTED_PROXIES` contains the peer; otherwise falls back to `request.client.host`.
+- Behavior: performs a pre-check/reserve for the `requests` category before calling the endpoint and commits afterwards. On denial, sets `Retry-After` and `X-RateLimit-*` headers. On success, injects accurate `X-RateLimit-*` headers using a governor `peek` when available.
+- Enable by setting `RG_ENABLE_SIMPLE_MIDDLEWARE=true`. It only guards `requests` in this minimal form; streaming/tokens categories require explicit endpoint plumbing for reserve/commit.
 
 ### OpenAI-Compatible Strict Mode (Local Providers)
 

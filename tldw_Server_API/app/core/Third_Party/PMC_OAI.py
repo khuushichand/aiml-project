@@ -12,50 +12,31 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch
 from xml.etree import ElementTree as ET
 
 
 BASE_URL = "https://pmc.ncbi.nlm.nih.gov/api/oai/v1/mh/"
 
 
-def _mk_session():
+def _get_xml(params: Dict[str, Any]) -> ET.Element:
+    """Perform a GET to PMC OAI-PMH and return parsed XML root."""
+    r = fetch(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/xml"}, timeout=20)
+    if r.status_code >= 400:
+        # Let caller handle via generic error path
+        raise RuntimeError(f"HTTP {r.status_code}")
     try:
-        c = create_client(timeout=20)
-        c.headers.update({"Accept-Encoding": "gzip, deflate"})
-        return c
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[429, 500, 502, 503, 504],
-            backoff_factor=1,
-            allowed_methods=["HEAD", "GET", "OPTIONS"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({"Accept-Encoding": "gzip, deflate"})
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
-
-
-def _get(session: requests.Session, params: Dict[str, Any]) -> ET.Element:
-    r = session.get(BASE_URL, params=params, timeout=20)
-    r.raise_for_status()
-    return ET.fromstring(r.text)
+        return ET.fromstring(r.text)
+    finally:
+        try:
+            r.close()
+        except Exception:
+            pass
 
 
 def pmc_oai_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        s = _mk_session()
-        root = _get(s, {"verb": "Identify"})
+        root = _get_xml({"verb": "Identify"})
         info: Dict[str, Any] = {}
         ident = root.find(".//{http://www.openarchives.org/OAI/2.0/}Identify")
         if ident is None:
@@ -75,17 +56,7 @@ def pmc_oai_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         })
         return info, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to PMC OAI-PMH timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to PMC OAI-PMH timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"PMC OAI-PMH Request Error: {str(e)}"
-        return None, f"Unexpected PMC OAI-PMH Identify error: {str(e)}"
+        return None, f"PMC OAI-PMH Identify error: {str(e)}"
 
 
 def r_text(el: ET.Element) -> str:
@@ -100,11 +71,10 @@ def _parse_resumption(root: ET.Element) -> Optional[str]:
 
 def pmc_oai_list_sets(resumption_token: Optional[str] = None) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
     try:
-        s = _mk_session()
         params: Dict[str, Any] = {"verb": "ListSets"}
         if resumption_token:
             params = {"verb": "ListSets", "resumptionToken": resumption_token}
-        root = _get(s, params)
+        root = _get_xml(params)
         sets: List[Dict[str, Any]] = []
         ns = {"oai": "http://www.openarchives.org/OAI/2.0/"}
         for se in root.findall(".//oai:set", ns):
@@ -116,17 +86,7 @@ def pmc_oai_list_sets(resumption_token: Optional[str] = None) -> Tuple[Optional[
             })
         return sets, _parse_resumption(root), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to PMC OAI-PMH timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to PMC OAI-PMH timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
-        return None, None, f"Unexpected PMC OAI-PMH ListSets error: {str(e)}"
+        return None, None, f"PMC OAI-PMH ListSets error: {str(e)}"
 
 
 def _parse_dc_metadata(md: ET.Element) -> Dict[str, Any]:
@@ -218,7 +178,6 @@ def pmc_oai_list_records(
     resumption_token: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
     try:
-        s = _mk_session()
         params: Dict[str, Any] = {"verb": "ListRecords"}
         if resumption_token:
             params["resumptionToken"] = resumption_token
@@ -230,21 +189,11 @@ def pmc_oai_list_records(
                 params["until"] = until_date
             if set_name:
                 params["set"] = set_name
-        root = _get(s, params)
+        root = _get_xml(params)
         items = _parse_records(root)
         return items, _parse_resumption(root), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to PMC OAI-PMH timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to PMC OAI-PMH timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
-        return None, None, f"Unexpected PMC OAI-PMH ListRecords error: {str(e)}"
+        return None, None, f"PMC OAI-PMH ListRecords error: {str(e)}"
 
 
 def pmc_oai_list_identifiers(
@@ -255,7 +204,6 @@ def pmc_oai_list_identifiers(
     resumption_token: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
     try:
-        s = _mk_session()
         params: Dict[str, Any] = {"verb": "ListIdentifiers"}
         if resumption_token:
             params["resumptionToken"] = resumption_token
@@ -267,7 +215,7 @@ def pmc_oai_list_identifiers(
                 params["until"] = until_date
             if set_name:
                 params["set"] = set_name
-        root = _get(s, params)
+        root = _get_xml(params)
         ns = {"oai": "http://www.openarchives.org/OAI/2.0/"}
         items: List[Dict[str, Any]] = []
         for he in root.findall(".//oai:header", ns):
@@ -281,17 +229,7 @@ def pmc_oai_list_identifiers(
             })
         return items, _parse_resumption(root), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to PMC OAI-PMH timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to PMC OAI-PMH timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"PMC OAI-PMH Request Error: {str(e)}"
-        return None, None, f"Unexpected PMC OAI-PMH ListIdentifiers error: {str(e)}"
+        return None, None, f"PMC OAI-PMH ListIdentifiers error: {str(e)}"
 
 
 def pmc_oai_get_record(
@@ -301,22 +239,11 @@ def pmc_oai_get_record(
     try:
         if not identifier or not identifier.strip():
             return None, "Identifier cannot be empty"
-        s = _mk_session()
         params = {"verb": "GetRecord", "identifier": identifier.strip(), "metadataPrefix": metadata_prefix}
-        root = _get(s, params)
+        root = _get_xml(params)
         items = _parse_records(root)
         if not items:
             return None, None
         return items[0], None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to PMC OAI-PMH timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"PMC OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to PMC OAI-PMH timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"PMC OAI-PMH HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"PMC OAI-PMH Request Error: {str(e)}"
-        return None, f"Unexpected PMC OAI-PMH GetRecord error: {str(e)}"
+        return None, f"PMC OAI-PMH GetRecord error: {str(e)}"

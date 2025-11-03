@@ -15,24 +15,78 @@ from typing import Optional
 import os
 
 from fastapi import Request
+import ipaddress
 
 from .tenant import hash_entity
 
 
+def _parse_trusted_proxies(env_val: str | None) -> list[ipaddress._BaseNetwork]:
+    nets: list[ipaddress._BaseNetwork] = []
+    if not env_val:
+        return nets
+    for part in env_val.split(","):
+        s = part.strip()
+        if not s:
+            continue
+        try:
+            # Accept both single IPs and CIDRs
+            if "/" in s:
+                nets.append(ipaddress.ip_network(s, strict=False))
+            else:
+                # Represent single host as /32 or /128 network
+                ip_obj = ipaddress.ip_address(s)
+                mask = 32 if ip_obj.version == 4 else 128
+                nets.append(ipaddress.ip_network(f"{s}/{mask}", strict=False))
+        except Exception:
+            continue
+    return nets
+
+
+def _is_trusted_proxy(remote_ip: str, trusted: list[ipaddress._BaseNetwork]) -> bool:
+    try:
+        if not remote_ip or not trusted:
+            return False
+        ip_obj = ipaddress.ip_address(remote_ip)
+        return any(ip_obj in n for n in trusted)
+    except Exception:
+        return False
+
+
 def derive_client_ip(request: Request) -> str:
-    header = os.getenv("RG_CLIENT_IP_HEADER")
-    if header:
-        val = request.headers.get(header) or request.headers.get(header.lower())
-        if val:
-            ip = str(val).split(",")[0].strip()
-            if ip:
-                return ip
+    """Derive client IP with trusted proxy handling.
+
+    - Trust header specified by RG_CLIENT_IP_HEADER (e.g., X-Forwarded-For) only when
+      the immediate peer (request.client.host) is within RG_TRUSTED_PROXIES (CIDR/IP list).
+    - Otherwise, fall back to request.client.host.
+    """
+    # Immediate peer address
+    remote_ip = None
     try:
         client = request.client
         if client and client.host:
-            return client.host
+            remote_ip = client.host
     except Exception:
-        pass
+        remote_ip = None
+
+    trusted = _parse_trusted_proxies(os.getenv("RG_TRUSTED_PROXIES"))
+    header_name = os.getenv("RG_CLIENT_IP_HEADER")
+
+    # Use header only when the remote peer is trusted
+    if header_name and _is_trusted_proxy(remote_ip or "", trusted):
+        val = request.headers.get(header_name) or request.headers.get(header_name.lower())
+        if val:
+            # For X-Forwarded-For, choose left-most IP
+            candidate = str(val).split(",")[0].strip()
+            try:
+                ipaddress.ip_address(candidate)
+                if candidate:
+                    return candidate
+            except Exception:
+                pass
+
+    # Fallback: use direct peer address
+    if remote_ip:
+        return remote_ip
     return "unknown"
 
 
@@ -79,4 +133,3 @@ def derive_entity_key(request: Request) -> str:
 async def get_entity_key(request: Request) -> str:
     """FastAPI dependency that returns an entity key for Resource Governor."""
     return derive_entity_key(request)
-

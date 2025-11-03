@@ -143,6 +143,11 @@ Phase 3: Remaining providers + cleanup
 Phase 4: Embeddings (optional follow-up)
 - Consider moving embeddings to provider adapters (or parallel `EmbeddingsProvider`) while preserving current endpoints.
 
+Status (initiated)
+- Added `EmbeddingsProvider` interface, registry, and an OpenAI embeddings adapter (delegate-first).
+- Native HTTP is opt-in via `LLM_EMBEDDINGS_NATIVE_HTTP_OPENAI`.
+- Endpoint wiring remains unchanged; migration will be opt-in via shim in a subsequent PR.
+
 ## 11. Backward Compatibility
 - Public FastAPI endpoints unchanged; request/response schema remains OpenAI-compatible.
 - Legacy `provider_config.API_CALL_HANDLERS` continue to exist, delegating to the registry, so orchestrators and tests remain intact.

@@ -67,6 +67,7 @@ from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_
 from tldw_Server_API.app.core.LLM_Calls.streaming import (
     iter_sse_lines_requests,
     aiter_sse_lines_httpx,
+    aiter_normalized_sse,
 )
 
 # -----------------------------------------------------------------------------
@@ -208,6 +209,572 @@ def _apply_tool_choice(payload: Dict[str, Any], tools: Optional[List[Dict[str, A
         pass
 #
 #######################################################################################################################
+
+# Adapter-backed wrappers (monolith cleanup):
+# These preserve public entry points but route through adapter shims.
+# True legacy implementations are kept under legacy_* names above to avoid
+# recursion and for optional fallback paths.
+
+def chat_with_openai(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        user: Optional[str] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    return openai_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_anthropic(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
+    return anthropic_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_groq(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import groq_chat_handler
+    return groq_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_openrouter(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler
+    return openrouter_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_google(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        candidate_count: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import google_chat_handler
+    return google_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        topk=topk,
+        max_output_tokens=max_output_tokens,
+        stop_sequences=stop_sequences,
+        candidate_count=candidate_count,
+        response_format=response_format,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_mistral(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
+        random_seed: Optional[int] = None,
+        top_k: Optional[int] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import mistral_chat_handler
+    return mistral_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        tools=tools,
+        tool_choice=tool_choice,
+        max_tokens=max_tokens,
+        random_seed=random_seed,
+        top_k=top_k,
+        app_config=app_config,
+    )
+
+
+def chat_with_qwen(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import qwen_chat_handler
+    return qwen_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        maxp=maxp,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_deepseek(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import deepseek_chat_handler
+    return deepseek_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        app_config=app_config,
+    )
+
+
+def chat_with_huggingface(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import huggingface_chat_handler
+    return huggingface_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_openai_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        user: Optional[str] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler_async
+    return await openai_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_groq_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import groq_chat_handler_async
+    return await groq_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_anthropic_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
+    # No dedicated async shim for Anthropic; call sync adapter via loop or rely on
+    # adapter's async if present (shims expose async for common providers already)
+    return anthropic_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_openrouter_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler_async
+    return await openrouter_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
 # Function Definitions
 #
 
@@ -838,7 +1405,7 @@ def get_openai_embeddings_batch(texts: List[str], model: str, app_config: Option
         raise ValueError(f"OpenAI Embeddings (batch): Unexpected error occurred: {str(e)}")
 
 
-def chat_with_openai(
+def legacy_chat_with_openai(
         input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
         model: Optional[str] = None,  # Mapped from 'model'
         api_key: Optional[str] = None,  # Mapped from 'api_key'
@@ -1188,31 +1755,19 @@ async def chat_with_openai_async(
     try:
         if final_streaming:
             async def _stream_async():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    status_code = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(status_code) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_httpx_chat_error("openai", e)
-                                async for chunk in aiter_sse_lines_httpx(resp, provider="openai"):
-                                    yield chunk
-                                # Append a single [DONE]
-                                yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="openai", message="Exceeded retry attempts for OpenAI stream", status_code=504)
+                policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+                async for chunk in aiter_normalized_sse(
+                    api_url,
+                    method="POST",
+                    headers=headers,
+                    json=payload,
+                    retry=policy,
+                    provider="openai",
+                ):
+                    yield chunk
+                # Append a single [DONE]
+                yield sse_done()
+                return
 
             return _stream_async()
         else:
@@ -1327,30 +1882,18 @@ async def chat_with_groq_async(
     try:
         if current_streaming:
             async def _stream():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    sc = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(sc) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_groq_http_error(e)
-                                async for chunk in aiter_sse_lines_httpx(resp, provider="groq"):
-                                    yield chunk
-                                yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="groq", message="Exceeded retry attempts for Groq stream", status_code=504)
+                policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+                async for chunk in aiter_normalized_sse(
+                    api_url,
+                    method="POST",
+                    headers=headers,
+                    json=payload,
+                    retry=policy,
+                    provider="groq",
+                ):
+                    yield chunk
+                yield sse_done()
+                return
 
             return _stream()
         else:
@@ -1696,30 +2239,18 @@ async def chat_with_openrouter_async(
     try:
         if current_streaming:
             async def _stream():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    sc = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(sc) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_openrouter_http_error(e)
-                                async for chunk in aiter_sse_lines_httpx(resp, provider="openrouter"):
-                                    yield chunk
-                                yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="openrouter", message="Exceeded retry attempts for OpenRouter stream", status_code=504)
+                policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+                async for chunk in aiter_normalized_sse(
+                    api_url,
+                    method="POST",
+                    headers=headers,
+                    json=payload,
+                    retry=policy,
+                    provider="openrouter",
+                ):
+                    yield chunk
+                yield sse_done()
+                return
 
             return _stream()
         else:
@@ -2682,7 +3213,7 @@ def chat_with_deepseek(
         raise ChatProviderError(provider="deepseek", message=f"Unexpected error: {e}")
 
 
-def chat_with_google(
+def legacy_chat_with_google(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -2952,7 +3483,7 @@ def chat_with_google(
 # https://console.groq.com/docs/quickstart
 
 
-def chat_with_qwen(
+def legacy_chat_with_qwen(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -3143,7 +3674,7 @@ def chat_with_qwen(
         logging.error(f"Qwen unexpected error: {e}", exc_info=True)
         raise ChatProviderError(provider="qwen", message=f"Unexpected error: {e}")
 
-def chat_with_groq(
+def legacy_chat_with_groq(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -3292,7 +3823,7 @@ def chat_with_groq(
         raise ChatProviderError(provider="groq", message=f"Unexpected error: {e}")
 
 
-def chat_with_huggingface(
+def legacy_chat_with_huggingface(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,  # This is the model_id like "Org/ModelName"
         api_key: Optional[str] = None,
@@ -3521,7 +4052,7 @@ def chat_with_huggingface(
             raise # Re-raise if it's already a ChatAPIError subtype
 
 
-def chat_with_mistral(
+def legacy_chat_with_mistral(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -3653,7 +4184,7 @@ def chat_with_mistral(
         raise ChatProviderError(provider="mistral", message=f"Unexpected error: {e}")
 
 
-def chat_with_openrouter(
+def legacy_chat_with_openrouter(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,

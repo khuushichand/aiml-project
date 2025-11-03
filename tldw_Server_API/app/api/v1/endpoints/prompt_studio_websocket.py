@@ -36,6 +36,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster, EventType
 )
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 ########################################################################################################################
 # Error Handling Utilities
@@ -302,12 +303,26 @@ async def websocket_endpoint_base(websocket: WebSocket):
     Args:
         websocket: WebSocket connection
     """
+    # Wrap socket for lifecycle metrics; keep domain payloads unchanged
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=None,  # leave heartbeats to domain logic if needed
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "prompt_studio", "endpoint": "ps_ws_base"},
+    )
+    # Accept via manager first to avoid double-accept issues
     await connection_manager.connect(websocket, "global")
+    await stream.start()
 
     try:
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_json()
+            try:
+                stream.mark_activity()
+            except Exception:
+                pass
 
             # Handle subscription requests
             if data.get("type") == "subscribe":
@@ -318,7 +333,7 @@ async def websocket_endpoint_base(websocket: WebSocket):
                         connection_manager.active_connections["global"] = set()
                     connection_manager.active_connections["global"].add(websocket)
 
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "subscribed",
                         "project_id": project_id
                     })
@@ -327,7 +342,7 @@ async def websocket_endpoint_base(websocket: WebSocket):
                 pass
             elif data.get("type") == "job_update":
                 # Echo job update (test harness expects a direct update message back)
-                await websocket.send_json(data)
+                await stream.send_json(data)
 
     except WebSocketDisconnect:
         # Pass the actual websocket to ensure proper cleanup
@@ -347,16 +362,28 @@ async def websocket_endpoint(
         project_id: Project ID to subscribe to
         db: Database instance
     """
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=None,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "prompt_studio", "endpoint": "ps_ws_project"},
+    )
     await connection_manager.connect(websocket, str(project_id))
+    await stream.start()
 
     try:
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_text()
+            try:
+                stream.mark_activity()
+            except Exception:
+                pass
 
             # Handle ping/pong for keepalive
             if data == "ping":
-                await websocket.send_text("pong")
+                await stream.ws.send_text("pong")
             else:
                 # Process other messages if needed
                 logger.debug(f"Received WebSocket message for project {project_id}: {data}")

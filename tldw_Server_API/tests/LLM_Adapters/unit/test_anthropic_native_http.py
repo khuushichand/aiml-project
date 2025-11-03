@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+import pytest
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int = 200, json_obj: Dict[str, Any] | None = None, lines: List[str] | None = None):
+        self.status_code = status_code
+        self._json = json_obj or {}
+        self._lines = lines or []
+
+    def raise_for_status(self):
+        if 400 <= self.status_code:
+            import httpx
+            req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+            resp = httpx.Response(self.status_code, request=req)
+            raise httpx.HTTPStatusError("err", request=req, response=resp)
+
+    def json(self):
+        return self._json
+
+    def iter_lines(self):
+        for l in self._lines:
+            yield l
+
+
+class _FakeStreamCtx:
+    def __init__(self, response: _FakeResponse):
+        self._r = response
+
+    def __enter__(self):
+        return self._r
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, url: str, json: Dict[str, Any], headers: Dict[str, str]):
+        return _FakeResponse(200, {"object": "chat.completion", "choices": [{"message": {"content": "ok"}}]})
+
+    def stream(self, method: str, url: str, json: Dict[str, Any], headers: Dict[str, str]):
+        lines = [
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}",
+            "data: [DONE]",
+        ]
+        return _FakeStreamCtx(_FakeResponse(200, lines=lines))
+
+
+@pytest.fixture(autouse=True)
+def _enable_native(monkeypatch):
+    monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_ANTHROPIC", "1")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
+    yield
+
+
+def test_anthropic_adapter_native_http_non_streaming(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    a = AnthropicAdapter()
+    r = a.chat({"messages": [{"role": "user", "content": "hi"}], "model": "claude-sonnet", "api_key": "k", "max_tokens": 32})
+    assert r.get("object") == "chat.completion"
+
+
+def test_anthropic_adapter_native_http_streaming(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    a = AnthropicAdapter()
+    chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "claude-sonnet", "api_key": "k", "max_tokens": 32, "stream": True}))
+    assert any(c.startswith("data: ") for c in chunks)
+    assert sum(1 for c in chunks if "[DONE]" in c) == 1
+

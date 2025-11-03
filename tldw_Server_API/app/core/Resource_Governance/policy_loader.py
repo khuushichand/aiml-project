@@ -63,8 +63,19 @@ class PolicyLoader:
     async def load_once(self) -> PolicySnapshot:
         """Load the policy file once and update the in‑memory snapshot."""
         if self._store is not None:
+            # DB-backed: fetch latest policy snapshot, and merge route_map from file (per PRD)
             version, policies, tenant, updated_at = await self._store.get_latest_policy()
             mtime = float(updated_at)
+            route_map = {}
+            try:
+                if self._path.exists():
+                    with self._path.open("r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    route_map = dict(data.get("route_map") or {})
+                    # Consider file route_map mtime for reload comparisons
+                    mtime = max(mtime, self._path.stat().st_mtime)
+            except Exception as e:
+                logger.debug("PolicyLoader: failed to read route_map from file: {}", e)
         else:
             if not self._path.exists():
                 raise FileNotFoundError(f"Policy file not found: {self._path}")
@@ -80,7 +91,7 @@ class PolicyLoader:
             version=version,
             policies=policies,
             tenant=tenant,
-            route_map=route_map if 'route_map' in locals() else {},
+            route_map=route_map,
             source_path=self._path,
             loaded_at_monotonic=self._time_source(),
             mtime=mtime,
@@ -140,8 +151,22 @@ class PolicyLoader:
             snap = self._snapshot
             if self._store is not None:
                 try:
-                    _v, _p, _t, updated_at = await self._store.get_latest_policy()
-                    cur_mtime = float(updated_at)
+                    _res = await self._store.get_latest_policy()
+                    # Back-compat: stores may return (version, policies, tenant, ts)
+                    if isinstance(_res, tuple) and len(_res) >= 4:
+                        if len(_res) == 4:
+                            _v, _p, _t, updated_at = _res
+                        else:
+                            _v, _p, _t, _rm, updated_at = _res[0], _res[1], _res[2], _res[3], _res[4]
+                        cur_mtime = float(updated_at)
+                    else:
+                        cur_mtime = time.time()
+                    # Also consider route_map file mtime
+                    try:
+                        if self._path.exists():
+                            cur_mtime = max(cur_mtime, self._path.stat().st_mtime)
+                    except Exception:
+                        pass
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Failed to poll policy store: {}", e)
                     return

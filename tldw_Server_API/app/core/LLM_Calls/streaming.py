@@ -108,6 +108,8 @@ async def aiter_normalized_sse(
     method: str = "GET",
     headers: Optional[dict] = None,
     params: Optional[dict] = None,
+    json: Optional[dict] = None,
+    data: Optional[dict] = None,
     retry: Optional[RetryPolicy] = None,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
@@ -123,7 +125,7 @@ async def aiter_normalized_sse(
         if provider_control_passthru is not None
         else os.getenv("STREAM_PROVIDER_CONTROL_PASSTHRU", "0") == "1"
     )
-    async for ev in astream_sse(url=url, method=method, headers=headers, params=params, retry=retry):
+    async for ev in astream_sse(url=url, method=method, headers=headers, params=params, json=json, data=data, retry=retry):
         if not ev or not ev.data:
             continue
         # Normalize SSE payload as if it were a provider line

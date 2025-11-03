@@ -313,9 +313,20 @@ class WebSocketStream:
 
     async def start(self) -> None:
         self._running = True
-        # Accept the connection if exposed
+        # Accept the connection if not already accepted
         try:
-            if hasattr(self.ws, "accept"):
+            already_accepted = False
+            try:
+                # Starlette exposes application_state when available
+                state = getattr(self.ws, "application_state", None)
+                # Avoid importing starlette if not present in tests
+                if state is not None:
+                    # Compare string form to avoid importing WebSocketState enum
+                    if str(state).upper().endswith("CONNECTED"):
+                        already_accepted = True
+            except Exception:
+                already_accepted = False
+            if hasattr(self.ws, "accept") and not already_accepted:
                 await maybe_await(self.ws.accept())
         except Exception:
             pass

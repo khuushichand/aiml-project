@@ -185,3 +185,21 @@ async def rg_diag_query(
     except Exception as e:
         logger.warning(f"rg_diag_query failed: {e}")
         return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+@router.get("/resource-governor/diag/capabilities")
+async def rg_diag_capabilities(user=Depends(RoleChecker("admin"))):
+    """Tiny capability probe to report whether Lua or fallback paths are in use."""
+    try:
+        gov = getattr(_app.state, "rg_governor", None)
+        if gov is None:
+            return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
+        caps_fn = getattr(gov, "capabilities", None)
+        if callable(caps_fn):
+            caps = await caps_fn()
+        else:
+            caps = {"backend": "unknown"}
+        return JSONResponse({"status": "ok", "capabilities": caps})
+    except Exception as e:
+        logger.warning(f"rg_diag_capabilities failed: {e}")
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)

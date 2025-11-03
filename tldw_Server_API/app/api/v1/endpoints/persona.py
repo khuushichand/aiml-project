@@ -18,6 +18,7 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
 from tldw_Server_API.app.core.feature_flags import is_persona_enabled
 from tldw_Server_API.app.core.MCP_unified import get_mcp_server, MCPRequest
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 
 router = APIRouter()
@@ -64,6 +65,7 @@ async def persona_stream(
 
     Accepts JSON text frames and echoes minimal notices.
     """
+    # Accept early and send initial notice using raw ws for maximal compatibility
     await ws.accept()
     if not is_persona_enabled():
         await ws.send_text(json.dumps({"event": "notice", "level": "error", "message": "Persona disabled"}))
@@ -71,6 +73,7 @@ async def persona_stream(
         return
     try:
         await ws.send_text(json.dumps({"event": "notice", "message": "persona stream connected (scaffold)"}))
+        # Continue using raw WebSocket for this scaffold endpoint to preserve existing test behavior
         # Resolve user_id from token/api_key similar to MCP ws
         user_id: Optional[str] = None
         try:

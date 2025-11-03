@@ -78,6 +78,16 @@ class ResourceGovernor:
     async def reset(self, entity: str, category: Optional[str] = None) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    async def capabilities(self) -> Dict[str, Any]:  # pragma: no cover - interface
+        """Return backend capability diagnostics for debugging.
+
+        Implementations should include at least:
+          - backend: str
+          - real_redis: bool (if applicable)
+          - tokens_lua_loaded / multi_lua_loaded: bool (if applicable)
+        """
+        return {"backend": "unknown"}
+
 
 # --- Token bucket primitives ---
 
@@ -642,8 +652,38 @@ class MemoryResourceGovernor(ResourceGovernor):
                 b = self._buckets.get(self._bucket_key(policy_id, category, sc, ev))
                 if b:
                     remainings.append(int(b.available(now)))
-            result[category] = {"remaining": (min(remainings) if remainings else None)}
+            result[category] = {"remaining": (min(remainings) if remainings else None), "reset": 0}
         return result
+
+    async def peek_with_policy(self, entity: str, categories: list[str], policy_id: str) -> Dict[str, Any]:
+        now = self._time()
+        entity_scope, entity_value = self._parse_entity(entity)
+        pol = self._get_policy(policy_id)
+        out: Dict[str, Any] = {}
+        for category in categories:
+            if category in ("requests", "tokens"):
+                cfg = self._category_limits(pol, category)
+                if category == "requests":
+                    rpm = float(cfg.get("rpm") or 0)
+                    burst = float(cfg.get("burst") or 1.0)
+                    refill_per_sec = rpm / 60.0
+                    capacity = rpm * max(1.0, burst)
+                else:
+                    per_min = float(cfg.get("per_min") or 0)
+                    burst = float(cfg.get("burst") or 1.0)
+                    refill_per_sec = per_min / 60.0
+                    capacity = per_min * max(1.0, burst)
+                scopes = self._scopes(pol)
+                remainings = []
+                for sc, ev in (("global", "*"), (entity_scope, entity_value)):
+                    if sc not in scopes and not (sc == entity_scope and "entity" in scopes):
+                        continue
+                    b = self._get_bucket(policy_id, category, sc, ev, capacity=capacity, refill_per_sec=refill_per_sec)
+                    remainings.append(int(b.available(now)))
+                out[category] = {"remaining": (min(remainings) if remainings else None), "reset": 0}
+            else:
+                out[category] = {"remaining": None, "reset": 0}
+        return out
 
     async def query(self, entity: str, category: str) -> Dict[str, Any]:
         now = self._time()
@@ -668,3 +708,12 @@ class MemoryResourceGovernor(ResourceGovernor):
                 except KeyError:
                     pass
 
+    async def capabilities(self) -> Dict[str, Any]:
+        return {
+            "backend": self._backend_label,
+            "real_redis": False,
+            "tokens_lua_loaded": False,
+            "multi_lua_loaded": False,
+            "last_used_tokens_lua": False,
+            "last_used_multi_lua": False,
+        }

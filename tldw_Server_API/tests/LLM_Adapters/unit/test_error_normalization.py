@@ -36,3 +36,26 @@ def test_normalize_requests_http_errors():
     assert p.norm(_requests_http_error(429)).__class__.__name__ == "ChatRateLimitError"
     assert p.norm(_requests_http_error(500)).__class__.__name__ == "ChatProviderError"
 
+
+def _httpx_status_error(status_code: int) -> Exception:
+    import httpx
+    # Build a minimal response and associated HTTPStatusError
+    request = httpx.Request("POST", "https://example.com/chat/completions")
+    response = httpx.Response(status_code, request=request, content=b'{"error":{"message":"x"}}')
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return e
+    raise AssertionError("Expected HTTPStatusError was not raised")
+
+
+def test_normalize_httpx_http_errors():
+    p = _DummyProvider()
+    assert p.norm(_httpx_status_error(400)).__class__.__name__ == "ChatBadRequestError"
+    assert p.norm(_httpx_status_error(401)).__class__.__name__ == "ChatAuthenticationError"
+    assert p.norm(_httpx_status_error(403)).__class__.__name__ == "ChatAuthenticationError"
+    assert p.norm(_httpx_status_error(429)).__class__.__name__ == "ChatRateLimitError"
+    # 5xx
+    err = p.norm(_httpx_status_error(503))
+    assert err.__class__.__name__ == "ChatProviderError"
+    assert getattr(err, "status_code", None) in (503, None)

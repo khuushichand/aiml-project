@@ -52,14 +52,20 @@ class DeepSeekAdapter(ChatProvider):
             pass
         else:
             kwargs["streaming"] = None
+        import os
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        return _legacy.chat_with_deepseek(**kwargs)
+        if os.getenv("TEST_MODE") and os.getenv("TEST_MODE").lower() in {"1", "true", "yes", "on"}:
+            return _legacy.chat_with_deepseek(**kwargs)
+        return _legacy.legacy_chat_with_deepseek(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = True
+        import os
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        return _legacy.chat_with_deepseek(**kwargs)
+        if os.getenv("TEST_MODE") and os.getenv("TEST_MODE").lower() in {"1", "true", "yes", "on"}:
+            return _legacy.chat_with_deepseek(**kwargs)
+        return _legacy.legacy_chat_with_deepseek(**kwargs)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)

@@ -2,18 +2,10 @@
 # Description: This file contains the functions for searching and ingesting arXiv papers.
 import time
 import arxiv  # Keep this if search_arxiv is used, or for reference
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover - optional
-    httpx = None  # type: ignore
 from bs4 import BeautifulSoup
 from typing import Optional, List, Dict, Any, Tuple  # Added for type hinting
-
-from requests.adapters import HTTPAdapter
-from urllib3 import Retry
 from urllib.parse import urlencode, quote_plus
-
+from tldw_Server_API.app.core.http_client import fetch
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 #
@@ -31,30 +23,18 @@ ARXIV_DEFAULT_PAGE_SIZE = 10
 
 def fetch_arxiv_pdf_url(paper_id: str) -> Optional[str]:
     base_url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
-    # Use centralized client (trust_env=False, sane timeouts)
-    http_session = create_client(timeout=10)
-
     try:
-        response = http_session.get(base_url, timeout=10)
-        response.raise_for_status()
+        r = fetch(method="GET", url=base_url, timeout=10)
+        if r.status_code >= 400:
+            return None
         time.sleep(1)  # Keep a small delay, 2s might be too long for an API response time
-        soup = BeautifulSoup(response.content, 'xml')  # Use response.content for bytes
+        soup = BeautifulSoup(r.content, 'xml')  # Use response.content for bytes
         pdf_link_tag = soup.find('link', attrs={'title': 'pdf', 'rel': 'related', 'type': 'application/pdf'})
         if pdf_link_tag and pdf_link_tag.has_attr('href'):
             return pdf_link_tag['href']
         return None
     except Exception as e:
-        # Map httpx and requests errors uniformly
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            print(f"**Error fetching PDF URL for {paper_id}:** timeout")
-            return None
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            print(f"**Error fetching PDF URL for {paper_id}:** HTTP {e.response.status_code}")
-            return None
         print(f"**Error fetching PDF URL for {paper_id}:** {e}")
-        return None
-    except Exception as e:
-        print(f"**Unexpected error fetching PDF URL for {paper_id}:** {e}")
         return None
 
 
@@ -66,32 +46,23 @@ def search_arxiv_custom_api(query: Optional[str], author: Optional[str], year: O
     """
     query_url = build_query_url(query, author, year, start_index, page_size)
 
-    http_session = create_client(timeout=10)
-
     try:
-        response = http_session.get(query_url, timeout=10)  # Added timeout
-        response.raise_for_status()
+        r = fetch(method="GET", url=query_url, timeout=10)
+        if r.status_code >= 400:
+            return None, 0, f"arXiv API request failed: HTTP {r.status_code}"
 
         # Brief delay after successful request
         time.sleep(0.5)  # Reduced delay
 
-        parsed_entries = parse_arxiv_feed(response.content)  # Pass response.content (bytes)
+        parsed_entries = parse_arxiv_feed(r.content)  # Pass response.content (bytes)
 
-        soup = BeautifulSoup(response.content, 'xml')
+        soup = BeautifulSoup(r.content, 'xml')
         total_results_tag = soup.find('opensearch:totalResults')
         total_results = int(total_results_tag.text) if total_results_tag and total_results_tag.text.isdigit() else 0
 
         return parsed_entries, total_results, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            error_msg = "Request to arXiv API timed out."
-            print(f"**Error:** {error_msg}")
-            return None, 0, error_msg
         error_msg = f"arXiv API request failed: {e}"
-        print(f"**Error:** {error_msg}")
-        return None, 0, error_msg
-    except Exception as e:
-        error_msg = f"An unexpected error occurred during arXiv search: {e}"
         print(f"**Error:** {error_msg}")
         return None, 0, error_msg
 
@@ -99,15 +70,12 @@ def search_arxiv_custom_api(query: Optional[str], author: Optional[str], year: O
 def fetch_arxiv_xml(paper_id: str) -> Optional[str]:
     base_url = "http://export.arxiv.org/api/query?id_list="
     try:
-        client = create_client(timeout=10)
-        response = client.get(base_url + paper_id)
-        response.raise_for_status()
-        time.sleep(1)  # Keep delay
-        return response.text
-    except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            print(f"**Error fetching XML for {paper_id}:** timeout")
+        r = fetch(method="GET", url=base_url + paper_id, timeout=10)
+        if r.status_code >= 400:
             return None
+        time.sleep(1)  # Keep delay
+        return r.text
+    except Exception as e:
         print(f"**Error fetching XML for {paper_id}:** {e}")
         return None
 

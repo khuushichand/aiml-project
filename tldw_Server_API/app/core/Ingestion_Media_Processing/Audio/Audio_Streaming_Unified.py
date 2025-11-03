@@ -1217,10 +1217,7 @@ async def handle_unified_websocket(
     )
     await stream.start()
     # Ensure downstream helpers using the raw websocket route sends through the stream where possible
-    try:
-        setattr(websocket, "send_json", stream.send_json)
-    except Exception:
-        pass
+    # Do not monkeypatch websocket.send_json; endpoints may rely on specific semantics
 
     if not config:
         config = UnifiedStreamingConfig()
@@ -1481,12 +1478,12 @@ async def handle_unified_websocket(
                     })
             except Exception as diar_err:
                 logger.error(f"Failed to initialize streaming diarizer: {diar_err}", exc_info=True)
-                    await stream.send_json({
-                        "type": "warning",
-                        "state": "diarization_unavailable",
-                        "message": "Diarization disabled: initialization failed",
-                        "details": str(diar_err),
-                    })
+                await stream.send_json({
+                    "type": "warning",
+                    "state": "diarization_unavailable",
+                    "message": "Diarization disabled: initialization failed",
+                    "details": str(diar_err),
+                })
                 diarizer = None
 
         if insights_engine is None and insights_settings and insights_settings.enabled:
@@ -1669,12 +1666,20 @@ async def handle_unified_websocket(
             except json.JSONDecodeError:
                 await stream.error("validation_error", "Invalid JSON message")
             except QuotaExceeded as qe:
-                # Send structured quota error and close with application-defined code
-                await stream.error(
-                    "quota_exceeded",
-                    "Streaming transcription quota exceeded",
-                    data={"quota": getattr(qe, "quota", "unknown")},
-                )
+                # Emit compatibility error frame and close with application-specific code (4003)
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error_type": "quota_exceeded",
+                        "quota": getattr(qe, "quota", "daily_minutes"),
+                        "message": "Streaming transcription quota exceeded",
+                    })
+                except Exception:
+                    pass
+                try:
+                    await websocket.close(code=4003, reason="quota_exceeded")
+                except Exception:
+                    pass
                 return
             except Exception as e:
                 logger.error(f"Error processing message: {e}")

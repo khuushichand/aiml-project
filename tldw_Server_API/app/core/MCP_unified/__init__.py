@@ -5,7 +5,7 @@ This module combines the best features of MCP v1 and v2 with enhanced security,
 performance, and production-readiness.
 """
 
-from .server import MCPServer, get_mcp_server
+from .server import MCPServer, get_mcp_server, reset_mcp_server
 from .protocol import MCPProtocol, MCPRequest, MCPResponse
 from .modules.base import BaseModule, ModuleConfig
 from .modules.registry import ModuleRegistry, get_module_registry
@@ -19,6 +19,7 @@ __version__ = "3.0.0"
 __all__ = [
     "MCPServer",
     "get_mcp_server",
+    "reset_mcp_server",
     "MCPProtocol",
     "MCPRequest",
     "MCPResponse",

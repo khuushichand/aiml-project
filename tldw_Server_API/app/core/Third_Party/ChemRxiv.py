@@ -13,34 +13,11 @@ Endpoints used:
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from urllib.parse import quote as urlquote
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BASE_URL = "https://chemrxiv.org/engage/chemrxiv/public-api/v1"
-
-
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
 
 
 def _join_authors(authors: Any) -> Optional[str]:
@@ -94,7 +71,6 @@ def search_items(
     subjectIds: Optional[List[str]] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
     try:
-        session = _mk_session()
         url = f"{BASE_URL}/items"
         params: Dict[str, Any] = {
             "skip": max(0, skip),
@@ -119,9 +95,7 @@ def search_items(
             for sid in subjectIds:
                 params.setdefault("subjectIds", []).append(sid)
 
-        r = session.get(url, params=params, timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=url, params=params, timeout=20)
         total = int(data.get("totalCount") or 0)
         hits = data.get("itemHits") or []
         # Each hit may wrap details or already be the item; best-effort unwrap
@@ -137,85 +111,43 @@ def search_items(
                         break
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to ChemRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to ChemRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"ChemRxiv API Request Error: {str(e)}"
         return None, 0, f"ChemRxiv error: {str(e)}"
 
 
 def get_item_by_id(item_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
         url = f"{BASE_URL}/items/{item_id}"
-        r = session.get(url, timeout=20)
+        r = fetch(method="GET", url=url, timeout=20)
         if r.status_code == 410:
             return None, None
-        r.raise_for_status()
+        if r.status_code >= 400:
+            return None, f"ChemRxiv HTTP error: {r.status_code}"
         data = r.json() or {}
         return _normalize_item(data), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to ChemRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to ChemRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"ChemRxiv API Request Error: {str(e)}"
         return None, f"ChemRxiv error: {str(e)}"
 
 
 def get_item_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
-        doi_enc = requests.utils.quote(doi.strip(), safe="/")
+        doi_enc = urlquote(doi.strip(), safe="/")
         url = f"{BASE_URL}/items/doi/{doi_enc}"
-        r = session.get(url, timeout=20)
+        r = fetch(method="GET", url=url, timeout=20)
         if r.status_code == 410:
             return None, None
-        r.raise_for_status()
+        if r.status_code >= 400:
+            return None, f"ChemRxiv HTTP error: {r.status_code}"
         data = r.json() or {}
         return _normalize_item(data), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to ChemRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to ChemRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"ChemRxiv API Request Error: {str(e)}"
         return None, f"ChemRxiv error: {str(e)}"
 
 
 def get_categories() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
-        r = session.get(f"{BASE_URL}/categories", timeout=20)
-        r.raise_for_status()
-        return r.json(), None
+        data = fetch_json(method="GET", url=f"{BASE_URL}/categories", timeout=20)
+        return data, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, f"Request to ChemRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, f"Request to ChemRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"ChemRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"ChemRxiv API Request Error: {str(e)}"
         return None, f"ChemRxiv error: {str(e)}"
 
 

@@ -485,7 +485,11 @@ class WebUI {
         mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
         // Convert inline event attributes into listeners to avoid CSP 'unsafe-inline'
         try { this.migrateInlineHandlers(mainContentArea); } catch (_) {}
-        // Always skip executing inline scripts (no eval) and only load external src scripts.
+        // Execute external scripts, and for now, also execute inline tab scripts to ensure
+        // functions defined within tab content are available to migrated handlers.
+        // NOTE: Inline execution still respects CSP. In production, script-src typically
+        // forbids 'unsafe-inline' so these will be ignored by the browser; in tests/dev
+        // where CSP allows inline, this enables legacy tab scripts to function.
         const MIGRATED_GROUPS = new Set();
         for (const s of scripts) {
             try {
@@ -496,11 +500,20 @@ class WebUI {
                     document.body.appendChild(newScript);
                     document.body.removeChild(newScript);
                 } else {
-                    // Inline script skipped to satisfy CSP (no 'unsafe-eval')
-                    console.debug(`Skipped inline script for group: ${groupName}`);
+                    // Recreate inline script node so the browser executes it subject to CSP
+                    const inlineScript = document.createElement('script');
+                    if (s.type) inlineScript.type = s.type;
+                    // If a CSP nonce is present on page scripts, attempt to reuse it
+                    try {
+                        const anyScript = document.querySelector('script[nonce]');
+                        if (anyScript && anyScript.nonce) inlineScript.nonce = anyScript.nonce;
+                    } catch (_) { /* ignore */ }
+                    inlineScript.text = s.text || s.innerHTML || '';
+                    document.body.appendChild(inlineScript);
+                    document.body.removeChild(inlineScript);
                 }
             } catch (e) {
-                console.error('Failed to execute inline script for group', groupName, e);
+                console.error('Failed to execute tab script for group', groupName, e);
             }
         }
         try {

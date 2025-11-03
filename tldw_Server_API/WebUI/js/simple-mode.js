@@ -110,6 +110,10 @@
     const isWeb = (mediaType === 'web');
     const webUrl = (document.getElementById('simpleIngest_web_url')?.value || '').trim();
 
+    // Safely initialize prompts used in both FormData and JSON paths
+    const seedPrompt = (document.getElementById('simpleIngest_seed')?.value || '').trim();
+    const systemPrompt = (document.getElementById('simpleIngest_system')?.value || '').trim();
+
     if (!isWeb && !url && !file) {
       Toast && Toast.warning ? Toast.warning('Provide a URL or choose a file') : alert('Provide a URL or choose a file');
       return;

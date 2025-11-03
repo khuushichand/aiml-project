@@ -18,6 +18,8 @@ import os
 import time
 import random
 import hashlib
+import ssl
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, TypedDict, Iterator, AsyncIterator, Tuple, Callable, Union
@@ -68,6 +70,13 @@ DEFAULT_MAX_REDIRECTS = int(os.getenv("HTTP_MAX_REDIRECTS", "5"))
 DEFAULT_TRUST_ENV = (os.getenv("HTTP_TRUST_ENV", "false").lower() in {"1", "true", "yes", "on"})
 DEFAULT_USER_AGENT = os.getenv("HTTP_DEFAULT_USER_AGENT", "tldw_server httpx")
 PROXY_ALLOWLIST = {h.strip().lower() for h in (os.getenv("PROXY_ALLOWLIST", "").split(",")) if h.strip()}
+ENFORCE_TLS_MIN = (
+    os.getenv("HTTP_ENFORCE_TLS_MIN")
+    or os.getenv("TLS_ENFORCE_MIN_VERSION")
+    or "false"
+)
+ENFORCE_TLS_MIN = (str(ENFORCE_TLS_MIN).lower() in {"1", "true", "yes", "on"})
+TLS_MIN_VERSION = (os.getenv("HTTP_TLS_MIN_VERSION") or os.getenv("TLS_MIN_VERSION") or "1.2").strip()
 
 
 def _httpx_timeout_from_defaults() -> "httpx.Timeout":
@@ -283,6 +292,63 @@ def _httpx_limits_default() -> "httpx.Limits":
                         max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE_CONNECTIONS", "20")))
 
 
+def _tls_min_version_from_str(ver: Optional[str]) -> ssl.TLSVersion:
+    try:
+        v = (ver or "1.2").strip().lower()
+        if v in {"1.3", "tls1.3", "tlsv1.3"}:
+            return ssl.TLSVersion.TLSv1_3
+    except Exception:
+        pass
+    return ssl.TLSVersion.TLSv1_2
+
+
+def _build_ssl_context(enforce_min: bool, min_ver: Optional[str]) -> Optional[ssl.SSLContext]:
+    if not enforce_min:
+        return None
+    ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+    try:
+        ctx.minimum_version = _tls_min_version_from_str(min_ver)
+    except Exception:
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
+def _get_client_cert_pins(client: Any) -> Optional[Dict[str, set[str]]]:
+    try:
+        pins = getattr(client, "_tldw_cert_pinning", None)
+        if pins is None:
+            return None
+        out: Dict[str, set[str]] = {}
+        for host, vals in pins.items():
+            out[str(host).lower()] = {str(v).lower() for v in (vals or set())}
+        return out
+    except Exception:
+        return None
+
+
+def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[str]) -> None:
+    if not host or not pins:
+        return
+    try:
+        ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+        try:
+            ctx.minimum_version = _tls_min_version_from_str(min_ver)
+        except Exception:
+            pass
+        with socket.create_connection((host, port), timeout=DEFAULT_CONNECT_TIMEOUT) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+        if not der:
+            raise EgressPolicyError("TLS pinning: no certificate presented")
+        fp = hashlib.sha256(der).hexdigest().lower()
+        if fp not in pins:
+            raise EgressPolicyError("TLS pinning mismatch for host")
+    except EgressPolicyError:
+        raise
+    except Exception as e:
+        raise EgressPolicyError(f"TLS pinning verification failed: {e}")
+
+
 # --------------------------------------------------------------------------------------
 # Client factories
 # --------------------------------------------------------------------------------------
@@ -326,6 +392,9 @@ def create_async_client(
     http3: bool = False,  # placeholder for future
     headers: Optional[Dict[str, str]] = None,
     transport: Optional["httpx.BaseTransport"] = None,
+    enforce_tls_min_version: bool = ENFORCE_TLS_MIN,
+    tls_min_version: str = TLS_MIN_VERSION,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.AsyncClient":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -336,6 +405,7 @@ def create_async_client(
     hdrs = _build_default_headers()
     if headers:
         hdrs.update(headers)
+    verify_ctx = _build_ssl_context(enforce_tls_min_version, tls_min_version)
     kwargs: Dict[str, Any] = dict(
         timeout=to,
         trust_env=trust_env,
@@ -345,9 +415,17 @@ def create_async_client(
         transport=transport,
         limits=limits or _httpx_limits_default(),
     )
+    if verify_ctx is not None:
+        kwargs["verify"] = verify_ctx
     if base_url is not None:
         kwargs["base_url"] = base_url
-    return _instantiate_client(httpx.AsyncClient, kwargs)
+    client = _instantiate_client(httpx.AsyncClient, kwargs)
+    try:
+        if cert_pinning:
+            setattr(client, "_tldw_cert_pinning", cert_pinning)
+    except Exception:
+        pass
+    return client
 
 
 def create_client(
@@ -361,6 +439,9 @@ def create_client(
     http3: bool = False,  # placeholder for future
     headers: Optional[Dict[str, str]] = None,
     transport: Optional["httpx.BaseTransport"] = None,
+    enforce_tls_min_version: bool = ENFORCE_TLS_MIN,
+    tls_min_version: str = TLS_MIN_VERSION,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.Client":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -371,6 +452,7 @@ def create_client(
     hdrs = _build_default_headers()
     if headers:
         hdrs.update(headers)
+    verify_ctx = _build_ssl_context(enforce_tls_min_version, tls_min_version)
     kwargs: Dict[str, Any] = dict(
         timeout=to,
         trust_env=trust_env,
@@ -380,9 +462,17 @@ def create_client(
         transport=transport,
         limits=limits or _httpx_limits_default(),
     )
+    if verify_ctx is not None:
+        kwargs["verify"] = verify_ctx
     if base_url is not None:
         kwargs["base_url"] = base_url
-    return _instantiate_client(httpx.Client, kwargs)
+    client = _instantiate_client(httpx.Client, kwargs)
+    try:
+        if cert_pinning:
+            setattr(client, "_tldw_cert_pinning", cert_pinning)
+    except Exception:
+        pass
+    return client
 
 
 # --------------------------------------------------------------------------------------
@@ -403,6 +493,7 @@ async def afetch(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     retry: Optional[RetryPolicy] = None,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.Response":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -419,6 +510,17 @@ async def afetch(
         req_headers = _inject_trace_headers(headers)
         # Always disable internal redirects to enforce policy per hop
         try:
+            # Optional cert pinning per host
+            try:
+                pins_map = cert_pinning or _get_client_cert_pins(ac)
+                if pins_map:
+                    u = httpx.URL(target_url)
+                    if u.scheme.lower() == "https":
+                        host = (u.host or "").lower()
+                        if host in pins_map:
+                            _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
+            except Exception as e:
+                return None, e.__class__.__name__  # type: ignore[return-value]
             r = await ac.request(
                 method.upper(),
                 target_url,
@@ -570,6 +672,7 @@ def fetch(
     allow_redirects: bool = True,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     retry: Optional[RetryPolicy] = None,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.Response":
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -584,6 +687,17 @@ def fetch(
     def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
         try:
+            # Optional cert pinning per host
+            try:
+                pins_map = cert_pinning or _get_client_cert_pins(sc)
+                if pins_map:
+                    u = httpx.URL(target_url)
+                    if u.scheme.lower() == "https":
+                        host = (u.host or "").lower()
+                        if host in pins_map:
+                            _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
+            except Exception as e:
+                return None, e.__class__.__name__
             r = sc.request(
                 method.upper(),
                 target_url,
@@ -774,6 +888,7 @@ async def astream_bytes(
     timeout: Optional[Union[float, "httpx.Timeout"]] = None,
     proxies: Optional[Union[str, Dict[str, str]]] = None,
     chunk_size: int = 65536,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> AsyncIterator[bytes]:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -788,6 +903,17 @@ async def astream_bytes(
 
     req_headers = _inject_trace_headers(headers)
     try:
+        # Optional cert pinning
+        try:
+            pins_map = cert_pinning or _get_client_cert_pins(ac)
+            if pins_map:
+                u = httpx.URL(url)
+                if u.scheme.lower() == "https":
+                    host = (u.host or "").lower()
+                    if host in pins_map:
+                        _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
+        except Exception as e:
+            raise NetworkError(e.__class__.__name__) from e
         async with ac.stream(
             method.upper(), url, headers=req_headers, params=params, json=json, data=data, files=files, timeout=timeout
         ) as resp:
@@ -810,38 +936,121 @@ async def astream_bytes(
 async def astream_sse(
     *,
     url: str,
+    method: str = "GET",
     client: Optional["httpx.AsyncClient"] = None,
     headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, Any]] = None,
+    json: Optional[Any] = None,
+    data: Optional[Any] = None,
     timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    retry: Optional[RetryPolicy] = None,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> AsyncIterator[SSEEvent]:
     hdrs = {"Accept": "text/event-stream"}
     if headers:
         hdrs.update(headers)
+    retry = retry or RetryPolicy()
+    _validate_egress_or_raise(url)
+    _validate_proxies_or_raise(proxies)
 
-    buffer = ""
+    need_close = False
+    ac = client
+    if ac is None:
+        ac = create_async_client(proxies=proxies)
+        need_close = True
 
-    async for chunk in astream_bytes(
-        method="GET",
-        url=url,
-        client=client,
-        headers=hdrs,
-        params=params,
-        timeout=timeout,
-    ):
-        try:
-            text = chunk.decode("utf-8", errors="replace")
-        except Exception as e:
-            raise StreamingProtocolError(f"Failed to decode SSE chunk: {e}")
-        buffer += text
-        while "\n\n" in buffer or "\r\n\r\n" in buffer:
-            if "\r\n\r\n" in buffer and ("\n\n" not in buffer or buffer.index("\r\n\r\n") < buffer.index("\n\n")):
-                raw, buffer = buffer.split("\r\n\r\n", 1)
-            else:
-                raw, buffer = buffer.split("\n\n", 1)
-            event = _parse_sse_event(raw)
-            if event is not None:
-                yield event
+    attempts = max(1, retry.attempts)
+    sleep_s = 0.0
+    cur_url = url
+    redirects = 0
+
+    try:
+        for attempt in range(1, attempts + 1):
+            # manual redirect handling before starting to read body
+            while True:
+                _validate_egress_or_raise(cur_url)
+                try:
+                    # Optional cert pinning
+                    try:
+                        pins_map = cert_pinning or _get_client_cert_pins(ac)
+                        if pins_map:
+                            u = httpx.URL(cur_url)
+                            if u.scheme.lower() == "https":
+                                host = (u.host or "").lower()
+                                if host in pins_map:
+                                    _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
+                    except Exception as e:
+                        raise NetworkError(e.__class__.__name__) from e
+
+                    async with ac.stream(
+                        method.upper(), cur_url, headers=_inject_trace_headers(hdrs), params=params, json=json, data=data, timeout=timeout, follow_redirects=False
+                    ) as resp:
+                        # Handle redirect response codes before reading any bytes
+                        if resp.status_code in (301, 302, 303, 307, 308):
+                            if redirects >= DEFAULT_MAX_REDIRECTS:
+                                raise NetworkError("Too many redirects")
+                            location = resp.headers.get("location")
+                            if not location:
+                                raise NetworkError("Redirect without Location header")
+                            try:
+                                next_url = resp.request.url.join(httpx.URL(location)).human_repr()
+                            except Exception:
+                                try:
+                                    next_url = httpx.URL(location).human_repr()
+                                except Exception:
+                                    raise NetworkError("Invalid redirect Location header")
+                            redirects += 1
+                            cur_url = next_url
+                            continue  # loop to re-validate egress and attempt again
+                        # Raise for non-OK statuses pre-body if not retriable
+                        if resp.status_code >= 400:
+                            should, rsn = _should_retry(method, resp.status_code, None, retry)
+                            if not should or attempt == attempts:
+                                # escalate as NetworkError; caller handles as appropriate
+                                raise NetworkError(f"HTTP {resp.status_code}")
+                            # retry with backoff
+                            delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                            await asyncio.sleep(delay)
+                            sleep_s = delay
+                            break  # exit redirect loop to outer attempt
+
+                        # Successful response; iterate SSE bytes and yield events
+                        buffer = ""
+                        async for chunk in resp.aiter_bytes():
+                            try:
+                                text = chunk.decode("utf-8", errors="replace")
+                            except Exception as e:
+                                raise StreamingProtocolError(f"Failed to decode SSE chunk: {e}")
+                            buffer += text
+                            while "\n\n" in buffer or "\r\n\r\n" in buffer:
+                                if "\r\n\r\n" in buffer and ("\n\n" not in buffer or buffer.index("\r\n\r\n") < buffer.index("\n\n")):
+                                    raw, buffer = buffer.split("\r\n\r\n", 1)
+                                else:
+                                    raw, buffer = buffer.split("\n\n", 1)
+                                event = _parse_sse_event(raw)
+                                if event is not None:
+                                    yield event
+                        return  # finished streaming without error
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # network or early error before bytes consumed
+                    should, rsn = _should_retry(method, None, NetworkError(str(e)), retry)
+                    if not should or attempt == attempts:
+                        raise
+                    delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                    await asyncio.sleep(delay)
+                    sleep_s = delay
+                    break  # next outer attempt
+        # exhausted attempts
+        raise RetryExhaustedError("All retry attempts exhausted (astream_sse)")
+    finally:
+        if need_close:
+            try:
+                await ac.aclose()
+            except Exception:
+                pass
 
 
 def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
@@ -887,6 +1096,7 @@ def download(
     checksum_alg: str = "sha256",
     resume: bool = False,
     retry: Optional[RetryPolicy] = None,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> Path:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -923,6 +1133,17 @@ def download(
 
             last_exc: Optional[Exception] = None
             try:
+                # Optional cert pinning
+                try:
+                    pins_map = cert_pinning or _get_client_cert_pins(sc)
+                    if pins_map:
+                        u = httpx.URL(url)
+                        if u.scheme.lower() == "https":
+                            host = (u.host or "").lower()
+                            if host in pins_map:
+                                _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
+                except Exception as e:
+                    raise DownloadError(str(e))
                 with sc.stream("GET", url, headers=req_headers, params=params, timeout=timeout) as resp:
                     if resp.status_code in (200, 206):
                         hasher = hashlib.new(checksum_alg) if checksum else None
@@ -1017,6 +1238,7 @@ async def adownload(
     checksum_alg: str = "sha256",
     resume: bool = False,
     retry: Optional[RetryPolicy] = None,
+    cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> Path:
     # Reuse sync downloader in a thread to avoid blocking event loop on file I/O
     return await asyncio.to_thread(
@@ -1032,6 +1254,7 @@ async def adownload(
         checksum_alg=checksum_alg,
         resume=resume,
         retry=retry,
+        cert_pinning=cert_pinning,
     )
 
 

@@ -3113,12 +3113,28 @@ except Exception as _metrics_rt_err:
 # Health check (registered conditionally below)
 async def health_check():
     body = {"status": "healthy"}
+    # Always attempt to include RG policy snapshot: prefer app.state, fallback to configured file
     try:
         rgv = getattr(app.state, "rg_policy_version", None)
         if rgv is not None:
             body["rg_policy_version"] = int(rgv)
             body["rg_policy_store"] = getattr(app.state, "rg_policy_store", None)
             body["rg_policy_count"] = getattr(app.state, "rg_policy_count", None)
+        else:
+            # Fallback to RG_POLICY_PATH (file-based) when loader not initialized
+            from pathlib import Path as _Path
+            import os as _os
+            import yaml as _yaml
+            p = _os.getenv("RG_POLICY_PATH")
+            if p and _Path(p).exists():
+                try:
+                    with _Path(p).open('r', encoding='utf-8') as _f:
+                        _data = _yaml.safe_load(_f) or {}
+                    body["rg_policy_version"] = int(_data.get("version") or 1)
+                    body["rg_policy_store"] = _os.getenv("RG_POLICY_STORE", "file")
+                    body["rg_policy_count"] = len((_data.get("policies") or {}).keys())
+                except Exception:
+                    pass
     except Exception:
         pass
     return body
@@ -3192,6 +3208,7 @@ async def readiness_check():
             "provider_health": provider_health,
             "otel_available": bool(OTEL_AVAILABLE),
         }
+        # Include Resource Governor policy metadata; prefer app.state and fallback to RG_POLICY_PATH
         try:
             rgv = getattr(app.state, "rg_policy_version", None)
             if rgv is not None:
@@ -3200,6 +3217,22 @@ async def readiness_check():
                     "store": getattr(app.state, "rg_policy_store", None),
                     "policies": getattr(app.state, "rg_policy_count", None),
                 }
+            else:
+                from pathlib import Path as _Path
+                import os as _os
+                import yaml as _yaml
+                p = _os.getenv("RG_POLICY_PATH")
+                if p and _Path(p).exists():
+                    try:
+                        with _Path(p).open('r', encoding='utf-8') as _f:
+                            _data = _yaml.safe_load(_f) or {}
+                        body["rg_policy"] = {
+                            "version": int(_data.get("version") or 1),
+                            "store": _os.getenv("RG_POLICY_STORE", "file"),
+                            "policies": len((_data.get("policies") or {}).keys()),
+                        }
+                    except Exception:
+                        pass
         except Exception:
             pass
         from fastapi.responses import JSONResponse as _JR

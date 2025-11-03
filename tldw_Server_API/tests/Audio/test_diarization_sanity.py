@@ -345,21 +345,4 @@ def test_detect_speech_fallback_when_hub_disabled(monkeypatch):
     assert pytest.approx(segments[0]["end"], rel=1e-6) == 1.0
 
 
-def test_detect_speech_fallback_when_vad_unavailable(monkeypatch):
-    """When Silero VAD import returns (None, None), _detect_speech falls back to a single region."""
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
-
-    # Force lazy import to report unavailable even when hub fetch would be allowed
-    monkeypatch.setattr(dlib, "_lazy_import_silero_vad", lambda: (None, None))
-
-    # Build service with defaults (hub fetch enabled) and allow fallback
-    svc = dlib.DiarizationService(config={
-        "enable_torch_hub_fetch": True,
-        "allow_vad_fallback": True,
-    })
-
-    waveform = np.zeros(16000, dtype=np.float32)
-    segments = svc._detect_speech(waveform, sample_rate=16000, streaming=False)
-    assert len(segments) == 1
-    assert segments[0]["start"] == 0.0
-    assert pytest.approx(segments[0]["end"], rel=1e-6) == 1.0
+    

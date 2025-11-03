@@ -52,10 +52,6 @@ except Exception as e:
 import pytest
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
-
 
 # Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.
 # This ensures general CI workflows never run Jobs tests; the dedicated
@@ -117,6 +113,11 @@ def client_with_single_user(monkeypatch):
     os.environ.setdefault("TESTING", "true")
 
     usage_logger = _TestUsageLogger()
+
+    # Import the FastAPI app and dependencies lazily to avoid heavy imports during test collection
+    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+    from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
     async def _override_user():
         return User(id=1, username="tester", email=None, is_active=True)

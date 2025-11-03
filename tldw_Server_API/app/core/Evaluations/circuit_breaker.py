@@ -116,6 +116,8 @@ class CircuitBreaker:
                     self.stats.rejected_calls += 1
                     if closed_permit_acquired:
                         self._closed_semaphore.release()
+                        # Avoid double-release in finally block
+                        closed_permit_acquired = False
                     raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
 
         # In HALF_OPEN we allow calls (no extra gating here); failures will

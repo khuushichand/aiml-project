@@ -103,6 +103,16 @@ class SandboxService:
             )
         except Exception:
             granular = False
+        # Whether execution is enabled (env overrides settings)
+        try:
+            env_exec = os.getenv("SANDBOX_ENABLE_EXECUTION")
+            if env_exec is not None:
+                execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
+            else:
+                execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
+        except Exception:
+            execute_enabled = False
+
         return [
             {
                 "name": "docker",
@@ -117,7 +127,8 @@ class SandboxService:
                 "workspace_cap_mb": workspace_cap_mb,
                 "artifact_ttl_hours": artifact_ttl_hours,
                 "supported_spec_versions": supported_spec_versions,
-                "interactive_supported": False,
+                # Advertise interactive only when real runner execution is enabled and available
+                "interactive_supported": bool(execute_enabled and docker_available()),
                 "egress_allowlist_supported": bool(egress_supported),
                 "store_mode": store_mode,
                 "notes": (

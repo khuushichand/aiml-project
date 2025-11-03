@@ -21,33 +21,11 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional, Tuple
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch
 import xml.etree.ElementTree as ET
 
 
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({"Accept-Encoding": "gzip, deflate"})
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
+ 
 
 
 # ---------------- IDEAS (RePEc) API: handle -> reference metadata ----------------
@@ -117,13 +95,11 @@ def get_ref_by_handle(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[s
         # stable; adjust if needed once access is provisioned.
         # Example function: getref; parameters: code, handle
         # If this endpoint shape changes, adapt the URL/params accordingly.
-        session = _mk_session()
         url = "https://ideas.repec.org/cgi-bin/getref.cgi"
         params: Dict[str, Any] = {"code": code, "handle": handle}
-        r = session.get(url, params=params, timeout=20)
+        r = fetch(method="GET", url=url, params=params, timeout=20, headers={"Accept-Encoding": "gzip, deflate"})
         if r.status_code == 404:
             return None, None
-        r.raise_for_status()
         data = r.json() if r.headers.get("content-type", "").startswith("application/json") else None
         if not data or not isinstance(data, list) or not data:
             # Some implementations may return a single object; support both
@@ -137,16 +113,6 @@ def get_ref_by_handle(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional[s
     except ValueError:
         return None, "RePEc getref response was not valid JSON."
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "RePEc getref request timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"RePEc getref HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "RePEc getref request timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"RePEc getref HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"RePEc getref Request Error: {str(e)}"
         return None, f"RePEc getref error: {str(e)}"
 
 
@@ -162,12 +128,10 @@ def get_citations_plain(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional
     or (None, error_message) on failures.
     """
     try:
-        session = _mk_session()
         url = f"{_CITEC_BASE}/plain/{handle}"
-        r = session.get(url, timeout=20)
+        r = fetch(method="GET", url=url, timeout=20, headers={"Accept-Encoding": "gzip, deflate"})
         if r.status_code == 404:
             return None, None
-        r.raise_for_status()
         text = r.text or ""
         if not text.strip():
             return None, "CitEc returned empty response."
@@ -206,16 +170,6 @@ def get_citations_plain(handle: str) -> Tuple[Optional[Dict[str, Any]], Optional
                     out["cites"] = 0
         return out, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "CitEc request timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "CitEc request timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"CitEc Request Error: {str(e)}"
         return None, f"CitEc error: {str(e)}"
 
 
@@ -225,22 +179,10 @@ def get_citations_amf_raw(handle: str) -> Tuple[Optional[str], Optional[str]]:
     Returns (xml_text, error_message). On success, xml_text is a string.
     """
     try:
-        session = _mk_session()
         url = f"{_CITEC_BASE}/amf/{handle}"
-        r = session.get(url, timeout=20)
+        r = fetch(method="GET", url=url, timeout=20, headers={"Accept-Encoding": "gzip, deflate"})
         if r.status_code == 404:
             return None, None
-        r.raise_for_status()
         return r.text, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "CitEc request timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "CitEc request timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"CitEc HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"CitEc Request Error: {str(e)}"
         return None, f"CitEc error: {str(e)}"

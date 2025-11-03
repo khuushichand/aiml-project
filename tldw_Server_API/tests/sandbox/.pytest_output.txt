@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/macbook-dev/Documents/GitHub/tldw_server2
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, anyio-4.11.0, hypothesis-6.142.5, Faker-37.12.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 93 items
+
+tldw_Server_API/tests/sandbox/test_admin_details_resource_usage.py .     [  1%]
+tldw_Server_API/tests/sandbox/test_admin_idempotency_and_usage.py ..     [  3%]
+tldw_Server_API/tests/sandbox/test_admin_list_filters_pagination.py ..   [  5%]
+tldw_Server_API/tests/sandbox/test_admin_rbac.py .                       [  6%]
+tldw_Server_API/tests/sandbox/test_artifact_content_type_and_path.py .   [  7%]
+tldw_Server_API/tests/sandbox/test_artifact_range.py .                   [  8%]
+tldw_Server_API/tests/sandbox/test_artifact_sharing_shared_dir.py .      [  9%]
+tldw_Server_API/tests/sandbox/test_artifact_traversal_integration.py s   [ 10%]
+tldw_Server_API/tests/sandbox/test_artifacts_api.py .                    [ 11%]
+tldw_Server_API/tests/sandbox/test_cancel_endpoint_ws_and_status.py .    [ 12%]
+tldw_Server_API/tests/sandbox/test_cancel_idempotent.py .                [ 13%]
+tldw_Server_API/tests/sandbox/test_docker_egress_allowlist_integration.py s [ 15%]
+                                                                         [ 15%]
+tldw_Server_API/tests/sandbox/test_docker_egress_enforcement.py F
+
+=================================== FAILURES ===================================
+__ test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular ___
+tldw_Server_API/tests/sandbox/test_docker_egress_enforcement.py:43: in test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular
+    with pytest.raises(_Called):
+         ^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE <class 'test_docker_egress_enforcement.test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular.<locals>._Called'>
+----------------------------- Captured stderr call -----------------------------
+2025-11-03 13:07:50.394 | DEBUG    | trace= span= tp= req= job= ps=: | tldw_Server_API.app.core.Sandbox.runners.docker_runner:start_run:146 - DockerRunner.start_run called with spec: RunSpec(session_id=None, runtime=<RuntimeType.docker: 'docker'>, base_image='python:3.11-slim', command=['python', '-c', "print('ok')"], env={}, startup_timeout_sec=None, timeout_sec=5, cpu=None, memory_mb=None, network_policy='allowlist', files_inline=[], capture_patterns=[], interactive=None, stdin_max_bytes=None, stdin_max_frame_bytes=None, stdin_bps=None, stdin_idle_timeout_sec=None)
+2025-11-03 13:07:50.394 | DEBUG    | trace= span= tp= req= job= ps=: | tldw_Server_API.app.core.Sandbox.streams:_schedule_dispatch:182 - dispatch schedule failed: Event loop is closed
+=========================== short test summary info ============================
+FAILED tldw_Server_API/tests/sandbox/test_docker_egress_enforcement.py::test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+============ 1 failed, 12 passed, 2 skipped, 886 warnings in 58.71s ============
