@@ -5,14 +5,14 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | Module | Path | Status | Owner | Notes |
 |---|---|---|---|---|
 | Audit | tldw_Server_API/app/core/Audit | Existing (Review/Update) |  | Preserve existing content; align with template |
-| AuthNZ | tldw_Server_API/app/core/AuthNZ | Existing (Review/Update) |  |  |
+| AuthNZ | tldw_Server_API/app/core/AuthNZ | Complete |  | Standardized to 3-section format |
 | Character_Chat | tldw_Server_API/app/core/Character_Chat | Existing (Review/Update) |  |  |
 | Chat | tldw_Server_API/app/core/Chat | Existing (Review/Update) |  |  |
 | Chatbooks | tldw_Server_API/app/core/Chatbooks | Existing (Review/Update) |  |  |
 | Chunking | tldw_Server_API/app/core/Chunking | Existing (Review/Update) |  |  |
 | Claims_Extraction | tldw_Server_API/app/core/Claims_Extraction | Scaffolded |  |  |
 | Collections | tldw_Server_API/app/core/Collections | Scaffolded |  |  |
-| DB_Management | tldw_Server_API/app/core/DB_Management | Scaffolded |  |  |
+| DB_Management | tldw_Server_API/app/core/DB_Management | Complete |  | Standardized to 3-section format |
 | Embeddings | tldw_Server_API/app/core/Embeddings | Complete |  | Standardized to 3-section format |
 | Evaluations | tldw_Server_API/app/core/Evaluations | Existing (Review/Update) |  |  |
 | External_Sources | tldw_Server_API/app/core/External_Sources | Scaffolded |  |  |

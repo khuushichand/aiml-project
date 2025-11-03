@@ -714,6 +714,9 @@ class DockerRunner:
                         subprocess.run(["docker", "network", "rm", egress_net_name], check=False)
                     except Exception:
                         pass
+        except Exception:
+            # Best-effort cleanup; ignore failures
+            pass
         return RunStatus(
             id="",
             phase=phase,
