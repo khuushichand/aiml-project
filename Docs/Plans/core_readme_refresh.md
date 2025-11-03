@@ -42,7 +42,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | Sync | tldw_Server_API/app/core/Sync | Scaffolded |  |  |
 | Third_Party | tldw_Server_API/app/core/Third_Party | Scaffolded |  |  |
 | Tools | tldw_Server_API/app/core/Tools | Scaffolded |  |  |
-| TTS | tldw_Server_API/app/core/TTS | Existing (Review/Update) |  |  |
+| TTS | tldw_Server_API/app/core/TTS | Complete |  | Standardized to 3-section format |
 | Usage | tldw_Server_API/app/core/Usage | Scaffolded |  |  |
 | Utils | tldw_Server_API/app/core/Utils | Scaffolded |  |  |
 | Watchlists | tldw_Server_API/app/core/Watchlists | Scaffolded |  |  |
