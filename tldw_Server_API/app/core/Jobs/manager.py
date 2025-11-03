@@ -1520,6 +1520,7 @@ class JobManager:
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
+                        d = None  # type: ignore[assignment]
                         if str(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")).lower() in {"1","true","yes","y","on"}:
                             # Build ordering clause with optional env overrides
                             prio_dir = self._priority_dir_for(domain, backend="pg")
@@ -1550,19 +1551,8 @@ class JobManager:
                             if not row2:
                                 return None
                             d = dict(row2)
-                        # SLA check: queue latency
-                        try:
-                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
-                            if pol and (pol.get("enabled") in (True, 1)):
-                                ca = _parse_dt(d.get("acquired_at"))
-                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
-                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
-                                    qlat = max(0.0, (ca - cr).total_seconds())
-                                    if qlat > float(pol.get("max_queue_latency_seconds")):
-                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
-                        except Exception:
-                            pass
                         else:
+                            # Two-step acquire: select next ID then update+return full row
                             base = (
                                 "SELECT id FROM jobs WHERE domain = %s AND queue = %s AND ("
                                 "  (status = 'queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
@@ -1603,6 +1593,19 @@ class JobManager:
                             if not row2:
                                 return None
                             d = dict(row2)
+
+                        # SLA check: queue latency (after acquiring and populating d)
+                        try:
+                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))  # type: ignore[arg-type]
+                            if pol and (pol.get("enabled") in (True, 1)):
+                                ca = _parse_dt(d.get("acquired_at"))
+                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
+                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
+                                    qlat = max(0.0, (ca - cr).total_seconds())
+                                    if qlat > float(pol.get("max_queue_latency_seconds")):
+                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
+                        except Exception:
+                            pass
                         # Counters: adjust queued->processing
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:

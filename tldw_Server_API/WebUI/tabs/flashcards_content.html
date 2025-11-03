@@ -1,0 +1,218 @@
+<!-- Flashcards: Manage -->
+<div id="tabFlashcardsManage" class="tab-content" role="tabpanel">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method get">FLASHCARDS</span>
+      <span class="endpoint-path">Decks & Cards</span>
+    </h2>
+
+    <div class="columns">
+      <div class="column">
+        <h3>Decks</h3>
+        <div class="form-group">
+          <button class="api-button" onclick="flashListDecks()">List Decks</button>
+        </div>
+        <div class="form-group">
+          <label for="fc_new_deck_name">New Deck Name</label>
+          <input id="fc_new_deck_name" type="text" placeholder="e.g., Biology" />
+        </div>
+        <div class="form-group">
+          <label for="fc_new_deck_desc">Description (optional)</label>
+          <input id="fc_new_deck_desc" type="text" placeholder="Short description" />
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" onclick="flashCreateDeck()">Create Deck</button>
+        </div>
+        <div class="form-group">
+          <label for="fc_manage_deck_select">Deck</label>
+          <select id="fc_manage_deck_select"></select>
+        </div>
+      </div>
+
+      <div class="column">
+        <h3>Cards</h3>
+        <div class="form-group">
+          <div class="columns">
+            <div class="column">
+              <label for="fc_filter_tag">Tag</label>
+              <input id="fc_filter_tag" type="text" placeholder="optional tag" />
+            </div>
+            <div class="column">
+              <label for="fc_filter_due">Due Status</label>
+              <select id="fc_filter_due">
+                <option value="all">All</option>
+                <option value="new">New</option>
+                <option value="learning">Learning</option>
+                <option value="due">Due</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="fc_filter_q">Search</label>
+          <input id="fc_filter_q" type="text" placeholder="full-text search" />
+        </div>
+        <div class="form-group">
+          <button class="api-button" onclick="flashListCards()">List Cards</button>
+        </div>
+
+        <h4>Create Card</h4>
+        <div class="form-group">
+          <label for="fc_front">Front</label>
+          <textarea id="fc_front" rows="2" placeholder="Question or {{c1::cloze}} text"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="fc_back">Back</label>
+          <textarea id="fc_back" rows="2" placeholder="Answer (ignored for cloze)"></textarea>
+        </div>
+        <div class="columns">
+          <div class="column">
+            <label for="fc_model_type">Model</label>
+            <select id="fc_model_type">
+              <option value="basic">Basic</option>
+              <option value="basic_reverse">Basic (Reverse)</option>
+              <option value="cloze">Cloze</option>
+            </select>
+          </div>
+          <div class="column">
+            <label for="fc_tags">Tags (comma-separated)</label>
+            <input id="fc_tags" type="text" placeholder="e.g., bio,cell" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="fc_notes">Notes</label>
+          <input id="fc_notes" type="text" placeholder="optional" />
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" onclick="flashCreateCard()">Create Card</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <h3>Results</h3>
+      <pre id="fc_manage_result" class="json-viewer"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- Flashcards: Review -->
+<div id="tabFlashcardsReview" class="tab-content" role="tabpanel">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method post">FLASHCARDS</span>
+      <span class="endpoint-path">Review</span>
+    </h2>
+
+    <div class="columns">
+      <div class="column">
+        <div class="form-group">
+          <label for="fc_review_deck">Deck</label>
+          <select id="fc_review_deck"></select>
+        </div>
+        <div class="form-group">
+          <button class="api-button" onclick="flashLoadDueCard()">Load Due Card</button>
+        </div>
+        <div class="form-group">
+          <div id="fc_card_front" class="json-viewer-content" style="min-height:3rem;" aria-live="polite"></div>
+          <button class="api-button secondary" id="fc_reveal_btn" onclick="flashRevealBack()" disabled>Reveal</button>
+          <div id="fc_card_back" class="json-viewer-content" style="min-height:3rem; display:none;"></div>
+        </div>
+        <div class="form-group">
+          <label for="fc_answer_time">Answer time (ms)</label>
+          <input id="fc_answer_time" type="number" placeholder="e.g., 800" />
+        </div>
+        <div class="form-group">
+          <div class="btn-group">
+            <button class="api-button" onclick="flashReviewRate(1)">Again (1)</button>
+            <button class="api-button" onclick="flashReviewRate(2)">Hard (2)</button>
+            <button class="api-button" onclick="flashReviewRate(3)">Good (3)</button>
+            <button class="api-button" onclick="flashReviewRate(4)">Easy (4)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <h3>Review Result</h3>
+      <pre id="fc_review_result" class="json-viewer"></pre>
+    </div>
+  </div>
+  <input id="fc_current_uuid" type="hidden" />
+</div>
+
+<!-- Flashcards: Import/Export -->
+<div id="tabFlashcardsImport" class="tab-content" role="tabpanel">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method post">FLASHCARDS</span>
+      <span class="endpoint-path">Import & Export</span>
+    </h2>
+
+    <div class="columns">
+      <div class="column">
+        <h3>Import (TSV/CSV-like)</h3>
+        <div class="form-group">
+          <label for="fc_import_text">Content</label>
+          <textarea id="fc_import_text" rows="8" placeholder="Deck\tFront\tBack\tTags\tNotes"></textarea>
+        </div>
+        <div class="columns">
+          <div class="column">
+            <label for="fc_import_delim">Delimiter</label>
+            <input id="fc_import_delim" type="text" value="\t" />
+          </div>
+          <div class="column">
+            <label>
+              <input type="checkbox" id="fc_import_has_header" /> Has header row
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" onclick="flashImportTSV()">Import</button>
+        </div>
+        <div class="form-group">
+          <pre id="fc_import_result" class="json-viewer"></pre>
+        </div>
+      </div>
+      <div class="column">
+        <h3>Export</h3>
+        <div class="form-group">
+          <label for="fc_export_deck">Deck</label>
+          <select id="fc_export_deck"></select>
+        </div>
+        <div class="form-group">
+          <label for="fc_export_tag">Tag (optional)</label>
+          <input id="fc_export_tag" type="text" />
+        </div>
+        <div class="columns">
+          <div class="column">
+            <label for="fc_export_format">Format</label>
+            <select id="fc_export_format">
+              <option value="csv">CSV</option>
+              <option value="apkg">Anki (.apkg)</option>
+            </select>
+          </div>
+          <div class="column">
+            <label>
+              <input type="checkbox" id="fc_export_header" /> Include header
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="fc_export_extended" /> Extended header (include Extra / Reverse)
+          </label>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="fc_export_reverse" /> Include reverse cards in APKG
+          </label>
+        </div>
+        <div class="form-group">
+          <button class="api-button" onclick="flashExport()">Export</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+

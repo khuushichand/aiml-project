@@ -247,6 +247,262 @@ async function audioTTSGenerate() {
     }
 }
 
+// ============================================================================
+// Flashcards Tab Functions
+// ============================================================================
+
+function initializeFlashcardsTab(contentId) {
+    try {
+        flashPopulateDecks();
+        // Clear any previous state
+        const res = document.getElementById('fc_manage_result');
+        if (res) res.textContent = '';
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.textContent = '';
+        const cf = document.getElementById('fc_card_front');
+        if (cf) cf.textContent = '';
+        const cb = document.getElementById('fc_card_back');
+        if (cb) { cb.textContent = ''; cb.style.display = 'none'; }
+        const rv = document.getElementById('fc_reveal_btn');
+        if (rv) rv.disabled = true;
+        const cu = document.getElementById('fc_current_uuid');
+        if (cu) cu.value = '';
+    } catch (e) {
+        console.debug('initializeFlashcardsTab failed:', e);
+    }
+}
+
+async function flashPopulateDecks() {
+    try {
+        const data = await window.apiClient.get('/api/v1/flashcards/decks');
+        const decks = Array.isArray(data) ? data : [];
+        const selects = ['fc_manage_deck_select', 'fc_review_deck', 'fc_export_deck'];
+        selects.forEach(id => {
+            const sel = document.getElementById(id);
+            if (!sel) return;
+            const prev = sel.value;
+            sel.innerHTML = '';
+            const opt0 = document.createElement('option');
+            opt0.value = '';
+            opt0.textContent = 'All Decks';
+            sel.appendChild(opt0);
+            decks.forEach(d => {
+                const o = document.createElement('option');
+                o.value = String(d.id);
+                o.textContent = d.name || `Deck ${d.id}`;
+                sel.appendChild(o);
+            });
+            if (prev) sel.value = prev;
+        });
+    } catch (e) {
+        console.error('Failed to populate decks:', e);
+    }
+}
+
+async function flashListDecks() {
+    try {
+        const data = await window.apiClient.get('/api/v1/flashcards/decks');
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || []);
+        flashPopulateDecks();
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashCreateDeck() {
+    const name = (document.getElementById('fc_new_deck_name')?.value || '').trim();
+    const description = (document.getElementById('fc_new_deck_desc')?.value || '').trim() || null;
+    if (!name) {
+        if (typeof Toast !== 'undefined') Toast.warning('Deck name is required');
+        return;
+    }
+    try {
+        const payload = { name, description };
+        const data = await window.apiClient.post('/api/v1/flashcards/decks', payload);
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        flashPopulateDecks();
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashListCards() {
+    const deckId = (document.getElementById('fc_manage_deck_select')?.value || '').trim();
+    const tag = (document.getElementById('fc_filter_tag')?.value || '').trim();
+    const due = (document.getElementById('fc_filter_due')?.value || 'all').trim();
+    const q = (document.getElementById('fc_filter_q')?.value || '').trim();
+    try {
+        const query = {};
+        if (deckId) query.deck_id = deckId;
+        if (tag) query.tag = tag;
+        if (due) query.due_status = due;
+        if (q) query.q = q;
+        const data = await window.apiClient.get('/api/v1/flashcards', query);
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashCreateCard() {
+    const deckId = (document.getElementById('fc_manage_deck_select')?.value || '').trim();
+    const front = (document.getElementById('fc_front')?.value || '').trim();
+    const back = (document.getElementById('fc_back')?.value || '').trim();
+    const model = (document.getElementById('fc_model_type')?.value || 'basic').trim();
+    const notes = (document.getElementById('fc_notes')?.value || '').trim();
+    const tagStr = (document.getElementById('fc_tags')?.value || '').trim();
+    if (!front) {
+        if (typeof Toast !== 'undefined') Toast.warning('Front is required');
+        return;
+    }
+    const tags = tagStr ? tagStr.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+    const isCloze = model === 'cloze';
+    const reverse = model === 'basic_reverse';
+    const payload = {
+        deck_id: deckId ? Number(deckId) : undefined,
+        front,
+        back,
+        notes: notes || undefined,
+        tags,
+        model_type: model,
+        is_cloze: isCloze || undefined,
+        reverse: reverse || undefined,
+        source_ref_type: 'manual'
+    };
+    try {
+        const data = await window.apiClient.post('/api/v1/flashcards', payload);
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        // clear inputs (keep deck)
+        try {
+            document.getElementById('fc_front').value = '';
+            document.getElementById('fc_back').value = '';
+            document.getElementById('fc_notes').value = '';
+            document.getElementById('fc_tags').value = '';
+        } catch(_){}
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashLoadDueCard() {
+    const deckId = (document.getElementById('fc_review_deck')?.value || '').trim();
+    const query = { due_status: 'due', limit: 1 };
+    if (deckId) query.deck_id = deckId;
+    try {
+        const data = await window.apiClient.get('/api/v1/flashcards', query);
+        const items = (data && data.items) || [];
+        const cf = document.getElementById('fc_card_front');
+        const cb = document.getElementById('fc_card_back');
+        const rv = document.getElementById('fc_reveal_btn');
+        const cu = document.getElementById('fc_current_uuid');
+        if (!items.length) {
+            if (cf) cf.textContent = 'No due cards.';
+            if (cb) { cb.textContent = ''; cb.style.display = 'none'; }
+            if (rv) rv.disabled = true;
+            if (cu) cu.value = '';
+            return;
+        }
+        const card = items[0];
+        if (cf) cf.textContent = card.front || '';
+        if (cb) { cb.textContent = card.back || ''; cb.style.display = 'none'; }
+        if (rv) rv.disabled = false;
+        if (cu) cu.value = card.uuid || '';
+    } catch (e) {
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+function flashRevealBack() {
+    try {
+        const cb = document.getElementById('fc_card_back');
+        if (cb) cb.style.display = 'block';
+    } catch (e) { /* ignore */ }
+}
+
+async function flashReviewRate(rating) {
+    const cu = document.getElementById('fc_current_uuid');
+    const uuid = (cu && cu.value) ? cu.value : '';
+    if (!uuid) {
+        if (typeof Toast !== 'undefined') Toast.warning('Load a due card first');
+        return;
+    }
+    let ans = 0;
+    try { ans = parseInt(document.getElementById('fc_answer_time')?.value || '0', 10) || 0; } catch(_){}
+    const payload = { card_uuid: uuid, rating: Number(rating), answer_time_ms: ans || undefined };
+    try {
+        const data = await window.apiClient.post('/api/v1/flashcards/review', payload);
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        // Load next due
+        setTimeout(() => flashLoadDueCard(), 100);
+    } catch (e) {
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashImportTSV() {
+    const content = (document.getElementById('fc_import_text')?.value || '').trim();
+    const delimiter = (document.getElementById('fc_import_delim')?.value || '\t');
+    const hasHeader = !!(document.getElementById('fc_import_has_header')?.checked);
+    if (!content) {
+        if (typeof Toast !== 'undefined') Toast.warning('Paste some content to import');
+        return;
+    }
+    const payload = { content, delimiter, has_header: hasHeader };
+    try {
+        const data = await window.apiClient.post('/api/v1/flashcards/import', payload);
+        const el = document.getElementById('fc_import_result');
+        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        flashPopulateDecks();
+    } catch (e) {
+        const el = document.getElementById('fc_import_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashExport() {
+    const deckId = (document.getElementById('fc_export_deck')?.value || '').trim();
+    const tag = (document.getElementById('fc_export_tag')?.value || '').trim();
+    const format = (document.getElementById('fc_export_format')?.value || 'csv').trim();
+    const includeHeader = !!(document.getElementById('fc_export_header')?.checked);
+    const extendedHeader = !!(document.getElementById('fc_export_extended')?.checked);
+    const includeReverse = !!(document.getElementById('fc_export_reverse')?.checked);
+    const query = { format };
+    if (deckId) query.deck_id = deckId;
+    if (tag) query.tag = tag;
+    if (format !== 'apkg') {
+        query.include_header = includeHeader ? 'true' : 'false';
+        query.extended_header = extendedHeader ? 'true' : 'false';
+    } else {
+        query.include_reverse = includeReverse ? 'true' : 'false';
+    }
+    try {
+        const blob = await window.apiClient.get('/api/v1/flashcards/export', query, { responseType: 'blob' });
+        const name = format === 'apkg' ? 'flashcards.apkg' : 'flashcards.csv';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        if (typeof Toast !== 'undefined') Toast.error(`Export failed: ${e.message || e}`);
+    }
+}
+
+
 // Button handlers wired in audio_content.html
 async function generateTTS() {
     return audioTTSGenerate();

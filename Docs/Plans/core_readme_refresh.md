@@ -7,7 +7,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | Audit | tldw_Server_API/app/core/Audit | Existing (Review/Update) |  | Preserve existing content; align with template |
 | AuthNZ | tldw_Server_API/app/core/AuthNZ | Complete |  | Standardized to 3-section format |
 | Character_Chat | tldw_Server_API/app/core/Character_Chat | Existing (Review/Update) |  |  |
-| Chat | tldw_Server_API/app/core/Chat | Existing (Review/Update) |  |  |
+| Chat | tldw_Server_API/app/core/Chat | Complete |  | Standardized to 3-section format |
 | Chatbooks | tldw_Server_API/app/core/Chatbooks | Existing (Review/Update) |  |  |
 | Chunking | tldw_Server_API/app/core/Chunking | Existing (Review/Update) |  |  |
 | Claims_Extraction | tldw_Server_API/app/core/Claims_Extraction | Scaffolded |  |  |
@@ -23,7 +23,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | LLM_Calls | tldw_Server_API/app/core/LLM_Calls | Complete |  | Standardized to 3-section format |
 | Local_LLM | tldw_Server_API/app/core/Local_LLM | Scaffolded |  |  |
 | Logging | tldw_Server_API/app/core/Logging | Scaffolded |  |  |
-| MCP_unified | tldw_Server_API/app/core/MCP_unified | Existing (Review/Update) |  |  |
+| MCP_unified | tldw_Server_API/app/core/MCP_unified | Complete |  | Standardized to 3-section format |
 | Metrics | tldw_Server_API/app/core/Metrics | Existing (Review/Update) |  |  |
 | Moderation | tldw_Server_API/app/core/Moderation | Scaffolded |  |  |
 | Monitoring | tldw_Server_API/app/core/Monitoring | Scaffolded |  |  |

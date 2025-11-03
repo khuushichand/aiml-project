@@ -248,6 +248,11 @@ class WebUI {
             initializeDictionariesTab();
         }
 
+        // Flashcards tab
+        if (contentId && contentId.startsWith('tabFlashcards') && typeof initializeFlashcardsTab === 'function') {
+            initializeFlashcardsTab(contentId);
+        }
+
         // Initialize model dropdowns for tabs that have LLM selection
         // This includes chat, media processing, and evaluation tabs
         const tabsWithModelSelection = [
