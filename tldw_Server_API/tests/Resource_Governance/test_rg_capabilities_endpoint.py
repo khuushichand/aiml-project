@@ -21,6 +21,14 @@ def test_rg_capabilities_endpoint_admin(monkeypatch):
 
     app.dependency_overrides[get_request_user] = _admin_user
 
+    # Ensure a governor instance exists even if startup skipped it
+    try:
+        from tldw_Server_API.app.core.Resource_Governance.governor import MemoryResourceGovernor
+        if getattr(app.state, "rg_governor", None) is None:
+            app.state.rg_governor = MemoryResourceGovernor()
+    except Exception:
+        pass
+
     with TestClient(app) as c:
         r = c.get("/api/v1/resource-governor/diag/capabilities")
         assert r.status_code == 200
@@ -31,4 +39,3 @@ def test_rg_capabilities_endpoint_admin(monkeypatch):
 
     # cleanup override
     app.dependency_overrides.pop(get_request_user, None)
-
