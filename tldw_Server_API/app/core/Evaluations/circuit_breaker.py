@@ -138,6 +138,7 @@ class CircuitBreaker:
             raise
         finally:
             # No explicit admission permits to release; nothing to do here.
+            pass
 
     async def _on_success(self):
         """Handle successful call."""
