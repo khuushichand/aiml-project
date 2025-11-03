@@ -1486,6 +1486,30 @@ def rg_policy_reload_interval_sec(default: int = 10) -> int:
     return max(1, _as_int(v, default))
 
 
+def rg_backend(default: str = "memory") -> str:
+    v = os.getenv("RG_BACKEND")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("ResourceGovernor", "backend", fallback=default) if cp else default
+        except Exception:
+            v = default
+    s = str(v).strip().lower()
+    return s if s in ("memory", "redis") else default
+
+
+def rg_redis_fail_mode(default: str = "fail_closed") -> str:
+    v = os.getenv("RG_REDIS_FAIL_MODE")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("ResourceGovernor", "redis_fail_mode", fallback=default) if cp else default
+        except Exception:
+            v = default
+    s = str(v).strip().lower()
+    return s if s in ("fail_closed", "fail_open", "fallback_memory") else default
+
+
 def rg_policy_path_default() -> str:
     try:
         base = Path(__file__).resolve().parents[3]

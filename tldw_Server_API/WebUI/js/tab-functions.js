@@ -336,6 +336,30 @@ function bindAudioTabHandlers() {
     if (runBtn && !runBtn._b) { runBtn._b = true; runBtn.addEventListener('click', () => { try { audioFileTranscribeRun(); } catch(_){} }); }
     const clrBtn = document.getElementById('fileTrans_clear_btn');
     if (clrBtn && !clrBtn._b) { clrBtn._b = true; clrBtn.addEventListener('click', () => { try { audioFileTranscribeClear(); } catch(_){} }); }
+
+    // Streaming transcription binds
+    const apiSave = document.getElementById('streamingApiKeySave');
+    if (apiSave && !apiSave._b) { apiSave._b = true; apiSave.addEventListener('click', () => { try { saveStreamingApiKey(); } catch(_){} }); }
+    const apiToggle = document.getElementById('streamingApiKeyToggle');
+    if (apiToggle && !apiToggle._b) { apiToggle._b = true; apiToggle.addEventListener('click', () => { try { toggleApiKeyVisibility(); } catch(_){} }); }
+    const modelSel = document.getElementById('streamingModel');
+    if (modelSel && !modelSel._b) { modelSel._b = true; modelSel.addEventListener('change', () => { try { updateModelOptions(); } catch(_){} }); }
+    const connectBtn = document.getElementById('connectStreamingBtn');
+    if (connectBtn && !connectBtn._b) { connectBtn._b = true; connectBtn.addEventListener('click', () => { try { toggleStreamingConnection(); } catch(_){} }); }
+    const startBtn = document.getElementById('startStreamingBtn');
+    if (startBtn && !startBtn._b) { startBtn._b = true; startBtn.addEventListener('click', () => { try { startStreamingRecording(); } catch(_){} }); }
+    const stopBtnS = document.getElementById('stopStreamingBtn');
+    if (stopBtnS && !stopBtnS._b) { stopBtnS._b = true; stopBtnS.addEventListener('click', () => { try { stopStreamingRecording(); } catch(_){} }); }
+    const clrStream = document.getElementById('clearStreamingBtn');
+    if (clrStream && !clrStream._b) { clrStream._b = true; clrStream.addEventListener('click', () => { try { clearStreamingTranscript(); } catch(_){} }); }
+
+    // Streaming segmentation (TreeSeg) binds
+    const segRefresh = document.getElementById('segRefreshProviders');
+    if (segRefresh && !segRefresh._b) { segRefresh._b = true; segRefresh.addEventListener('click', () => { try { refreshEmbeddingProviders(); } catch(_){} }); }
+    const segRun = document.getElementById('segRunBtn');
+    if (segRun && !segRun._b) { segRun._b = true; segRun.addEventListener('click', () => { try { segmentTranscriptRun(); } catch(_){} }); }
+    const segClr = document.getElementById('segClearBtn');
+    if (segClr && !segClr._b) { segClr._b = true; segClr.addEventListener('click', () => { try { segClearOutput(); } catch(_){} }); }
 }
 
 // ============================================================================
@@ -686,6 +710,43 @@ function _fcRenderTagEditor(tagsArr) {
         ${chips}
         <input type="text" class="fc-tag-input" placeholder="add tag" style="min-width:80px; border:1px solid var(--color-border); padding:2px 6px;" />
     </div>`;
+}
+
+// ============================================================================
+// Media Tab common bindings (migrated from inline scripts)
+// ============================================================================
+
+function bindMediaCommonHandlers() {
+    try {
+        // Provider/model selector normalization: extract provider from provider/model into hidden input
+        const ids = ['addMedia_model', 'processVideos_model', 'processAudios_model', 'processEbooks_model', 'processDocuments_model'];
+        ids.forEach((id) => {
+            const sel = document.getElementById(id);
+            if (!sel || sel._mediaBound) return;
+            sel._mediaBound = true;
+            const originalName = sel.getAttribute('name');
+            sel.addEventListener('change', function() {
+                try {
+                    if (this.value && this.value.includes('/')) {
+                        const provider = this.value.split('/')[0];
+                        let hidden = this.parentElement.querySelector(`input[type="hidden"][name="${originalName}"]`);
+                        if (!hidden) {
+                            hidden = document.createElement('input');
+                            hidden.type = 'hidden';
+                            hidden.name = originalName || 'model_provider';
+                            this.parentElement.appendChild(hidden);
+                        }
+                        hidden.value = provider;
+                        this.removeAttribute('name');
+                    } else {
+                        if (originalName) this.setAttribute('name', originalName);
+                        const hidden = this.parentElement.querySelector(`input[type="hidden"][name="${originalName}"]`);
+                        if (hidden) hidden.remove();
+                    }
+                } catch (_) {}
+            });
+        });
+    } catch (_) { /* ignore */ }
 }
 
 function _fcBindTagEditors() {
@@ -2564,6 +2625,12 @@ function initializeWebScrapingIngestTab() {
 
         // Initial validation state
         updateFriendlyIngestValidationState();
+
+        // Bind submit/show-curl buttons (replacing inline handlers)
+        const submitBtn = document.getElementById('friendlyIngest_submit');
+        if (submitBtn && !submitBtn._bound) { submitBtn.addEventListener('click', () => submitWebScrapingIngestFriendly(false)); submitBtn._bound = true; }
+        const curlBtn = document.getElementById('friendlyIngest_show_curl');
+        if (curlBtn && !curlBtn._bound) { curlBtn.addEventListener('click', () => submitWebScrapingIngestFriendly(true)); curlBtn._bound = true; }
     } catch (e) {
         console.warn('Failed to initialize Web Scraping Ingest tab:', e.message);
     }

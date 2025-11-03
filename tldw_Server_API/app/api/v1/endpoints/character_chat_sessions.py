@@ -21,6 +21,8 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from collections import defaultdict, deque
 import time
+import os
+import asyncio
 import random
 
 # Database and authentication dependencies
@@ -76,6 +78,8 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import (
 )
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
 
 
 def _extract_sse_data_lines(chunk: Any) -> List[str]:
@@ -634,6 +638,12 @@ async def character_chat_completion(
                     streaming=bool(body.stream),
                     user_identifier=str(current_user.id)
                 )
+                # Support async-returning provider hooks (test stubs or adapters)
+                try:
+                    if asyncio.iscoroutine(llm_resp):
+                        llm_resp = await llm_resp  # type: ignore
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error")
@@ -642,6 +652,33 @@ async def character_chat_completion(
         def _extract_text(resp: Any) -> str:
             if resp is None:
                 return ""
+
+        def _coerce_sse_line(chunk: Any) -> Optional[str]:
+            """Convert a provider chunk into a single SSE-formatted line.
+
+            Prefer provider iterator output (already normalized). If chunk is not a
+            string, attempt normalization; return None when nothing to forward.
+            """
+            try:
+                if chunk is None:
+                    return None
+                if isinstance(chunk, (bytes, bytearray)):
+                    text = chunk.decode("utf-8", errors="replace")
+                elif isinstance(chunk, str):
+                    text = chunk
+                else:
+                    # As a fallback, stringify and normalize
+                    text = str(chunk)
+                if not text:
+                    return None
+                # If line looks like SSE control or data, keep as-is; otherwise normalize
+                lower = text.strip().lower()
+                if lower.startswith("data:") or lower.startswith("event:") or lower.startswith("id:") or lower.startswith("retry:") or lower.startswith(":"):
+                    return ensure_sse_line(text.strip())
+                normalized = normalize_provider_line(text)
+                return normalized
+            except Exception:
+                return None
             if isinstance(resp, str):
                 return resp
             if isinstance(resp, dict):
@@ -721,31 +758,99 @@ async def character_chat_completion(
                         yield "data: [DONE]\n\n"
                 return StreamingResponse(_offline_sse(), media_type="text/event-stream")
         else:
-            assistant_text = _extract_text(llm_resp).strip()
-            # Try to extract tool calls if present (OpenAI-like shape)
+            # For streaming, assistant text is not finalized here; skip extraction.
             assistant_tool_calls = []
-            try:
-                if isinstance(llm_resp, dict):
-                    tool_calls = llm_resp.get("choices", [{}])[0].get("message", {}).get("tool_calls")
-                    if isinstance(tool_calls, list):
-                        assistant_tool_calls = tool_calls
-            except Exception:
-                pass
+            if not bool(body.stream):
+                assistant_text = _extract_text(llm_resp).strip()
+                # Try to extract tool calls if present (OpenAI-like shape)
+                try:
+                    if isinstance(llm_resp, dict):
+                        tool_calls = llm_resp.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+                        if isinstance(tool_calls, list):
+                            assistant_tool_calls = tool_calls
+                except Exception:
+                    pass
 
         # If streaming requested and we have a generator, stream SSE (real providers)
         if not offline_sim and bool(body.stream):
             try:
+                # Feature flag: use unified SSEStream when enabled
+                if str(os.getenv("STREAMS_UNIFIED", "0")).strip() in {"1", "true", "on", "yes"}:
+                    stream = SSEStream(
+                        labels={"component": "chat", "endpoint": "character_chat_stream"}
+                    )
+                    try:
+                        logger.debug(
+                            f"Unified SSE enabled: interval={stream.heartbeat_interval_s} mode={stream.heartbeat_mode}"
+                        )
+                    except Exception:
+                        pass
+
+                    async def _produce_async():
+                        try:
+                            if hasattr(llm_resp, "__aiter__"):
+                                async for chunk in llm_resp:  # type: ignore
+                                    line = _coerce_sse_line(chunk)
+                                    if not line:
+                                        continue
+                                    if line.strip().lower() == "data: [done]":
+                                        await stream.done()
+                                        break
+                                    await stream.send_raw_sse_line(line)
+                            elif hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list)):
+                                for chunk in llm_resp:  # type: ignore
+                                    line = _coerce_sse_line(chunk)
+                                    if not line:
+                                        continue
+                                    if line.strip().lower() == "data: [done]":
+                                        await stream.done()
+                                        break
+                                    await stream.send_raw_sse_line(line)
+                            # Ensure DONE if provider didn't send one
+                            await stream.done()
+                        except Exception as e:
+                            await stream.error("internal_error", f"{e}")
+
+                    async def _generator():
+                        producer = asyncio.create_task(_produce_async())
+                        try:
+                            async for line in stream.iter_sse():
+                                yield line
+                        except asyncio.CancelledError:
+                            raise
+                        else:
+                            # Ensure producer completes if stream ended without explicit DONE
+                            if not producer.done():
+                                try:
+                                    await producer
+                                except Exception:
+                                    pass
+                            # If DONE wasn’t enqueued for any reason, append one now
+                            try:
+                                if not getattr(stream, "_done_enqueued", False):
+                                    yield sse_done()
+                            except Exception:
+                                pass
+
+                    headers = {
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    }
+                    return StreamingResponse(_generator(), media_type="text/event-stream", headers=headers)
+                # Legacy path (flag off): stream directly (provider iterator yields SSE lines)
                 # Support async generators
                 if hasattr(llm_resp, "__aiter__"):
                     async def _sse_async():
                         done_sent = False
                         try:
                             async for chunk in llm_resp:  # type: ignore
-                                for line in _extract_sse_data_lines(chunk):
-                                    normalized = line.strip().lower()
-                                    if normalized == "data: [done]":
-                                        done_sent = True
-                                    yield f"{line}\n\n"
+                                line = _coerce_sse_line(chunk)
+                                if not line:
+                                    continue
+                                normalized = line.strip().lower()
+                                if normalized == "data: [done]":
+                                    done_sent = True
+                                yield ensure_sse_line(line)
                         except Exception as e:
                             if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
                                 logger.debug("Ignoring streaming session close error: %s", e)
@@ -762,11 +867,13 @@ async def character_chat_completion(
                         done_sent = False
                         try:
                             for chunk in llm_resp:  # type: ignore
-                                for line in _extract_sse_data_lines(chunk):
-                                    normalized = line.strip().lower()
-                                    if normalized == "data: [done]":
-                                        done_sent = True
-                                    yield f"{line}\n\n"
+                                line = _coerce_sse_line(chunk)
+                                if not line:
+                                    continue
+                                normalized = line.strip().lower()
+                                if normalized == "data: [done]":
+                                    done_sent = True
+                                yield ensure_sse_line(line)
                         except Exception as e:
                             yield f"data: {json.dumps({'error': str(e)})}\n\n"
                         finally:

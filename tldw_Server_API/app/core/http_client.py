@@ -886,6 +886,7 @@ def download(
     checksum: Optional[str] = None,
     checksum_alg: str = "sha256",
     resume: bool = False,
+    retry: Optional[RetryPolicy] = None,
 ) -> Path:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -895,63 +896,106 @@ def download(
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
 
+    retry = retry or RetryPolicy()
+
     need_close = False
     sc = client
     if sc is None:
         sc = create_client(proxies=proxies)
         need_close = True
 
-    req_headers = _inject_trace_headers(headers)
-    # Basic resume support
-    existing = 0
-    if resume and tmp_path.exists():
-        try:
-            existing = tmp_path.stat().st_size
-        except Exception:
-            existing = 0
-        if existing > 0:
-            req_headers = dict(req_headers)
-            req_headers["Range"] = f"bytes={existing}-"
+    attempts = max(1, retry.attempts)
+    sleep_s = 0.0
 
     try:
-        with sc.stream("GET", url, headers=req_headers, params=params, timeout=timeout) as resp:
-            if resp.status_code in (200, 206):
-                hasher = hashlib.new(checksum_alg) if checksum else None
-                mode = "ab" if (resume and existing > 0 and resp.status_code == 206) else "wb"
-                with open(tmp_path, mode) as f:
-                    for chunk in resp.iter_bytes():
-                        if not chunk:
-                            continue
-                        f.write(chunk)
-                        if hasher is not None:
-                            hasher.update(chunk)
-                # Validate checksum
-                if checksum and hasher is not None:
-                    hex_val = hasher.hexdigest()
-                    if hex_val.lower() != checksum.lower():
-                        raise DownloadError("Checksum validation failed")
-                # Validate content-length if present
-                clen = resp.headers.get("content-length")
-                if clen and not resume:
+        for attempt in range(1, attempts + 1):
+            req_headers = _inject_trace_headers(headers)
+            # Basic resume support
+            existing = 0
+            if resume and tmp_path.exists():
+                try:
+                    existing = tmp_path.stat().st_size
+                except Exception:
+                    existing = 0
+                if existing > 0:
+                    req_headers = dict(req_headers)
+                    req_headers["Range"] = f"bytes={existing}-"
+
+            last_exc: Optional[Exception] = None
+            try:
+                with sc.stream("GET", url, headers=req_headers, params=params, timeout=timeout) as resp:
+                    if resp.status_code in (200, 206):
+                        hasher = hashlib.new(checksum_alg) if checksum else None
+                        mode = "ab" if (resume and existing > 0 and resp.status_code == 206) else "wb"
+                        with open(tmp_path, mode) as f:
+                            for chunk in resp.iter_bytes():
+                                if not chunk:
+                                    continue
+                                f.write(chunk)
+                                if hasher is not None:
+                                    hasher.update(chunk)
+                        # Validate checksum
+                        if checksum and hasher is not None:
+                            hex_val = hasher.hexdigest()
+                            if hex_val.lower() != checksum.lower():
+                                raise DownloadError("Checksum validation failed")
+                        # Validate content-length if present (when not resuming)
+                        clen = resp.headers.get("content-length")
+                        if clen and not resume:
+                            try:
+                                if tmp_path.stat().st_size != int(clen):
+                                    raise DownloadError("Content-Length mismatch")
+                            except Exception:
+                                raise
+                        tmp_path.replace(dest_path)
+                        return dest_path
+                    else:
+                        should, rsn = _should_retry("GET", resp.status_code, None, retry)
+                        if not should or attempt == attempts:
+                            raise DownloadError(f"Download failed with status {resp.status_code}")
+                        try:
+                            get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
+                        except Exception:
+                            pass
+                        delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                        logger.debug(
+                            f"download retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                        )
+                        time.sleep(delay)
+                        sleep_s = delay
+                        if not resume:
+                            try:
+                                if tmp_path.exists():
+                                    tmp_path.unlink()
+                            except Exception:
+                                pass
+                        continue
+            except Exception as e:
+                last_exc = e
+
+            if last_exc is not None:
+                should, rsn = _should_retry("GET", None, last_exc, retry)
+                if not should or attempt == attempts:
                     try:
-                        if tmp_path.stat().st_size != int(clen):
-                            raise DownloadError("Content-Length mismatch")
+                        if tmp_path.exists() and (not resume or attempt == attempts):
+                            tmp_path.unlink()
                     except Exception:
-                        raise
-                tmp_path.replace(dest_path)
-                return dest_path
-            else:
-                raise DownloadError(f"Download failed with status {resp.status_code}")
-    except Exception as e:
-        # Clean partial file
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except Exception:
-            pass
-        if isinstance(e, DownloadError):
-            raise
-        raise DownloadError(str(e))
+                        pass
+                    if isinstance(last_exc, DownloadError):
+                        raise last_exc
+                    raise DownloadError(str(last_exc))
+                try:
+                    get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
+                except Exception:
+                    pass
+                delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                logger.debug(
+                    f"download network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
+                )
+                time.sleep(delay)
+                sleep_s = delay
+                continue
+        raise RetryExhaustedError("All retry attempts exhausted (download)")
     finally:
         if need_close:
             try:
@@ -972,6 +1016,7 @@ async def adownload(
     checksum: Optional[str] = None,
     checksum_alg: str = "sha256",
     resume: bool = False,
+    retry: Optional[RetryPolicy] = None,
 ) -> Path:
     # Reuse sync downloader in a thread to avoid blocking event loop on file I/O
     return await asyncio.to_thread(
@@ -986,6 +1031,7 @@ async def adownload(
         checksum=checksum,
         checksum_alg=checksum_alg,
         resume=resume,
+        retry=retry,
     )
 
 

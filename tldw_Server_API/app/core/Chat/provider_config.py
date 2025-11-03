@@ -10,11 +10,24 @@ from typing import Dict, Any, Callable
 #
 # Local Imports - Import the actual handler functions
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
-    chat_with_openai, chat_with_anthropic, chat_with_cohere,
+    chat_with_cohere,
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
     chat_with_mistral, chat_with_huggingface, chat_with_google,
     chat_with_qwen, chat_with_bedrock, chat_with_moonshot, chat_with_zai,
     chat_with_openai_async, chat_with_groq_async, chat_with_anthropic_async, chat_with_openrouter_async,
+)
+from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
+    openai_chat_handler,
+    anthropic_chat_handler,
+    groq_chat_handler,
+    openrouter_chat_handler,
+    google_chat_handler,
+    mistral_chat_handler,
+    qwen_chat_handler,
+    deepseek_chat_handler,
+    huggingface_chat_handler,
+    custom_openai_chat_handler,
+    custom_openai_2_chat_handler,
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -30,17 +43,17 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
 
 # 1. Dispatch table for handler functions
 API_CALL_HANDLERS: Dict[str, Callable] = {
-    'openai': chat_with_openai,
+    'openai': openai_chat_handler,
     'bedrock': chat_with_bedrock,
-    'anthropic': chat_with_anthropic,
+    'anthropic': anthropic_chat_handler,
     'cohere': chat_with_cohere,
-    'groq': chat_with_groq,
-    'qwen': chat_with_qwen,
-    'openrouter': chat_with_openrouter,
-    'deepseek': chat_with_deepseek,
-    'mistral': chat_with_mistral,
-    'google': chat_with_google,
-    'huggingface': chat_with_huggingface,
+    'groq': groq_chat_handler,
+    'qwen': qwen_chat_handler,
+    'openrouter': openrouter_chat_handler,
+    'deepseek': deepseek_chat_handler,
+    'mistral': mistral_chat_handler,
+    'google': google_chat_handler,
+    'huggingface': huggingface_chat_handler,
     'moonshot': chat_with_moonshot,
     'zai': chat_with_zai,
     'llama.cpp': chat_with_llama,
@@ -51,8 +64,8 @@ API_CALL_HANDLERS: Dict[str, Callable] = {
     'local-llm': chat_with_local_llm,
     'ollama': chat_with_ollama,
     'aphrodite': chat_with_aphrodite,
-    'custom-openai-api': chat_with_custom_openai,
-    'custom-openai-api-2': chat_with_custom_openai_2,
+    'custom-openai-api': custom_openai_chat_handler,
+    'custom-openai-api-2': custom_openai_2_chat_handler,
 }
 """
 A dispatch table mapping API endpoint names (e.g., 'openai') to their

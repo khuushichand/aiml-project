@@ -10,7 +10,7 @@ Supports loading from:
 
 import json
 import csv
-import requests
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 from typing import List, Dict, Any, Optional, Generator, Tuple
 from pathlib import Path
 from loguru import logger
@@ -26,9 +26,7 @@ class DatasetLoader:
     def load_json(source: str) -> List[Dict[str, Any]]:
         """Load JSON dataset from file or URL."""
         if source.startswith(('http://', 'https://')):
-            response = requests.get(source, timeout=15)
-            response.raise_for_status()
-            data = response.json()
+            data = fetch_json(method="GET", url=source, timeout=15)
         else:
             with open(source, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -52,11 +50,17 @@ class DatasetLoader:
         data = []
 
         if source.startswith(('http://', 'https://')):
-            response = requests.get(source, stream=True, timeout=30)
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
-                    data.append(json.loads(line))
+            # Simpler: fetch full text then split lines (avoids bespoke streaming logic)
+            r = fetch(method="GET", url=source, timeout=30)
+            try:
+                for line in r.text.splitlines():
+                    if line:
+                        data.append(json.loads(line))
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
         else:
             with open(source, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -71,10 +75,15 @@ class DatasetLoader:
         data = []
 
         if source.startswith(('http://', 'https://')):
-            response = requests.get(source, timeout=15)
-            response.raise_for_status()
-            lines = response.text.strip().split('\n')
-            reader = csv.DictReader(lines, delimiter=delimiter)
+            r = fetch(method="GET", url=source, timeout=15)
+            try:
+                lines = r.text.strip().split('\n')
+                reader = csv.DictReader(lines, delimiter=delimiter)
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
         else:
             with open(source, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter=delimiter)
@@ -123,15 +132,19 @@ class DatasetLoader:
             chunk = []
 
             if source.startswith(('http://', 'https://')):
-                response = requests.get(source, stream=True, timeout=60)
-                response.raise_for_status()
-
-                for line in response.iter_lines():
-                    if line:
-                        chunk.append(json.loads(line))
-                        if len(chunk) >= chunk_size:
-                            yield chunk
-                            chunk = []
+                r = fetch(method="GET", url=source, timeout=60)
+                try:
+                    for line in r.text.splitlines():
+                        if line:
+                            chunk.append(json.loads(line))
+                            if len(chunk) >= chunk_size:
+                                yield chunk
+                                chunk = []
+                finally:
+                    try:
+                        r.close()
+                    except Exception:
+                        pass
             else:
                 with open(source, 'r', encoding='utf-8') as f:
                     for line in f:

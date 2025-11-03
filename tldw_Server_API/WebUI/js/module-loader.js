@@ -40,9 +40,12 @@
       'js/auth-permissions.js',
     ],
     simple: ['js/simple-mode.js'],
+    // Vector stores loads its own module
+    vector_stores: ['js/vector-stores.js'],
+    // Additional groups
+    webscraping: ['js/webscraping.js'],
     // Placeholders (documenting groups that intentionally load no extra scripts)
     flashcards: [],
-    webscraping: [],
     llamacpp: [],
     health: [],
     mcp: [],

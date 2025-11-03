@@ -1,97 +1,257 @@
-import json
-import pytest
 import asyncio
+import os
+import time
+from contextlib import contextmanager
 
+import pytest
+
+from tldw_Server_API.app.core.LLM_Calls.streaming import iter_sse_lines_requests
 from tldw_Server_API.app.core.Streaming.streams import SSEStream, WebSocketStream
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+
+
+class _FakeResponse:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def iter_lines(self, decode_unicode=True):
+        for ln in self._lines:
+            # Simulate raw provider bytes when decode_unicode=False
+            yield ln
+
+
+@contextmanager
+def env_override(key: str, value: str):
+    old = os.environ.get(key)
+    os.environ[key] = value
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
+
+
+def test_iter_normalization_passthru_off_drops_control_lines():
+    lines = [
+        b"event: chunk",
+        b"id: 42",
+        b"retry: 1000",
+        b": heartbeat",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}",
+        b"data: [DONE]",
+    ]
+    resp = _FakeResponse(lines)
+    out = list(iter_sse_lines_requests(resp, decode_unicode=False, provider="test"))
+    # Control lines dropped; data line preserved; DONE suppressed
+    assert len(out) == 1
+    assert out[0].startswith("data:")
+
+
+def test_iter_normalization_passthru_on_preserves_control_lines():
+    lines = [
+        b"event: chunk",
+        b"id: 42",
+        b"retry: 1000",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}",
+        b"data: [DONE]",
+    ]
+    resp = _FakeResponse(lines)
+    with env_override("STREAM_PROVIDER_CONTROL_PASSTHRU", "1"):
+        out = list(iter_sse_lines_requests(resp, decode_unicode=False, provider="test"))
+    # Control lines preserved along with data line; DONE suppressed
+    assert any(x.startswith("event:") for x in out)
+    assert any(x.startswith("id:") for x in out)
+    assert any(x.startswith("retry:") for x in out)
+    assert any(x.startswith("data:") and "[DONE]" not in x for x in out)
+
+
+def test_iter_normalization_control_filter_maps_and_drops():
+    lines = [
+        b"event: original",
+        b"id: 99",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}",
+    ]
+    resp = _FakeResponse(lines)
+
+    def filt(name: str, value: str):
+        if name.lower() == "event":
+            return ("event", "renamed")
+        if name.lower() == "id":
+            return None  # drop id
+        return (name, value)
+
+    out = list(
+        iter_sse_lines_requests(
+            resp,
+            decode_unicode=False,
+            provider="test",
+            provider_control_passthru=True,
+            control_filter=filt,
+        )
+    )
+    assert any(x.startswith("event: renamed") for x in out)
+    assert not any(x.startswith("id:") for x in out)
+    assert any(x.startswith("data:") for x in out)
 
 
 @pytest.mark.asyncio
-async def test_sse_send_json_and_done():
-    stream = SSEStream(heartbeat_interval_s=None)
+async def test_sse_stream_idle_timeout_triggers_error_then_done():
+    # Make heartbeat longer than idle to avoid masking
+    stream = SSEStream(heartbeat_interval_s=1.0, idle_timeout_s=0.2)
 
-    async def collect(n: int):
+    async def collect_first_n(n):
         out = []
-        async for line in stream.iter_sse():
-            out.append(line)
+        async for ln in stream.iter_sse():
+            out.append(ln)
             if len(out) >= n:
                 break
         return out
 
-    collector = asyncio.create_task(collect(2))
-    await stream.send_json({"hello": "world"})
-    await stream.done()
-    lines = await collector
-
-    assert lines[0].startswith("data: ")
-    payload = json.loads(lines[0].split("data: ", 1)[1])
-    assert payload == {"hello": "world"}
-    assert lines[1] == "data: [DONE]\n\n"
+    # Expect two lines: error + DONE
+    t0 = time.monotonic()
+    out = await asyncio.wait_for(collect_first_n(2), timeout=2.0)
+    assert any("\"idle_timeout\"" in x for x in out)
+    assert any(x.strip().lower() == "data: [done]" for x in out)
+    assert (time.monotonic() - t0) >= 0.2
 
 
 @pytest.mark.asyncio
-async def test_sse_error_auto_done():
-    stream = SSEStream(heartbeat_interval_s=None)
+async def test_sse_stream_max_duration_triggers_error_then_done():
+    # Disable heartbeat by making it longer than max duration
+    stream = SSEStream(heartbeat_interval_s=10.0, max_duration_s=0.2)
 
-    async def collect_until_done():
+    async def collect_first_n(n):
         out = []
-        async for line in stream.iter_sse():
-            out.append(line)
-            if line.strip().lower() == "data: [done]":
-                break
-        return out
-
-    collector = asyncio.create_task(collect_until_done())
-    await stream.error("internal_error", "boom")
-    lines = await collector
-
-    assert len(lines) == 2
-    err = json.loads(lines[0].split("data: ", 1)[1])
-    assert err["error"]["code"] == "internal_error"
-    assert err["error"]["message"] == "boom"
-    assert lines[1] == "data: [DONE]\n\n"
-
-
-@pytest.mark.asyncio
-async def test_sse_raw_line_ensure_terminator():
-    stream = SSEStream(heartbeat_interval_s=None)
-
-    async def collect(n: int):
-        out = []
-        async for line in stream.iter_sse():
-            out.append(line)
+        async for ln in stream.iter_sse():
+            out.append(ln)
             if len(out) >= n:
                 break
         return out
 
-    collector = asyncio.create_task(collect(1))
-    await stream.send_raw_sse_line("data: test")
-    lines = await collector
-    assert lines[0].endswith("\n\n")
+    out = await asyncio.wait_for(collect_first_n(2), timeout=2.0)
+    assert any("\"max_duration_exceeded\"" in x for x in out)
+    assert any(x.strip().lower() == "data: [done]" for x in out)
 
 
-class _FakeWebSocket:
+@pytest.mark.asyncio
+async def test_sse_stream_send_json_and_raw_line():
+    stream = SSEStream(heartbeat_interval_s=0.5)
+
+    async def producer():
+        await stream.send_json({"hello": "world"})
+        await stream.send_raw_sse_line("event: summary")
+        await stream.send_json({"summary": True})
+        await stream.done()
+
+    async def collect():
+        out = []
+        async def gen():
+            async for ln in stream.iter_sse():
+                out.append(ln)
+        await asyncio.gather(gen(), producer())
+        return out
+
+    out = await asyncio.wait_for(collect(), timeout=2.0)
+    assert any("data: {\"hello\": \"world\"}" in x for x in out)
+    assert any(x.startswith("event: summary") for x in out)
+    assert any("data: {\"summary\": true}" in x.lower() for x in out)
+    assert out[-1].strip().lower() == "data: [done]"
+
+
+class _StubWebSocket:
     def __init__(self):
         self.sent = []
-        self.closed = None
+        self.accepted = False
+        self.closed = False
+        self.close_code = None
 
-    async def send_json(self, data):
-        self.sent.append(data)
+    async def accept(self):
+        self.accepted = True
 
-    async def close(self, code=1000, reason=""):
-        self.closed = (code, reason)
+    async def send_json(self, payload):
+        self.sent.append(payload)
+
+    async def close(self, code: int = 1000):
+        self.closed = True
+        self.close_code = code
 
 
 @pytest.mark.asyncio
-async def test_websocket_basic_flow():
-    ws = _FakeWebSocket()
-    stream = WebSocketStream(ws, heartbeat_interval_s=None, close_on_done=True)
-
-    await stream.send_event("summary", {"a": 1})
-    await stream.error("quota_exceeded", "limit", data={"limit": 1})
+async def test_ws_stream_send_done_and_ping_metrics():
+    ws = _StubWebSocket()
+    reg = get_metrics_registry()
+    stream = WebSocketStream(ws, heartbeat_interval_s=0.05, labels={"component": "test", "endpoint": "ws"})
+    await stream.start()
+    await stream.send_json({"hello": "world"})
     await stream.done()
+    # Allow a couple of pings
+    await asyncio.sleep(0.12)
+    await stream.stop()
 
-    assert ws.sent[0] == {"type": "event", "event": "summary", "data": {"a": 1}}
-    assert ws.sent[1] == {"type": "error", "code": "quota_exceeded", "message": "limit", "data": {"limit": 1}}
-    assert ws.sent[2] == {"type": "done"}
-    assert ws.closed == (1000, "done")
+    assert ws.accepted is True
+    assert any(msg.get("type") == "done" for msg in ws.sent)
 
+    # Metrics assertions
+    ws_latency_stats = reg.get_metric_stats("ws_send_latency_ms")
+    assert ws_latency_stats.get("count", 0) >= 2
+    pings_stats = reg.get_metric_stats("ws_pings_total")
+    assert pings_stats.get("count", 0) >= 1
+    ping_fail_stats = reg.get_metric_stats("ws_ping_failures_total")
+    assert ping_fail_stats.get("count", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_ws_stream_error_compat_and_close_code():
+    ws = _StubWebSocket()
+    stream = WebSocketStream(ws, heartbeat_interval_s=0, compat_error_type=True)
+    await stream.start()
+    await stream.error("quota_exceeded", "limit reached", data={"limit": 5})
+    assert ws.closed is True
+    assert ws.close_code == 1008
+    # Last sent payload is error
+    assert ws.sent[-1]["type"] == "error"
+    assert ws.sent[-1]["code"] == "quota_exceeded"
+    assert ws.sent[-1]["error_type"] == "quota_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_ws_stream_idle_timeout_counter_and_close():
+    ws = _StubWebSocket()
+    reg = get_metrics_registry()
+    # Disable pings, set short idle timeout
+    stream = WebSocketStream(ws, heartbeat_interval_s=0, idle_timeout_s=0.1)
+    await stream.start()
+    # Wait for idle loop to trigger
+    await asyncio.sleep(0.2)
+    assert ws.closed is True
+    assert ws.close_code == 1001
+    idle_stats = reg.get_metric_stats("ws_idle_timeouts_total")
+    assert idle_stats.get("count", 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_sse_metrics_enqueue_to_yield_and_high_watermark():
+    reg = get_metrics_registry()
+    stream = SSEStream(heartbeat_interval_s=10.0)  # avoid heartbeat noise
+
+    async def producer():
+        # Enqueue a couple of lines
+        await stream.send_json({"a": 1})
+        await stream.send_json({"b": 2})
+        await stream.done()
+
+    out = []
+
+    async def consumer():
+        async for ln in stream.iter_sse():
+            out.append(ln)
+
+    await asyncio.gather(producer(), consumer())
+    assert len(out) >= 3
+
+    e2y_stats = reg.get_metric_stats("sse_enqueue_to_yield_ms")
+    assert e2y_stats.get("count", 0) >= 3
+    hwm_stats = reg.get_metric_stats("sse_queue_high_watermark")
+    assert hwm_stats.get("latest", 0) >= 1

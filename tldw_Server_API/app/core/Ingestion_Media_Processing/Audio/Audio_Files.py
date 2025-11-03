@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
     sanitize_filename, logging, get_project_root
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
+from tldw_Server_API.app.core.http_client import download as http_download, fetch as http_fetch, RetryPolicy
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
 # exception handling is consistent across modules (enables pytest fallback).
@@ -219,10 +220,13 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
                 if isinstance(cookies, str): # Only raise if it was a string that failed to parse
                     raise ValueError(f"Invalid JSON format for cookies: {e}") from e
 
-        response = requests.get(url, headers=headers, stream=True, timeout=120)
-        response.raise_for_status()
+        # Use centralized HEAD to validate content-length against MAX_FILE_SIZE
+        try:
+            head_resp = http_fetch(method="HEAD", url=url, headers=headers, timeout=120)
+        except Exception as e:
+            raise AudioDownloadError(f"HEAD request failed for {url}: {e}")
 
-        file_size_header = response.headers.get('content-length', 0)
+        file_size_header = head_resp.headers.get('content-length', 0)
         try:
             file_size = int(file_size_header)
         except (TypeError, ValueError):
@@ -233,7 +237,7 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
                 f"File size ({file_size / (1024*1024):.2f} MB) exceeds the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit for URL {url}."
             )
 
-        content_disposition = response.headers.get('content-disposition')
+        content_disposition = head_resp.headers.get('content-disposition')
         original_filename = None
         if content_disposition:
             parts = content_disposition.split('filename=')
@@ -261,30 +265,29 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         save_dir.mkdir(parents=True, exist_ok=True) # Ensure it exists
         save_path = save_dir / file_name
 
-        # Download the file efficiently
-        downloaded_bytes = 0
-        log_interval = 5 * 1024 * 1024  # Log every 5MB
-        next_log_thresh = log_interval
         logging.info(f"Downloading {url} to: {save_path}")
-        file_too_large = False
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                # Filter out keep-alive new chunks.
-                if chunk:
-                    f.write(chunk)
-                    downloaded_bytes += len(chunk)
-                    if file_size > 0 and downloaded_bytes >= next_log_thresh:
-                        logging.info(f"Download progress for {url}: {downloaded_bytes / (1024*1024):.1f} / {file_size / (1024*1024):.1f} MB")
-                        next_log_thresh += log_interval
-                    if MAX_FILE_SIZE and downloaded_bytes > MAX_FILE_SIZE:
-                        file_too_large = True
-                        break
-
-        if file_too_large:
+        try:
+            # Use centralized downloader with retries
+            policy = RetryPolicy()
+            http_download(url=url, dest=save_path, headers=headers, retry=policy)
+        except Exception as e:
+            # Clean up on failure
             try:
                 Path(save_path).unlink(missing_ok=True)
-            except Exception as cleanup_err:
-                logging.warning(f"Failed to remove oversized audio file '{save_path}': {cleanup_err}")
+            except Exception:
+                pass
+            raise AudioDownloadError(f"Download failed for {url}: {e}")
+
+        # Post-download size validation when HEAD was inconclusive
+        try:
+            downloaded_bytes = Path(save_path).stat().st_size
+        except Exception:
+            downloaded_bytes = 0
+        if MAX_FILE_SIZE and downloaded_bytes and downloaded_bytes > MAX_FILE_SIZE:
+            try:
+                Path(save_path).unlink(missing_ok=True)
+            except Exception:
+                pass
             raise AudioFileSizeError(
                 f"Downloaded content for {url} exceeded the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit."
             )
@@ -303,12 +306,11 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         raise
     except requests.exceptions.Timeout:
          logging.error(f"Timeout occurred while downloading audio file: {url}")
-         raise requests.RequestException(f"Download timed out for {url}")
+         raise AudioDownloadError(f"Download timed out for {url}")
     except requests.exceptions.RequestException as e:
         logging.error(f"Error downloading audio file from {url}: {type(e).__name__} - {e}")
-        # Optionally include response details if available
-        err_msg = f"Error downloading audio: {e.response.status_code}" if e.response else str(e)
-        raise requests.RequestException(f"Download failed for {url}. Reason: {err_msg}") from e
+        err_msg = str(e)
+        raise AudioDownloadError(f"Download failed for {url}. Reason: {err_msg}") from e
     except ValueError as e: # Handles cookie format issues and other value errors
         logging.error(f"Value error during download from {url}: {e}")
         if "cookies" in str(e).lower():

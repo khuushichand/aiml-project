@@ -83,6 +83,7 @@ from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_pr
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -3559,11 +3560,57 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
 async def orchestrator_events(current_user: User = Depends(get_request_user)):
     require_admin(current_user)
     client = await _get_redis_client()
-    async def _gen():
+
+    # Legacy path (default): keep existing SSE generator behavior
+    if os.getenv("STREAMS_UNIFIED", "0") != "1":
+        async def _gen():
+            try:
+                orchestrator_sse_connections.inc()
+                async for chunk in _sse_orchestrator_stream(client):
+                    yield chunk
+            finally:
+                try:
+                    orchestrator_sse_connections.dec()
+                    orchestrator_sse_disconnects_total.inc()
+                except Exception:
+                    pass
+                await ensure_async_client_closed(client)
+        return StreamingResponse(_gen(), media_type="text/event-stream")
+
+    # Unified path (flagged): use SSEStream with standardized heartbeats and error handling
+    async def _gen_unified():
+        import random as _random
         try:
             orchestrator_sse_connections.inc()
-            async for chunk in _sse_orchestrator_stream(client):
-                yield chunk
+            stream = SSEStream(
+                # Honor env defaults for interval/mode; allow overriding via env
+                heartbeat_interval_s=None,
+                heartbeat_mode=None,
+                close_on_error=False,  # do not close the stream on transient errors
+                labels={"component": "embeddings", "endpoint": "orchestrator_events"},
+            )
+
+            async def _produce():
+                while True:
+                    try:
+                        payload = await _build_orchestrator_snapshot(client)
+                        await stream.send_event("summary", payload)
+                    except Exception as e:
+                        # Emit a non-fatal error frame and continue
+                        await stream.error("provider_error", str(e), data=None, close=False)
+                    # Jittered ~5s cadence
+                    await asyncio.sleep(_random.uniform(4.5, 5.5))
+
+            producer = asyncio.create_task(_produce())
+            try:
+                async for line in stream.iter_sse():
+                    yield line
+            finally:
+                try:
+                    producer.cancel()
+                    await asyncio.gather(producer, return_exceptions=True)
+                except Exception:
+                    pass
         finally:
             try:
                 orchestrator_sse_connections.dec()
@@ -3571,8 +3618,12 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
             except Exception:
                 pass
             await ensure_async_client_closed(client)
-    # The client will keep the connection; we don't close Redis here (shared)
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(_gen_unified(), media_type="text/event-stream", headers=headers)
 
 
 @router.get(

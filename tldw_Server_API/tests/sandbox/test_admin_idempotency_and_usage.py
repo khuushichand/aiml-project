@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -20,7 +21,10 @@ def _client(monkeypatch) -> TestClient:
     if "sandbox" not in parts:
         parts.append("sandbox")
     monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
-    from tldw_Server_API.app.main import app  # import after env is set
+    # Build a minimal app with only the sandbox router
+    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    app = FastAPI()
+    app.include_router(sandbox_router, prefix="/api/v1")
     return TestClient(app)
 
 
@@ -31,9 +35,8 @@ def _admin_user_dep():
 
 @pytest.mark.unit
 def test_admin_idempotency_list_filters_and_pagination(monkeypatch) -> None:
-    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-
     with _client(monkeypatch) as client:
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         # Create a session with idempotency key, then post the same again to trigger 409
         body: Dict[str, Any] = {"spec_version": "1.0", "runtime": "docker"}
@@ -70,9 +73,8 @@ def test_admin_idempotency_list_filters_and_pagination(monkeypatch) -> None:
 
 @pytest.mark.unit
 def test_admin_usage_aggregates_schema_and_filters(monkeypatch) -> None:
-    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-
     with _client(monkeypatch) as client:
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         # Create two runs for default user
         for i in range(2):

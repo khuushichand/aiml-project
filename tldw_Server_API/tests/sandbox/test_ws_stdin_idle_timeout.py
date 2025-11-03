@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -22,8 +23,11 @@ def _client(monkeypatch) -> TestClient:
     if "sandbox" not in parts:
         parts.append("sandbox")
     monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
-    from tldw_Server_API.app.main import app as _app
-    return TestClient(_app)
+    # Build a minimal app with only the sandbox router
+    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    app = FastAPI()
+    app.include_router(sandbox_router, prefix="/api/v1")
+    return TestClient(app)
 
 
 def test_ws_stdin_idle_timeout_emits_truncated_and_closes(ws_flush, monkeypatch) -> None:

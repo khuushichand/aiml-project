@@ -1,33 +1,51 @@
 # Setup
 
-Note: This README is scaffolded from the core template. Replace placeholders with accurate details from the implementation and tests.
-
 ## 1. Descriptive of Current Feature Set
 
-- Purpose: What Setup handles and why it exists.
-- Capabilities: Initialization routines, environment preparation, migrations.
-- Inputs/Outputs: Config inputs and setup artifacts/outputs.
-- Related Endpoints: Link API routes (if any) and files.
-- Related Schemas: Pydantic models used.
+- Purpose: Centralize first-time setup and config management (config.txt), and define install plans for STT/TTS/Embeddings.
+- Capabilities:
+  - Read/update `config.txt` with section labels, hints, and diff-safe writes
+  - Toggle remote setup access and propagate via hook
+  - Define validated install plans for STT/TTS/Embeddings
+- Inputs/Outputs:
+  - Inputs: form-like updates to config fields; install plan models
+  - Outputs: persisted config.txt and install plan DTOs
+- Related Schemas:
+  - `tldw_Server_API/app/core/Setup/install_schema.py:1`
 
 ## 2. Technical Details of Features
 
-- Architecture & Data Flow: Initialization steps and dependencies.
-- Key Classes/Functions: Entry points and CLI hooks.
-- Dependencies: Internal modules and external tools.
-- Data Models & DB: Migrations/helpers via `DB_Management`.
-- Configuration: Env vars and config keys.
-- Concurrency & Performance: Considerations for setup processes.
-- Error Handling: Failure modes and retries.
-- Security: Secret handling and permissions.
+- Architecture & Data Flow:
+  - `setup_manager.py` reads/writes config with placeholder detection; `install_manager.py` manages dependency checks/installs
+- Key Classes/Functions:
+  - `register_remote_access_hook`, section label/description maps, field hints, diff helpers
+  - Install models: `InstallPlan`, `STTInstall`, `TTSInstall`, `EmbeddingsInstall`
+- Dependencies:
+  - Standard library; optional pip invocation via controlled gates
+- Data Models & DB:
+  - No DB; files under `Config_Files/`
+- Configuration:
+  - `TLDW_SETUP_SKIP_PIP` to block installs; env for default engines and models
+- Concurrency & Performance:
+  - File IO only
+- Error Handling:
+  - Safe fallbacks for missing sections; placeholder detection to prevent accidental secrets commit
+- Security:
+  - Sensitive key markers; never log secrets; anchor relative paths to project root
 
 ## 3. Developer-Related/Relevant Information for Contributors
 
-- Folder Structure: Subpackages and responsibilities.
-- Extension Points: Adding new setup routines.
-- Coding Patterns: Logging, idempotency, and guards.
-- Tests: Where tests live and fixtures to reuse.
-- Local Dev Tips: Running setup locally and validation steps.
-- Pitfalls & Gotchas: Platform diffs and order dependencies.
-- Roadmap/TODOs: Planned setup improvements.
-
+- Folder Structure:
+  - `Setup/setup_manager.py`, `install_manager.py`, `install_schema.py`
+- Extension Points:
+  - Add new sections/labels/hints; extend installers for new engines
+- Coding Patterns:
+  - Keep config mutations idempotent and minimal; use helper utilities for diffing
+- Tests:
+  - (Add targeted tests for diff/hints as features expand)
+- Local Dev Tips:
+  - Use a temp copy of `Config_Files/config.txt` while iterating
+- Pitfalls & Gotchas:
+  - Placeholder values should be replaced; handle OS-specific paths
+- Roadmap/TODOs:
+  - Expose minimal setup APIs and UI helpers

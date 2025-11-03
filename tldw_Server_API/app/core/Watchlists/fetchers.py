@@ -586,7 +586,8 @@ async def fetch_site_items_with_rules(
     collected: List[Dict[str, Any]] = []
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        from tldw_Server_API.app.core.http_client import create_async_client, afetch
+        async with create_async_client(timeout=timeout) as client:
             while queue and len(visited) < max_pages:
                 page_url = queue.pop(0)
                 if page_url in visited:
@@ -603,7 +604,7 @@ async def fetch_site_items_with_rules(
                     continue
 
                 try:
-                    resp = await client.get(page_url, headers=headers)
+                    resp = await afetch(method="GET", url=page_url, client=client, headers=headers, timeout=timeout)
                 except Exception as exc:
                     logger.debug(f"fetch_site_items_with_rules request failed ({page_url}): {exc}")
                     continue
@@ -678,8 +679,9 @@ async def fetch_rss_feed(
         if last_modified:
             headers["If-Modified-Since"] = last_modified
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
+        from tldw_Server_API.app.core.http_client import create_async_client, afetch
+        async with create_async_client(timeout=timeout) as client:
+            resp = await afetch(method="GET", url=url, client=client, headers=headers, timeout=timeout)
 
         status = int(resp.status_code)
         # Retry-After handling

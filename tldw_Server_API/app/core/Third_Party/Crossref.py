@@ -6,34 +6,10 @@ standardized return signatures expected by the API layer.
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BASE_URL = "https://api.crossref.org"
-
-
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
 
 
 def _join_authors(authors: Any) -> Optional[str]:
@@ -106,7 +82,6 @@ def search_crossref(
     to_year: Optional[int] = None,
 ) -> Tuple[Optional[List[Dict]], int, Optional[str]]:
     try:
-        session = _mk_session()
         url = f"{BASE_URL}/works"
         params: Dict[str, Any] = {
             "rows": limit,
@@ -125,49 +100,29 @@ def search_crossref(
         if filter_venue:
             params["query.container-title"] = filter_venue
 
-        r = session.get(url, params=params, timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=url, params=params, timeout=20)
         message = data.get("message") or {}
         items_raw = message.get("items") or []
         total = int(message.get("total-results") or 0)
         items = [_normalize_item(it) for it in items_raw]
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to Crossref API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"Crossref API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to Crossref API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"Crossref API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"Crossref API Request Error: {str(e)}"
         return None, 0, f"Crossref error: {str(e)}"
 
 
 def get_crossref_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
     try:
-        session = _mk_session()
         doi_clean = doi.strip()
         url = f"{BASE_URL}/works/{doi_clean}"
-        r = session.get(url, timeout=20)
+        r = fetch(method="GET", url=url, timeout=20)
         if r.status_code == 404:
+            try:
+                r.close()
+            except Exception:
+                pass
             return None, None
-        r.raise_for_status()
         data = r.json() or {}
         msg = (data.get("message") or {})
         return _normalize_item(msg), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to Crossref API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"Crossref API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to Crossref API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"Crossref API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"Crossref API Request Error: {str(e)}"
         return None, f"Crossref error: {str(e)}"

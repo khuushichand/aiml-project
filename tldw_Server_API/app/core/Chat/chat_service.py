@@ -1118,6 +1118,63 @@ async def execute_streaming_call(
                     await asyncio.gather(*pending_audit_tasks, return_exceptions=True)
 
     streaming_generator = tracked_streaming_generator()
+
+    # Feature-flagged: route through unified SSE abstraction for pilot
+    try:
+        use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        use_unified = False
+
+    if use_unified:
+        # Use SSEStream to standardize lifecycle + metrics; forward lines from the
+        # existing tracked generator, filtering provider [DONE] and emitting our own.
+        from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+        sse_stream = SSEStream(labels={"component": "chat", "endpoint": "chat_completions_stream"})
+        done_seen = False
+
+        async def _produce():
+            nonlocal done_seen
+            try:
+                async for ln in streaming_generator:
+                    if not ln:
+                        continue
+                    if ln.strip().lower() == "data: [done]":
+                        # Suppress provider DONE; emit unified DONE immediately and stop producing
+                        if not done_seen:
+                            await sse_stream.done()
+                            done_seen = True
+                        break
+                    await sse_stream.send_raw_sse_line(ln)
+                if not done_seen:
+                    await sse_stream.done()
+            except Exception as e:
+                # As a safeguard; tracked_streaming_generator typically yields error frames itself
+                await sse_stream.error("internal_error", f"{e}")
+
+        async def _gen():
+            prod = asyncio.create_task(_produce())
+            try:
+                async for line in sse_stream.iter_sse():
+                    yield line
+            finally:
+                if not prod.done():
+                    prod.cancel()
+                    try:
+                        await prod
+                    except Exception:
+                        pass
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Legacy path: return the tracked generator directly
     return StreamingResponse(
         streaming_generator,
         media_type="text/event-stream",

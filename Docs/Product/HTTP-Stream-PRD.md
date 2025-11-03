@@ -198,6 +198,19 @@ PRD: HTTP Client Consolidation
   - Unit tests
       - Egress: allowed/denied schemes, ports, hosts, private/reserved IP; DNS resolution IP checks; per-redirect hop enforcement; proxy allowlist.
       - Retry/backoff: attempts, decorrelated jitter bounds, Retry-After (delta-seconds and HTTP-date) behavior, status code matrix, idempotency.
+
+  Status Update (current)
+
+  - Summarization providers migrated to centralized helpers:
+      - OpenAI, Anthropic (previously), now Cohere, Groq, OpenRouter, HuggingFace, DeepSeek, Mistral, Google.
+      - Streaming paths use centralized client streams with no auto-retry after first byte.
+  - Workflows + notifications:
+      - Webhook DLQ and replay paths now use create_client/create_async_client and afetch/fetch for egress enforcement and retries.
+      - Notification webhook sender switched to fetch.
+  - Ingestion/audio:
+      - External transcription provider now uses afetch with create_async_client; downloads previously consolidated to download/adownload.
+  - Docs updated:
+      - README and Config_Files/README document streaming (astream_sse) and download (download/adownload) usage examples.
       - JSON: success, bad JSON, wrong content-type, max_bytes enforcement.
       - Streaming: normal end, mid-stream error surfaced, cancellation propagation (CancelledError), proper close; SSE parsing.
       - Download: atomic rename, partial cleanup, checksum and Content-Length validation, basic Range-resume (when enabled).

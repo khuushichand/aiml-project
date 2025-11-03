@@ -248,6 +248,19 @@ policies:
   - Cache layer with TTL and/or change feed; hot-reload applies atomically across workers.
   - Env vars remain as development overrides; DB wins in production when present.
 
+### Admin API (Minimal)
+
+- Read-only snapshot:
+  - `GET /api/v1/resource-governor/policy` → metadata (version, store, count); `?include=ids|full` for IDs or full payloads.
+- Admin (requires `admin` role; single-user treated as admin):
+  - `GET /api/v1/resource-governor/policies` → list `{id, version, updated_at}`
+  - `GET /api/v1/resource-governor/policy/{policy_id}` → `{id, version, updated_at, payload}`
+  - `PUT /api/v1/resource-governor/policy/{policy_id}` → upsert JSON payload; optional explicit `version` (auto-increments if omitted)
+  - `DELETE /api/v1/resource-governor/policy/{policy_id}` → delete policy
+- Behavior:
+  - When `RG_POLICY_STORE=db`, successful writes trigger best-effort PolicyLoader refresh; file store remains read-only.
+  - All responses include `{status: ok|error}` and details on errors; avoid logging PII.
+
 ## Integration Plan (Phased Migration)
 
 Phase 0 — Ship ResourceGovernor (no integrations yet)
@@ -595,3 +608,98 @@ Notes:
 - Evaluations/AuthNZ/Character Chat/Web Scraping
   - Before: bespoke.
   - After: move to governor with appropriate categories; keep per-feature knobs as policy inputs.
+
+## Implementation Plan (v1 Roadmap)
+
+Stage 0 — Spec Alignment & Stubs
+- Goal: Lock semantics and prepare scaffolding for incremental delivery.
+- Deliverables:
+  - Clarify policy composition (strictest-wins per category; retry_after = max across denying scopes/categories) and default algorithms (token bucket first, sliding window where appropriate).
+  - Guard metrics cardinality: exclude `entity` by default; gate hashed entity behind `RG_METRICS_ENTITY_LABEL=true`.
+  - Add stub policy YAML at `tldw_Server_API/Config_Files/resource_governor_policies.yaml` with examples from “Policy DSL & Route Mapping”.
+  - Finalize envs: `RG_POLICY_STORE`, `RG_REDIS_FAIL_MODE`, `RG_METRICS_ENTITY_LABEL`, `RG_CLIENT_IP_HEADER`, `RG_TRUSTED_PROXIES`.
+- Success Criteria:
+  - YAML stub loads; envs documented; PRD clarifications merged.
+- Tests:
+  - YAML schema/load test (file store) and basic validation of policy fields.
+
+Stage 1 — Core ResourceGovernor Library
+- Goal: Implement core API and in-memory backend with deterministic tests.
+- Deliverables:
+  - `ResourceGovernor` with `check/reserve/commit/refund/renew/release/peek/query/reset` and idempotency via `op_id`.
+  - Memory backend implementations: token bucket + sliding window for `requests/tokens`; semaphore for `streams/jobs` with lease TTL; thin adapter for existing minutes ledger.
+  - Handle lifecycle with `expires_at`, background sweeper, refund safety (cap by prior reservation).
+  - `TimeSource` (monotonic) injectable for tests.
+  - Metrics: `rg_decisions_total{category,scope,backend,result,policy_id}`, `rg_denials_total{...}`, `rg_refunds_total{...}`, gauges for `rg_concurrency_active{...}`.
+- Success Criteria:
+  - ≥80% coverage for core module; stable unit tests; deterministic behavior in `TLDW_TEST_MODE`.
+- Tests:
+  - Unit tests for token bucket/sliding window, composite reservations, idempotent commit/refund, concurrency leases (memory), and handle expiry using mock time.
+
+Stage 2 — Redis Backend & Concurrency Leases
+- Goal: Ship Redis path with safe lease management and fail modes.
+- Deliverables:
+  - Lua/MULTI-EXEC operations for windows and atomic multi-category reservations.
+  - ZSET-based leases per entity/category with acquire/renew/release + GC; TTL heartbeat.
+  - `RG_REDIS_FAIL_MODE=fail_closed|fail_open|fallback_memory` honored; per-policy overrides respected.
+- Success Criteria:
+  - Concurrency stress tests show no leaks/double-release; failover behavior observable via `backend=fallback` metrics.
+- Tests:
+  - Redis unit/integration tests for leases/TTL/renew; chaos tests simulating Redis outage and clock skew; property tests for windows under selected parameters.
+
+Stage 3 — Policy Layer (Store/Loader) & Health
+- Goal: Centralize policies and expose observability.
+- Deliverables:
+  - `PolicyLoader` with `file` and `db` stores; cache TTL (`RG_POLICY_DB_CACHE_TTL_SEC`); hot-reload.
+  - Wire selection via `RG_POLICY_STORE` in settings/config; env overrides in dev.
+  - AuthNZ-backed `PolicyStore` (read-only) reading `rg_policies` (Postgres/SQLite variants) + sample seed helper.
+  - Health endpoint: `GET /api/v1/resource-governor/health` → `{store, snapshot_version, policy_count, updated_at}`.
+- Success Criteria:
+  - Health endpoint returns live snapshot data; DB store works with AuthNZ Postgres fixture.
+- Tests:
+  - SQLite unit test for `AuthNZPolicyStore` and seed helper.
+  - Postgres-based test using existing Postgres fixtures (if available) for both `PolicyStore` and `DailyLedger` plumbing readiness.
+  - Integration test verifying `/health` reports policy snapshot metadata.
+
+Stage 4 — Ingress Middleware & Header Compatibility
+- Goal: Replace ingress counting with a thin governor façade.
+- Deliverables:
+  - ASGI middleware (SlowAPI façade) reading route tags/decorators to resolve `policy_id` and derive entity (auth scopes preferred; IP fallback with trusted-proxy rules).
+  - Enforce via `check/reserve` pre-handler; `commit/refund` post-handler; support streaming renew/release.
+  - Standard headers mapping: `Retry-After`, `X-RateLimit-*` for `requests` where applicable.
+  - Logging: mask/HMAC sensitive fields; include `handle_id`, `op_id`, `policy_id`, `denial_reason`.
+- Success Criteria:
+  - No double-counting; header compatibility verified; décor strings map to policies via tags.
+- Tests:
+  - Integration tests covering allowed/denied paths, header values, proxy scoping with `RG_TRUSTED_PROXIES` and `RG_CLIENT_IP_HEADER`.
+
+Stage 5 — Module Integrations (MCP, Chat, Embeddings, Audio)
+- Goal: Migrate high-impact modules with feature flags and parity tests.
+- Deliverables:
+  - MCP: replace limiter with RG `requests` and tags `category=ingestion|read`.
+  - Chat: combine `requests` + `tokens`; idempotent reserve→commit(actuals)→refund(delta) flow.
+  - Embeddings: unify to RG `requests`; property tests for window equivalence under steady load.
+  - Audio: `streams` semaphore with TTL heartbeat; continue durable `minutes` via existing ledger; add minimal `DailyLedger` DAL wrapper with `remaining(daily_cap)` and `peek_range` (SQLite + Postgres paths) to prep v1.1.
+  - Per-module flags (`RG_ENABLE_*`) inherit from `RG_ENABLED`.
+- Success Criteria:
+  - MCP/Chat/Embeddings parity (HTTP behavior, headers); audio streams enforce concurrency; minutes charging unchanged.
+- Tests:
+  - Module-specific integration tests; Postgres tests for `DailyLedger.peek_range` using `test_db_pool` fixture where available.
+
+Stage 6 — Admin API, Observability & Rollout
+- Goal: Manage policies safely and cut over with guardrails.
+- Deliverables:
+  - Admin policy endpoints (PUT/DELETE/GET) gated by admin auth; file store remains read-only.
+  - Postgres seeder for `rg_policies` and example seed data.
+  - Shadow-mode decision delta metric (legacy vs RG) and basic dashboards for `rg_*` metrics.
+  - Compat map + deprecation warnings; per-module rollout plan (enable MCP/Chat first, then Embeddings/SlowAPI, then Audio).
+- Success Criteria:
+  - Admin endpoints tested; dashboards populated; shadow-mode shows near-zero drift pre-cutover; staged flags allow safe rollback.
+- Tests:
+  - Admin API integration test for `/api/v1/resource-governor/policy` endpoints.
+  - Shadow-mode drift alert test (delta metric non-zero on injected mismatch).
+
+Post v1.0 (Planned v1.1)
+- Generic `DailyLedger` for tokens-per-day and future categories; migration of audio minutes to generic ledger.
+- Cross-category “cost unit” modeling for analytics and optional budgets (no enforcement changes).
+- Additional providers/integrations as needed.

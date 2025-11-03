@@ -70,7 +70,35 @@ async def request_json(
 
     Uses centralized egress enforcement, retries, and backoff.
     """
-    # Map legacy semantics (attempts = 1 + retries)
+    # Backward-compat shim: if client is not an httpx.AsyncClient (e.g., tests provide a FakeClient),
+    # fall back to the legacy minimal retry loop without extra kwargs.
+    if not isinstance(client, httpx.AsyncClient):
+        attempt = 0
+        while True:
+            try:
+                resp = await client.request(method.upper(), url, json=json, headers=headers)
+                if 500 <= resp.status_code < 600 and attempt < retries:
+                    attempt += 1
+                    await asyncio.sleep(backoff * (attempt or 1))
+                    continue
+                if resp.status_code >= 400:
+                    raise httpx.HTTPStatusError("", request=resp.request, response=resp)
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                status = getattr(e.response, "status_code", None)
+                if status and status >= 500 and attempt < retries:
+                    attempt += 1
+                    await asyncio.sleep(backoff * (attempt or 1))
+                    continue
+                raise
+            except httpx.RequestError:
+                if attempt < retries:
+                    attempt += 1
+                    await asyncio.sleep(backoff * (attempt or 1))
+                    continue
+                raise
+
+    # Map legacy semantics (attempts = 1 + retries) for real httpx clients
     attempts = max(1, int(retries)) + 1
     # Convert legacy backoff seconds to ms base with a reasonable cap
     backoff_ms = max(50, int(backoff * 1000))

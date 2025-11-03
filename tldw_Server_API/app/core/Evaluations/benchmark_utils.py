@@ -1104,21 +1104,26 @@ def load_dataset_from_jsonl(file_path: str) -> List[Dict[str, Any]]:
 
 
 def load_dataset_from_url(url: str, format: str = "auto") -> List[Dict[str, Any]]:
-    """Load dataset from URL."""
-    import requests
-
-    response = requests.get(url, timeout=15)
-    response.raise_for_status()
+    """Load dataset from URL using centralized HTTP client."""
+    from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
     if format == "auto":
-        # Try to detect format from URL or content type
-        if url.endswith('.jsonl') or 'jsonl' in response.headers.get('content-type', ''):
+        # best-effort detect based on extension
+        if url.endswith('.jsonl'):
             format = "jsonl"
         else:
             format = "json"
 
     if format == "jsonl":
-        lines = response.text.strip().split('\n')
-        return [json.loads(line) for line in lines if line]
+        r = fetch(method="GET", url=url, timeout=15)
+        try:
+            lines = r.text.strip().split('\n')
+            return [json.loads(line) for line in lines if line]
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
     else:
-        return response.json() if isinstance(response.json(), list) else [response.json()]
+        data = fetch_json(method="GET", url=url, timeout=15)
+        return data if isinstance(data, list) else [data]

@@ -21,7 +21,6 @@
 # Import necessary libraries
 import os
 import platform
-import requests
 import shutil
 import subprocess
 import zipfile
@@ -170,15 +169,9 @@ def download_ffmpeg():
 
     logging.info("Downloading ffmpeg...")
     try:
-        response = requests.get(FFMPEG_DOWNLOAD_URL, stream=True)
-        # Raise an exception for bad HTTP status codes (4xx or 5xx).
-        response.raise_for_status()
-
         zip_path = "ffmpeg-release-essentials.zip"
-        with open(zip_path, 'wb') as file:
-            # Write the downloaded content in chunks to avoid memory issues.
-            for chunk in response.iter_content(chunk_size=8192):
-                file.write(chunk)
+        # Use centralized downloader with retries + egress enforcement
+        download(url=FFMPEG_DOWNLOAD_URL, dest=zip_path)
 
         logging.info("Extracting ffmpeg.exe...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -205,7 +198,7 @@ def download_ffmpeg():
         return True # returns if the process was succesful
 
     # Handle potential errors during the download and extraction process.
-    except requests.exceptions.RequestException as e:
+    except DownloadError as e:
         logging.error(f"Error downloading ffmpeg: {e}")
         return False
     except (FileNotFoundError, zipfile.BadZipFile, OSError) as e:
@@ -218,3 +211,4 @@ def download_ffmpeg():
 #
 #
 #######################################################################################################################
+from tldw_Server_API.app.core.http_client import download, DownloadError

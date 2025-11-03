@@ -1,67 +1,79 @@
 # Resource Governor Policies (stub)
 #
-# This file defines initial example policies for the ResourceGovernor.
-# It is hot‑reloadable by the server when policy reload is enabled.
-#
-# Notes:
-# - RG_* environment variables take precedence over values here.
-# - Per-module feature flags (e.g., RG_ENABLE_CHAT) control integration enablement.
-# - The 'fail_mode' can override RG_REDIS_FAIL_MODE for a given policy.
-# - Scopes are evaluated with strictest-wins semantics (min headroom).
-# - Token units are model tokens when available, otherwise estimated generic tokens.
+# This file defines example policies for development and local testing.
+# In production, prefer RG_POLICY_STORE=db with policies managed via AuthNZ.
 
-version: 1
+schema_version: 1
 
-reload:
+hot_reload:
   enabled: true
-  interval_sec: 10
+  interval_sec: 5  # watcher/TTL interval for file store
+
+metadata:
+  description: Default example policies for tldw_server Resource Governor
+  owner: core-platform
+  version: 1
+
+# Global defaults applied when a policy omits a field.
+defaults:
+  fail_mode: fail_closed  # can be overridden per policy
+  algorithm:
+    requests: token_bucket   # token_bucket | sliding_window
+    tokens: token_bucket     # preferred for model tokens
+  scopes_order: [global, tenant, user, conversation, client, ip, service]
 
 policies:
-  ingress.default:
-    requests:
-      rpm: 1200
-      burst: 1.0
-    scopes: [global, ip]
-    fail_mode: fail_closed
-
+  # Chat API: per-user and per-conversation controls
   chat.default:
-    requests:
-      rpm: 120
-      burst: 2.0
-    tokens:
-      per_min: 60000
-      burst: 1.5
+    requests: { rpm: 120, burst: 2.0 }
+    tokens:   { per_min: 60000, burst: 1.5 }
     scopes: [global, user, conversation]
     fail_mode: fail_closed
 
+  # MCP ingestion/read paths
   mcp.ingestion:
-    requests:
-      rpm: 60
-      burst: 1.0
+    requests: { rpm: 60, burst: 1.0 }
     scopes: [global, client]
-    fail_mode: fallback_memory
+    fail_mode: fallback_memory  # acceptable local over-admission during outages
 
+  # Embeddings service (OpenAI-compatible)
+  embeddings.default:
+    requests: { rpm: 60, burst: 1.2 }
+    scopes: [user]
+
+  # Audio: concurrency via streams + durable minutes cap
   audio.default:
-    minutes:
-      daily_cap: 120
-    streams:
-      max_concurrent: 2
-      ttl_sec: 60
+    streams: { max_concurrent: 2, ttl_sec: 90 }
+    minutes: { daily_cap: 120, rounding: ceil }
     scopes: [user]
     fail_mode: fail_closed
 
-  embeddings.default:
-    requests:
-      rpm: 300
-      burst: 2.0
-    scopes: [global, user]
-    fail_mode: fail_closed
+  # SlowAPI façade defaults (ingress IP-based when auth scopes unavailable)
+  slowapi.default:
+    requests: { rpm: 300, burst: 2.0 }
+    scopes: [ip]
 
-# Tenancy
-tenant:
-  # Include per-tenant scoping early; no-op unless populated.
-  enabled: false
-  # Examples: header or claim used to derive tenant id when enabled.
-  header: X-TLDW-Tenant
-  jwt_claim: tenant_id
+  # Evaluations module
+  evals.default:
+    requests: { rpm: 30, burst: 1.0 }
+    scopes: [user]
+
+# Route/tag mapping helpers. Middleware may use these to resolve policy_id.
+route_map:
+  by_tag:
+    chat: chat.default
+    mcp.ingestion: mcp.ingestion
+    embeddings: embeddings.default
+    audio: audio.default
+    evals: evals.default
+    slowapi: slowapi.default
+  by_path:
+    "/api/v1/chat/*": chat.default
+    "/api/v1/mcp/*": mcp.ingestion
+    "/api/v1/embeddings*": embeddings.default
+    "/api/v1/audio/*": audio.default
+    "/api/v1/evaluations/*": evals.default
+
+# Observability note: Do not include entity label in metrics by default.
+# Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.
 

@@ -12,14 +12,7 @@ Supports:
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BASE_URL = "https://api.archives-ouvertes.fr/search/"
@@ -33,23 +26,7 @@ def _build_url(scope: Optional[str]) -> str:
         return BASE_URL
     return f"{BASE_URL}{s}/"
 
-
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({"Accept": "application/json"})
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
+ 
 
 
 DEFAULT_FL = (
@@ -124,7 +101,6 @@ def search(
     scope: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
     try:
-        s = _mk_session()
         params_list: List[Tuple[str, str]] = [
             ("q", (q or "*:*")),
             ("wt", "json"),
@@ -138,9 +114,7 @@ def search(
             for f in fq:
                 params_list.append(("fq", f))
         url = _build_url(scope)
-        r = s.get(url, params=params_list, timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=url, params=params_list, headers={"Accept": "application/json"}, timeout=20)
         resp = (data.get("response") or {}) if isinstance(data, dict) else {}
         total = int(resp.get("numFound") or 0)
         docs = resp.get("docs") or []
@@ -150,16 +124,6 @@ def search(
                 items.append(_normalize_doc(d))
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to HAL API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"HAL API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to HAL API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"HAL API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"HAL API Request Error: {str(e)}"
         return None, 0, f"HAL error: {str(e)}"
 
 
@@ -178,32 +142,20 @@ def by_docid(docid: str, fl: Optional[str] = None, scope: Optional[str] = None) 
 def raw(params: Dict[str, Any], scope: Optional[str] = None) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """Raw passthrough. Accepts wt in params and returns (content, media_type, error)."""
     try:
-        s = _mk_session()
         wt = (params.get("wt") or "json").lower()
         # set Accept to something reasonable; we return upstream content-type anyway
         if wt in ("xml", "xml-tei", "atom", "rss"):
-            s.headers.update({"Accept": "application/xml"})
+            accept = "application/xml"
         elif wt in ("csv", "bibtex", "endnote"):
-            s.headers.update({"Accept": "text/plain"})
+            accept = "text/plain"
         else:
-            s.headers.update({"Accept": "application/json"})
+            accept = "application/json"
 
         url = _build_url(scope)
-        r = s.get(url, params=params, timeout=25)
-        r.raise_for_status()
+        r = fetch(method="GET", url=url, params=params, headers={"Accept": accept}, timeout=25)
         ct = r.headers.get("content-type") or "application/octet-stream"
         return r.content, ct.split(";")[0], None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to HAL API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"HAL API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to HAL API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"HAL API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"HAL API Request Error: {str(e)}"
         return None, None, f"HAL error: {str(e)}"
 
 

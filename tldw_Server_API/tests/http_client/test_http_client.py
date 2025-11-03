@@ -239,3 +239,91 @@ def test_metrics_increment_on_successful_request():
         assert (after.get("sum", 0) or 0) >= (before.get("sum", 0) or 0)
     finally:
         client.close()
+
+
+@requires_httpx
+def test_proxy_allowlist_dict_form_allows(monkeypatch):
+    from tldw_Server_API.app.core.http_client import create_client
+    import tldw_Server_API.app.core.http_client as hc
+
+    # Allow a specific proxy host via allowlist and verify dict-form proxies pass
+    monkeypatch.setattr(hc, "PROXY_ALLOWLIST", {"proxy.internal"})
+    client = create_client(proxies={"http": "http://proxy.internal:8080", "https": "http://proxy.internal:8080"})
+    try:
+        assert client is not None
+    finally:
+        client.close()
+
+
+@requires_httpx
+@pytest.mark.asyncio
+async def test_mixed_host_redirect_egress_denied(monkeypatch):
+    import httpx
+    from tldw_Server_API.app.core.http_client import afetch, create_async_client
+    from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
+
+    # First hop is a public IP; redirect points to 127.0.0.1 which must be denied by egress
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "93.184.216.34":  # example.com
+            return httpx.Response(302, request=request, headers={"Location": "http://127.0.0.1/blocked"})
+        return httpx.Response(200, request=request, text="ok")
+
+    transport = httpx.MockTransport(handler)
+    client = create_async_client(transport=transport)
+    try:
+        # Some stacks may surface per-hop egress denial as a terminal retry failure;
+        # accept either explicit egress error or retry exhaustion here.
+        with pytest.raises((EgressPolicyError, RetryExhaustedError)):
+            await afetch(method="GET", url="http://93.184.216.34/start", client=client)
+    finally:
+        await client.aclose()
+
+
+@requires_httpx
+@pytest.mark.asyncio
+async def test_retry_on_unsafe_default_no_retry():
+    import httpx
+    from tldw_Server_API.app.core.http_client import afetch, create_async_client, RetryPolicy
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(500, request=request, text="server error")
+        return httpx.Response(200, request=request, text="ok")
+
+    transport = httpx.MockTransport(handler)
+    client = create_async_client(transport=transport)
+    try:
+        # retry_on_unsafe defaults to False; expect no retry for POST
+        resp = await afetch(method="POST", url="http://93.184.216.34/unsafe", client=client, retry=RetryPolicy(attempts=2))
+        assert resp.status_code == 500
+        assert calls["n"] == 1
+    finally:
+        await client.aclose()
+
+
+@requires_httpx
+@pytest.mark.asyncio
+async def test_retry_on_unsafe_true_does_retry():
+    import httpx
+    from tldw_Server_API.app.core.http_client import afetch, create_async_client, RetryPolicy
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            return httpx.Response(500, request=request, text="server error")
+        return httpx.Response(200, request=request, text="ok")
+
+    transport = httpx.MockTransport(handler)
+    client = create_async_client(transport=transport)
+    try:
+        policy = RetryPolicy(attempts=2, retry_on_unsafe=True)
+        resp = await afetch(method="POST", url="http://93.184.216.34/unsafe", client=client, retry=policy)
+        assert resp.status_code == 200
+        assert calls["n"] == 2
+    finally:
+        await client.aclose()

@@ -335,6 +335,26 @@ logger.info("Logging configured (Loguru + stdlib interception)")
 # Auth Endpoint (NEW)
 #
 # Auth Endpoint (NEW)
+"""
+Initialize feature flags up-front so later references in route inclusion do not
+raise NameError when running under ULTRA/MINIMAL test modes or when optional
+routers fail to import.
+"""
+_HAS_HEALTH = False
+_HAS_AUDIO = False
+_HAS_AUDIO_JOBS = False
+_HAS_MEDIA = False
+_HAS_SANDBOX = False
+_HAS_OUTPUT_TEMPLATES = False
+_HAS_OUTPUTS = False
+_HAS_PROMPT_STUDIO = False
+_HAS_WORKFLOWS = False
+_HAS_UNIFIED_EVALUATIONS = False
+_HAS_SCHEDULER_WF = False
+_HAS_JOBS_ADMIN = False
+_HAS_AUTH_ENHANCED = False
+_HAS_CHUNKING = False
+
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 try:
     from tldw_Server_API.app.api.v1.endpoints.auth_enhanced import router as auth_enhanced_router
@@ -397,9 +417,17 @@ elif not _MINIMAL_TEST_APP:
     except Exception as _sandbox_err:  # noqa: BLE001
         logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sandbox_err}")
         _HAS_SANDBOX = False
-    # Chunking Endpoints
-    from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
-    from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+    # Chunking Endpoints (guard to avoid failures from optional summarization deps)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
+        _HAS_CHUNKING = True
+    except Exception as _chunk_err:  # noqa: BLE001
+        logger.warning(f"Chunking endpoints unavailable; skipping import: {_chunk_err}")
+        _HAS_CHUNKING = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+    except Exception as _chunk_tpl_err:  # noqa: BLE001
+        logger.warning(f"Chunking templates endpoints unavailable; skipping import: {_chunk_tpl_err}")
     # Embeddings / Vector stores / Claims
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
     from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
@@ -748,11 +776,13 @@ async def lifespan(app: FastAPI):
                 PolicyReloadConfig as _RGReloadCfg,
                 PolicyLoader as _RGPolicyLoader,
             )
+            from tldw_Server_API.app.core.Resource_Governance import MemoryResourceGovernor, RedisResourceGovernor
             from tldw_Server_API.app.core.config import (
                 rg_policy_store as _rg_store_sel,
                 rg_policy_reload_interval_sec as _rg_reload_interval,
                 rg_policy_reload_enabled as _rg_reload_enabled,
                 rg_policy_path as _rg_policy_path,
+                rg_backend as _rg_backend_sel,
             )
             _store_mode = _rg_store_sel()
             if _store_mode == "db":
@@ -782,6 +812,16 @@ async def lifespan(app: FastAPI):
                 logger.debug(f"Policy auto-reload not started: {_rg_reload_err}")
             app.state.rg_policy_loader = rg_loader
             app.state.rg_policy_store = _store_mode
+            try:
+                _backend = _rg_backend_sel()
+                if _backend == "redis":
+                    app.state.rg_governor = RedisResourceGovernor(policy_loader=rg_loader)
+                    logger.info("ResourceGovernor initialized (redis backend)")
+                else:
+                    app.state.rg_governor = MemoryResourceGovernor(policy_loader=rg_loader)
+                    logger.info("ResourceGovernor initialized (memory backend)")
+            except Exception as _rg_gov_err:
+                logger.warning(f"ResourceGovernor initialization failed/skipped: {_rg_gov_err}")
             try:
                 snap = rg_loader.get_snapshot()
                 app.state.rg_policy_version = int(getattr(snap, "version", 0) or 0)
@@ -2212,6 +2252,14 @@ _startup_trace("FastAPI app created")
 
 # Early middleware to guard workflow templates path traversal attempts
 from starlette.responses import JSONResponse  # noqa: E402
+import os as _os  # noqa: E402
+try:
+    if (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}:
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware as _RGMw  # noqa: E402
+        app.add_middleware(_RGMw)
+        logger.info("RGSimpleMiddleware enabled via RG_ENABLE_SIMPLE_MIDDLEWARE")
+except Exception as _rg_mw_err:  # pragma: no cover - best effort
+    logger.debug(f"RGSimpleMiddleware not enabled: {_rg_mw_err}")
 
 @app.middleware("http")
 async def _guard_workflow_templates_traversal(request, call_next):
@@ -2918,7 +2966,8 @@ else:
     _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
     _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
-    _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
+    if _HAS_CHUNKING and 'chunking_router' in locals():
+        _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
     _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
     if _HAS_OUTPUT_TEMPLATES:
         _include_if_enabled("outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
@@ -3005,6 +3054,12 @@ else:
             pass
     _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    # Resource Governor policy snapshot endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router
+        _include_if_enabled("resource-governor", resource_governor_router, prefix=f"{API_V1_PREFIX}", tags=["resource-governor"])
+    except Exception as _rg_ep_err:
+        logger.warning(f"Resource Governor endpoint unavailable; skipping import: {_rg_ep_err}")
     if _HAS_JOBS_ADMIN:
         _include_if_enabled(
             "jobs",

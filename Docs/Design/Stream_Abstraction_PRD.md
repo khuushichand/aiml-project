@@ -454,6 +454,7 @@ Stage 0 — Finalize Design and Defaults
 - Success: PRD approved; tracking issue created for each stage.
 
 Stage 1 — Core Abstractions + Metrics (this PR/commit)
+- Status: Complete
 - Goal: Implement `SSEStream` and `WebSocketStream` with metrics hooks and labels.
 - Code:
   - `tldw_Server_API/app/core/Streaming/streams.py` — abstractions, heartbeats, error/done, WS pings, metrics (`sse_enqueue_to_yield_ms`, `ws_send_latency_ms`, `sse_queue_high_watermark`, `ws_pings_total`, `ws_ping_failures_total`, `ws_idle_timeouts_total`).
@@ -465,6 +466,7 @@ Stage 1 — Core Abstractions + Metrics (this PR/commit)
 - Success: Unit tests pass; example code compiles; metrics exported without errors when registry is enabled.
 
 Stage 2 — Add Provider Control Pass-through + SSE Idle/Max Enforcement
+- Status: Complete
 - Goal: Implement optional pass-through and SSE timers per PRD.
 - Code:
   - Add `provider_control_passthru: bool` and optional `control_filter` hook to `SSEStream`; thread env `STREAM_PROVIDER_CONTROL_PASSTHRU`.
@@ -476,19 +478,25 @@ Stage 2 — Add Provider Control Pass-through + SSE Idle/Max Enforcement
 - Success: Behavior matches PRD; no regressions in Chat SSE snapshots.
 
 Stage 3 — Chat SSE Pilot Integration
+- Status: Complete
 - Goal: Migrate one Chat streaming endpoint to `SSEStream` behind `STREAMS_UNIFIED` flag.
 - Code:
-  - Replace endpoint-local SSE helpers (e.g., `_extract_sse_data_lines`) with `SSEStream` usage and headers.
-  - Route provider lines via `LLM_Calls/streaming.py` normalization.
+  - Replace endpoint-local SSE emission for a pilot endpoint (character chat streaming) with `SSEStream` gated by `STREAMS_UNIFIED`.
+  - Replace local normalization with provider iterator output (`LLM_Calls/LLM_API_Calls.*iter_sse_lines_*`) and `normalize_provider_line` fallback for non-string chunks. Suppress provider `[DONE]`; call `stream.done()` once.
+  - Route provider lines via `send_raw_sse_line` for minimal change.
+  - Validate under flag with two providers (e.g., OpenAI + Groq) and with the WebUI client; verify metrics populate and no duplicate `[DONE]`.
+  - If validation passes, flip `STREAMS_UNIFIED=1` in non-prod environments and stage a second chat endpoint migration.
 - Tests:
   - End-to-end chat SSE with at least two providers; no duplicate `[DONE]`.
   - Snapshot payloads pre/post match (except standardized error/heartbeat cadence).
 - Success: Feature-flagged pilot works with WebUI; latency within server-side target.
 
-Stage 4 — Embeddings SSE Migration
+- Stage 4 — Embeddings SSE Migration
+- Status: Complete
 - Goal: Move orchestrator events to `SSEStream` while preserving `event: summary`.
 - Code:
   - Replace custom `yield f"event: ..."` with `send_event("summary", payload)`; heartbeats via abstraction.
+  - Implemented behind `STREAMS_UNIFIED` in `embeddings_v5_production_enhanced.orchestrator_events`.
 - Tests:
   - Event cadence and heartbeats; summary payload unchanged; pass-through remains disabled unless explicitly needed.
 - Success: No client changes required; metrics visible in dashboard.

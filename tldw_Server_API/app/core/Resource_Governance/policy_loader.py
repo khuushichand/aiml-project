@@ -23,6 +23,7 @@ class PolicySnapshot:
     version: int
     policies: Dict[str, Any]
     tenant: Dict[str, Any]
+    route_map: Dict[str, Any]
     source_path: Path
     loaded_at_monotonic: float
     mtime: float
@@ -73,11 +74,13 @@ class PolicyLoader:
             version = int(data.get("version") or 1)
             policies = dict(data.get("policies") or {})
             tenant = dict(data.get("tenant") or {})
+            route_map = dict(data.get("route_map") or {})
 
         snap = PolicySnapshot(
             version=version,
             policies=policies,
             tenant=tenant,
+            route_map=route_map if 'route_map' in locals() else {},
             source_path=self._path,
             loaded_at_monotonic=self._time_source(),
             mtime=mtime,

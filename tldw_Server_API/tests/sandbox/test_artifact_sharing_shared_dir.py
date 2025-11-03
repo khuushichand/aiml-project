@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -19,7 +20,10 @@ def _client(monkeypatch) -> TestClient:
     if "sandbox" not in parts:
         parts.append("sandbox")
     monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
-    from tldw_Server_API.app.main import app
+    # Build a minimal app with only the sandbox router
+    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    app = FastAPI()
+    app.include_router(sandbox_router, prefix="/api/v1")
     return TestClient(app)
 
 
@@ -58,4 +62,3 @@ def test_shared_artifacts_directory_persists_and_is_listed(tmp_path: Path, monke
             dr = client2.get(f"/api/v1/sandbox/runs/{run_id}/artifacts/results/a.txt")
             assert dr.status_code == 200
             assert dr.content == b"hello"
-

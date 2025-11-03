@@ -1,0 +1,73 @@
+import os
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.mark.asyncio
+async def test_policy_snapshot_endpoint(monkeypatch):
+    base = Path(__file__).resolve().parents[3]
+    stub = base / "Config_Files" / "resource_governor_policies.yaml"
+
+    monkeypatch.setenv("RG_POLICY_STORE", "file")
+    monkeypatch.setenv("RG_POLICY_PATH", str(stub))
+    monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{base / 'Databases' / 'users_test_rg_endpoint.db'}")
+
+    from tldw_Server_API.app.main import app
+    with TestClient(app) as client:
+        r = client.get("/api/v1/resource-governor/policy?include=ids")
+        assert r.status_code == 200
+        data = r.json()
+        assert data.get("status") == "ok"
+        assert data.get("store") == "file"
+        assert data.get("version") >= 1
+        ids = data.get("policy_ids") or []
+        assert isinstance(ids, list) and len(ids) >= 3
+        assert any(i == "chat.default" for i in ids)
+
+        # Basic get (admin-gated; single_user treated as admin)
+        # Ensure endpoint is reachable; result may be 404 in file store
+        g = client.get(f"/api/v1/resource-governor/policy/{ids[0]}")
+        assert g.status_code in (200, 404)
+
+
+@pytest.mark.asyncio
+async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch):
+    # Use DB policy store so admin writes update the snapshot on refresh
+    base = Path(__file__).resolve().parents[3]
+    monkeypatch.setenv("RG_POLICY_STORE", "db")
+    monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{base / 'Databases' / 'users_test_rg_admin.db'}")
+
+    from tldw_Server_API.app.main import app
+    with TestClient(app) as client:
+        # Upsert a policy
+        new_policy_id = "test.policy"
+        up = client.put(
+            f"/api/v1/resource-governor/policy/{new_policy_id}",
+            json={
+                "payload": {"requests": {"rpm": 42, "burst": 1.0}},
+                "version": 1,
+            },
+        )
+        assert up.status_code == 200
+        # Verify it's included in snapshot ids
+        r = client.get("/api/v1/resource-governor/policy?include=ids")
+        assert r.status_code == 200
+        ids = r.json().get("policy_ids") or []
+        assert new_policy_id in ids
+        # Delete it
+        de = client.delete(f"/api/v1/resource-governor/policy/{new_policy_id}")
+        assert de.status_code == 200
+        r2 = client.get("/api/v1/resource-governor/policy?include=ids")
+        assert new_policy_id not in (r2.json().get("policy_ids") or [])
+
+        # List policies (admin)
+        lst = client.get("/api/v1/resource-governor/policies")
+        assert lst.status_code == 200
+        items = lst.json().get("items")
+        assert isinstance(items, list)

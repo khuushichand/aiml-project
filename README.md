@@ -257,6 +257,20 @@ async def fetch_items():
         return await afetch_json(method="GET", url="https://api.example.com/items", client=client)
 ```
 
+Streaming and downloads
+```
+from tldw_Server_API.app.core.http_client import astream_sse, adownload, RetryPolicy
+
+# Stream SSE events (async)
+async def stream_events(url: str):
+    async for evt in astream_sse(method="GET", url=url):
+        print(evt.event, evt.data)
+
+# Download with retries and checksum
+async def fetch_file(url: str, dest: str):
+    await adownload(url=url, dest=dest, retry=RetryPolicy(attempts=3))
+```
+
 Notes
 - HTTP/2 is preferred, with automatic downgrade when `h2` is not installed. HTTP/3 is available behind a flag when supported.
 - Structured logs redact sensitive headers; metrics are exported when telemetry is configured.
@@ -527,6 +541,25 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
 - Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
+
+### Resource Governor Config
+- Overview & PRD: `Docs/Design/Resource_Governor_PRD.md`
+- Policy store selection (env):
+  - `RG_POLICY_STORE`: `file` (default) or `db`
+  - `RG_POLICY_PATH`: path to YAML when using `file` store (defaults to `tldw_Server_API/Config_Files/resource_governor_policies.yaml`)
+  - `RG_POLICY_RELOAD_ENABLED`: `true|false` (default `true`)
+  - `RG_POLICY_RELOAD_INTERVAL_SEC`: reload interval seconds (default `10`)
+- Backend selection (env):
+  - `RG_BACKEND`: `memory` (default) or `redis`
+  - `RG_REDIS_FAIL_MODE`: `fail_closed` (default) | `fail_open` | `fallback_memory`
+- Proxy/IP scoping (env):
+  - `RG_TRUSTED_PROXIES`: comma-separated CIDRs of reverse proxies
+  - `RG_CLIENT_IP_HEADER`: trusted header name (e.g., `X-Forwarded-For` or `CF-Connecting-IP`)
+- Metrics cardinality (env):
+  - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`); when true, metrics may include a hashed entity label
+- Test mode precedence:
+  - `RG_TEST_BYPASS` overrides Resource Governor behavior when set; otherwise falls back to `TLDW_TEST_MODE`
+ - `RG_ENABLE_SIMPLE_MIDDLEWARE`: `true|false` to enable the minimal pre-check middleware for `requests` category using route tags/path mapping.
 
 ### OpenAI-Compatible Strict Mode (Local Providers)
 

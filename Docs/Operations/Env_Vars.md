@@ -306,6 +306,13 @@ Notes
 | `OTEL_EXPORTER_OTLP_PROTOCOL`   | `grpc`              | `grpc` or `http/protobuf` |
 | `OTEL_EXPORTER_OTLP_HEADERS`    | (empty)             | Optional headers string |
 | `OTEL_EXPORTER_OTLP_INSECURE`   | `true`              | Allow insecure transport |
+| `STREAMS_UNIFIED`               | `0`                 | Feature flag: unified SSE/WS streams in pilot endpoints (set `1` in non-prod) |
+| `STREAM_HEARTBEAT_INTERVAL_S`   | `10`                | Default heartbeat interval for streams (seconds) |
+| `STREAM_HEARTBEAT_MODE`         | `comment`           | `comment` or `data` heartbeats (prefer `data` behind reverse proxies) |
+| `STREAM_IDLE_TIMEOUT_S`         | (disabled)          | Idle timeout for SSE streams (seconds) |
+| `STREAM_MAX_DURATION_S`         | (disabled)          | Maximum duration for SSE streams (seconds) |
+| `STREAM_QUEUE_MAXSIZE`          | `256`               | Default bounded queue size for SSE streams |
+| `STREAM_PROVIDER_CONTROL_PASSTHRU` | `0`              | Preserve provider SSE control lines (`event/id/retry`) when `1` |
 
 ## Prometheus & Grafana (deployment)
 

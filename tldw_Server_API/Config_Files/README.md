@@ -361,6 +361,18 @@ async with create_async_client() as client:
     data = await afetch_json(method="GET", url="https://api.example.com/items", client=client)
 ```
 
+Downloads and streaming
+```
+from tldw_Server_API.app.core.http_client import adownload, astream_sse, RetryPolicy
+
+# Reliable file downloads with optional checksum/length validation
+await adownload(url="https://host/file.bin", dest="/tmp/file.bin", retry=RetryPolicy(attempts=3))
+
+# Stream SSE events with backpressure-friendly async iteration
+async for evt in astream_sse(method="GET", url="https://host/stream"):
+    print(evt.event, evt.data)
+```
+
 ## [Moderation]
 - `enabled` (bool)
 - `input_enabled|output_enabled` (bool)

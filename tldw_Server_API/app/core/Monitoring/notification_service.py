@@ -183,11 +183,15 @@ class NotificationService:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
     def _send_webhook(self, payload: Dict[str, Any]) -> None:
-        import httpx
-        timeout = httpx.Timeout(5.0, connect=3.0)
-        with httpx.Client(timeout=timeout) as client:
-            headers = {"Content-Type": "application/json"}
-            client.post(self.webhook_url, json=payload, headers=headers)
+        from tldw_Server_API.app.core.http_client import create_client, fetch
+        # 3s connect, 5s read/write aligns with defaults but explicit here
+        try:
+            with create_client(timeout=5.0) as client:
+                headers = {"Content-Type": "application/json"}
+                fetch(method="POST", url=self.webhook_url, client=client, headers=headers, json=payload, timeout=5.0)
+        except Exception as e:
+            # Let retry decorator handle; raise to trigger retry
+            raise e
 
     def _send_webhook_safe(self, payload: Dict[str, Any]) -> None:
         try:

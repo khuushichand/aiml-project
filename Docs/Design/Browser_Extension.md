@@ -194,19 +194,290 @@ Example Requests
   - Example body:
     `{ "model": "openai/gpt-4o-mini", "stream": true, "messages": [{"role":"user","content":"Summarize https://example.com"}] }`
   - Headers: `Accept: text/event-stream` for SSE; server emits NDJSON/SSE lines ending with `[DONE]`.
+  - Expected response (stream lines):
+    - `data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant","content":"Hello"}}]}`
+    - `data: {"choices":[{"delta":{"content":" world"}}]}`
+    - `data: [DONE]`
 - RAG (streaming)
   - Request: `POST /api/v1/rag/search/stream`
   - Body minimal: `{ "query": "impact of CRISPR on gene therapy", "enable_generation": true, "top_k": 5 }`
   - Stream events: `delta` (answer tokens), optional `claims_overlay`, and final summary. Content-type `application/x-ndjson` or SSE with `data:` lines.
+  - Expected response (ndjson lines):
+    - `{ "event": "delta", "data": { "content": "Genome editing ..." } }`
+    - `{ "event": "claims_overlay", "data": { "citations": [{"url":"...","span":[12,34]}] } }`
+    - `{ "event": "done" }`
 - Media add (persist)
   - `POST /api/v1/media/add` with JSON `{ "url": "https://example.com/article" }`
+  - Expected response (shape):
+    - `{ "results": [ { "status": "Success", "input_ref": "https://...", "media_type": "site", "db_id": 456, "message": "Media added to database.", "summary": "..." } ] }`
 - Media process (no DB)
   - JSON URL: `POST /api/v1/media/process-pdfs` with `{ "urls": ["https://host/file.pdf"] }`
   - File upload: multipart to `/api/v1/media/process-pdfs` with `files=@/path/file.pdf`.
+  - Expected response (shape):
+    - `{ "processed_count": 1, "errors_count": 0, "errors": [], "results": [ { "status": "Success", "input_ref": "https://.../file.pdf", "media_type": "pdf", "content": "...", "chunks": [ ... ] } ] }`
 - STT (multipart)
   - `POST /api/v1/audio/transcriptions`
   - Fields: `file=@/path/audio.wav`, `model=whisper-1`, optional `language=en`, `response_format=json`.
   - Example cURL: `curl -X POST "$BASE/api/v1/audio/transcriptions" -H "Authorization: Bearer TOKEN" -F "file=@/abs/audio.wav" -F "model=whisper-1" -F "language=en"`
+  - Expected response (json):
+    - `{ "text": "hello world", "language": "en", "segments": [ {"start":0.0,"end":0.8,"text":"hello"}, {"start":0.8,"end":1.5,"text":"world"} ] }`
+
+- Reading — save & list
+  - Save current tab: `POST /api/v1/reading/save`
+    - Body:
+      `{
+        "url": "https://example.com/ai/rag-intro",
+        "title": "RAG Intro",
+        "tags": ["ai","rag"],
+        "status": "saved",
+        "favorite": false
+      }`
+    - Expected response (ReadingItem):
+      `{
+        "id": 1456,
+        "media_id": 8123,
+        "title": "RAG Intro",
+        "url": "https://example.com/ai/rag-intro",
+        "domain": "example.com",
+        "summary": null,
+        "published_at": null,
+        "status": "saved",
+        "favorite": false,
+        "tags": ["ai","rag"],
+        "created_at": "2025-10-19T08:00:10Z",
+        "updated_at": "2025-10-19T08:00:10Z"
+      }`
+  - List items: `GET /api/v1/reading/items?status=saved&tags=ai&page=1&size=20`
+    - Expected response (ReadingItemsListResponse):
+      `{
+        "items": [ { "id": 1456, "title": "RAG Intro", "url": "https://example.com/ai/rag-intro", "status": "saved", "favorite": false, "tags": ["ai","rag"], "created_at": "..." } ],
+        "total": 1,
+        "page": 1,
+        "size": 20
+      }`
+
+  - Update item: `PATCH /api/v1/reading/items/{item_id}`
+    - Body: `{ "status": "reading", "favorite": true, "tags": ["ai","rag","priority"] }`
+    - Expected response (ReadingItem):
+      `{ "id": 1456, "title": "RAG Intro", "status": "reading", "favorite": true, "tags": ["ai","rag","priority"], "updated_at": "2025-10-19T09:15:00Z" }`
+
+  - List filters (query param variants):
+    - Multi-filter: `GET /api/v1/reading/items?status=saved&status=reading&tags=ai&tags=ml&favorite=true&q=vector%20search&domain=example.com&page=2&size=50`
+    - Text search only: `GET /api/v1/reading/items?q=rag&page=1&size=10`
+    - Tag filter only: `GET /api/v1/reading/items?tags=ai`
+    - Notes:
+      - Repeat `status` and `tags` keys to pass multiple values (FastAPI parses as list).
+      - `favorite` accepts `true|false`.
+      - `status` allowed values: `saved|reading|read|archived`.
+    - cURL examples:
+      - Multi-filter:
+        `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/reading/items?status=saved&status=reading&tags=ai&tags=ml&favorite=true&q=vector%20search&domain=example.com&page=2&size=50"`
+      - Text search only:
+        `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/reading/items?q=rag&page=1&size=10"`
+      - Tag filter only:
+        `curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/reading/items?tags=ai"`
+
+  - Minimal PATCH examples (single-field updates):
+    - Toggle favorite: `PATCH /api/v1/reading/items/{id}` body `{ "favorite": true }`
+    - Update tags only: `PATCH /api/v1/reading/items/{id}` body `{ "tags": ["ai","priority"] }`
+    - Update status only: `PATCH /api/v1/reading/items/{id}` body `{ "status": "read" }`
+    - cURL (PATCH):
+      - Toggle favorite:
+        `curl -sS -X PATCH "$BASE/api/v1/reading/items/1456" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"favorite": true}'`
+      - Update tags:
+        `curl -sS -X PATCH "$BASE/api/v1/reading/items/1456" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"tags": ["ai","priority"]}'`
+      - Update status:
+        `curl -sS -X PATCH "$BASE/api/v1/reading/items/1456" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"status": "read"}'`
+
+- Reading — highlights
+  - Create highlight: `POST /api/v1/reading/items/{item_id}/highlight`
+  - Example body:
+    `{
+      "item_id": 456,
+      "quote": "The mitochondrion is the powerhouse of the cell.",
+      "start_offset": 128,
+      "end_offset": 178,
+      "color": "yellow",
+      "note": "Key definition",
+      "anchor_strategy": "fuzzy_quote"
+    }`
+  - Expected response (Highlight):
+    `{ "id": 1001, "item_id": 456, "quote": "The mitochondrion is the powerhouse of the cell.", "start_offset":128, "end_offset":178, "color":"yellow", "note":"Key definition", "created_at":"2025-10-19T08:00:10Z", "anchor_strategy":"fuzzy_quote", "content_hash_ref": "sha256:...", "context_before": "... power...", "context_after": "... cell ...", "state": "active" }`
+  - List highlights for item: `GET /api/v1/reading/items/{item_id}/highlights`
+    - Expected response (array of Highlight):
+      `[{ "id": 1001, "item_id": 456, "quote": "...", "color":"yellow", "note":"Key definition", "created_at":"2025-10-19T08:00:10Z", "anchor_strategy":"fuzzy_quote", "state":"active" }]`
+  - Update highlight: `PATCH /api/v1/reading/highlights/{highlight_id}`
+    - Body: `{ "note": "Refined takeaway", "color": "green", "state": "active" }`
+    - Expected response: updated Highlight object
+  - Delete highlight: `DELETE /api/v1/reading/highlights/{highlight_id}` → `{ "success": true }`
+
+- Notes — keyword link/unlink
+  - Precondition: a note exists (`note_id` is a UUID string) and a keyword exists (`keyword_id` is an integer). Create keyword with `POST /api/v1/notes/keywords/` body `{ "keyword": "biology" }` if needed.
+  - Link keyword to note: `POST /api/v1/notes/{note_id}/keywords/{keyword_id}`
+    - Expected response: `{ "success": true, "message": "Note linked to keyword successfully." }`
+  - List keywords on note: `GET /api/v1/notes/{note_id}/keywords/`
+    - Expected response:
+      `{ "note_id": "a3f0...", "keywords": [ { "id": 17, "keyword": "biology", "created_at": "2025-10-18T07:01:02Z", "last_modified": "2025-10-18T07:01:02Z", "version": 1, "client_id": "api_client", "deleted": false } ] }`
+  - List notes for a keyword: `GET /api/v1/notes/keywords/{keyword_id}/notes/?limit=50&offset=0`
+    - Expected response (shape): `{ "keyword_id": 17, "notes": [ { "id": "a3f0...", "title": "Mitochondria", "version": 3, "deleted": false, "keywords": [ {"id":17, "keyword": "biology", ...} ] } ] }`
+  - Unlink keyword from note: `DELETE /api/v1/notes/{note_id}/keywords/{keyword_id}`
+    - Expected response: `{ "success": true, "message": "Note unlinked from keyword successfully." }`
+  - Errors: `404 { "detail": "Note with ID '...' not found." }`, `404 { "detail": "Keyword with ID '...' not found." }`
+
+- Prompts — search
+  - Request: `POST /api/v1/prompts/search?search_query=embedding&search_fields=name&search_fields=details&page=1&results_per_page=10`
+  - Expected response (PromptSearchResponse):
+    `{
+      "items": [
+        {
+          "id": 12,
+          "uuid": "c9d3...",
+          "name": "Dense Retrieval Prompt",
+          "author": "alice",
+          "details": "Guidelines for embedding-based retrieval...",
+          "system_prompt": "You are a helpful...",
+          "user_prompt": "Given the query ...",
+          "keywords": ["retrieval","embedding"],
+          "last_modified": "2025-10-18T10:00:00Z",
+          "version": 4,
+          "deleted": false,
+          "relevance_score": 0.91
+        }
+      ],
+      "total_matches": 3,
+      "page": 1,
+      "per_page": 10
+    }`
+
+- Prompts — export
+  - Request (CSV): `GET /api/v1/prompts/export?export_format=csv&filter_keywords=retrieval&include_system=true&include_user=true&include_details=false&include_author=true&include_associated_keywords=true`
+  - Request (Markdown): `GET /api/v1/prompts/export?export_format=markdown&markdown_template_name=Basic%20Template`
+  - Expected response (ExportResponse):
+    `{
+      "message": "Export successful (2 prompts)",
+      "file_content_b64": "UE5HLE5hbWUsQXV0aG9yLk4uLi4="
+    }`
+
+- Prompts — keywords export (CSV)
+  - Request: `GET /api/v1/prompts/keywords/export-csv`
+  - Expected response (ExportResponse):
+    `{
+      "message": "Successfully exported 12 active prompt keywords",
+      "file_content_b64": "a2V5d29yZCxwcm9tcHRzX2NvdW50XG5SQUcsMTA..."
+    }`
+
+- Watchlists — generate output
+  - Request: `POST /api/v1/watchlists/outputs`
+  - Example body:
+    `{
+      "run_id": 123,
+      "item_ids": [1001, 1002, 1007],
+      "title": "Daily Tech Briefing",
+      "type": "briefing_markdown",
+      "format": "md",
+      "template_name": "daily_md",
+      "temporary": true,
+      "deliveries": {
+        "email": {
+          "enabled": true,
+          "recipients": ["me@example.com"],
+          "attach_file": true,
+          "body_format": "auto"
+        },
+        "chatbook": {
+          "enabled": true,
+          "title": "Tech Briefing",
+          "description": "Auto-generated from watchlist run 123"
+        }
+      }
+    }`
+  - Notes: omit `item_ids` to include all ingested items for the run.
+  - Expected response (WatchlistOutput):
+    - `{ "id": 9001, "run_id": 123, "job_id": 77, "type": "briefing_markdown", "format": "md", "title": "Daily Tech Briefing", "content": "# Daily Tech...", "metadata": { "item_count": 3, "template_name": "daily_md" }, "version": 2, "expires_at": "2025-10-20T08:00:00Z", "created_at": "2025-10-19T08:00:10Z" }`
+
+- Watchlists — list and download outputs
+  - List: `GET /api/v1/watchlists/outputs?run_id=123&page=1&size=50`
+  - Get metadata: `GET /api/v1/watchlists/outputs/{output_id}` (returns `format`, `title`, `expires_at`, etc.)
+  - Download: `GET /api/v1/watchlists/outputs/{output_id}/download`
+    - Content-Disposition filename uses title and `.{md|html}` based on `format`.
+  - Expected list response:
+    - `{ "items": [ { "id": 9001, "run_id": 123, "format": "md", "title": "Daily Tech Briefing", "expired": false, "created_at": "..." } ], "total": 1 }`
+
+- Flashcards — import TSV/CSV
+  - Request: `POST /api/v1/flashcards/import`
+  - Body (JSON):
+    `{
+      "delimiter": "\t",
+      "has_header": true,
+      "content": "Deck\tFront\tBack\tTags\tNotes\nDefault\tWhat is RAG?\tRetrieval-Augmented Generation\tAI;RAG\tcore concept\nDefault\tCloze example {{c1::mask}}\t\tcloze;example\t" 
+    }`
+  - Response: `{ "imported": N, "items": [{"uuid":"...","deck_id":1}, ...], "errors": [...] }`
+  - Limits: see “Flashcards import limits” in Schema Notes.
+  - Sample error entries in `errors`:
+    - `{ "line": null, "error": "Maximum import line limit reached (10000)" }`
+    - `{ "index": 3, "error": "Field too long: Front (> 8192 bytes)" }`
+    - `{ "index": 7, "error": "Invalid cloze: Front must contain one or more {{cN::...}} patterns" }`
+
+- Flashcards — APKG export
+  - Request (CSV): `GET /api/v1/flashcards/export?deck_id=1&format=csv&include_header=true&delimiter=%09`
+  - Request (APKG): `GET /api/v1/flashcards/export?deck_id=1&format=apkg`
+  - Example cURL: `curl -L "$BASE/api/v1/flashcards/export?deck_id=1&format=apkg" -H "Authorization: Bearer $TOKEN" -o deck.apkg`
+  - Expected response (APKG):
+    - Binary stream; headers include `Content-Type: application/octet-stream` and `Content-Disposition: attachment; filename="<deck>.apkg"`.
+
+Sample Error Responses
+- Watchlists outputs (POST /watchlists/outputs)
+  - `404 { "detail": "run_not_found" }`
+  - `404 { "detail": "job_not_found" }`
+  - `400 { "detail": "items_must_belong_to_run" }`
+  - `400 { "detail": "no_items_available" }`
+  - `400 { "detail": "invalid_template_name" }`
+  - `404 { "detail": "template_not_found" }`
+  - `400 { "detail": "invalid_format" }`
+- Notes update/delete without correct version header
+  - `409 { "detail": "version_conflict" }`
+
+- Watchlists — create job
+  - Request: `POST /api/v1/watchlists/jobs`
+  - Example body:
+    `{
+      "name": "Tech Daily",
+      "description": "Top tech headlines",
+      "scope": {"sources": [1,2], "groups": [10], "tags": ["ai","ml"]},
+      "schedule_expr": "0 8 * * *",
+      "timezone": "UTC+8",
+      "active": true,
+      "max_concurrency": 4,
+      "per_host_delay_ms": 1500,
+      "output_prefs": {"template": "daily_md", "retention_days": 7},
+      "job_filters": {
+        "filters": [
+          {"type": "keyword", "action": "include", "value": {"terms": ["AI","LLM"], "scope": "title"}, "priority": 1},
+          {"type": "regex", "action": "exclude", "value": {"pattern": "(?i)rumor|sponsored"} }
+        ],
+        "require_include": true
+      }
+    }`
+
+- Watchlists — preview candidates (no ingest)
+  - Request: `POST /api/v1/watchlists/jobs/{job_id}/preview?limit=20&per_source=10`
+  - Example response (shape):
+    `{
+      "items": [
+        {"source_id": 1, "source_type": "rss", "url": "https://...", "title": "...", "summary": "...", "decision": "ingest", "matched_action": "include"},
+        {"source_id": 2, "source_type": "site", "url": "https://...", "title": "...", "summary": "...", "decision": "filtered", "matched_action": "exclude", "matched_filter_key": "regex:rumor"}
+      ],
+      "total": 25,
+      "ingestable": 12,
+      "filtered": 13
+    }`
+
+- Notes — optimistic concurrency (error)
+  - Update requires header `expected-version: <int>`; stale version triggers 409.
+  - Example request: `PATCH /api/v1/notes/{id}` with body `{ "content": "New text" }` and header `expected-version: 3`.
+  - Example 409 response:
+    `{ "detail": "version_conflict" }`
+  - Clients should re-fetch the note, read the current `version`, and retry with the latest value.
 
 
 AuthNZ & Headers

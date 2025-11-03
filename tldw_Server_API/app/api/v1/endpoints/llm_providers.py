@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.Chat.provider_config import (
     PROVIDER_CAPABILITIES,
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
 
 #######################################################################################################################
 #
@@ -772,7 +773,16 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             # Centralized capability diagnostics
             try:
                 provider_data['requires_api_key'] = bool(PROVIDER_REQUIRES_KEY.get(provider_name, provider_info['type'] == 'commercial'))
+                # Start with defaults from static map
                 capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
+                # Merge adapter-reported capabilities if available
+                try:
+                    reg = llm_adapter_registry.get_registry()
+                    reg_caps = reg.get_all_capabilities()
+                    if provider_name in reg_caps:
+                        capabilities.update(reg_caps[provider_name])
+                except Exception:
+                    pass
                 # Merge config-indicated streaming support as an override if provided
                 if 'supports_streaming' not in capabilities and 'supports_streaming' in provider_data:
                     capabilities['supports_streaming'] = provider_data['supports_streaming']

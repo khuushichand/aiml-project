@@ -26,6 +26,7 @@ import numpy as np
 import tempfile
 from pathlib import Path
 from fastapi import WebSocketDisconnect
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from loguru import logger
 from uuid import uuid4
 
@@ -1205,6 +1206,22 @@ async def handle_unified_websocket(
     """
     logger.info("=== handle_unified_websocket STARTED ===")
 
+    # Wrap the WebSocket with standardized lifecycle (ping/error/done) and metrics.
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=None,  # use env default
+        compat_error_type=True,     # include error_type for rollout compatibility
+        close_on_done=True,
+        idle_timeout_s=None,
+        labels={"component": "audio", "endpoint": "audio_unified_ws"},
+    )
+    await stream.start()
+    # Ensure downstream helpers using the raw websocket route sends through the stream where possible
+    try:
+        setattr(websocket, "send_json", stream.send_json)
+    except Exception:
+        pass
+
     if not config:
         config = UnifiedStreamingConfig()
         logger.info("Created default config")
@@ -1349,7 +1366,7 @@ async def handle_unified_websocket(
             logger.error(error_msg, exc_info=True)
             # Emit structured warning about model/variant unavailability before fallback attempts
             try:
-                await websocket.send_json({
+                await stream.send_json({
                     "type": "warning",
                     "state": "model_unavailable",
                     "error_type": "model_unavailable",
@@ -1390,7 +1407,7 @@ async def handle_unified_websocket(
                     logger.info("Successfully fell back to Whisper model")
 
                     # Notify client about fallback
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "warning",
                         "message": f"{original_model} model unavailable, using Whisper instead",
                         "fallback": True,
@@ -1399,22 +1416,18 @@ async def handle_unified_websocket(
                     })
                 except Exception as fallback_error:
                     logger.error(f"Fallback to Whisper also failed: {fallback_error}")
-                    # Send error with more details
-                    await websocket.send_json({
-                        "type": "error",
-                        "error_type": "model_unavailable",
-                        "message": "No transcription models available. Please install required dependencies.",
-                        "details": {
+                    # Send standardized error and close with mapped code (1011)
+                    await stream.error(
+                        "provider_error",
+                        "No transcription models available. Please install required dependencies.",
+                        data={
                             "model": config.model,
                             "variant": getattr(config, 'model_variant', None),
                             "original_error": str(e),
                             "fallback_error": str(fallback_error),
-                            "suggestion": "Install nemo_toolkit[asr] for Parakeet/Canary or ensure faster-whisper is installed"
-                        }
-                    })
-
-                    # Close with error code
-                    await websocket.close(code=1011, reason="No models available")
+                            "suggestion": "Install nemo_toolkit[asr] for Parakeet/Canary or ensure faster-whisper is installed",
+                        },
+                    )
                     return
             else:
                 # Fallback disabled or already using Whisper
@@ -1424,22 +1437,18 @@ async def handle_unified_websocket(
                 elif config.model.lower() == 'whisper':
                     suggestion = "Ensure faster-whisper is installed: pip install faster-whisper"
 
-                # Send error with more details
-                await websocket.send_json({
-                    "type": "error",
-                    "error_type": "model_unavailable",
-                    "message": error_msg,
-                    "details": {
+                # Standardized error + close mapping (internal error)
+                await stream.error(
+                    "internal_error",
+                    error_msg,
+                    data={
                         "model": config.model,
                         "error_type": type(e).__name__,
                         "error_details": str(e),
                         "fallback_enabled": fallback_enabled,
-                        "suggestion": suggestion
-                    }
-                })
-
-                # Close with error code
-                await websocket.close(code=1011, reason=error_msg[:120])  # 1011 = Internal Error
+                        "suggestion": suggestion,
+                    },
+                )
                 return
 
         if diarizer is None and config.diarization_enabled:
@@ -1472,12 +1481,12 @@ async def handle_unified_websocket(
                     })
             except Exception as diar_err:
                 logger.error(f"Failed to initialize streaming diarizer: {diar_err}", exc_info=True)
-                await websocket.send_json({
-                    "type": "warning",
-                    "state": "diarization_unavailable",
-                    "message": "Diarization disabled: initialization failed",
-                    "details": str(diar_err),
-                })
+                    await stream.send_json({
+                        "type": "warning",
+                        "state": "diarization_unavailable",
+                        "message": "Diarization disabled: initialization failed",
+                        "details": str(diar_err),
+                    })
                 diarizer = None
 
         if insights_engine is None and insights_settings and insights_settings.enabled:
@@ -1486,14 +1495,14 @@ async def handle_unified_websocket(
                 logger.info(
                     f"Live insights enabled (provider={insights_engine.provider}, model={insights_engine.model})"
                 )
-                await websocket.send_json({
+                await stream.send_json({
                     "type": "status",
                     "state": "insights_enabled",
                     "insights": insights_engine.describe()
                 })
             except Exception as insight_err:
                 logger.error(f"Failed to initialize live insights engine: {insight_err}", exc_info=True)
-                await websocket.send_json({
+                await stream.send_json({
                     "type": "warning",
                     "state": "insights_unavailable",
                     "message": "Live insights disabled: initialization failed",
@@ -1509,6 +1518,10 @@ async def handle_unified_websocket(
         while True:
             try:
                 message = await websocket.receive_text()
+                try:
+                    stream.mark_activity()
+                except Exception:
+                    pass
                 data = json.loads(message)
 
                 if data.get("type") == "audio":
@@ -1557,7 +1570,7 @@ async def handle_unified_websocket(
                             except Exception as diar_err:
                                 logger.error(f"Diarization update failed: {diar_err}", exc_info=True)
 
-                        await websocket.send_json(result)
+                        await stream.send_json(result)
                         if insights_engine and result.get("is_final"):
                             try:
                                 await insights_engine.on_transcript(result)
@@ -1602,7 +1615,7 @@ async def handle_unified_websocket(
                                     config.diarization_store_audio
                                     and (audio_path is None or not audio_path)
                                 ):
-                                    await websocket.send_json({
+                                    await stream.send_json({
                                         "type": "warning",
                                         "warning_type": "audio_persistence_unavailable",
                                         "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
@@ -1611,13 +1624,13 @@ async def handle_unified_websocket(
                                 if config.diarization_store_audio:
                                     _method = getattr(diarizer, "persistence_method", None)
                                     if audio_path and _method and _method != "soundfile":
-                                        await websocket.send_json({
+                                        await stream.send_json({
                                             "type": "status",
                                             "state": "diarization_persist_degraded",
                                             "persistence_method": _method,
                                         })
                                     elif (not audio_path) or (_method is None):
-                                        await websocket.send_json({
+                                        await stream.send_json({
                                             "type": "status",
                                             "state": "diarization_persist_disabled",
                                             "persistence_method": _method,
@@ -1640,56 +1653,41 @@ async def handle_unified_websocket(
                             await diarizer.reset()
                         except Exception as diar_err:
                             logger.error(f"Diarization reset failed: {diar_err}", exc_info=True)
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "status",
                         "state": "reset"
                     })
 
                 elif data.get("type") == "stop":
-                    # Stop transcription
+                    # Stop transcription with standardized done frame
+                    try:
+                        await stream.done()
+                    except Exception:
+                        pass
                     break
 
             except json.JSONDecodeError:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Invalid JSON message"
-                })
+                await stream.error("validation_error", "Invalid JSON message")
             except QuotaExceeded as qe:
                 # Send structured quota error and close with application-defined code
-                try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "error_type": "quota_exceeded",
-                        "quota": getattr(qe, "quota", "unknown"),
-                        "message": "Streaming transcription quota exceeded"
-                    })
-                finally:
-                    try:
-                        await websocket.close(code=4003, reason="quota_exceeded")
-                    except Exception:
-                        pass
+                await stream.error(
+                    "quota_exceeded",
+                    "Streaming transcription quota exceeded",
+                    data={"quota": getattr(qe, "quota", "unknown")},
+                )
                 return
             except Exception as e:
                 logger.error(f"Error processing message: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"Processing error: {str(e)}"
-                })
+                await stream.error("internal_error", f"Processing error: {str(e)}")
 
     except asyncio.TimeoutError:
-        await websocket.send_json({
-            "type": "error",
-            "message": "Configuration timeout"
-        })
+        await stream.error("idle_timeout", "Configuration timeout")
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected by client")
     except Exception as e:
         logger.error(f"WebSocket handler error: {e}")
         try:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Server error: {str(e)}"
-            })
+            await stream.error("internal_error", f"Server error: {str(e)}")
         except Exception as send_err:
             logger.debug(f"Failed to send error frame on websocket: error={send_err}")
     finally:
@@ -1706,6 +1704,10 @@ async def handle_unified_websocket(
                 await diarizer.close()
             except Exception as diar_err:
                 logger.error(f"Failed to close diarizer: {diar_err}")
+        try:
+            await stream.stop()
+        except Exception:
+            pass
 
 
 # Export main components

@@ -14,6 +14,7 @@ import httpx
 
 import os
 from .sse import normalize_provider_line, is_done_line, sse_data
+from tldw_Server_API.app.core.http_client import astream_sse, RetryPolicy
 
 
 def iter_sse_lines_requests(
@@ -99,3 +100,38 @@ async def aiter_sse_lines_httpx(
         yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
     except Exception as e_stream:
         yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
+
+
+async def aiter_normalized_sse(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: Optional[dict] = None,
+    params: Optional[dict] = None,
+    retry: Optional[RetryPolicy] = None,
+    provider: str = "provider",
+    provider_control_passthru: Optional[bool] = None,
+    control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
+) -> AsyncIterator[str]:
+    """Standardized SSE iterator built on the centralized astream_sse helper.
+
+    - Enforces egress policy and retries per PRD defaults.
+    - Normalizes provider lines using existing helpers.
+    """
+    passthru = (
+        provider_control_passthru
+        if provider_control_passthru is not None
+        else os.getenv("STREAM_PROVIDER_CONTROL_PASSTHRU", "0") == "1"
+    )
+    async for ev in astream_sse(url=url, method=method, headers=headers, params=params, retry=retry):
+        if not ev or not ev.data:
+            continue
+        # Normalize SSE payload as if it were a provider line
+        normalized = normalize_provider_line(
+            ev.data,
+            provider_control_passthru=passthru,
+            control_filter=control_filter,
+        )
+        if normalized is None:
+            continue
+        yield normalized

@@ -1,382 +1,441 @@
-"""
-Streaming abstraction for SSE and WebSocket transports.
-
-Provides a small, composable interface to standardize:
-- emission of structured events and JSON payloads
-- DONE and ERROR lifecycle frames (with canonical error code + message)
-- optional heartbeat for long-lived streams
-
-Notes
-- SSEStream is queue-backed and exposes iter_sse() for FastAPI StreamingResponse.
-- WebSocketStream wraps a Starlette/FastAPI WebSocket, with optional ping loop.
-"""
-
-from __future__ import annotations
-
 import asyncio
 import json
-from typing import Any, AsyncIterator, Dict, Optional, Protocol, Tuple
-import time as _time
+import os
+import time
+from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
 
-try:
-    # Prefer unified metrics module if available
-    from tldw_Server_API.app.core.Metrics import observe_histogram, set_gauge, increment_counter
-except Exception:  # pragma: no cover - metrics optional in minimal envs
-    def observe_histogram(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:  # type: ignore
-        return
-
-    def set_gauge(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:  # type: ignore
-        return
-
-    def increment_counter(metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None) -> None:  # type: ignore
-        return
+from loguru import logger
 
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     ensure_sse_line,
     sse_data,
     sse_done,
 )
+from tldw_Server_API.app.core.Metrics.metrics_manager import (
+    get_metrics_registry,
+    MetricDefinition,
+    MetricType,
+)
 
 
-class AsyncStream(Protocol):
-    async def send_event(self, event: str, data: Any | None = None) -> None: ...
-    async def send_json(self, payload: Dict[str, Any]) -> None: ...
-    async def done(self) -> None: ...
-    async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None) -> None: ...
+_STREAM_METRICS_REGISTERED = False
+
+
+def _ensure_stream_metrics_registered() -> None:
+    global _STREAM_METRICS_REGISTERED
+    if _STREAM_METRICS_REGISTERED:
+        return
+    reg = get_metrics_registry()
+    try:
+        reg.register_metric(
+            MetricDefinition(
+                name="sse_enqueue_to_yield_ms",
+                type=MetricType.HISTOGRAM,
+                description="Time from SSE enqueue to yield (ms)",
+                unit="ms",
+                labels=["component", "endpoint", "transport"],
+                buckets=[0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+            )
+        )
+        reg.register_metric(
+            MetricDefinition(
+                name="sse_queue_high_watermark",
+                type=MetricType.GAUGE,
+                description="Max SSE queue size observed",
+                unit="items",
+                labels=["component", "endpoint", "transport"],
+            )
+        )
+        reg.register_metric(
+            MetricDefinition(
+                name="ws_send_latency_ms",
+                type=MetricType.HISTOGRAM,
+                description="WebSocket send_json latency (ms)",
+                unit="ms",
+                labels=["component", "endpoint", "transport", "kind"],
+                buckets=[0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000],
+            )
+        )
+        reg.register_metric(
+            MetricDefinition(
+                name="ws_pings_total",
+                type=MetricType.COUNTER,
+                description="Total WS ping frames sent",
+                labels=["component", "endpoint", "transport"],
+            )
+        )
+        reg.register_metric(
+            MetricDefinition(
+                name="ws_ping_failures_total",
+                type=MetricType.COUNTER,
+                description="Total WS ping send failures",
+                labels=["component", "endpoint", "transport"],
+            )
+        )
+        reg.register_metric(
+            MetricDefinition(
+                name="ws_idle_timeouts_total",
+                type=MetricType.COUNTER,
+                description="Total WS idle timeouts",
+                labels=["component", "endpoint", "transport"],
+            )
+        )
+        _STREAM_METRICS_REGISTERED = True
+    except Exception as e:
+        logger.debug(f"Stream metrics registration failed or already registered: {e}")
 
 
 class SSEStream:
-    """Async queue-backed SSE stream with optional heartbeats.
+    """
+    SSE stream helper with queue, heartbeats, and optional idle/max enforcement.
 
-    Usage
-        stream = SSEStream(heartbeat_interval_s=10)
-        return StreamingResponse(stream.iter_sse(), media_type="text/event-stream")
+    Features:
+    - Bounded queue (default maxsize 256; block on full)
+    - Heartbeats (comment or data mode)
+    - Provider control pass-through toggle for upstream normalization flows
+    - Idle timeout and max duration enforcement (emit error + DONE)
+    - Optional labels dict for metrics tagging (not enforced here)
     """
 
     def __init__(
         self,
         *,
-        heartbeat_interval_s: Optional[float] = 10.0,
-        heartbeat_mode: str = "comment",  # "comment" or "data"
-        queue_maxsize: int = 1000,
+        heartbeat_interval_s: Optional[float] = None,
+        heartbeat_mode: Optional[str] = None,  # "comment" or "data"; env-driven by default
+        queue_maxsize: Optional[int] = None,
         close_on_error: bool = True,
+        idle_timeout_s: Optional[float] = None,
+        max_duration_s: Optional[float] = None,
+        provider_control_passthru: Optional[bool] = None,
+        control_filter: Optional[Callable[[str, str], Optional[tuple[str, str]]]] = None,
         labels: Optional[Dict[str, str]] = None,
     ) -> None:
-        self._queue: "asyncio.Queue[Tuple[str, float]]" = asyncio.Queue(maxsize=max(1, int(queue_maxsize)))
-        self._hb_task: Optional[asyncio.Task] = None
-        self._heartbeat_interval = heartbeat_interval_s if (heartbeat_interval_s or 0) > 0 else None
-        self._heartbeat_mode = heartbeat_mode
-        self._done_emitted = False
+        self.heartbeat_interval_s = (
+            heartbeat_interval_s
+            if heartbeat_interval_s is not None
+            else float(os.getenv("STREAM_HEARTBEAT_INTERVAL_S", "10"))
+        )
+        self.heartbeat_mode = (
+            heartbeat_mode if heartbeat_mode is not None else os.getenv("STREAM_HEARTBEAT_MODE", "comment")
+        )
+        self.queue_maxsize = (
+            queue_maxsize if queue_maxsize is not None else int(os.getenv("STREAM_QUEUE_MAXSIZE", "256"))
+        )
+        self.close_on_error = close_on_error
+        self.idle_timeout_s = (
+            idle_timeout_s
+            if idle_timeout_s is not None
+            else _parse_float_env("STREAM_IDLE_TIMEOUT_S")
+        )
+        self.max_duration_s = (
+            max_duration_s
+            if max_duration_s is not None
+            else _parse_float_env("STREAM_MAX_DURATION_S")
+        )
+        self.provider_control_passthru = (
+            provider_control_passthru
+            if provider_control_passthru is not None
+            else (os.getenv("STREAM_PROVIDER_CONTROL_PASSTHRU", "0") == "1")
+        )
+        self.control_filter = control_filter
+        self.labels = labels or {}
+
+        _ensure_stream_metrics_registered()
+        self._queue: asyncio.Queue[Tuple[str, float]] = asyncio.Queue(maxsize=self.queue_maxsize)
         self._closed = False
-        self._lock = asyncio.Lock()
-        self._close_on_error = bool(close_on_error)
-        self._q_highwater = 0
-        self._labels = dict(labels) if labels else None
-
-    def _merge_labels(self, extra: Optional[Dict[str, str]] = None) -> Optional[Dict[str, str]]:
-        if self._labels and extra:
-            merged = {**self._labels, **extra}
-            return merged
-        return self._labels or extra
-
-    async def _enqueue(self, line: str) -> None:
-        # Backpressure policy: block on full queue
-        t_enq = _time.perf_counter()
-        await self._queue.put((line, t_enq))
-        # track high-water mark
-        try:
-            depth = self._queue.qsize()
-            if depth > self._q_highwater:
-                self._q_highwater = depth
-                set_gauge(
-                    "sse_queue_high_watermark",
-                    float(self._q_highwater),
-                    labels=self._merge_labels({"transport": "sse"}),
-                )
-        except Exception:
-            pass
+        self._done_enqueued = False
+        self._high_watermark = 0
+        self._labels = {"transport": "sse"}
+        self._labels.update(self.labels)
 
     async def send_event(self, event: str, data: Any | None = None) -> None:
-        if self._closed:
-            return
-        payload = {} if data is None else data
-        block = f"event: {event}\n" + sse_data(payload)
-        await self._enqueue(block)
+        # Emit event: <name> followed by data line
+        await self._enqueue(ensure_sse_line(f"event: {event}"))
+        if data is not None:
+            await self.send_json(data)
+        else:
+            # SSE requires a blank line to dispatch event
+            await self._enqueue("\n")
 
     async def send_json(self, payload: Dict[str, Any]) -> None:
-        if self._closed:
-            return
         await self._enqueue(sse_data(payload))
 
     async def send_raw_sse_line(self, line: str) -> None:
-        """SSE-specific helper: enqueue a raw SSE line (ensuring terminators)."""
-        if self._closed:
-            return
         await self._enqueue(ensure_sse_line(line))
 
     async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None, close: Optional[bool] = None) -> None:
-        if self._closed:
-            return
-        err = {"error": {"code": code, "message": message, "data": data}}
-        await self._enqueue(sse_data(err))
-        # Determine closure policy
-        do_close = self._close_on_error if close is None else bool(close)
-        if do_close:
+        payload: Dict[str, Any] = {"error": {"code": code, "message": message}}
+        if data is not None:
+            payload["error"]["data"] = data
+        await self.send_json(payload)
+        should_close = self.close_on_error if close is None else bool(close)
+        if should_close:
             await self.done()
 
     async def done(self) -> None:
-        async with self._lock:
-            if self._done_emitted:
-                self._closed = True
-                return
+        if not self._done_enqueued:
+            self._done_enqueued = True
             await self._enqueue(sse_done())
-            self._done_emitted = True
-            self._closed = True
-            # Stop heartbeat
-            if self._hb_task is not None:
-                self._hb_task.cancel()
-                self._hb_task = None
-
-    async def _heartbeat_loop(self) -> None:
-        try:
-            # Small initial delay to let first payloads through
-            interval = self._heartbeat_interval or 0
-            if interval <= 0:
-                return
-            while not self._closed:
-                await asyncio.sleep(interval)
-                if self._closed:
-                    break
-                if self._heartbeat_mode == "data":
-                    await self._enqueue(sse_data({"heartbeat": True}))
-                else:
-                    await self._enqueue(ensure_sse_line(":"))
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            # Heartbeat failures should never crash the stream; ignore
-            pass
-
-    async def _ensure_heartbeat(self) -> None:
-        if self._hb_task is None and self._heartbeat_interval and self._heartbeat_interval > 0:
-            self._hb_task = asyncio.create_task(self._heartbeat_loop())
-
-    async def close(self) -> None:
-        await self.done()
-
-    async def __aenter__(self) -> "SSEStream":  # optional convenience
-        await self._ensure_heartbeat()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        await self.done()
-
-    async def _dequeue(self) -> Optional[Tuple[str, float]]:
-        try:
-            return await self._queue.get()
-        except asyncio.CancelledError:
-            return None
+        self._closed = True
 
     async def iter_sse(self) -> AsyncIterator[str]:
-        await self._ensure_heartbeat()
-        try:
-            while True:
-                item = await self._dequeue()
-                if item is None:
-                    break
-                line, t_enq = item
-                # measure enqueue->yield latency
+        start_ts = time.monotonic()
+        last_emit_ts = start_ts
+        last_hb_ts = start_ts
+
+        while not self._closed:
+            now = time.monotonic()
+            # Compute deadlines
+            next_heartbeat_delta = None
+            if self.heartbeat_interval_s and self.heartbeat_interval_s > 0:
+                hb_due_at = last_hb_ts + self.heartbeat_interval_s
+                next_heartbeat_delta = max(0.0, hb_due_at - now)
+
+            idle_delta = None
+            if self.idle_timeout_s and self.idle_timeout_s > 0:
+                idle_due_at = last_emit_ts + self.idle_timeout_s
+                idle_delta = max(0.0, idle_due_at - now)
+
+            max_delta = None
+            if self.max_duration_s and self.max_duration_s > 0:
+                max_due_at = start_ts + self.max_duration_s
+                max_delta = max(0.0, max_due_at - now)
+
+            timeouts = [d for d in (next_heartbeat_delta, idle_delta, max_delta) if d is not None]
+            timeout = min(timeouts) if timeouts else None
+
+            try:
+                if timeout is not None:
+                    line, enq_ts = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+                else:
+                    line, enq_ts = await self._queue.get()
+                last_emit_ts = time.monotonic()
                 try:
-                    dt_ms = max(0.0, (_time.perf_counter() - t_enq) * 1000.0)
-                    observe_histogram(
-                        "sse_enqueue_to_yield_ms",
-                        dt_ms,
-                        labels=self._merge_labels({"transport": "sse"}),
-                    )
+                    dt_ms = max(0.0, (last_emit_ts - enq_ts) * 1000.0)
+                    get_metrics_registry().observe("sse_enqueue_to_yield_ms", dt_ms, self._labels)
+                except Exception:
+                    pass
+                try:
+                    logger.debug(f"SSEStream yielding line: {line.strip()[:120]}")
                 except Exception:
                     pass
                 yield line
-                # When closed and queue drained, exit
-                if self._closed and self._queue.empty():
-                    break
-        finally:
-            if self._hb_task is not None:
-                self._hb_task.cancel()
-                self._hb_task = None
+                continue
+            except asyncio.TimeoutError:
+                now = time.monotonic()
+
+                # Check terminal conditions first
+                if self.idle_timeout_s and self.idle_timeout_s > 0:
+                    if now >= last_emit_ts + self.idle_timeout_s:
+                        await self.error("idle_timeout", "idle timeout")
+                        # error() enqueues DONE when close_on_error
+                        break
+                if self.max_duration_s and self.max_duration_s > 0:
+                    if now >= start_ts + self.max_duration_s:
+                        await self.error("max_duration_exceeded", "stream exceeded maximum duration")
+                        break
+
+                # Heartbeat (suppressed once DONE is enqueued)
+                if self.heartbeat_interval_s and self.heartbeat_interval_s > 0 and not self._done_enqueued:
+                    if now >= last_hb_ts + self.heartbeat_interval_s:
+                        try:
+                            logger.debug(
+                                f"SSEStream heartbeat emit mode={self.heartbeat_mode} interval_s={self.heartbeat_interval_s}"
+                            )
+                        except Exception:
+                            pass
+                        if self.heartbeat_mode == "data":
+                            await self._enqueue(sse_data({"heartbeat": True}))
+                        else:
+                            # Comment heartbeat
+                            await self._enqueue(ensure_sse_line(":"))
+                        last_hb_ts = time.monotonic()
+                        # Drain immediately
+                        continue
+
+        # Drain any remaining items (e.g., DONE) if the loop was closed by error/done
+        while not self._queue.empty():
+            try:
+                line, enq_ts = self._queue.get_nowait()
+                try:
+                    dt_ms = max(0.0, (time.monotonic() - enq_ts) * 1000.0)
+                    get_metrics_registry().observe("sse_enqueue_to_yield_ms", dt_ms, self._labels)
+                except Exception:
+                    pass
+                yield line
+            except asyncio.QueueEmpty:
+                break
+
+    async def _enqueue(self, line: str) -> None:
+        # Blocking (default) backpressure policy
+        await self._queue.put((line, time.monotonic()))
+        try:
+            qsize = self._queue.qsize()
+            if qsize > self._high_watermark:
+                self._high_watermark = qsize
+                get_metrics_registry().set_gauge("sse_queue_high_watermark", float(self._high_watermark), self._labels)
+        except Exception:
+            pass
 
 
 class WebSocketStream:
-    """WebSocket streaming wrapper with standardized lifecycle frames and optional pings."""
+    """
+    WebSocket stream helper providing standardized lifecycle frames, optional ping loop,
+    close code mapping, and metrics.
+    """
 
     def __init__(
         self,
         websocket: Any,
         *,
-        heartbeat_interval_s: Optional[float] = 10.0,
+        heartbeat_interval_s: Optional[float] = None,
         close_on_done: bool = True,
-        idle_timeout_s: Optional[float] = None,
         compat_error_type: bool = False,
+        idle_timeout_s: Optional[float] = None,
         labels: Optional[Dict[str, str]] = None,
     ) -> None:
-        self.websocket = websocket
-        self._hb_interval = heartbeat_interval_s if (heartbeat_interval_s or 0) > 0 else None
-        self._idle_timeout = idle_timeout_s if (idle_timeout_s or 0) > 0 else None
-        self._close_on_done = close_on_done
-        self._hb_task: Optional[asyncio.Task] = None
-        self._closed = False
-        self._last_activity = asyncio.get_event_loop().time()
-        self._compat_error_type = bool(compat_error_type)
-        self._labels = dict(labels) if labels else None
+        _ensure_stream_metrics_registered()
+        self.ws = websocket
+        self.heartbeat_interval_s = heartbeat_interval_s if heartbeat_interval_s is not None else float(
+            os.getenv("STREAM_HEARTBEAT_INTERVAL_S", "10")
+        )
+        self.close_on_done = close_on_done
+        self.compat_error_type = compat_error_type
+        self.idle_timeout_s = idle_timeout_s
+        self.labels = labels or {}
+        self._labels = {"transport": "ws"}
+        self._labels.update(self.labels)
 
-    def _merge_labels(self, extra: Optional[Dict[str, str]] = None) -> Optional[Dict[str, str]]:
-        if self._labels and extra:
-            merged = {**self._labels, **extra}
-            return merged
-        return self._labels or extra
-
-    def record_activity(self) -> None:
-        try:
-            self._last_activity = asyncio.get_event_loop().time()
-        except Exception:
-            pass
-
-    async def send_event(self, event: str, data: Any | None = None) -> None:
-        if self._closed:
-            return
-        t0 = _time.perf_counter()
-        await self.websocket.send_json({"type": "event", "event": event, "data": data})
-        try:
-            dt_ms = max(0.0, (_time.perf_counter() - t0) * 1000.0)
-            observe_histogram(
-                "ws_send_latency_ms",
-                dt_ms,
-                labels=self._merge_labels({"transport": "ws", "kind": "event"}),
-            )
-        except Exception:
-            pass
-        self.record_activity()
-
-    async def send_json(self, payload: Dict[str, Any]) -> None:
-        if self._closed:
-            return
-        t0 = _time.perf_counter()
-        await self.websocket.send_json(payload)
-        try:
-            dt_ms = max(0.0, (_time.perf_counter() - t0) * 1000.0)
-            observe_histogram(
-                "ws_send_latency_ms",
-                dt_ms,
-                labels=self._merge_labels({"transport": "ws", "kind": "json"}),
-            )
-        except Exception:
-            pass
-        self.record_activity()
-
-    async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None) -> None:
-        if self._closed:
-            return
-        payload = {"type": "error", "code": code, "message": message, "data": data}
-        if self._compat_error_type:
-            payload["error_type"] = code
-        t0 = _time.perf_counter()
-        await self.websocket.send_json(payload)
-        try:
-            dt_ms = max(0.0, (_time.perf_counter() - t0) * 1000.0)
-            observe_histogram(
-                "ws_send_latency_ms",
-                dt_ms,
-                labels=self._merge_labels({"transport": "ws", "kind": "error"}),
-            )
-        except Exception:
-            pass
-        self.record_activity()
-        # Do not close automatically here; callers decide policy per endpoint
-
-    async def done(self) -> None:
-        if self._closed:
-            return
-        t0 = _time.perf_counter()
-        await self.websocket.send_json({"type": "done"})
-        try:
-            dt_ms = max(0.0, (_time.perf_counter() - t0) * 1000.0)
-            observe_histogram(
-                "ws_send_latency_ms",
-                dt_ms,
-                labels=self._merge_labels({"transport": "ws", "kind": "done"}),
-            )
-        except Exception:
-            pass
-        self.record_activity()
-        if self._close_on_done:
-            try:
-                await self.websocket.close(code=1000, reason="done")
-            finally:
-                self._closed = True
-
-    async def close(self, *, code: int = 1000, reason: str = "") -> None:
-        if self._closed:
-            return
-        try:
-            await self.websocket.close(code=code, reason=reason)
-        finally:
-            self._closed = True
-
-    async def _ping_loop(self) -> None:
-        try:
-            if not self._hb_interval or self._hb_interval <= 0:
-                return
-            while not self._closed:
-                await asyncio.sleep(self._hb_interval)
-                if self._closed:
-                    break
-                # Idle timeout
-                now = asyncio.get_event_loop().time()
-                if self._idle_timeout and (now - self._last_activity) > max(1.0, float(self._idle_timeout)):
-                    try:
-                        increment_counter("ws_idle_timeouts_total", labels=self._merge_labels({"transport": "ws"}))
-                    except Exception:
-                        pass
-                    await self.close(code=1001, reason="Idle timeout")
-                    break
-                try:
-                    t0 = _time.perf_counter()
-                    await self.websocket.send_json({"type": "ping"})
-                    try:
-                        dt_ms = max(0.0, (_time.perf_counter() - t0) * 1000.0)
-                        observe_histogram(
-                            "ws_send_latency_ms",
-                            dt_ms,
-                            labels=self._merge_labels({"transport": "ws", "kind": "ping"}),
-                        )
-                        increment_counter("ws_pings_total", labels=self._merge_labels({"transport": "ws"}))
-                    except Exception:
-                        pass
-                except Exception:
-                    # Consider ping failure as transport error and close
-                    try:
-                        increment_counter("ws_ping_failures_total", labels=self._merge_labels({"transport": "ws"}))
-                    except Exception:
-                        pass
-                    await self.close(code=1011, reason="Ping failure")
-                    break
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            # Do not crash on ping loop errors
-            pass
+        self._running = False
+        self._ping_task: Optional[asyncio.Task] = None
+        self._idle_task: Optional[asyncio.Task] = None
+        self._last_activity = time.monotonic()
 
     async def start(self) -> None:
-        if self._hb_task is None and self._hb_interval and self._hb_interval > 0:
-            self._hb_task = asyncio.create_task(self._ping_loop())
+        self._running = True
+        # Accept the connection if exposed
+        try:
+            if hasattr(self.ws, "accept"):
+                await maybe_await(self.ws.accept())
+        except Exception:
+            pass
+        if self.heartbeat_interval_s and self.heartbeat_interval_s > 0:
+            self._ping_task = asyncio.create_task(self._ping_loop())
+        if self.idle_timeout_s and self.idle_timeout_s > 0:
+            self._idle_task = asyncio.create_task(self._idle_loop())
 
     async def stop(self) -> None:
-        if self._hb_task is not None:
-            self._hb_task.cancel()
-            self._hb_task = None
+        self._running = False
+        for task in (self._ping_task, self._idle_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except Exception:
+                    pass
+
+    def mark_activity(self) -> None:
+        self._last_activity = time.monotonic()
+
+    async def send_event(self, event: str, data: Any | None = None) -> None:
+        # Optional WS event frame
+        payload = {"type": "event", "event": event}
+        if data is not None:
+            payload["data"] = data
+        await self._send_json_with_metrics(payload, kind="event")
+
+    async def send_json(self, payload: Dict[str, Any]) -> None:
+        await self._send_json_with_metrics(payload, kind="json")
+
+    async def done(self, *, close_code: int = 1000) -> None:
+        await self._send_json_with_metrics({"type": "done"}, kind="done")
+        if self.close_on_done:
+            try:
+                await maybe_await(self.ws.close(code=close_code))
+            except Exception:
+                pass
+
+    async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None) -> None:
+        payload: Dict[str, Any] = {"type": "error", "code": code, "message": message}
+        if data is not None:
+            payload["data"] = data
+        if self.compat_error_type:
+            payload["error_type"] = code
+        await self._send_json_with_metrics(payload, kind="error")
+        close_code = self._map_close_code(code)
+        try:
+            await maybe_await(self.ws.close(code=close_code))
+        except Exception:
+            pass
+
+    async def _send_json_with_metrics(self, payload: Dict[str, Any], *, kind: str) -> None:
+        t0 = time.monotonic()
+        try:
+            await maybe_await(self.ws.send_json(payload))
+        finally:
+            dt_ms = max(0.0, (time.monotonic() - t0) * 1000.0)
+            try:
+                get_metrics_registry().observe("ws_send_latency_ms", dt_ms, {**self._labels, "kind": kind})
+            except Exception:
+                pass
+            self.mark_activity()
+
+    async def _ping_loop(self) -> None:
+        reg = get_metrics_registry()
+        try:
+            while self._running:
+                await asyncio.sleep(self.heartbeat_interval_s)
+                try:
+                    await self._send_json_with_metrics({"type": "ping"}, kind="ping")
+                    reg.increment("ws_pings_total", 1, self._labels)
+                except Exception:
+                    reg.increment("ws_ping_failures_total", 1, self._labels)
+                    # Continue loop; failures counted
+        except asyncio.CancelledError:
+            return
+
+    async def _idle_loop(self) -> None:
+        reg = get_metrics_registry()
+        try:
+            while self._running:
+                await asyncio.sleep(max(0.05, min(self.idle_timeout_s or 60.0, 1.0)))
+                now = time.monotonic()
+                if self.idle_timeout_s and now - self._last_activity >= self.idle_timeout_s:
+                    # Close with 1001 and increment counter
+                    reg.increment("ws_idle_timeouts_total", 1, self._labels)
+                    try:
+                        await maybe_await(self.ws.close(code=1001))
+                    except Exception:
+                        pass
+                    self._running = False
+                    break
+        except asyncio.CancelledError:
+            return
+
+    @staticmethod
+    def _map_close_code(code: str) -> int:
+        lower = (code or "").lower()
+        if lower == "quota_exceeded":
+            return 1008
+        if lower == "idle_timeout":
+            return 1001
+        if lower in ("internal_error", "transport_error", "provider_error"):
+            return 1011
+        return 1000
 
 
-__all__ = [
-    "AsyncStream",
-    "SSEStream",
-    "WebSocketStream",
-]
+async def maybe_await(value: Any) -> Any:
+    if asyncio.iscoroutine(value) or isinstance(value, asyncio.Future):
+        return await value
+    return value
+
+
+def _parse_float_env(name: str) -> Optional[float]:
+    raw = os.getenv(name)
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except Exception:
+        logger.debug(f"Invalid float in env {name}={raw}")
+        return None

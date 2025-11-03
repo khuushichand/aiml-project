@@ -1596,11 +1596,8 @@ async def replay_webhook_dlq(
             _is_module = isinstance(httpx, _types.ModuleType)
             if not _is_module or not hasattr(httpx, "Client"):
                 raise RuntimeError("httpx appears monkeypatched; falling back to urllib")
-            try:
-                client_ctx = httpx.Client(timeout=timeout, trust_env=False)
-            except TypeError:
-                client_ctx = httpx.Client(timeout=timeout)
-            with client_ctx as client:
+            from tldw_Server_API.app.core.http_client import create_client
+            with create_client(timeout=timeout) as client:
                 resp = client.post(url, data=raw, headers=headers)
         except Exception:
             # Robust fallback using urllib with proxies disabled

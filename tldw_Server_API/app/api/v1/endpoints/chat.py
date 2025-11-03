@@ -2528,58 +2528,99 @@ async def generate_document(
                         return
                     yield streaming_source
 
-                async def _sse_stream() -> AsyncIterator[str]:
-                    try:
-                        async for chunk in _iter_stream():
-                            payload = _normalize_chunk(chunk)
-                            if payload:
-                                collected_chunks.append(payload)
-                                yield _encode_sse(payload)
-                    except asyncio.CancelledError:
-                        logger.info(
-                            "Document generation stream cancelled for conversation %s",
-                            request.conversation_id,
-                        )
-                        raise
-                    finally:
-                        try:
-                            document_body = "".join(collected_chunks).strip()
-                            if document_body:
-                                generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
-                                await asyncio.to_thread(
-                                    service.record_streamed_document,
-                                    conversation_id=request.conversation_id,
-                                    document_type=doc_type,
-                                    content=document_body,
-                                    provider=provider_name,
-                                    model=request.model,
-                                    generation_time_ms=generation_time_ms
-                                )
-                            else:
-                                logger.info(
-                                    "Streamed document produced no content for conversation %s; skipping persistence",
-                                    request.conversation_id
-                                )
-                        except asyncio.CancelledError:
-                            # Propagate cancellation after best-effort persistence shielded above.
-                            raise
-                        except Exception as persist_exc:  # pragma: no cover - defensive logging
-                            logger.error(
-                                "Failed to persist streamed document for conversation %s: %s",
-                                request.conversation_id,
-                                persist_exc
-                            )
-                    yield "data: [DONE]\n\n"
+                # Feature flag: use unified SSEStream when enabled
+                if str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}:
+                    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+                    stream = SSEStream(labels={"component": "chat", "endpoint": "chat_doc_stream"})
 
-                return StreamingResponse(
-                    _sse_stream(),
-                    media_type="text/event-stream",
-                    headers={
+                    async def _produce():
+                        try:
+                            async for chunk in _iter_stream():
+                                payload = _normalize_chunk(chunk)
+                                if not payload:
+                                    continue
+                                collected_chunks.append(payload)
+                                # Split payload into SSE data lines
+                                for line in (payload.splitlines() or [""]):
+                                    # Suppress provider DONE; SSEStream will emit a single terminal DONE
+                                    if line.strip().lower() == "[done]":
+                                        continue
+                                    await stream.send_raw_sse_line(f"data: {line}")
+                            await stream.done()
+                        except Exception as e:
+                            await stream.error("internal_error", f"{e}")
+
+                    async def _gen():
+                        prod = asyncio.create_task(_produce())
+                        try:
+                            async for ln in stream.iter_sse():
+                                yield ln
+                        finally:
+                            if not prod.done():
+                                prod.cancel()
+                                try:
+                                    await prod
+                                except Exception:
+                                    pass
+
+                    headers = {
                         "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
                         "X-Accel-Buffering": "no",
-                    },
-                )
+                    }
+                    return StreamingResponse(_gen(), media_type="text/event-stream", headers=headers)
+                else:
+                    async def _sse_stream() -> AsyncIterator[str]:
+                        try:
+                            async for chunk in _iter_stream():
+                                payload = _normalize_chunk(chunk)
+                                if payload:
+                                    collected_chunks.append(payload)
+                                    yield _encode_sse(payload)
+                        except asyncio.CancelledError:
+                            logger.info(
+                                "Document generation stream cancelled for conversation %s",
+                                request.conversation_id,
+                            )
+                            raise
+                        finally:
+                            try:
+                                document_body = "".join(collected_chunks).strip()
+                                if document_body:
+                                    generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
+                                    await asyncio.to_thread(
+                                        service.record_streamed_document,
+                                        conversation_id=request.conversation_id,
+                                        document_type=doc_type,
+                                        content=document_body,
+                                        provider=provider_name,
+                                        model=request.model,
+                                        generation_time_ms=generation_time_ms
+                                    )
+                                else:
+                                    logger.info(
+                                        "Streamed document produced no content for conversation %s; skipping persistence",
+                                        request.conversation_id
+                                    )
+                            except asyncio.CancelledError:
+                                # Propagate cancellation after best-effort persistence shielded above.
+                                raise
+                            except Exception as persist_exc:  # pragma: no cover - defensive logging
+                                logger.error(
+                                    "Failed to persist streamed document for conversation %s: %s",
+                                    request.conversation_id,
+                                    persist_exc
+                                )
+                        yield "data: [DONE]\n\n"
+
+                    return StreamingResponse(
+                        _sse_stream(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
 
             # Get the saved document
             docs = service.get_generated_documents(

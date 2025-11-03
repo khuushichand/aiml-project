@@ -45,6 +45,7 @@ from typing import List, Any, Optional, Tuple, Dict, Union, Iterable
 # Import 3rd-Party Libraries
 import requests
 import httpx
+from tldw_Server_API.app.core.http_client import fetch, RetryPolicy
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 #
@@ -62,11 +63,133 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_data,
     sse_done,
 )
-from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries
+from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries as _legacy_create_session_with_retries
 from tldw_Server_API.app.core.LLM_Calls.streaming import (
     iter_sse_lines_requests,
     aiter_sse_lines_httpx,
 )
+
+# -----------------------------------------------------------------------------
+# Session shim for non-streaming POST calls
+# - Preserves the public name `create_session_with_retries` so tests can
+#   monkeypatch it, while centralizing non-streaming requests via http_client.
+# - For streaming (stream=True), falls back to the legacy requests session
+#   returned by http_helpers.create_session_with_retries to preserve
+#   iter_lines() semantics used in streaming paths still on requests.
+# -----------------------------------------------------------------------------
+
+class _RequestsLikeResponse:
+    """Wrap an httpx.Response with requests-like attributes for error paths."""
+
+    def __init__(self, resp: httpx.Response):
+        self._resp = resp
+
+    @property
+    def status_code(self) -> int:
+        return self._resp.status_code
+
+    @property
+    def headers(self):  # minimal mapping
+        return self._resp.headers
+
+    @property
+    def text(self) -> str:
+        return self._resp.text
+
+    def json(self):
+        return self._resp.json()
+
+
+class _ResponseShim:
+    """Response shim that proxies to httpx.Response for success paths
+    and raises requests.exceptions.HTTPError on raise_for_status.
+    """
+
+    def __init__(self, resp: httpx.Response):
+        self._resp = resp
+        # Expose commonly used attributes directly
+        self.status_code = resp.status_code
+        self.headers = resp.headers
+        self.text = resp.text
+
+    def json(self):
+        return self._resp.json()
+
+    def raise_for_status(self):
+        if 400 <= self._resp.status_code:
+            # Raise a requests-like HTTPError carrying a response with json()/text
+            err = requests.exceptions.HTTPError(
+                f"HTTP {self._resp.status_code}", response=_RequestsLikeResponse(self._resp)
+            )
+            raise err
+        return None
+
+
+class _SessionShim:
+    def __init__(
+        self,
+        *,
+        total: int = 3,
+        backoff_factor: float = 1.0,
+        status_forcelist: Optional[list[int]] = None,
+        allowed_methods: Optional[list[str]] = None,
+    ) -> None:
+        attempts = max(1, int(total)) + 0  # attempts ~ total; keep exact mapping
+        self._retry = RetryPolicy(
+            attempts=attempts,
+            backoff_base_ms=int(float(backoff_factor) * 1000),
+            retry_on_status=tuple(status_forcelist or (408, 429, 500, 502, 503, 504)),
+        )
+        self._delegate_session = None
+
+    # requests.Session compat
+    def post(self, url, *, headers=None, json=None, stream: bool = False, timeout=None, **kwargs):
+        if stream:
+            # Fall back to legacy requests session for streaming semantics
+            self._delegate_session = _legacy_create_session_with_retries(
+                total=self._retry.attempts,
+                backoff_factor=self._retry.backoff_base_ms / 1000.0,
+                status_forcelist=list(self._retry.retry_on_status),
+                allowed_methods=["POST"],
+            )
+            return self._delegate_session.post(url, headers=headers, json=json, stream=True, timeout=timeout)
+        # Non-streaming path via centralized http client
+        resp = fetch(
+            method="POST",
+            url=url,
+            headers=headers,
+            json=json,
+            timeout=timeout,
+            retry=self._retry,
+        )
+        return _ResponseShim(resp)
+
+    def close(self):
+        try:
+            if self._delegate_session is not None:
+                self._delegate_session.close()
+        except Exception:
+            pass
+
+
+def create_session_with_retries(
+    *,
+    total: int = 3,
+    backoff_factor: float = 1.0,
+    status_forcelist: Optional[list[int]] = None,
+    allowed_methods: Optional[list[str]] = None,
+):
+    """Return a requests-like session that centralizes non-streaming POSTs.
+
+    Tests may monkeypatch this symbol; streaming `.post(..., stream=True)`
+    is delegated to the legacy session to preserve `.iter_lines()` behavior.
+    """
+    return _SessionShim(
+        total=total,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+        allowed_methods=allowed_methods,
+    )
 #
 # Shared helper for consistent tool_choice gating across providers
 def _apply_tool_choice(payload: Dict[str, Any], tools: Optional[List[Dict[str, Any]]], tool_choice: Optional[Union[str, Dict[str, Any]]]) -> None:

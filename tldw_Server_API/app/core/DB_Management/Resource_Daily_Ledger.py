@@ -119,9 +119,24 @@ class ResourceDailyLedger:
                     "INSERT OR IGNORE INTO resource_daily_ledger (day_utc, entity_scope, entity_value, category, units, op_id, occurred_at, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))"
                 )
-                res = await self.db_pool.execute(q, day, entry.entity_scope, entry.entity_value, entry.category, int(entry.units), entry.op_id, entry.occurred_at.isoformat())
-                # aiosqlite returns a cursor-like object; we can't rely on rowcount here, so fetch to confirm
-                # Check existence after insert
+                res = await self.db_pool.execute(
+                    q,
+                    day,
+                    entry.entity_scope,
+                    entry.entity_value,
+                    entry.category,
+                    int(entry.units),
+                    entry.op_id,
+                    entry.occurred_at.isoformat(),
+                )
+                # Prefer rowcount when available: 1 if inserted, 0 if ignored
+                try:
+                    rc = int(getattr(res, "rowcount", -1))
+                    if rc in (0, 1):
+                        return rc == 1
+                except Exception:
+                    pass
+                # Fallback: presence check (returns True both times, so only use when rowcount is unavailable)
                 check = await self.db_pool.fetchval(
                     "SELECT 1 FROM resource_daily_ledger WHERE day_utc=? AND entity_scope=? AND entity_value=? AND category=? AND op_id=?",
                     day,

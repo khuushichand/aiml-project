@@ -414,6 +414,21 @@ class _InMemoryRedisCore:
         for member, score in mapping.items():
             zset[str(member)] = float(score)
 
+    def zrem(self, key: str, member: str) -> int:
+        zset = self._sorted_sets.get(key)
+        if not zset:
+            return 0
+        member = str(member)
+        if member in zset:
+            try:
+                del zset[member]
+            except KeyError:
+                return 0
+            if not zset:
+                self._sorted_sets.pop(key, None)
+            return 1
+        return 0
+
     def zremrangebyscore(self, key: str, minimum: float, maximum: float) -> int:
         zset = self._sorted_sets.get(key)
         if not zset:
@@ -592,6 +607,10 @@ class InMemoryAsyncRedis:
     async def zadd(self, key: str, mapping: Dict[str, float]) -> None:
         async with self._lock:
             self._core.zadd(key, mapping)
+
+    async def zrem(self, key: str, member: str) -> int:
+        async with self._lock:
+            return self._core.zrem(key, member)
 
     async def zremrangebyscore(self, key: str, minimum: float, maximum: float) -> int:
         async with self._lock:

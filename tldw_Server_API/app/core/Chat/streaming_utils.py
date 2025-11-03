@@ -312,6 +312,8 @@ class StreamingResponseHandler:
                     payload_str = candidate[len("data:"):].strip()
                     if payload_str == "[DONE]":
                         outputs.append("data: [DONE]\n\n")
+                        # Mark DONE as sent to avoid emitting a second terminal sentinel in cleanup
+                        self.done_sent = True
                         self.update_activity()
                         return outputs, True
                     try:
@@ -524,9 +526,10 @@ class StreamingResponseHandler:
                             "conversation_id": self.conversation_id
                         }
                         yield f"data: {json.dumps(done_payload)}\n\n"
-                    # Emit terminal DONE sentinel and mark it as sent to avoid duplicates
-                    yield "data: [DONE]\n\n"
-                    self.done_sent = True
+                    # Emit terminal DONE sentinel only if not already sent by upstream
+                    if not self.done_sent:
+                        yield "data: [DONE]\n\n"
+                        self.done_sent = True
 
                 # Save the full response/tool calls if callback provided (only when not cancelled)
                 has_output = self.has_accumulated_output()

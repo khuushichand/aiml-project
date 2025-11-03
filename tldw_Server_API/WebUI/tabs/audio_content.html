@@ -556,8 +556,8 @@
                 <label for="streamingApiKey">API Key:</label>
                 <div style="display: flex; gap: 10px;">
                     <input type="password" id="streamingApiKey" placeholder="Enter your API key" style="flex: 1;">
-                    <button class="api-button secondary" onclick="saveStreamingApiKey()">Save</button>
-                    <button class="api-button" onclick="toggleApiKeyVisibility()">Show/Hide</button>
+                    <button class="api-button secondary" id="streamingApiKeySave">Save</button>
+                    <button class="api-button" id="streamingApiKeyToggle">Show/Hide</button>
                 </div>
                 <small style="color: var(--color-text-muted);">API key is required for authentication. It will be saved in your browser's local storage.</small>
             </div>
@@ -566,7 +566,7 @@
                 <div class="column">
                     <div class="form-group">
                         <label for="streamingModel">Model:</label>
-                        <select id="streamingModel" onchange="updateModelOptions()">
+                        <select id="streamingModel">
                             <option value="parakeet">Parakeet (Fast)</option>
                             <option value="canary">Canary (Multilingual)</option>
                             <option value="whisper">Whisper (Accurate)</option>
@@ -670,16 +670,16 @@
 
         <!-- Control Buttons -->
         <div class="button-group">
-            <button id="connectStreamingBtn" class="api-button" onclick="toggleStreamingConnection()">
+            <button id="connectStreamingBtn" class="api-button">
                 Connect to Server
             </button>
-            <button id="startStreamingBtn" class="api-button secondary" onclick="startStreamingRecording()" disabled>
+            <button id="startStreamingBtn" class="api-button secondary" disabled>
                 Start Recording
             </button>
-            <button id="stopStreamingBtn" class="api-button danger" onclick="stopStreamingRecording()" disabled>
+            <button id="stopStreamingBtn" class="api-button danger" disabled>
                 Stop Recording
             </button>
-            <button class="api-button" onclick="clearStreamingTranscript()">
+            <button class="api-button" id="clearStreamingBtn">
                 Clear Transcript
             </button>
             <span id="streamingConfigHint" style="margin-left: 10px; color: var(--color-text-muted); display: none; align-items: center; gap: 6px;">
@@ -777,7 +777,7 @@
                             <option value="huggingface">HuggingFace</option>
                             <option value="local">Local</option>
                         </select>
-                        <button class="btn-small" type="button" onclick="refreshEmbeddingProviders()" title="Refresh providers and models">
+                        <button class="btn-small" type="button" id="segRefreshProviders" title="Refresh providers and models">
                             <i class="icon-refresh"></i> Refresh
                         </button>
                     </div>
@@ -792,8 +792,8 @@
         </div>
 
         <div class="button-group">
-            <button class="api-button" onclick="segmentTranscriptRun()">Segment Transcript</button>
-            <button class="api-button secondary" onclick="segClearOutput()">Clear</button>
+            <button class="api-button" id="segRunBtn">Segment Transcript</button>
+            <button class="api-button secondary" id="segClearBtn">Clear</button>
         </div>
 
         <!-- Output -->

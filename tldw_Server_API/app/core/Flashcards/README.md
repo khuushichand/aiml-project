@@ -1,33 +1,53 @@
 # Flashcards
 
-Note: This README is scaffolded from the core template. Replace placeholders with accurate details from the implementation and tests.
-
 ## 1. Descriptive of Current Feature Set
 
-- Purpose: What Flashcards provides and why it exists.
-- Capabilities: Current flashcard generation, review, and export features.
-- Inputs/Outputs: Inputs (notes, content) and outputs (decks, cards).
-- Related Endpoints: Link API routes (if any) and files.
-- Related Schemas: Pydantic models involved.
+- Purpose: Export learning material as Anki `.apkg` decks for spaced repetition.
+- Capabilities:
+  - Build Basic and Cloze models; multi-template cards with Extra field
+  - Deterministic IDs, scheduling defaults, deck metadata
+  - Package assembly with media-less decks (cards only)
+- Inputs/Outputs:
+  - Inputs: rows (front/back/extra or cloze text) and deck definitions
+  - Outputs: single `.apkg` file stream or bytes for download
+- Related Endpoints:
+  - (No direct endpoints; used by higher-level export flows)
+- Related Module:
+  - `tldw_Server_API/app/core/Flashcards/apkg_exporter.py:1`
 
 ## 2. Technical Details of Features
 
-- Architecture & Data Flow: Components and data flow.
-- Key Classes/Functions: Entry points and how to extend card types.
-- Dependencies: Internal modules and external SDKs/services.
-- Data Models & DB: Storage schemas via `DB_Management`.
-- Configuration: Env vars and config keys.
-- Concurrency & Performance: Batching, caching, rate limits.
-- Error Handling: Exceptions, retries, and failure modes.
-- Security: AuthNZ, permissions, input validation.
+- Architecture & Data Flow:
+  - Pure-Python APKG generator that writes SQLite structures into a zip container with deck JSON
+- Key Classes/Functions:
+  - `export_apkg_from_rows` (builds deck, models, notes, cards)
+  - Utility helpers: `_build_models_json`, `_build_decks_json`, `_build_conf_json`, `_compute_card_sched`
+- Dependencies:
+  - Standard library (sqlite3, zipfile); no network
+- Data Models & DB:
+  - On-the-fly Anki collection schema creation; no persistent server DB usage
+- Configuration:
+  - None required; card styling and deck names passed in
+- Concurrency & Performance:
+  - In-memory build; large decks may require temp files (handled internally)
+- Error Handling:
+  - Validates inputs and falls back to defaults for optional fields
+- Security:
+  - No external I/O apart from optional file write by caller
 
 ## 3. Developer-Related/Relevant Information for Contributors
 
-- Folder Structure: Subpackages and responsibilities.
-- Extension Points: New card generators, reviewers, or exporters.
-- Coding Patterns: DI, logging, rate limiting.
-- Tests: Locations, fixtures, example tests.
-- Local Dev Tips: Quick start and sample flows.
-- Pitfalls & Gotchas: Edge cases and performance notes.
-- Roadmap/TODOs: Improvements and backlog items.
-
+- Folder Structure:
+  - `Flashcards/apkg_exporter.py` (single-purpose exporter)
+- Extension Points:
+  - Add new model templates; add media embedding if needed
+- Coding Patterns:
+  - Keep exporter side-effect-free; return bytes for API download paths
+- Tests:
+  - `tldw_Server_API/tests/Flashcards/test_apkg_exporter.py:1`
+- Local Dev Tips:
+  - Generate a small deck with 2–3 notes and inspect in Anki
+- Pitfalls & Gotchas:
+  - Very large decks impact memory; consider streaming write patterns if expanded
+- Roadmap/TODOs:
+  - Optional media support; style presets per project

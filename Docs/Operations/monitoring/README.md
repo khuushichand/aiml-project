@@ -49,6 +49,16 @@ Import the provided dashboards:
     - Stage processed/s and failed/s
     - Stage flags (paused/drain)
 
+Additionally, for streaming (SSE/WS) metrics, import `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json` which includes:
+- SSE enqueue→yield latency (ms) histogram
+- SSE queue high-watermark gauge
+- WS send latency (ms) histogram
+- WS pings sent (counter)
+
+Template variables
+- component: derived from metric labels; filter panels by component
+- endpoint: derived from metric labels; filter panels and drive a repeated row that facets metrics per endpoint
+
 In Grafana:
 1. Dashboards → New → Import
 2. Upload `grafana_embeddings_orchestrator.json`, `grafana_workflows.json`, `grafana_service_overview.json`, or `grafana_tenant_overview.json`

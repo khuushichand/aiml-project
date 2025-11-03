@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -23,7 +24,10 @@ def _client(monkeypatch) -> TestClient:
     if "sandbox" not in parts:
         parts.append("sandbox")
     monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
-    from tldw_Server_API.app.main import app
+    # Build a minimal app with only the sandbox router
+    from tldw_Server_API.app.api.v1.endpoints.sandbox import router as sandbox_router
+    app = FastAPI()
+    app.include_router(sandbox_router, prefix="/api/v1")
     return TestClient(app)
 
 
@@ -53,4 +57,3 @@ def test_firecracker_run_succeeds_and_reports_runtime_version(monkeypatch) -> No
         assert j.get("runtime") == "firecracker"
         assert j.get("runtime_version") == "1.0.0-test"
         client.app.dependency_overrides.clear()
-

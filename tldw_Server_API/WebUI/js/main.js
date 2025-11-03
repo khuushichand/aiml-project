@@ -57,6 +57,9 @@ class WebUI {
             } catch (e) { /* ignore */ }
         }
 
+        // Proactively migrate any inline handlers present in base HTML
+        try { this.migrateInlineHandlers(document.body || document); } catch (_) {}
+
         console.log('WebUI initialized successfully');
     }
 
@@ -98,11 +101,43 @@ class WebUI {
                         box.style.color = 'var(--color-text-muted)';
                         box.style.fontSize = '0.85em';
                         try { box.setAttribute('aria-live', 'polite'); } catch(_){}
+                        const textSpan = document.createElement('span');
+                        textSpan.className = 'corr-text';
+                        const copyRidBtn = document.createElement('button');
+                        copyRidBtn.type = 'button';
+                        copyRidBtn.className = 'btn btn-compact corr-copy-btn';
+                        copyRidBtn.textContent = 'Copy RID';
+                        copyRidBtn.style.marginLeft = '8px';
+                        copyRidBtn.addEventListener('click', async (e) => {
+                            e.preventDefault();
+                            try {
+                                const ok = await Utils.copyToClipboard(String(rid || ''));
+                                if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied X-Request-ID');
+                            } catch (_) {}
+                        });
+                        const copyTraceBtn = document.createElement('button');
+                        copyTraceBtn.type = 'button';
+                        copyTraceBtn.className = 'btn btn-compact corr-copy-btn';
+                        copyTraceBtn.textContent = 'Copy Trace';
+                        copyTraceBtn.style.marginLeft = '6px';
+                        copyTraceBtn.addEventListener('click', async (e) => {
+                            e.preventDefault();
+                            try {
+                                const ok = await Utils.copyToClipboard(String(trace || ''));
+                                if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied trace');
+                            } catch (_) {}
+                        });
+                        box.appendChild(textSpan);
+                        box.appendChild(copyRidBtn);
+                        box.appendChild(copyTraceBtn);
                         pre.parentNode.insertBefore(box, pre.nextSibling);
                     }
                     const shortReq = rid && rid.length > 12 ? rid.slice(0, 12) + '…' : (rid || '-');
                     const shortTr = trace && trace.length > 24 ? trace.slice(0, 24) + '…' : (trace || '-');
-                    box.textContent = `Correlation: X-Request-ID=${shortReq}  trace=${shortTr}`;
+                    // Update text span if present; else fallback to textContent
+                    const textNode = box.querySelector('.corr-text');
+                    const content = `Correlation: X-Request-ID=${shortReq}  trace=${shortTr}`;
+                    if (textNode) textNode.textContent = content; else box.textContent = content;
                     box.title = `X-Request-ID=${rid || '-'}  traceparent/X-Trace-Id=${trace || '-'}`;
                 });
             } catch (_) { /* ignore */ }
@@ -390,13 +425,16 @@ class WebUI {
             initializeDictionariesTab();
         }
 
-        if (contentId && contentId.startsWith('tabAudio') && typeof bindAudioTabHandlers === 'function') {
+        if (contentId && (contentId.startsWith('tabAudio') || contentId === 'tabTranscriptSeg') && typeof bindAudioTabHandlers === 'function') {
             bindAudioTabHandlers();
         }
 
         // Flashcards tab
         if (contentId && contentId.startsWith('tabFlashcards') && typeof initializeFlashcardsTab === 'function') {
             initializeFlashcardsTab(contentId);
+        }
+        if (contentId && contentId.startsWith('tabMedia') && typeof bindMediaCommonHandlers === 'function') {
+            bindMediaCommonHandlers();
         }
 
         // Initialize model dropdowns for tabs that have LLM selection
@@ -445,8 +483,10 @@ class WebUI {
         const scripts = Array.from(temp.querySelectorAll('script'));
         scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
         mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
-        // For migrated groups, skip executing inline scripts (no eval) and only load external src scripts.
-        const MIGRATED_GROUPS = new Set(['keywords', 'jobs', 'rag', 'evaluations', 'admin']);
+        // Convert inline event attributes into listeners to avoid CSP 'unsafe-inline'
+        try { this.migrateInlineHandlers(mainContentArea); } catch (_) {}
+        // Always skip executing inline scripts (no eval) and only load external src scripts.
+        const MIGRATED_GROUPS = new Set();
         for (const s of scripts) {
             try {
                 if (s.src) {
@@ -456,13 +496,8 @@ class WebUI {
                     document.body.appendChild(newScript);
                     document.body.removeChild(newScript);
                 } else {
-                    // Inline script: only execute for non-migrated groups
-                    if (!MIGRATED_GROUPS.has(groupName)) {
-                        const code = s.textContent || '';
-                        (0, eval)(code);
-                    } else {
-                        console.debug(`Skipped inline script eval for migrated group: ${groupName}`);
-                    }
+                    // Inline script skipped to satisfy CSP (no 'unsafe-eval')
+                    console.debug(`Skipped inline script for group: ${groupName}`);
                 }
             } catch (e) {
                 console.error('Failed to execute inline script for group', groupName, e);
@@ -492,6 +527,102 @@ class WebUI {
                 }
             }, 100);
         }
+    }
+
+    // Convert inline event attributes (onclick, onchange, etc.) to proper listeners
+    migrateInlineHandlers(root) {
+        const scope = root || document;
+        const attrs = [
+            'onclick','onchange','oninput','onkeydown','onkeyup','onsubmit','ondblclick','onfocus','onblur',
+            'onmouseenter','onmouseleave','onmouseover','onmouseout','onmouseup','onmousedown','oncontextmenu',
+            'ondrag','ondragstart','ondragend','ondragover','ondrop'
+        ];
+        const attrToEvent = (attr) => attr.slice(2);
+        // Simple parser for makeRequest('a','b','/path','json', {...}, 'stream') forms
+        const splitArgs = (s) => {
+            const out = [];
+            let buf = '';
+            let q = null; // quote char
+            let depth = 0; // brace depth
+            for (let i=0;i<s.length;i++){
+                const ch = s[i];
+                if (q) {
+                    if (ch === q && s[i-1] !== '\\') { q = null; buf += ch; continue; }
+                    buf += ch; continue;
+                }
+                if (ch === '"' || ch === "'") { q = ch; buf += ch; continue; }
+                if (ch === '{' || ch === '[') { depth++; buf += ch; continue; }
+                if (ch === '}' || ch === ']') { depth--; buf += ch; continue; }
+                if (ch === ',' && depth === 0) { out.push(buf.trim()); buf=''; continue; }
+                buf += ch;
+            }
+            if (buf.trim()) out.push(buf.trim());
+            return out;
+        };
+        const stripQuotes = (s) => {
+            if (!s) return s;
+            if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) return s.slice(1, -1);
+            return s;
+        };
+        const devMarkers = (() => {
+            try { return String(localStorage.getItem('DEV_MIGRATE_MARKERS') || '') === '1'; } catch (_) { return false; }
+        })();
+        attrs.forEach((attr) => {
+            const nodes = scope.querySelectorAll(`[${attr}]`);
+            nodes.forEach((el) => {
+                const code = el.getAttribute(attr);
+                if (!code) return;
+                el.removeAttribute(attr);
+                const evt = attrToEvent(attr);
+                let bound = false;
+                // Case 1: makeRequest(...) forms
+                const mr = code.match(/^\s*(?:if\s*\(.*?\)\s*)?makeRequest\((.*)\)\s*;?\s*$/s);
+                if (mr) {
+                    const argStr = mr[1] || '';
+                    const parts = splitArgs(argStr);
+                    const args = parts.map(p => {
+                        const t = p.trim();
+                        if (t.startsWith('{') || t.startsWith('[')) {
+                            try { return JSON.parse(t); } catch(_) { return t; }
+                        }
+                        return stripQuotes(t);
+                    });
+                    const cm = code.match(/confirm\((['\"])(.*?)\1\)/s);
+                    const message = cm ? cm[2] : null;
+                    const listener = (event) => {
+                        try {
+                            if (message && !window.confirm(message)) return;
+                            window.makeRequest && window.makeRequest.apply(null, args);
+                        } catch (e) { console.error('makeRequest handler failed', e); }
+                    };
+                    el.addEventListener(evt, listener);
+                    if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
+                    bound = true;
+                }
+                // Case 2: simple function call like foo() or foo(arg)
+                if (!bound) {
+                    const m = code.match(/^\s*([A-Za-z_$][\w$]*)\s*\((.*)\)\s*;?\s*$/s);
+                    if (m) {
+                        const fname = m[1];
+                        const argStr = m[2] || '';
+                        const args = argStr ? splitArgs(argStr).map(a => {
+                            const t = a.trim();
+                            if (t.startsWith('{') || t.startsWith('[')) { try { return JSON.parse(t); } catch(_) { return t; } }
+                            return stripQuotes(t);
+                        }) : [];
+                        el.addEventListener(evt, (event) => {
+                            try { const fn = window[fname]; if (typeof fn === 'function') fn.apply(el, args); } catch (e) { console.error('Handler failed', e); }
+                        });
+                        if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
+                        bound = true;
+                    }
+                }
+                if (!bound) {
+                    // As a last resort, ignore to keep CSP-safe; log debug for devs
+                    try { console.debug('Skipped inline handler migration for:', code.slice(0,120)); } catch(_){}
+                }
+            });
+        });
     }
 
     // --------------------------
