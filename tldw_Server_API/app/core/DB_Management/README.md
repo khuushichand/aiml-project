@@ -48,7 +48,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - For Postgres content mode, RLS policies are expected (see `pg_rls_policies.py`) and validated by `validate_postgres_content_backend()`.
 - Configuration:
   - Content backend selection: `TLDW_CONTENT_DB_BACKEND=sqlite|postgresql` (defaults to `sqlite`).
-  - SQLite path: `TLDW_CONTENT_SQLITE_PATH` or `[Database].sqlite_path`; backups: `TLDW_DB_BACKUP_PATH` or `[Database].backup_path`.
+  - SQLite path: `TLDW_CONTENT_SQLITE_PATH` or `[Database].sqlite_path`; backups: `TLDW_DB_BACKUP_PATH` or `[Database].backup_path` (defaults to `./tldw_DB_Backups/`).
   - Postgres (content) envs: `TLDW_CONTENT_PG_DSN` (or `POSTGRES_TEST_DSN`), `TLDW_CONTENT_PG_HOST|PORT|DATABASE|USER|PASSWORD|SSLMODE` (fallback to `TLDW_PG_*` or `PG*`).
   - Per-user base dir: `[settings].USER_DB_BASE_DIR` used by `db_path_utils.DatabasePaths` for media/notes/prompts/evals/workflows trees.
   - General app config merges env + config files via `load_comprehensive_config`.

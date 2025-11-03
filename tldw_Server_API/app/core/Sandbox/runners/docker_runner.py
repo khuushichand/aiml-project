@@ -65,6 +65,7 @@ class DockerRunner:
 
     # Track active containers per run for cancellation
     _active_lock = threading.RLock()
+    _egress_lock = threading.RLock()
     _active_cid: dict[str, str] = {}
     _egress_net: dict[str, Optional[str]] = {}
     _egress_label: dict[str, str] = {}
@@ -73,6 +74,7 @@ class DockerRunner:
     def cancel_run(cls, run_id: str) -> bool:
         with cls._active_lock:
             cid = cls._active_cid.get(run_id)
+        with cls._egress_lock:
             net = cls._egress_net.get(run_id)
             label = cls._egress_label.get(run_id, f"tldw-run-{run_id[:12]}")
         if not cid:
@@ -112,6 +114,7 @@ class DockerRunner:
         finally:
             with cls._active_lock:
                 cls._active_cid.pop(run_id, None)
+            with cls._egress_lock:
                 cls._egress_net.pop(run_id, None)
                 cls._egress_label.pop(run_id, None)
         # Cleanup egress rules and network if present
@@ -369,6 +372,7 @@ class DockerRunner:
         try:
             with DockerRunner._active_lock:
                 DockerRunner._active_cid[run_id] = cid
+            with DockerRunner._egress_lock:
                 DockerRunner._egress_net[run_id] = egress_net_name
                 DockerRunner._egress_label[run_id] = egress_label
         except Exception:

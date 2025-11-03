@@ -8,7 +8,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | AuthNZ | tldw_Server_API/app/core/AuthNZ | Complete |  | Standardized to 3-section format |
 | Character_Chat | tldw_Server_API/app/core/Character_Chat | Existing (Review/Update) |  |  |
 | Chat | tldw_Server_API/app/core/Chat | Complete |  | Standardized to 3-section format |
-| Chatbooks | tldw_Server_API/app/core/Chatbooks | Existing (Review/Update) |  |  |
+| Chatbooks | tldw_Server_API/app/core/Chatbooks | Complete |  | Standardized to 3-section format |
 | Chunking | tldw_Server_API/app/core/Chunking | Existing (Review/Update) |  |  |
 | Claims_Extraction | tldw_Server_API/app/core/Claims_Extraction | Scaffolded |  |  |
 | Collections | tldw_Server_API/app/core/Collections | Scaffolded |  |  |
@@ -47,7 +47,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | Utils | tldw_Server_API/app/core/Utils | Scaffolded |  |  |
 | Watchlists | tldw_Server_API/app/core/Watchlists | Scaffolded |  |  |
 | Web_Scraping | tldw_Server_API/app/core/Web_Scraping | Scaffolded |  |  |
-| WebSearch | tldw_Server_API/app/core/WebSearch | Scaffolded |  |  |
+| WebSearch | tldw_Server_API/app/core/WebSearch | Complete |  | Standardized to 3-section format |
 | Workflows | tldw_Server_API/app/core/Workflows | Scaffolded |  |  |
 | Writing | tldw_Server_API/app/core/Writing | Scaffolded |  |  |
 

@@ -128,11 +128,31 @@ print(res['processed_count'])
 import tempfile
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
 tmp = tempfile.mkdtemp(prefix='vid_')
-out = process_videos(inputs=['https://www.youtube.com/watch?v=dQw4w9WgXcQ'], start_time=None, end_time=None, diarize=False, vad_use=False,
-                     transcription_model='small', transcription_language='en', perform_analysis=False, custom_prompt=None, system_prompt=None,
-                     perform_chunking=True, chunk_method='sentences', max_chunk_size=1000, chunk_overlap=200, use_adaptive_chunking=False,
-                     use_multi_level_chunking=False, chunk_language='en', summarize_recursively=False, api_name=None, use_cookies=False,
-                     cookies=None, timestamp_option=False, perform_confabulation_check=False, temp_dir=tmp)
+out = process_videos(
+    inputs=['https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
+    start_time=None,
+    end_time=None,
+    diarize=False,
+    vad_use=False,
+    transcription_model='small',
+    transcription_language='en',
+    perform_analysis=False,
+    custom_prompt=None,
+    system_prompt=None,
+    perform_chunking=True,
+    chunk_method='sentences',
+    max_chunk_size=1000,
+    chunk_overlap=200,
+    use_adaptive_chunking=False,
+    use_multi_level_chunking=False,
+    chunk_language='en',
+    summarize_recursively=False,
+    api_name=None,
+    use_cookies=False,
+    cookies=None,
+    timestamp_option=False,
+    perform_confabulation_check=False,
+    temp_dir=tmp,
+)
 print(out['processed_count'])
 ```
-
