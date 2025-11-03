@@ -29,7 +29,9 @@ jobs:
       - name: Generate Python SBOM (CycloneDX)
         run: |
           set -euo pipefail
-          python -m pip install -q cyclonedx-python
+          # Install the correct CycloneDX Python CLI. The package providing
+          # the `cyclonedx-py` CLI is `cyclonedx-bom` (not `cyclonedx-python`).
+          python -m pip install -q cyclonedx-bom
           GEN_CMD="python -m cyclonedx_py"
           if [ -n "${pythonLocation:-}" ] && [ -x "${pythonLocation}/bin/cyclonedx-py" ]; then \
             GEN_CMD="${pythonLocation}/bin/cyclonedx-py"; \

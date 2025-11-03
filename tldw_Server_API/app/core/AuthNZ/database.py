@@ -229,6 +229,7 @@ class DatabasePool:
             # Ensure AuthNZ migrations are up to date (handles legacy columns)
             try:
                 if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
+                    logger.info(f"SQLite schema harmonization: ensuring AuthNZ tables at {self._sqlite_fs_path}")
                     await asyncio.to_thread(ensure_authnz_tables, Path(self._sqlite_fs_path))
             except Exception as migration_error:
                 logger.debug(f"SQLite migration harmonization skipped: {migration_error}")
