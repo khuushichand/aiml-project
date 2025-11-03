@@ -359,19 +359,6 @@ def _startup_trace(msg: str) -> None:
             logger.debug(f"Startup trace logging failed: {_startup_log_err}")
 
 _startup_trace(f"Endpoint import gating: ULTRA_MINIMAL_APP={_ULTRA_MINIMAL_APP}, MINIMAL_TEST_APP={_MINIMAL_TEST_APP}")
-
-# Detect whether we're running a pytest test that lives under tests/Jobs/
-def _in_jobs_test_context() -> bool:
-    try:
-        node = os.getenv("PYTEST_CURRENT_TEST", "")
-        if not node:
-            return False
-        node = node.replace("\\", "/").lower()
-        return "/tests/jobs/" in node
-    except Exception:
-        return False
-
-_JOBS_TEST_CONTEXT = _in_jobs_test_context()
 #
 if _ULTRA_MINIMAL_APP:
     try:
@@ -690,21 +677,6 @@ async def lifespan(app: FastAPI):
         raise
     except ImportError as _content_import_err:
         logger.debug(f"Content backend validation skipped (import error): {_content_import_err}")
-
-    # In pytest, disable Jobs workers/metrics by default outside tests/Jobs/
-    try:
-        import sys as _sys
-        _is_pytest = ("pytest" in _sys.modules) or bool(os.getenv("PYTEST_CURRENT_TEST"))
-        if _is_pytest and not _JOBS_TEST_CONTEXT:
-            os.environ.setdefault("CHATBOOKS_CORE_WORKER_ENABLED", "false")
-            os.environ.setdefault("JOBS_METRICS_GAUGES_ENABLED", "false")
-            os.environ.setdefault("JOBS_METRICS_RECONCILE_ENABLE", "false")
-            os.environ.setdefault("AUDIO_JOBS_WORKER_ENABLED", "false")
-            os.environ.setdefault("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false")
-            os.environ.setdefault("JOBS_WEBHOOKS_ENABLED", "false")
-            logger.info("Test context outside Jobs: default-disabling Jobs workers and gauges")
-    except Exception:
-        pass
 
     # Startup: Initialize telemetry and metrics
     logger.info("App Startup: Initializing telemetry and metrics...")
@@ -2966,21 +2938,13 @@ else:
     _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
     if _HAS_JOBS_ADMIN:
-        if _TEST_MODE:
-            # In pytest, only include Jobs admin endpoints for tests under tests/Jobs/
-            # This avoids unrelated test suites initializing Jobs control-plane routes by default.
-            if _JOBS_TEST_CONTEXT or os.getenv("JOBS_INCLUDE_IN_ALL_TESTS", "").lower() in {"1", "true", "yes", "y", "on"}:
-                app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
-            else:
-                logger.info("Skipping Jobs admin endpoints in non-Jobs test context")
-        else:
-            _include_if_enabled(
-                "jobs",
-                jobs_admin_router,
-                prefix=f"{API_V1_PREFIX}",
-                tags=["jobs"],
-                default_stable=False,
-            )
+        _include_if_enabled(
+            "jobs",
+            jobs_admin_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["jobs"],
+            default_stable=False,
+        )
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
     # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
