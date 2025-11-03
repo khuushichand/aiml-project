@@ -520,8 +520,27 @@ class LlamafileHandler(BaseLLMHandler):
                             self.logger.info(f"Sent SIGKILL to process group {pgid} (leader PID: {current_pid}).")
                         except ProcessLookupError:
                             self.logger.warning(f"Process {current_pid} not found during getpgid for SIGKILL.")
-                            process_to_stop.kill()  # Fallback
-                            self.logger.info(f"Sent SIGKILL to process PID {current_pid} (fallback).")
+                            # Fallback: try direct SIGKILL to PID; if that fails, try process.kill() if available
+                            try:
+                                await asyncio.to_thread(os.kill, current_pid, signal.SIGKILL)
+                                self.logger.info(f"Sent SIGKILL to process PID {current_pid} (fallback).")
+                            except ProcessLookupError:
+                                self.logger.warning(
+                                    f"Process {current_pid} already exited when attempting SIGKILL fallback.")
+                            except Exception as e_killpid:
+                                self.logger.debug(
+                                    f"os.kill fallback failed for PID {current_pid}: {e_killpid}; "
+                                    f"checking for process.kill() availability"
+                                )
+                                if hasattr(process_to_stop, "kill"):
+                                    try:
+                                        process_to_stop.kill()
+                                        self.logger.info(
+                                            f"Invoked process.kill() for PID {current_pid} (final fallback)."
+                                        )
+                                    except Exception as e_pkill:
+                                        self.logger.warning(
+                                            f"process.kill() failed for PID {current_pid}: {e_pkill}")
 
                     await process_to_stop.wait()  # Ensure it's reaped
                     self.logger.info(
@@ -654,14 +673,25 @@ class LlamafileHandler(BaseLLMHandler):
                     self.logger.error(f"Error during cleanup of PID {pid}: {e}. Attempting kill.")
                     if proc.returncode is None:  # Check again before kill
                         if platform.system() == "Windows":
-                            proc.kill()
+                            if hasattr(proc, "kill"):
+                                try:
+                                    proc.kill()
+                                except Exception as e_pkill:
+                                    self.logger.debug(f"proc.kill() failed for PID {pid} on Windows: {e_pkill}")
                         else:
                             try:
                                 pgid = os.getpgid(pid)
                                 os.killpg(pgid, signal.SIGKILL)
                             except Exception as e_kill:
-                                self.logger.debug(f"os.killpg failed for PID {pid} (pgid may be absent): error={e_kill}; falling back to proc.kill()")
-                                proc.kill()  # fallback
+                                self.logger.debug(
+                                    f"os.killpg failed for PID {pid} (pgid may be absent): error={e_kill}; "
+                                    f"falling back to proc.kill() if available"
+                                )
+                                if hasattr(proc, "kill"):
+                                    try:
+                                        proc.kill()  # fallback
+                                    except Exception as e_pkill:
+                                        self.logger.debug(f"proc.kill() fallback failed for PID {pid}: {e_pkill}")
             if port in self._active_servers:
                 del self._active_servers[port]
         self.logger.info("Managed llamafile server synchronous cleanup attempt complete.")

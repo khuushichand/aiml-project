@@ -11,7 +11,7 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
 ## Goals
 - Deliver an integrated research assistant in the browser that:
   - Chats via `/api/v1/chat/completions` with streaming and model selection.
-  - Searches via RAG (`/api/v1/rag/search` and `simple` if exposed).
+  - Searches via RAG (`POST /api/v1/rag/search` and `GET /api/v1/rag/simple` if exposed).
   - Ingests content (current page URL or manual URL) via `/api/v1/media/process` and related helpers.
   - Manages notes and prompts through their REST endpoints.
   - Transcribes audio via `/api/v1/audio/transcriptions`; synthesizes speech via `/api/v1/audio/speech`.
@@ -63,22 +63,26 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
 
 ### Settings and Auth
 - Allow any `serverUrl` (http/https); validate via a health check.
+- Health check path: `GET /api/v1/health` (optional lightweight: `/healthz`, readiness: `/readyz`). Treat non-200 as not ready.
 - Modes: Single‑User uses `X-API-KEY: <key>`. Multi‑User uses `Authorization: Bearer <access_token>`.
 - Manage access token in memory; persist refresh token only when necessary.
 - Auto‑refresh on 401 with single‑flight queue; one retry per request.
 - Never log secrets; redact sensitive fields in errors.
 
+- MV3 token lifecycle: persist refresh token in `chrome.storage.local` to survive service worker suspension/restart; keep access token in memory (or `chrome.storage.session`). On background start, attempt auto‑refresh when a refresh token exists; use single‑flight refresh queue on 401.
+
 ### Network Proxy (Background/Service Worker)
 - All API calls originate from background; UI/content never handles tokens directly.
 - Optional host permissions per configured origin at runtime; least privilege.
-- SSE support: set `Accept: text/event-stream`, parse events, keep‑alive handling, `AbortController` cancellation.
+- SSE support: set `Accept: text/event-stream`, parse events (including handling `[DONE]` sentinel), keep‑alive handling, `AbortController` cancellation.
 - Timeouts with exponential backoff (jitter). Offline queue for small writes.
+- Propagate an `X-Request-ID` header per request for correlation and idempotent retries.
 
 ### API Path Hygiene
 - Match the server’s OpenAPI exactly, including trailing slashes where specified, to avoid redirects and CORS quirks.
 - Core endpoints:
   - Chat: `POST /api/v1/chat/completions`
-  - RAG: `POST /api/v1/rag/search` (and `/rag/simple` if exposed)
+  - RAG: `POST /api/v1/rag/search`, `POST /api/v1/rag/search/stream`, `GET /api/v1/rag/simple`
   - Media: `POST /api/v1/media/process`
   - Notes: `/api/v1/notes/...` (search may require a trailing slash; align to spec)
   - Prompts: `/api/v1/prompts/...`
@@ -88,10 +92,33 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
   - Providers/Models: `GET /api/v1/llm/providers` (and `/llm/models` if present)
 - Centralize route constants; do not rely on client‑side redirects.
 
+#### Trailing Slash Rules (Notes/Prompts)
+- Notes:
+  - List/Create: `GET/POST /api/v1/notes/` (trailing slash required)
+  - Search: `GET /api/v1/notes/search/` (trailing slash required)
+  - Item: `GET/DELETE/PATCH /api/v1/notes/{id}` (no trailing slash)
+  - Keywords collections use trailing slash, e.g., `/api/v1/notes/keywords/`, `/api/v1/notes/keywords/search/`, `/api/v1/notes/{note_id}/keywords/`
+- Prompts:
+  - Base: `GET/POST /api/v1/prompts` (no trailing slash)
+  - Search: `POST /api/v1/prompts/search` (no trailing slash)
+  - Export: `GET /api/v1/prompts/export` (no trailing slash)
+  - Keywords collection: `/api/v1/prompts/keywords/` (trailing slash)
+
+### API Semantics
+- Chat SSE shape: Expect OpenAI-style chunks with "delta" objects, then "[DONE]". Parse lines like `data: {"choices":[{"delta":{"role":"assistant","content":"..."}}]}` and terminate on `[DONE]`.
+- RAG streaming is NDJSON (not SSE). Treat each line as a complete JSON object; do not expect `[DONE]`. Endpoints: `POST /api/v1/rag/search/stream` (stream), `GET /api/v1/rag/simple` (simple retrieval).
+- Health signals: `GET /api/v1/health` returns status "ok" (200) or "degraded" (206). Treat any non-200 as not ready during setup. Use `/readyz` (readiness) and `/healthz` (liveness) for lightweight probes.
+
+References:
+- Chat SSE generator: `tldw_Server_API/app/api/v1/endpoints/chat.py:1256`
+- RAG endpoints: `tldw_Server_API/app/api/v1/endpoints/rag_unified.py:664, 1110, 1174`
+- Health endpoints: `tldw_Server_API/app/api/v1/endpoints/health.py:97, 110`
+
 ### Chat
 - Support `stream: true|false`, model selection, and OpenAI‑compatible request fields.
 - Pause/cancel active streams; display partial tokens.
 - Error UX: connection lost, server errors, token expiration.
+- SSE streaming must detect and handle the `[DONE]` sentinel to terminate cleanly; keep the service worker alive during streams (e.g., via a long‑lived Port from the side panel).
 
 ### RAG
 - Query field, minimal filters; result list with snippet, source, timestamp.
@@ -100,6 +127,7 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
 ### Media Ingestion
 - Current tab URL ingestion; allow manual URL input.
 - Show progress/toasts and final status; handle failures gracefully.
+- Display progress logs from the server response where present; if a job identifier is returned, poll status with exponential backoff and provide cancel.
 
 ### Notes and Prompts
 - Create note from selection or input; tag and search.
@@ -153,6 +181,7 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
 - Background state store; message bus to UIs; `chrome.storage` for non‑sensitive prefs.
 - Do not store user content by default beyond session state.
 - Optional local cache for small artifacts with TTL and user clear.
+- Persist only refresh tokens (encrypted at rest if available) in `chrome.storage.local`; keep access tokens ephemeral (memory or `chrome.storage.session`).
 
 ## CORS & Server Config
 - Prefer background‑origin requests with explicit `host_permissions`/`optional_host_permissions`.
@@ -191,11 +220,13 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
 ## Acceptance Criteria (Key)
 - Path Hygiene: All requests hit exact API paths defined by OpenAPI; no 307s observed in logs.
 - Security: Tokens never appear in UI or console logs; content scripts lack access to tokens.
-- SSE: Streaming responses parsed without memory leaks; cancel stops network within ~200ms.
+- SSE: Streaming responses parsed without memory leaks; recognizes `[DONE]`; cancel stops network within ~200ms.
 - Retry/Refresh: 401 triggers single‑flight refresh; queued requests replay once; exponential backoff with jitter for network errors.
 - Permissions: Optional host permissions requested only for user‑configured origin; revocation handled gracefully.
 - Media: Ingest current tab URL; show progress and final status; errors actionable.
 - STT/TTS: Supported formats accepted; errors surfaced with clear messages.
+- 429 Handling: Honors `Retry-After` on rate limits; UI presents retry timing.
+- Streaming Memory: No unbounded memory growth during 5‑minute continuous streams; remains within budget.
 
 ## Dependencies
 - Server availability and correct CORS config.
@@ -212,14 +243,40 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
 - Advanced MCP tools integration.
 - Batch operations and resumable uploads.
 
-## Open Questions
-- Confirm canonical API key header name: proceeding with `X-API-KEY`. Any alternate accepted?
-- Is `/api/v1/llm/models` present alongside `/api/v1/llm/providers`? If both, which is authoritative for selection?
-- Do Notes/Prompts endpoints require trailing slash on search routes in current server build?
-- Preferred handling for self‑signed HTTPS during development?
+## Resolved Decisions
+- Canonical API key header: `X-API-KEY` (single‑user). Multi‑user uses `Authorization: Bearer <token>`.
+- Model discovery: Prefer `GET /api/v1/llm/providers` (authoritative provider→models); `GET /api/v1/llm/models` available as aggregate.
+- Trailing slashes: See “Trailing Slash Rules (Notes/Prompts)” above (notes search and collections require trailing slash; prompts base/search do not).
+- Dev HTTPS: Prefer HTTP on localhost; for HTTPS, trust a local CA or enable Chrome’s localhost invalid‑cert exception; ensure server CORS allows the extension origin.
+
+## Developer Validation Checklist
+- Connectivity & Auth
+  - Set server URL and verify `GET /api/v1/health` succeeds.
+  - Single‑user: requests with `X-API-KEY` succeed; Multi‑user: login/refresh/logout succeeds and access token auto‑refreshes after service worker suspend/resume.
+- Path Hygiene
+  - All calls are 2xx without redirects (no 307); Notes/Prompts follow trailing‑slash rules.
+- Chat
+  - Non‑stream and SSE stream both work; `[DONE]` handled; cancel closes network <200ms; models list loads from `/api/v1/llm/providers`.
+- RAG
+  - `POST /api/v1/rag/search` returns results; `GET /api/v1/rag/simple` works; `POST /api/v1/rag/search/stream` NDJSON parsed correctly.
+- Media
+  - Current tab URL ingest works; progress logs displayed; failures surface actionable errors; job polling (if job id present) functions with backoff.
+- Notes & Prompts
+  - Notes CRUD + `GET /api/v1/notes/search/` (with slash) work; Prompts base/search work; keywords endpoints reachable.
+- Audio
+  - STT accepts <= 25 MB and returns transcript; TTS synthesizes and plays; voices catalog fetched.
+- Reliability
+  - 429 responses respect `Retry-After`; 5xx/network use exponential backoff with jitter; offline queue for small writes visible.
+- Permissions
+  - Only the configured server origin is granted host permission; revocation handled gracefully.
+- CORS/HTTPS
+  - Extension origin allowed by server; dev HTTP works; dev HTTPS usable with trusted cert or localhost exception.
+- Metrics/Headers
+  - `X-Request-ID` sent on requests and echoed; `traceparent` present in responses.
+- Performance
+  - Background steady memory < 50 MB; streaming memory stable over 5 minutes; first chat token < 1.5s on LAN.
 
 ## Glossary
 - SSE: Server‑Sent Events; streaming over HTTP.
 - MV3: Chrome Manifest V3.
 - Background Proxy: Service worker owning all network I/O and auth.
-

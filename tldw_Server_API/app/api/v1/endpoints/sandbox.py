@@ -143,6 +143,39 @@ async def get_runtimes(current_user: User = Depends(get_request_user)) -> Sandbo
     return SandboxRuntimesResponse(runtimes=info)  # type: ignore[arg-type]
 
 
+@router.get("/health", summary="Sandbox health and readiness probe")
+async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict:
+    """Report sandbox store and Redis fan-out health.
+
+    - Store: reports effective `store_mode` and a basic connectivity check in cluster mode.
+    - Redis: reports whether WS fan-out is enabled and connected.
+    """
+    from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
+    store_info: dict = {"mode": None, "healthy": True}
+    try:
+        mode = str(get_store_mode())
+        store_info["mode"] = mode
+        if mode == "cluster":
+            try:
+                st = get_store()
+                # Minimal smoke call to exercise connectivity
+                _ = int(st.count_runs())
+                store_info["healthy"] = True
+            except Exception as e:
+                store_info["healthy"] = False
+                store_info["error"] = str(e)
+    except Exception as e:
+        store_info["healthy"] = False
+        store_info["error"] = str(e)
+    # Redis status via hub
+    try:
+        redis_status = get_hub().get_redis_status()  # type: ignore[attr-defined]
+    except Exception:
+        redis_status = {"enabled": False}
+    ok = bool(store_info.get("healthy", True)) and (True if not redis_status.get("enabled") else bool(redis_status.get("connected")))
+    return {"ok": ok, "store": store_info, "redis": redis_status}
+
+
 @router.post("/sessions", response_model=SandboxSession, summary="Create a short-lived sandbox session")
 async def create_session(
     payload: SandboxSessionCreateRequest = Body(...),

@@ -4,8 +4,12 @@ import asyncio
 import base64
 import threading
 from typing import Any, Dict, Optional
+import json
+import os
+import uuid
 
 from loguru import logger
+from tldw_Server_API.app.core.config import settings as app_settings
 
 
 class RunStreamHub:
@@ -29,6 +33,13 @@ class RunStreamHub:
         # Interactive stdin caps and state per run
         self._stdin_cfg: dict[str, dict] = {}
         self._stdin_state: dict[str, dict] = {}
+        # Optional Redis fan-out (cross-worker broadcast)
+        self._redis_enabled: bool = False
+        self._redis_client = None
+        self._redis_thread: Optional[threading.Thread] = None
+        self._redis_channel: str = str(os.getenv("SANDBOX_WS_REDIS_CHANNEL") or "tldw:sandbox:streams:v1")
+        self._instance_id: str = uuid.uuid4().hex
+        self._maybe_enable_redis_fanout()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -121,6 +132,20 @@ class RunStreamHub:
             return cur
 
     def _publish(self, run_id: str, frame: dict) -> None:
+        # Local dispatch first
+        self._publish_local(run_id, frame)
+        # Redis relay for cross-worker subscribers if enabled
+        try:
+            if self._redis_enabled and self._redis_client is not None:
+                payload = {"origin": self._instance_id, "run_id": run_id, "frame": frame}
+                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                # fire-and-forget; swallow errors
+                self._redis_client.publish(self._redis_channel, data)
+        except Exception as e:
+            logger.debug(f"redis publish failed: {e}
+")
+
+    def _publish_local(self, run_id: str, frame: dict) -> None:
         with self._lock:
             # Buffer non-heartbeat frames for reconnects (seq is assigned at dispatch time)
             if not (isinstance(frame, dict) and frame.get("type") == "heartbeat"):
@@ -429,6 +454,94 @@ class RunStreamHub:
             self._ended.discard(run_id)
             # Clear sequence counter
             self._seq.pop(run_id, None)
+
+    # -----------------
+    # Redis fan-out (optional)
+    # -----------------
+    def _maybe_enable_redis_fanout(self) -> None:
+        try:
+            # Explicit toggle (env) or reuse global REDIS_ENABLED
+            toggle_env = str(os.getenv("SANDBOX_WS_REDIS_FANOUT") or "").strip().lower() in {"1","true","yes","on","y"}
+            global_enabled = False
+            try:
+                global_enabled = bool(getattr(app_settings, "REDIS_ENABLED", False))
+            except Exception:
+                global_enabled = False
+            if not (toggle_env or global_enabled):
+                return
+            # Resolve URL
+            url = os.getenv("SANDBOX_REDIS_URL") or os.getenv("REDIS_URL")
+            if not url:
+                try:
+                    url = getattr(app_settings, "REDIS_URL", None)
+                except Exception:
+                    url = None
+            if not url:
+                # Try host/port/db
+                try:
+                    host = getattr(app_settings, "REDIS_HOST", "127.0.0.1")
+                    port = int(getattr(app_settings, "REDIS_PORT", 6379))
+                    db = int(getattr(app_settings, "REDIS_DB", 0))
+                    url = f"redis://{host}:{port}/{db}"
+                except Exception:
+                    url = None
+            if not url:
+                return
+            try:
+                import redis  # type: ignore
+                client = redis.Redis.from_url(url)
+                # Ping to ensure connectivity
+                client.ping()
+                self._redis_client = client
+                self._redis_enabled = True
+                # Start background subscriber
+                th = threading.Thread(target=self._redis_listen_loop, name="sandbox-redis-fanout", daemon=True)
+                th.start()
+                self._redis_thread = th
+                logger.debug("Sandbox WS Redis fan-out enabled")
+            except Exception as e:
+                self._redis_enabled = False
+                self._redis_client = None
+                logger.debug(f"Sandbox WS Redis fan-out unavailable: {e}")
+        except Exception:
+            # Never break hub init on redis issues
+            self._redis_enabled = False
+            self._redis_client = None
+
+    def _redis_listen_loop(self) -> None:
+        try:
+            if not (self._redis_enabled and self._redis_client is not None):
+                return
+            pubsub = self._redis_client.pubsub(ignore_subscribe_messages=True)
+            pubsub.subscribe(self._redis_channel)
+            for msg in pubsub.listen():
+                try:
+                    if msg is None:
+                        continue
+                    if msg.get("type") != "message":
+                        continue
+                    data = msg.get("data")
+                    if isinstance(data, (bytes, bytearray)):
+                        data = data.decode("utf-8", "ignore")
+                    payload = json.loads(data)
+                    if payload.get("origin") == self._instance_id:
+                        continue
+                    run_id = payload.get("run_id")
+                    frame = payload.get("frame")
+                    if isinstance(run_id, str) and isinstance(frame, dict):
+                        self._publish_local(run_id, frame)
+                except Exception:
+                    # Keep listening on individual message errors
+                    continue
+        except Exception as e:
+            logger.debug(f"redis listen loop ended: {e}")
+
+    def get_redis_status(self) -> dict:
+        return {
+            "enabled": bool(self._redis_enabled),
+            "channel": self._redis_channel,
+            "connected": bool(self._redis_enabled and self._redis_client is not None),
+        }
 
 
 _HUB = RunStreamHub()

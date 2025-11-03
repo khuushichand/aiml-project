@@ -926,6 +926,539 @@ class SQLiteStore(SandboxStore):
         return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
 
 
+class PostgresStore(SandboxStore):
+    """Cluster/durable store backed by Postgres.
+
+    - Requires psycopg (v3).
+    - Uses per-operation connections (no extra pooling dependency).
+    - Stores datetimes as ISO-8601 TEXT for parity with SQLite paths.
+    """
+
+    def __init__(self, dsn: str, idem_ttl_sec: int = 600) -> None:
+        self.idem_ttl_sec = int(idem_ttl_sec)
+        self.dsn = dsn
+        self._lock = threading.RLock()
+        try:
+            import psycopg  # noqa: F401
+            from psycopg.rows import dict_row  # noqa: F401
+        except Exception as e:  # pragma: no cover
+            raise RuntimeError("psycopg is required for PostgresStore") from e
+        self._init_db()
+
+    def _conn(self):
+        import psycopg
+        from psycopg.rows import dict_row
+        return psycopg.connect(self.dsn, autocommit=True, row_factory=dict_row)
+
+    def _init_db(self) -> None:
+        with self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sandbox_runs (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT,
+                        spec_version TEXT,
+                        runtime TEXT,
+                        runtime_version TEXT,
+                        base_image TEXT,
+                        phase TEXT,
+                        exit_code INTEGER,
+                        started_at TEXT,
+                        finished_at TEXT,
+                        message TEXT,
+                        image_digest TEXT,
+                        policy_hash TEXT,
+                        resource_usage JSONB
+                    );
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sandbox_idempotency (
+                        endpoint TEXT,
+                        user_key TEXT,
+                        key TEXT,
+                        fingerprint TEXT,
+                        object_id TEXT,
+                        response_body JSONB,
+                        created_at DOUBLE PRECISION,
+                        PRIMARY KEY (endpoint, user_key, key)
+                    );
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sandbox_usage (
+                        user_id TEXT PRIMARY KEY,
+                        artifact_bytes BIGINT
+                    );
+                    """
+                )
+                # Migrations: ensure new columns exist
+                def _ensure_column(table: str, col: str, coltype: str) -> None:
+                    try:
+                        cur.execute(
+                            """
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name=%s AND column_name=%s
+                            """,
+                            (table, col),
+                        )
+                        if cur.fetchone():
+                            return
+                        cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+                    except Exception:
+                        logger.debug(f"Postgres migration: could not add {table}.{col}")
+
+                _ensure_column("sandbox_runs", "resource_usage", "JSONB")
+                _ensure_column("sandbox_runs", "runtime_version", "TEXT")
+
+    def _fp(self, body: Dict[str, Any]) -> str:
+        try:
+            canon = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            canon = str(body)
+        import hashlib
+        return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+    def _user_key(self, user_id: Any) -> str:
+        try:
+            return str(user_id)
+        except Exception:
+            return ""
+
+    def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not key:
+            return None
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                # TTL GC
+                try:
+                    ttl = max(1, int(self.idem_ttl_sec))
+                except Exception:
+                    ttl = 600
+                cutoff = time.time() - ttl
+                try:
+                    cur.execute("DELETE FROM sandbox_idempotency WHERE created_at < %s", (cutoff,))
+                except Exception:
+                    pass
+                cur.execute(
+                    """
+                    SELECT fingerprint, response_body, object_id, created_at
+                    FROM sandbox_idempotency
+                    WHERE endpoint=%s AND user_key=%s AND key=%s
+                    """,
+                    (endpoint, self._user_key(user_id), key),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                fp_new = self._fp(body)
+                if row.get("fingerprint") == fp_new:
+                    try:
+                        return row.get("response_body")
+                    except Exception:
+                        return None
+                # Conflict: include created_at epoch seconds
+                ct = None
+                try:
+                    ct = float(row.get("created_at")) if row.get("created_at") is not None else None
+                except Exception:
+                    ct = None
+                raise IdempotencyConflict(row.get("object_id") or "", key=key, created_at=ct)
+
+    def store_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
+        if not key:
+            return
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO sandbox_idempotency(endpoint,user_key,key,fingerprint,object_id,response_body,created_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT (endpoint, user_key, key) DO NOTHING
+                        """,
+                        (
+                            endpoint,
+                            self._user_key(user_id),
+                            key,
+                            self._fp(body),
+                            object_id,
+                            json.dumps(response, ensure_ascii=False),
+                            time.time(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.debug(f"idempotency store failed (pg): {e}")
+
+    def put_run(self, user_id: Any, st: RunStatus) -> None:
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sandbox_runs (id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash,resource_usage)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        user_id=EXCLUDED.user_id,
+                        spec_version=EXCLUDED.spec_version,
+                        runtime=EXCLUDED.runtime,
+                        runtime_version=EXCLUDED.runtime_version,
+                        base_image=EXCLUDED.base_image,
+                        phase=EXCLUDED.phase,
+                        exit_code=EXCLUDED.exit_code,
+                        started_at=EXCLUDED.started_at,
+                        finished_at=EXCLUDED.finished_at,
+                        message=EXCLUDED.message,
+                        image_digest=EXCLUDED.image_digest,
+                        policy_hash=EXCLUDED.policy_hash,
+                        resource_usage=EXCLUDED.resource_usage
+                    """,
+                    (
+                        st.id,
+                        self._user_key(user_id),
+                        st.spec_version,
+                        (st.runtime.value if st.runtime else None),
+                        (st.runtime_version if getattr(st, "runtime_version", None) else None),
+                        st.base_image,
+                        st.phase.value,
+                        st.exit_code,
+                        (st.started_at.isoformat() if st.started_at else None),
+                        (st.finished_at.isoformat() if st.finished_at else None),
+                        st.message,
+                        st.image_digest,
+                        st.policy_hash,
+                        (json.dumps(st.resource_usage) if isinstance(st.resource_usage, dict) else None),
+                    ),
+                )
+
+    def get_run(self, run_id: str) -> Optional[RunStatus]:
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute("SELECT * FROM sandbox_runs WHERE id=%s", (run_id,))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                try:
+                    ru = None
+                    try:
+                        ru = row.get("resource_usage") if row.get("resource_usage") else None
+                        if isinstance(ru, str):
+                            ru = json.loads(ru)
+                    except Exception:
+                        ru = None
+                    st = RunStatus(
+                        id=row.get("id"),
+                        phase=RunPhase(row.get("phase")),
+                        spec_version=row.get("spec_version"),
+                        runtime=(RuntimeType(row.get("runtime")) if row.get("runtime") else None),
+                        runtime_version=row.get("runtime_version"),
+                        base_image=row.get("base_image"),
+                        image_digest=row.get("image_digest"),
+                        policy_hash=row.get("policy_hash"),
+                        exit_code=row.get("exit_code"),
+                        started_at=(datetime.fromisoformat(row.get("started_at")) if row.get("started_at") else None),
+                        finished_at=(datetime.fromisoformat(row.get("finished_at")) if row.get("finished_at") else None),
+                    )
+                    st.message = row.get("message")
+                    st.resource_usage = ru if isinstance(ru, dict) else None
+                    return st
+                except Exception as e:
+                    logger.debug(f"pg get_run parse error: {e}")
+                    return None
+
+    def update_run(self, st: RunStatus) -> None:
+        # UPSERT via put_run
+        self.put_run(None, st)
+
+    def get_run_owner(self, run_id: str) -> Optional[str]:
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute("SELECT user_id FROM sandbox_runs WHERE id=%s", (run_id,))
+                row = cur.fetchone()
+                if row and (row.get("user_id") is not None):
+                    return str(row.get("user_id"))
+                return None
+
+    def get_user_artifact_bytes(self, user_id: str) -> int:
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute("SELECT artifact_bytes FROM sandbox_usage WHERE user_id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    return 0
+                try:
+                    return int(row.get("artifact_bytes") or 0)
+                except Exception:
+                    return 0
+
+    def increment_user_artifact_bytes(self, user_id: str, delta: int) -> None:
+        if not user_id:
+            return
+        d = int(delta or 0)
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sandbox_usage(user_id, artifact_bytes) VALUES (%s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET artifact_bytes = COALESCE(sandbox_usage.artifact_bytes, 0) + EXCLUDED.artifact_bytes
+                    """,
+                    (user_id, d),
+                )
+
+    def list_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        order = "DESC" if sort_desc else "ASC"
+        where = ["1=1"]
+        params: list[Any] = []
+        if image_digest:
+            where.append("image_digest = %s")
+            params.append(image_digest)
+        if user_id:
+            where.append("user_id = %s")
+            params.append(user_id)
+        if phase:
+            where.append("phase = %s")
+            params.append(phase)
+        if started_at_from:
+            where.append("started_at >= %s")
+            params.append(started_at_from)
+        if started_at_to:
+            where.append("started_at <= %s")
+            params.append(started_at_to)
+        sql = (
+            "SELECT id,user_id,spec_version,runtime,runtime_version,base_image,phase,exit_code,started_at,finished_at,message,image_digest,policy_hash "
+            f"FROM sandbox_runs WHERE {' AND '.join(where)} ORDER BY started_at {order} LIMIT %s OFFSET %s"
+        )
+        params.extend([int(limit), int(offset)])
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                items: list[dict] = []
+                for row in cur.fetchall() or []:
+                    items.append({
+                        "id": row.get("id"),
+                        "user_id": row.get("user_id"),
+                        "spec_version": row.get("spec_version"),
+                        "runtime": row.get("runtime"),
+                        "runtime_version": row.get("runtime_version"),
+                        "base_image": row.get("base_image"),
+                        "phase": row.get("phase"),
+                        "exit_code": row.get("exit_code"),
+                        "started_at": row.get("started_at"),
+                        "finished_at": row.get("finished_at"),
+                        "message": row.get("message"),
+                        "image_digest": row.get("image_digest"),
+                        "policy_hash": row.get("policy_hash"),
+                    })
+                return items
+
+    def count_runs(
+        self,
+        *,
+        image_digest: Optional[str] = None,
+        user_id: Optional[str] = None,
+        phase: Optional[str] = None,
+        started_at_from: Optional[str] = None,
+        started_at_to: Optional[str] = None,
+    ) -> int:
+        where = ["1=1"]
+        params: list[Any] = []
+        if image_digest:
+            where.append("image_digest = %s")
+            params.append(image_digest)
+        if user_id:
+            where.append("user_id = %s")
+            params.append(user_id)
+        if phase:
+            where.append("phase = %s")
+            params.append(phase)
+        if started_at_from:
+            where.append("started_at >= %s")
+            params.append(started_at_from)
+        if started_at_to:
+            where.append("started_at <= %s")
+            params.append(started_at_to)
+        sql = f"SELECT COUNT(*) AS c FROM sandbox_runs WHERE {' AND '.join(where)}"
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                row = cur.fetchone()
+                try:
+                    return int(list(row.values())[0]) if row else 0
+                except Exception:
+                    return 0
+
+    def list_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        order = "DESC" if sort_desc else "ASC"
+        where = ["1=1"]
+        params: list[Any] = []
+        if endpoint:
+            where.append("endpoint = %s")
+            params.append(endpoint)
+        if user_id:
+            where.append("user_key = %s")
+            params.append(user_id)
+        if key:
+            where.append("key = %s")
+            params.append(key)
+        if created_at_from:
+            where.append("created_at >= %s")
+            params.append(self._coerce_created_at(created_at_from))
+        if created_at_to:
+            where.append("created_at <= %s")
+            params.append(self._coerce_created_at(created_at_to))
+        sql = (
+            "SELECT endpoint,user_key,key,fingerprint,object_id,created_at FROM sandbox_idempotency "
+            f"WHERE {' AND '.join(where)} ORDER BY created_at {order} LIMIT %s OFFSET %s"
+        )
+        params.extend([int(limit), int(offset)])
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                items: list[dict] = []
+                for row in cur.fetchall() or []:
+                    iso_ct = None
+                    try:
+                        if row.get("created_at") is not None:
+                            iso_ct = datetime.fromtimestamp(float(row.get("created_at")), tz=timezone.utc).isoformat()
+                    except Exception:
+                        iso_ct = None
+                    items.append({
+                        "endpoint": row.get("endpoint"),
+                        "user_id": row.get("user_key"),
+                        "key": row.get("key"),
+                        "fingerprint": row.get("fingerprint"),
+                        "object_id": row.get("object_id"),
+                        "created_at": iso_ct,
+                    })
+                return items
+
+    def count_idempotency(
+        self,
+        *,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        key: Optional[str] = None,
+        created_at_from: Optional[str] = None,
+        created_at_to: Optional[str] = None,
+    ) -> int:
+        where = ["1=1"]
+        params: list[Any] = []
+        if endpoint:
+            where.append("endpoint = %s")
+            params.append(endpoint)
+        if user_id:
+            where.append("user_key = %s")
+            params.append(user_id)
+        if key:
+            where.append("key = %s")
+            params.append(key)
+        if created_at_from:
+            where.append("created_at >= %s")
+            params.append(self._coerce_created_at(created_at_from))
+        if created_at_to:
+            where.append("created_at <= %s")
+            params.append(self._coerce_created_at(created_at_to))
+        sql = f"SELECT COUNT(*) AS c FROM sandbox_idempotency WHERE {' AND '.join(where)}"
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute(sql, tuple(params))
+                row = cur.fetchone()
+                try:
+                    return int(list(row.values())[0]) if row else 0
+                except Exception:
+                    return 0
+
+    def list_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+        sort_desc: bool = True,
+    ) -> list[dict]:
+        order = "DESC" if sort_desc else "ASC"
+        with self._lock, self._conn() as con:
+            with con.cursor() as cur:
+                cur.execute("SELECT user_id, artifact_bytes FROM sandbox_usage")
+                usage_rows = {r.get("user_id"): int(r.get("artifact_bytes") or 0) for r in (cur.fetchall() or [])}
+                cur.execute("SELECT user_id, resource_usage FROM sandbox_runs")
+                agg: dict[str, dict] = {}
+                for row in cur.fetchall() or []:
+                    u = row.get("user_id")
+                    if not u:
+                        continue
+                    if user_id and u != user_id:
+                        continue
+                    rs = agg.setdefault(u, {"runs_count": 0, "log_bytes": 0})
+                    rs["runs_count"] += 1
+                    try:
+                        ru = row.get("resource_usage")
+                        if isinstance(ru, str):
+                            ru = json.loads(ru)
+                        if ru and isinstance(ru.get("log_bytes"), int):
+                            rs["log_bytes"] += int(ru.get("log_bytes") or 0)
+                    except Exception:
+                        pass
+                users = set(usage_rows.keys()) | set(agg.keys())
+                items: list[dict] = []
+                for u in sorted(users, reverse=bool(sort_desc)):
+                    if user_id and u != user_id:
+                        continue
+                    items.append({
+                        "user_id": u,
+                        "runs_count": int((agg.get(u) or {}).get("runs_count", 0)),
+                        "log_bytes": int((agg.get(u) or {}).get("log_bytes", 0)),
+                        "artifact_bytes": int(usage_rows.get(u, 0)),
+                    })
+                return items[offset: offset + limit]
+
+    def count_usage(
+        self,
+        *,
+        user_id: Optional[str] = None,
+    ) -> int:
+        return len(self.list_usage(user_id=user_id, limit=10**9, offset=0, sort_desc=True))
+
+
+def _resolve_pg_dsn() -> Optional[str]:
+    # Prefer explicit SANDBOX_STORE_PG_DSN, then env, then DATABASE_URL
+    try:
+        dsn = getattr(app_settings, "SANDBOX_STORE_PG_DSN", None)
+    except Exception:
+        dsn = None
+    dsn = dsn or os.getenv("SANDBOX_STORE_PG_DSN") or os.getenv("SANDBOX_PG_DSN")
+    if not dsn:
+        try:
+            dsn = getattr(app_settings, "DATABASE_URL", None)
+        except Exception:
+            dsn = None
+    return str(dsn) if dsn else None
+
+
 def get_store() -> SandboxStore:
     backend = None
     try:
@@ -935,6 +1468,16 @@ def get_store() -> SandboxStore:
     if backend == "memory":
         ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
         return InMemoryStore(idem_ttl_sec=ttl)
+    if backend == "cluster":
+        ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
+        dsn = _resolve_pg_dsn()
+        if dsn:
+            try:
+                return PostgresStore(dsn=dsn, idem_ttl_sec=ttl)
+            except Exception as e:
+                logger.warning(f"Cluster store requested but unavailable ({e}); falling back to SQLite store")
+        else:
+            logger.warning("Cluster store requested but SANDBOX_STORE_PG_DSN/DATABASE_URL not set; falling back to SQLite store")
     # Default sqlite
     ttl = int(getattr(app_settings, "SANDBOX_IDEMPOTENCY_TTL_SEC", 600))
     try:
@@ -945,14 +1488,24 @@ def get_store() -> SandboxStore:
 
 
 def get_store_mode() -> str:
-    """Return the configured store mode string for feature discovery.
+    """Return the effective store mode for feature discovery.
 
-    Values: memory | sqlite | cluster (future) | unknown
+    Values: memory | sqlite | cluster | unknown
     """
     try:
         backend = str(getattr(app_settings, "SANDBOX_STORE_BACKEND", "memory")).strip().lower()
     except Exception:
         backend = "memory"
-    if backend in {"memory", "sqlite", "cluster"}:
+    if backend == "cluster":
+        dsn = _resolve_pg_dsn()
+        try:
+            import psycopg  # noqa: F401
+            deps_ok = True
+        except Exception:
+            deps_ok = False
+        if dsn and deps_ok:
+            return "cluster"
+        return "sqlite"
+    if backend in {"memory", "sqlite"}:
         return backend
     return "unknown"

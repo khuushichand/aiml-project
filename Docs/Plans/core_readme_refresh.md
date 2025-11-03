@@ -36,7 +36,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | RateLimiting | tldw_Server_API/app/core/RateLimiting | Scaffolded |  |  |
 | Sandbox | tldw_Server_API/app/core/Sandbox | Scaffolded |  |  |
 | Scheduler | tldw_Server_API/app/core/Scheduler | Scaffolded |  |  |
-| Search_and_Research | tldw_Server_API/app/core/Search_and_Research | Scaffolded |  |  |
+| Search_and_Research | tldw_Server_API/app/core/Search_and_Research | Complete |  | Standardized to 3-section format |
 | Security | tldw_Server_API/app/core/Security | Existing (Review/Update) |  |  |
 | Setup | tldw_Server_API/app/core/Setup | Scaffolded |  |  |
 | Sync | tldw_Server_API/app/core/Sync | Scaffolded |  |  |

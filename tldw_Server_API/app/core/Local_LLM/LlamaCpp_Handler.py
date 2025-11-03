@@ -501,9 +501,30 @@ class LlamaCppHandler(BaseLLMHandler):
                         try:
                             pgid = await asyncio.to_thread(os.getpgid, pid)  # Re-fetch pgid in case
                             await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError, OSError) as e:  # Specific exceptions for kill fallback
-                            self.logger.warning(f"Failed to kill process group {pgid}: {str(e)}. Falling back to kill.")
-                            process_to_stop.kill()
+                        except (ProcessLookupError, PermissionError, OSError) as e:
+                            # pgid may not be available if getpgid failed; log using pid
+                            self.logger.warning(
+                                f"Failed to kill process group for PID {pid}: {e}. Attempting PID SIGKILL fallback.")
+                            # Try direct SIGKILL to PID; if that fails, try process.kill() if available
+                            try:
+                                await asyncio.to_thread(os.kill, pid, signal.SIGKILL)
+                                self.logger.info(f"Sent SIGKILL to PID {pid} (fallback).")
+                            except ProcessLookupError:
+                                self.logger.warning(
+                                    f"PID {pid} already exited when attempting SIGKILL fallback.")
+                            except Exception as e_killpid:
+                                self.logger.debug(
+                                    f"os.kill fallback failed for PID {pid}: {e_killpid}; checking for process.kill()"
+                                )
+                                if hasattr(process_to_stop, "kill"):
+                                    try:
+                                        process_to_stop.kill()
+                                        self.logger.info(
+                                            f"Invoked process.kill() for PID {pid} (final fallback)."
+                                        )
+                                    except Exception as e_pkill:
+                                        self.logger.warning(
+                                            f"process.kill() failed for PID {pid}: {e_pkill}")
                     await process_to_stop.wait()
             else:
                 self.logger.info(

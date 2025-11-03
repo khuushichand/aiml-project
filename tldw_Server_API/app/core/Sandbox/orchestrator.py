@@ -290,10 +290,13 @@ class SandboxOrchestrator:
     # Artifacts
     # -----------------
     def _artifact_dir(self, user_id: str, run_id: str) -> Path:
-        try:
-            root = getattr(app_settings, "SANDBOX_ROOT_DIR", None)
-        except Exception:
-            root = None
+        # Prefer an explicit shared artifacts root for cluster deployments
+        root = os.getenv("SANDBOX_SHARED_ARTIFACTS_DIR")
+        if not root:
+            try:
+                root = getattr(app_settings, "SANDBOX_ROOT_DIR", None)
+            except Exception:
+                root = None
         if not root:
             try:
                 proj = getattr(app_settings, "PROJECT_ROOT", ".")
