@@ -19,16 +19,17 @@ def _docker_present() -> bool:
         return False
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # Use pytest monkeypatch to avoid leaking env between tests
+    monkeypatch.setenv("TEST_MODE", "1")
     # Enable real execution and granular egress enforcement
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "true"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "false"
-    os.environ["TLDW_SANDBOX_DOCKER_FAKE_EXEC"] = "0"
-    os.environ["SANDBOX_EGRESS_ENFORCEMENT"] = "true"
-    os.environ["SANDBOX_EGRESS_GRANULAR_ENFORCEMENT"] = "true"
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "0")
+    monkeypatch.setenv("SANDBOX_EGRESS_ENFORCEMENT", "true")
+    monkeypatch.setenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "true")
     # Use CIDR allowlist for Cloudflare Anycast (HTTP 1.1.1.1)
-    os.environ["SANDBOX_EGRESS_ALLOWLIST"] = "1.1.1.1/32"
+    monkeypatch.setenv("SANDBOX_EGRESS_ALLOWLIST", "1.1.1.1/32")
     clear_config_cache()
     return TestClient(app)
 
@@ -37,11 +38,11 @@ def _client() -> TestClient:
     not bool(os.environ.get("TLDW_SANDBOX_DOCKER_EGRESS_IT")),
     reason="Explicitly enable with TLDW_SANDBOX_DOCKER_EGRESS_IT=1; requires Docker + iptables",
 )
-def test_docker_egress_allowlist_allows_allowed_and_blocks_others() -> None:
+def test_docker_egress_allowlist_allows_allowed_and_blocks_others(monkeypatch: pytest.MonkeyPatch) -> None:
     if not _docker_present():
         pytest.skip("docker not available on PATH")
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         # Allowed: 1.1.1.1
         body_allow = {
             "spec_version": "1.0",
@@ -80,4 +81,3 @@ def test_docker_egress_allowlist_allows_allowed_and_blocks_others() -> None:
         # Expect non-zero exit due to DROP
         assert s2.get("phase") in {"failed", "completed"}
         assert (s2.get("exit_code") or 1) != 0
-

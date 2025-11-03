@@ -8,16 +8,16 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Enable execution but fake docker to avoid host dependency
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "true"
-    os.environ["TLDW_SANDBOX_DOCKER_FAKE_EXEC"] = "1"
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
     return TestClient(app)
 
 
-def test_docker_fake_exec_path() -> None:
-    with _client() as client:
+def test_docker_fake_exec_path(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",
@@ -33,8 +33,8 @@ def test_docker_fake_exec_path() -> None:
         assert "message" in j and isinstance(j["message"], str)
 
 
-def test_docker_fake_exec_resource_usage_shape() -> None:
-    with _client() as client:
+def test_docker_fake_exec_resource_usage_shape(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",

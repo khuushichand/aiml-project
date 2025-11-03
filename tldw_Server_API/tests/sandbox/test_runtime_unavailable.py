@@ -6,17 +6,17 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Ensure sandbox routes are enabled in case route gating is active
-    os.environ.setdefault("ROUTES_ENABLE", "sandbox")
+    monkeypatch.setenv("ROUTES_ENABLE", "sandbox")
     # Make firecracker appear unavailable regardless of host
-    os.environ["TLDW_SANDBOX_FIRECRACKER_AVAILABLE"] = "0"
+    monkeypatch.setenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE", "0")
     return TestClient(app)
 
 
-def test_run_firecracker_unavailable_returns_503() -> None:
-    with _client() as client:
+def test_run_firecracker_unavailable_returns_503(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         body = {
             "spec_version": "1.0",
             "runtime": "firecracker",
@@ -34,8 +34,8 @@ def test_run_firecracker_unavailable_returns_503() -> None:
         assert isinstance(d.get("suggested"), list) and "docker" in d.get("suggested")
 
 
-def test_session_firecracker_unavailable_returns_503() -> None:
-    with _client() as client:
+def test_session_firecracker_unavailable_returns_503(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         body = {
             "spec_version": "1.0",
             "runtime": "firecracker",
@@ -49,4 +49,3 @@ def test_session_firecracker_unavailable_returns_503() -> None:
         assert d.get("runtime") == "firecracker"
         assert d.get("available") is False
         assert isinstance(d.get("suggested"), list) and "docker" in d.get("suggested")
-

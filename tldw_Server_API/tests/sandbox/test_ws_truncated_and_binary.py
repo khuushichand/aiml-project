@@ -13,13 +13,13 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     return TestClient(app)
 
 
-def test_ws_truncated_frame_behavior(ws_flush) -> None:
-    with _client() as client:
+def test_ws_truncated_frame_behavior(ws_flush, monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         run_id = "ws_trunc_1"
         hub = get_hub()
         # Publish two chunks with a small cap: first consumes the cap (5 bytes),
@@ -37,8 +37,8 @@ def test_ws_truncated_frame_behavior(ws_flush) -> None:
             ws.close()
 
 
-def test_ws_binary_stdout_base64_encoding(ws_flush) -> None:
-    with _client() as client:
+def test_ws_binary_stdout_base64_encoding(ws_flush, monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         run_id = "ws_bin_1"
         hub = get_hub()
         # Non-UTF8 bytes should be base64 encoded
@@ -55,9 +55,9 @@ def test_ws_binary_stdout_base64_encoding(ws_flush) -> None:
 
 
 @pytest.mark.unit
-def test_ws_heartbeats_include_seq_consolidated(ws_flush):
+def test_ws_heartbeats_include_seq_consolidated(ws_flush, monkeypatch):
     # Avoid relying on server's background heartbeat loop; publish via hub directly
-    with _client() as client:
+    with _client(monkeypatch) as client:
         run_id = "ws_hb_seq_1"
         with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws:
             hub = get_hub()

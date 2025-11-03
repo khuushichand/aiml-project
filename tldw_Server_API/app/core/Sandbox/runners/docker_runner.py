@@ -117,16 +117,8 @@ class DockerRunner:
         # Cleanup egress rules and network if present
         try:
             try:
-                out = subprocess.check_output(["iptables", "-S", "DOCKER-USER"], text=True)
-                for line in out.splitlines():
-                    if label in line:
-                        parts = line.strip().split()
-                        if parts and parts[0] in {"-A", "-I"}:
-                            parts[0] = "-D"
-                            try:
-                                subprocess.run(["iptables"] + parts, check=False)
-                            except Exception:
-                                pass
+                # Use centralized helper to remove iptables rules by label
+                delete_rules_by_label(label)
             except Exception:
                 pass
             if net:

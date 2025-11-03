@@ -6,16 +6,16 @@ from tldw_Server_API.app.core.config import clear_config_cache
 from tldw_Server_API.app.main import app
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Advertise a specific store backend
-    os.environ["SANDBOX_STORE_BACKEND"] = "memory"
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
     clear_config_cache()
     return TestClient(app)
 
 
-def test_runtimes_include_capability_flags_and_store_mode() -> None:
-    with _client() as client:
+def test_runtimes_include_capability_flags_and_store_mode(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         r = client.get("/api/v1/sandbox/runtimes")
         assert r.status_code == 200
         data = r.json()
@@ -29,12 +29,18 @@ def test_runtimes_include_capability_flags_and_store_mode() -> None:
 
 def test_egress_allowlist_supported_when_enforced(monkeypatch) -> None:
     # Ensure app is in test mode and config cache is fresh
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ["SANDBOX_STORE_BACKEND"] = "memory"
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
     clear_config_cache()
     # Flip enforcement on the live service instance to avoid re-importing app
     import tldw_Server_API.app.api.v1.endpoints.sandbox as sandbox_ep
-    sandbox_ep._service.policy.cfg.egress_enforcement = True  # type: ignore[attr-defined]
+    # Temporarily enforce egress via monkeypatch so state is restored after test
+    monkeypatch.setattr(
+        sandbox_ep._service.policy.cfg,  # type: ignore[attr-defined]
+        "egress_enforcement",
+        True,
+        raising=False,
+    )
     with TestClient(app) as client:
         r = client.get("/api/v1/sandbox/runtimes")
         assert r.status_code == 200
@@ -45,11 +51,11 @@ def test_egress_allowlist_supported_when_enforced(monkeypatch) -> None:
         assert docker.get("egress_allowlist_supported") is True
 
 
-def test_runtimes_notes_reflect_granular_allowlist() -> None:
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ["SANDBOX_STORE_BACKEND"] = "memory"
-    os.environ["SANDBOX_EGRESS_ENFORCEMENT"] = "true"
-    os.environ["SANDBOX_EGRESS_GRANULAR_ENFORCEMENT"] = "true"
+def test_runtimes_notes_reflect_granular_allowlist(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    monkeypatch.setenv("SANDBOX_EGRESS_ENFORCEMENT", "true")
+    monkeypatch.setenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "true")
     clear_config_cache()
     with TestClient(app) as client:
         r = client.get("/api/v1/sandbox/runtimes")

@@ -13,9 +13,9 @@ psycopg = pytest.importorskip("psycopg")
 # can reuse the same cluster without extra env wiring.
 pg_dsn: Optional[str] = (
     os.getenv("TEST_DATABASE_URL")
+    or os.getenv("POSTGRES_TEST_DSN")
     or os.getenv("DATABASE_URL")
     or os.getenv("JOBS_DB_URL")
-    or os.getenv("POSTGRES_TEST_DSN")
 )
 
 
@@ -53,8 +53,9 @@ def pg_schema_and_cleanup():
 
     # Determine DSN
     dsn = pg_dsn
-    if not dsn:
-        pytest.skip("JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests")
+    # Skip cleanly when a proper Postgres DSN is not provided
+    if not dsn or not str(dsn).lower().startswith("postgres"):
+        pytest.skip("Postgres DSN not configured; skipping Postgres jobs tests")
 
     # Ensure DB exists and schema is created
     ensure_db_exists(dsn)

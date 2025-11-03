@@ -454,30 +454,31 @@ class SandboxService:
                         except Exception as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
                     threading.Thread(target=_worker_fc, daemon=True).start()
-                # Foreground
-                fr = FirecrackerRunner()
-                ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
-                real = fr.start_run(status.id, spec, ws)
-                real.id = status.id
-                status.phase = real.phase
-                status.exit_code = real.exit_code
-                status.started_at = real.started_at
-                status.finished_at = real.finished_at
-                status.message = real.message
-                status.image_digest = real.image_digest
-                status.runtime_version = real.runtime_version
-                try:
-                    if getattr(real, "resource_usage", None):
-                        status.resource_usage = real.resource_usage  # type: ignore[assignment]
-                except Exception:
-                    pass
-                if real.artifacts:
-                    self._orch.store_artifacts(status.id, real.artifacts)
-                self._orch.update_run(status.id, status)
-                try:
-                    self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                except Exception:
-                    pass
+                else:
+                    # Foreground
+                    fr = FirecrackerRunner()
+                    ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+                    real = fr.start_run(status.id, spec, ws)
+                    real.id = status.id
+                    status.phase = real.phase
+                    status.exit_code = real.exit_code
+                    status.started_at = real.started_at
+                    status.finished_at = real.finished_at
+                    status.message = real.message
+                    status.image_digest = real.image_digest
+                    status.runtime_version = real.runtime_version
+                    try:
+                        if getattr(real, "resource_usage", None):
+                            status.resource_usage = real.resource_usage  # type: ignore[assignment]
+                    except Exception:
+                        pass
+                    if real.artifacts:
+                        self._orch.store_artifacts(status.id, real.artifacts)
+                    self._orch.update_run(status.id, status)
+                    try:
+                        self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning(f"Firecracker execution failed; keeping enqueue status. Error: {e}")
         else:

@@ -10,8 +10,8 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.Sandbox.models import RunStatus, RunPhase, RuntimeType
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Use in-memory store by default (already defaulted in config)
     return TestClient(app)
 
@@ -46,7 +46,7 @@ def test_admin_list_filters_and_pagination(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         # Seed 3 runs: two with d1 digest, one with d2
         _seed_run("r1", 1, "d1", 300)
         _seed_run("r2", 1, "d1", 200)
@@ -87,7 +87,7 @@ def test_admin_list_filter_by_user_and_phase(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         # Seed runs for two users and phases
         _seed_run("u1_ok", 1, "d1", 300, phase="completed")
         _seed_run("u2_fail", 2, "d1", 200, phase="failed")

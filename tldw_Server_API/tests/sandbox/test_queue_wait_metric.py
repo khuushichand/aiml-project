@@ -9,11 +9,11 @@ import pytest
 from tldw_Server_API.app.main import app
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "true"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "true"
-    os.environ["TLDW_SANDBOX_DOCKER_FAKE_EXEC"] = "1"
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
     return TestClient(app)
 
 
@@ -29,7 +29,7 @@ def test_queue_wait_metric_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(svc, "observe_histogram", _obs, raising=True)
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",

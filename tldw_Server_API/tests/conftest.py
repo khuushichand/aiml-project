@@ -27,6 +27,25 @@ try:
     # Enable deterministic test behaviors across subsystems
     os.environ.setdefault("TEST_MODE", "1")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+    # Ensure Postgres tests use a proper DSN instead of falling back to a SQLite DATABASE_URL.
+    # If a dedicated DSN is provided via TEST_DATABASE_URL or POSTGRES_TEST_DSN, prefer it.
+    # Otherwise, if POSTGRES_TEST_HOST/USER/DB are present, synthesize a DSN.
+    try:
+        _pg_dsn = os.getenv("TEST_DATABASE_URL") or os.getenv("POSTGRES_TEST_DSN")
+        if not _pg_dsn:
+            _pg_host = os.getenv("POSTGRES_TEST_HOST")
+            _pg_port = os.getenv("POSTGRES_TEST_PORT", "5432")
+            _pg_user = os.getenv("POSTGRES_TEST_USER")
+            _pg_pass = os.getenv("POSTGRES_TEST_PASSWORD", "")
+            _pg_db = os.getenv("POSTGRES_TEST_DATABASE") or os.getenv("POSTGRES_TEST_DB")
+            if _pg_host and _pg_user and _pg_db:
+                # Compose a DSN and set TEST_DATABASE_URL so PG helpers don't pick SQLite DATABASE_URL
+                _auth = f"{_pg_user}:{_pg_pass}" if _pg_pass else _pg_user
+                _pg_dsn = f"postgresql://{_auth}@{_pg_host}:{int(_pg_port)}/{_pg_db}"
+        if _pg_dsn and _pg_dsn.lower().startswith("postgres"):
+            os.environ["TEST_DATABASE_URL"] = _pg_dsn
+    except Exception:
+        pass
 except Exception as e:
     # Surface environment setup failures in test output
     _log.exception("Failed to apply test environment setup in conftest.py")

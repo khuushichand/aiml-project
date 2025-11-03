@@ -12,19 +12,19 @@ from tldw_Server_API.app.core.Sandbox.streams import get_hub
 pytestmark = pytest.mark.timeout(10)
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Ensure sandbox router enabled
     existing = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing.split(",") if p.strip()]
     if "sandbox" not in parts:
         parts.append("sandbox")
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
     from tldw_Server_API.app.main import app
     return TestClient(app)
 
 
-def test_ws_resume_from_seq_replays_only_newer(ws_flush) -> None:
+def test_ws_resume_from_seq_replays_only_newer(ws_flush, monkeypatch) -> None:
     run_id = "resume_seq_run1"
     hub = get_hub()
     # Publish a handful of frames before connecting
@@ -33,7 +33,7 @@ def test_ws_resume_from_seq_replays_only_newer(ws_flush) -> None:
     hub.publish_stdout(run_id, b"world", max_log_bytes=1024)
     hub.publish_event(run_id, "end", {"n": 2})
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         # Ask to resume from seq=3; subscribe should only deliver frames with seq>=3
         with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream?from_seq=3") as ws:
             seqs: List[int] = []

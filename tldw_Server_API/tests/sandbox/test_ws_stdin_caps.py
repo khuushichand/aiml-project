@@ -11,23 +11,23 @@ import pytest
 pytestmark = pytest.mark.timeout(10)
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ.setdefault("SANDBOX_ENABLE_EXECUTION", "true")
-    os.environ.setdefault("SANDBOX_BACKGROUND_EXECUTION", "true")
-    os.environ.setdefault("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
     # Ensure sandbox router active
     existing_enable = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing_enable.split(",") if p.strip()]
     if "sandbox" not in parts:
         parts.append("sandbox")
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
     from tldw_Server_API.app.main import app as _app
     return TestClient(_app)
 
 
-def test_ws_accepts_stdin_and_enforces_caps(ws_flush) -> None:
-    with _client() as client:
+def test_ws_accepts_stdin_and_enforces_caps(ws_flush, monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         # Start a run with interactive caps
         body: Dict[str, Any] = {
             "spec_version": "1.0",
@@ -59,4 +59,3 @@ def test_ws_accepts_stdin_and_enforces_caps(ws_flush) -> None:
             assert saw_trunc, "Expected a truncated frame due to stdin caps"
             ws_flush(run_id)
             ws.close()
-

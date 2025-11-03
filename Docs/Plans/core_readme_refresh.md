@@ -14,7 +14,7 @@ Purpose: Track standardization of README files across `tldw_Server_API/app/core/
 | Collections | tldw_Server_API/app/core/Collections | Scaffolded |  |  |
 | DB_Management | tldw_Server_API/app/core/DB_Management | Complete |  | Standardized to 3-section format |
 | Embeddings | tldw_Server_API/app/core/Embeddings | Complete |  | Standardized to 3-section format |
-| Evaluations | tldw_Server_API/app/core/Evaluations | Existing (Review/Update) |  |  |
+| Evaluations | tldw_Server_API/app/core/Evaluations | Complete |  | Standardized to 3-section format |
 | External_Sources | tldw_Server_API/app/core/External_Sources | Scaffolded |  |  |
 | Flashcards | tldw_Server_API/app/core/Flashcards | Scaffolded |  |  |
 | Infrastructure | tldw_Server_API/app/core/Infrastructure | Scaffolded |  |  |

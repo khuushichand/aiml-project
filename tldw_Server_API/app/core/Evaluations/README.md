@@ -1,3 +1,117 @@
+# Evaluations Module
+
+Note: This README is aligned to the project’s 3-section template. The original README content is preserved below unchanged to avoid any loss of information or diagrams.
+
+## 1. Descriptive of Current Feature Set
+
+The Evaluations module provides a unified, API- and CLI-driven system for model benchmarking and evaluation. It supports OpenAI-compatible workflows and tldw-specific evaluators, plus datasets/runs management, webhooks, rate limiting, and embeddings A/B tests.
+
+- Capabilities
+  - Unified evaluations: model-graded, exact/includes/fuzzy match, GEval, RAG, response quality, propositions, OCR, label_choice, nli_factcheck
+  - Datasets and runs: CRUD, pagination, idempotent create/run, run cancellation, history
+  - Embeddings A/B testing: create/run tests, status/results, significance, reranker toggles
+  - Webhooks: registration, status, test helpers; delivery metrics
+  - Rate limits and admin tools: per-user guards; idempotency key cleanup
+
+- Inputs/Outputs
+  - Input: JSON requests per evaluation type (see schemas); optional idempotency via `Idempotency-Key`
+  - Output: structured responses (scores/metrics/results); streaming available where applicable
+
+- Related Endpoints (examples)
+  - Router base: /api/v1/evaluations — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:90
+  - CRUD: POST `/api/v1/evaluations` — tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py:29
+  - CRUD: GET `/api/v1/evaluations` — tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py:84
+  - CRUD: GET `/api/v1/evaluations/{eval_id}` — tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py:118
+  - CRUD: PATCH `/api/v1/evaluations/{eval_id}` — tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py:142
+  - CRUD: DELETE `/api/v1/evaluations/{eval_id}` — tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py:160
+  - Runs: POST `/api/v1/evaluations/{eval_id}/runs` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1035
+  - GEval: POST `/api/v1/evaluations/geval` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1144
+  - RAG: POST `/api/v1/evaluations/rag` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1332
+  - Response Quality: POST `/api/v1/evaluations/response-quality` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1475
+  - Propositions: POST `/api/v1/evaluations/propositions` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1635
+  - OCR: POST `/api/v1/evaluations/ocr` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:2059
+  - OCR (PDF): POST `/api/v1/evaluations/ocr-pdf` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:2118
+  - Batch: POST `/api/v1/evaluations/batch` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1781
+  - History: POST `/api/v1/evaluations/history` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:2234
+  - Rate limits: GET `/api/v1/evaluations/rate-limits` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:644
+  - Admin: POST `/api/v1/evaluations/admin/idempotency/cleanup` — tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:140
+  - Webhooks: POST `/api/v1/evaluations/webhooks` — tldw_Server_API/app/api/v1/endpoints/evaluations_webhooks.py:41
+  - Emb. A/B: POST `/api/v1/evaluations/embeddings/abtest` — tldw_Server_API/app/api/v1/endpoints/evaluations_embeddings_abtest.py:42
+
+- Related Schemas (key models)
+  - Create/Update/Get Evaluation — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:239, 257, 264
+  - Runs — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:283, 300, 319
+  - Datasets — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:331, 339, 402
+  - GEval/RAG/Response Quality/Propositions — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:409, 448, 506, 469
+  - OCR — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:365, 375
+  - Batch/History — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:722, 783
+  - Webhooks — tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:792, 811, 823, 830, 843, 848
+  - Embeddings A/B — tldw_Server_API/app/api/v1/schemas/embeddings_abtest_schemas.py:14, 57, 72, 96, 101, 107
+
+## 2. Technical Details of Features
+
+- Architecture & Flow
+  - Unified router aggregates CRUD, run management, evaluator-specific routes, webhooks, rate limits, admin ops
+  - Service layer: `unified_evaluation_service.py` orchestrates evaluators, DB adapters, and async work
+  - Evaluation types map to dedicated evaluators (e.g., `rag_evaluator.py`, `response_quality_evaluator.py`, `ocr_evaluator.py`)
+
+- Key Components
+  - Service & managers: `unified_evaluation_service.py`, `evaluation_manager.py`, `webhook_manager.py`, `user_rate_limiter.py`
+  - Evaluators/utilities: `rag_evaluator.py`, `ms_g_eval.py`, `simpleqa_eval.py`, `metrics.py`, `metrics_advanced.py`
+  - Embeddings A/B: `embeddings_abtest_service.py`, `embeddings_abtest_repository.py`
+  - Infra: `connection_pool.py`, `db_adapter.py`, `circuit_breaker.py`
+
+- Database & Storage
+  - DB manager: `DB_Management/Evaluations_DB.py` with optional PostgreSQL backend and RLS policies
+  - Per-user DB paths via `db_path_utils.DatabasePaths.get_evaluations_db_path(user_id)`
+  - Idempotency store for evaluations/runs/A/B tests; admin cleanup endpoint available
+
+- Configuration & AuthNZ
+  - Rate limits: `evaluations_auth.check_evaluation_rate_limit`; per-user limits + `GET /rate-limits`
+  - RBAC: `rbac_rate_limit`, `require_token_scope` on sensitive endpoints; admin checks for A/B runs and cleanup
+  - Idempotency: `Idempotency-Key` header for create/run endpoints; replay indicated via `X-Idempotent-Replay`
+  - Test overrides: `EVALUATIONS_TEST_DB_PATH` to redirect DB in tests; single-user vs multi-user logic
+
+- Concurrency & Performance
+  - Async evaluators; background tasks for long-running processes (A/B runs)
+  - Connection pooling and circuit breakers; streaming where supported
+
+- Error Handling & Security
+  - Standardized error responses via `create_error_response`; input sanitization in schemas
+  - Webhook delivery tracking, retries, and stats; safe URL handling and secrets
+
+## 3. Developer-Related/Relevant Information for Contributors
+
+- Folder Structure (high-level)
+  - `Evaluations/` — evaluators, services, metrics, CLI, benchmark registry/loaders
+  - `Evaluations/cli/` — CLI commands (`tldw-evals`)
+  - `Evaluations/configs/` — example configs and templates
+
+- Extension Points
+  - Add a new evaluator: implement in `Evaluations/` and register in service/registry
+  - Add endpoints: extend `evaluations_unified.py` (or split modules) and add schemas
+  - Extend A/B: update `embeddings_abtest_service.py` + schemas; update repository queries
+
+- Tests (useful suites)
+  - Integration/API: `tldw_Server_API/tests/Evaluations/integration/test_api_endpoints.py`
+  - Unified/e2e: `tldw_Server_API/tests/Evaluations/test_evaluations_unified.py`, `tldw_Server_API/tests/e2e/test_evaluations_workflow.py`
+  - OCR/RAG/Propositions: `tldw_Server_API/tests/Evaluations/test_ocr_metrics.py`, `test_rag_pipeline_runner.py`, `test_proposition_evaluations.py`
+  - A/B tests: `tldw_Server_API/tests/Evaluations/test_embeddings_abtest_idempotency.py`, `embeddings_abtest/test_scaffold.py`
+  - DB/CRUD (Postgres+SQLite): `tldw_Server_API/tests/Evaluations/test_evaluations_postgres_crud.py`, `tests/DB_Management/test_evaluations_unified_and_crud.py`
+
+- Local Dev Tips
+  - Install extras: `pip install -e .[evals]`
+  - Use `Idempotency-Key` during repeated runs in dev/testing
+  - `TESTING=1` may force sync paths for some long-running A/B flows
+
+- Docs
+  - User Guide: `tldw_Server_API/app/core/Evaluations/EVALS_USER_GUIDE.md`
+  - Developer Guide: `tldw_Server_API/app/core/Evaluations/EVALS_DEVELOPER_GUIDE.md`
+
+---
+
+# Original README (Preserved)
+
 # tldw Evaluations Module
 
 > Deprecation Notice (CLI)

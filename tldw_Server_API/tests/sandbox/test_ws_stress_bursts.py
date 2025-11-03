@@ -10,22 +10,22 @@ from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from uuid import uuid4
 
 
-def _client() -> TestClient:
+def _client(monkeypatch) -> TestClient:
     # Fast WS poll and deterministic behavior
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ.setdefault("MINIMAL_TEST_APP", "1")
-    os.environ["SANDBOX_WS_POLL_TIMEOUT_SEC"] = "1"
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("SANDBOX_WS_POLL_TIMEOUT_SEC", "1")
     # Disable synthetic frames to assert true ordering
-    os.environ["SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS"] = "false"
+    monkeypatch.setenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", "false")
     # No actual execution
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "false"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "false"
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "false")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
     # Ensure sandbox routes are enabled
     existing_enable = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing_enable.split(",") if p.strip()]
     if "sandbox" not in parts:
         parts.append("sandbox")
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
     from tldw_Server_API.app.main import app  # import after env vars set
     return TestClient(app)
 
@@ -37,8 +37,8 @@ def _new_run_id() -> str:
     return f"run-{uuid4()}"
 
 
-def test_ws_burst_stdout_stderr_order_and_types() -> None:
-    with _client() as client:
+def test_ws_burst_stdout_stderr_order_and_types(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         run_id = _new_run_id()
         hub = get_hub()
 

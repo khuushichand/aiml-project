@@ -7,21 +7,21 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 
 
-def _client() -> TestClient:
+def _client(monkeypatch) -> TestClient:
     # Ensure quick WS polling and disable synthetic frames for deterministic assertions
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ.setdefault("MINIMAL_TEST_APP", "1")
-    os.environ["SANDBOX_WS_POLL_TIMEOUT_SEC"] = "1"
-    os.environ["SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS"] = "false"
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("SANDBOX_WS_POLL_TIMEOUT_SEC", "1")
+    monkeypatch.setenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS", "false")
     # Disable execution/background to avoid runner events
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "false"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "false"
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "false")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
     # Ensure sandbox routes enabled
     existing_enable = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing_enable.split(",") if p.strip()]
     if "sandbox" not in parts:
         parts.append("sandbox")
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
     from tldw_Server_API.app.main import app  # import after env is set
     return TestClient(app)
 
@@ -39,8 +39,8 @@ def _create_run(client: TestClient) -> str:
     return r.json()["id"]
 
 
-def test_ws_multi_subscribers_receive_same_order() -> None:
-    with _client() as client:
+def test_ws_multi_subscribers_receive_same_order(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
         # Publish a small sequence of frames before any subscriber connects
@@ -67,8 +67,8 @@ def test_ws_multi_subscribers_receive_same_order() -> None:
             assert seqs1 == seqs2
 
 
-def test_ws_reconnect_drain_buffer() -> None:
-    with _client() as client:
+def test_ws_reconnect_drain_buffer(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
         # Publish two frames, then connect first subscriber
@@ -94,13 +94,13 @@ def test_ws_reconnect_drain_buffer() -> None:
             assert seqs == sorted(seqs)
 
 
-def test_ws_multi_subs_live_stream() -> None:
+def test_ws_multi_subs_live_stream(monkeypatch) -> None:
     """Two subscribers connected while frames are being published should observe identical ordering.
 
     This test simulates a small live stream by publishing frames from a background thread
     while two clients are connected. Both should receive the same seq-ordered frames.
     """
-    with _client() as client:
+    with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
 

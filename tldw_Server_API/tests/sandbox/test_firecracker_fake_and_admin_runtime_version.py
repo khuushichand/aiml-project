@@ -8,18 +8,18 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Enable execution and mark firecracker as available for this test
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "true"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "false"
-    os.environ["TLDW_SANDBOX_FIRECRACKER_AVAILABLE"] = "1"
-    os.environ["TLDW_SANDBOX_FIRECRACKER_VERSION"] = "9.9.9"
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
+    monkeypatch.setenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_FIRECRACKER_VERSION", "9.9.9")
     return TestClient(app)
 
 
-def test_firecracker_fake_exec_and_admin_details_runtime_version() -> None:
-    with _client() as client:
+def test_firecracker_fake_exec_and_admin_details_runtime_version(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "firecracker",
@@ -38,4 +38,3 @@ def test_firecracker_fake_exec_and_admin_details_runtime_version() -> None:
         assert d.status_code == 200
         jj = d.json()
         assert jj.get("runtime_version") == "9.9.9"
-

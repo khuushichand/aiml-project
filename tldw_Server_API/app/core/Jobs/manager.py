@@ -263,14 +263,24 @@ class JobManager:
 
         Env (checked in order):
           - JOBS_{BACKEND}_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)
+          - JOBS_{ALIAS}_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)  # e.g., BACKEND=pg -> ALIAS=postgres
           - JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)
         If domain is listed => DESC; otherwise ASC.
         """
         try:
             dom = (domain or "").strip()
-            key_backend = f"JOBS_{backend.upper()}_ACQUIRE_PRIORITY_DESC_DOMAINS"
+            b = (backend or "").strip().lower()
+            key_backend = f"JOBS_{b.upper()}_ACQUIRE_PRIORITY_DESC_DOMAINS"
+            # Support alternate alias names (e.g., pg -> postgres)
+            alias = "postgres" if b == "pg" else None
+            key_alias = f"JOBS_{alias.upper()}_ACQUIRE_PRIORITY_DESC_DOMAINS" if alias else None
             key_global = "JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS"
-            raw = os.getenv(key_backend) or os.getenv(key_global) or ""
+            raw = (
+                os.getenv(key_backend)
+                or (os.getenv(key_alias) if key_alias else None)
+                or os.getenv(key_global)
+                or ""
+            )
             listed = {d.strip().lower() for d in raw.split(",") if d.strip()}
             if dom.lower() in listed:
                 return "DESC"
