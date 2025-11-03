@@ -259,7 +259,9 @@ class WebUI {
             'tabChatCompletions', 'tabCharacterChat', 'tabConversations',
             'tabMediaIngestion', 'tabMediaProcessingNoDB',
             'tabEvalsOpenAI', 'tabEvalsGEval',
-            'tabWebScrapingIngest', 'tabMultiItemAnalysis'
+            'tabWebScrapingIngest', 'tabMultiItemAnalysis',
+            // Flashcards Import panel includes a model selector for generation
+            'tabFlashcardsImport'
         ];
 
         if (tabsWithModelSelection.includes(contentId)) {
