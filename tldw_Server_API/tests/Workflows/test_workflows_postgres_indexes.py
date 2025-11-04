@@ -1,29 +1,12 @@
-"""PostgreSQL schema/index tests for Workflows DB (fresh and legacy).
-
-Skips if Postgres driver is unavailable.
-"""
+"""PostgreSQL schema/index tests for Workflows DB (fresh and legacy)."""
 
 from __future__ import annotations
-
-import os
 
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
-
-try:
-    import psycopg as _psycopg_v3  # type: ignore
-    _PG_DRIVER = "psycopg"
-except Exception:  # pragma: no cover - optional dependency
-    try:
-        import psycopg2 as _psycopg2  # type: ignore
-        _PG_DRIVER = "psycopg2"
-    except Exception:
-        _PG_DRIVER = None
-
-pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not installed")
 
 
 def _postgres_config_from_params(params: dict) -> DatabaseConfig:
@@ -37,30 +20,9 @@ def _postgres_config_from_params(params: dict) -> DatabaseConfig:
     )
 
 
-def _reset_postgres_database(config: DatabaseConfig) -> None:
-    assert _PG_DRIVER is not None
-    if _PG_DRIVER == "psycopg":
-        conn = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname=config.pg_database,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    else:
-        conn = _psycopg2.connect(  # type: ignore[name-defined]
-            host=config.pg_host,
-            port=config.pg_port,
-            database=config.pg_database,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    conn.autocommit = True
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    finally:
-        conn.close()
+def _reset_postgres_database(backend) -> None:
+    with backend.transaction() as conn:
+        backend.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;", connection=conn)
 
 
 def _index_def(backend, conn, table: str, name: str) -> str:
@@ -73,10 +35,9 @@ def _index_def(backend, conn, table: str, name: str) -> str:
 
 
 @pytest.mark.integration
-def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes(pg_eval_params) -> None:
-    config = _postgres_config_from_params(pg_eval_params)
-    _reset_postgres_database(config)
-    backend = DatabaseBackendFactory.create_backend(config)
+def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes(pg_database_config: DatabaseConfig) -> None:
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
+    _reset_postgres_database(backend)
 
     try:
         # Fresh initialization should create schema and migrations up to current version
@@ -126,7 +87,7 @@ def test_workflows_postgres_fresh_schema_has_jsonb_and_indexes(pg_eval_params) -
 
 
 @pytest.mark.integration
-def test_workflows_postgres_migration_preserves_indexes_from_legacy(pg_eval_params) -> None:
+def test_workflows_postgres_migration_preserves_indexes_from_legacy(pg_database_config: DatabaseConfig) -> None:
     # Start with a legacy schema then instantiate WorkflowsDatabase to migrate
     LEGACY_STMTS = (
         """
@@ -207,9 +168,8 @@ def test_workflows_postgres_migration_preserves_indexes_from_legacy(pg_eval_para
         """,
     )
 
-    config = _postgres_config_from_params(pg_eval_params)
-    _reset_postgres_database(config)
-    backend = DatabaseBackendFactory.create_backend(config)
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
+    _reset_postgres_database(backend)
 
     try:
         with backend.transaction() as conn:

@@ -79,6 +79,26 @@ This is a major milestone release that transitions tldw from a Gradio-based appl
 
 See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
+---
+
+### Migrating From Gradio Version (pre-0.1.0)
+- Backup:
+    - `cp -a ./Databases ./Databases.backup`
+- Update configuration:
+    - Copy provider keys to `.env`.
+    - For AuthNZ setup: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+- Database migration:
+    - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
+    - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
+    - Optional: `--db-path /path/to/Media_DB_v2.db` if not using defaults
+    - If migrating content to Postgres later, use the tools under `tldw_Server_API/app/core/DB_Management/` (e.g., migration_tools.py)
+- API changes:
+    - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
+- Frontend:
+    - Legacy: /webui 
+    - Or integrate directly against the API;
+---
+
 ## Highlights
 
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
@@ -441,13 +461,101 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 Docker Compose
 ```bash
-# Bring up the stack (app + dependencies where applicable)
+# Run from repo root
+
+# Option A) Single-user (SQLite users DB)
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
 
-# Optional proxy overlay examples are available:
+# Option B) Multi-user (Postgres users DB)
+export AUTH_MODE=multi_user
+export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+# Optional: route Jobs module to Postgres as well
+export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.override.yml up -d --build
+
+# Option C) Dev overlay — enable unified streaming (non-prod)
+# This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
+# Keep disabled in production until validated in your environment.
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml up -d --build
+
+# Check status
+docker compose -f Dockerfiles/docker-compose.yml ps
+docker compose -f Dockerfiles/docker-compose.yml logs -f app
+
+# First-time AuthNZ initialization (inside the running app container)
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize
+
+# Optional: proxy overlays
 #   - Dockerfiles/docker-compose.proxy.yml
 #   - Dockerfiles/docker-compose.proxy-nginx.yml
+
+# Optional: use pgvector + pgbouncer for Postgres
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.pg.yml up -d --build
 ```
+
+Notes
+- Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
+- The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
+- For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
+
+### Supporting Services via Docker
+
+Run only infrastructure services without the app.
+
+Postgres + Redis (base compose)
+```bash
+docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
+```
+
+Prometheus + Grafana (embeddings compose, monitoring profile)
+```bash
+docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+```
+
+All four together
+```bash
+docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
+docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+```
+
+Manage and verify
+```bash
+# Status
+docker compose -f Dockerfiles/docker-compose.yml ps
+docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml ps
+
+# Logs
+docker compose -f Dockerfiles/docker-compose.yml logs -f postgres redis
+docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml logs -f prometheus grafana
+
+# Stop
+docker compose -f Dockerfiles/docker-compose.yml stop postgres redis
+docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml stop prometheus grafana
+
+# Remove
+docker compose -f Dockerfiles/docker-compose.yml down
+docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml down
+```
+
+Ports
+- Postgres: 5432
+- Redis: 6379
+- Prometheus: 9091 (container listens on 9090)
+- Grafana: 3000
+
+Prometheus config
+- Create `Config_Files/prometheus.yml` to define scrape targets. Minimal self-scrape example:
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+See Docs/Operations/monitoring/README.md for examples that scrape the API and worker orchestrator.
 
 Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
 
@@ -552,9 +660,84 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Backend selection (env):
   - `RG_BACKEND`: `memory` (default) or `redis`
   - `RG_REDIS_FAIL_MODE`: `fail_closed` (default) | `fail_open` | `fallback_memory`
+  - `REDIS_URL`: Redis connection URL (used by RG when backend=redis). If unset, defaults to `redis://127.0.0.1:6379`.
+  - Requests determinism (tests/dev):
+    - `RG_TEST_FORCE_STUB_RATE=1` prefers in‑process sliding‑window rails for requests/tokens when running Redis backend, stabilizing burst vs steady retry‑after behavior in CI.
 - Policy route_map precedence:
   - When `RG_POLICY_STORE=db` is in use, policies (limits) load from the DB store but `route_map` is currently sourced from the YAML file and merged into the snapshot. If both DB and file provide mappings in the future, file route_map takes precedence unless otherwise documented.
   - When `RG_POLICY_STORE=file`, both policies and route_map come from the YAML file at `RG_POLICY_PATH`.
+
+#### DB Policy Store Bootstrap
+- Configure env for DB store (FastAPI reads these on startup):
+  - `RG_POLICY_STORE=db`
+  - `AUTH_MODE=multi_user`
+  - `DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME`
+- Option A — Python bootstrap (no HTTP):
+```
+python - << 'PY'
+import asyncio
+from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
+
+async def main():
+    admin = AuthNZPolicyAdmin()
+    await admin.upsert_policy("chat.default", {"requests": {"rpm": 120, "burst": 2.0}, "tokens": {"per_min": 60000, "burst": 1.5}}, version=1)
+    await admin.upsert_policy("embeddings.default", {"requests": {"rpm": 60, "burst": 1.2}}, version=1)
+    await admin.upsert_policy("audio.default", {"streams": {"max_concurrent": 2, "ttl_sec": 90}}, version=1)
+    print("Seeded rg_policies (DB store)")
+
+asyncio.run(main())
+PY
+```
+- Option B — Admin API (HTTP):
+  1) Obtain an admin JWT (login as admin in multi-user mode).
+  2) Upsert policies via API:
+```
+curl -X PUT \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"payload": {"requests": {"rpm": 120, "burst": 2.0}, "tokens": {"per_min": 60000, "burst": 1.5}}, "version": 1}' \
+  http://127.0.0.1:8000/api/v1/resource-governor/policy/chat.default
+
+curl -X PUT \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"payload": {"requests": {"rpm": 60, "burst": 1.2}}, "version": 1}' \
+  http://127.0.0.1:8000/api/v1/resource-governor/policy/embeddings.default
+```
+- Verify snapshot and list:
+```
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8000/api/v1/resource-governor/policy?include=ids
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8000/api/v1/resource-governor/policies
+```
+
+#### Sample Policy YAML (route_map merging)
+- Provide a YAML at `RG_POLICY_PATH` to supply/override `route_map` while using DB-backed policies. Example:
+```
+schema_version: 1
+defaults:
+  fail_mode: fail_closed
+  algorithm:
+    requests: token_bucket
+    tokens: token_bucket
+
+policies:
+  chat.default:
+    requests: { rpm: 120, burst: 2.0 }
+    tokens:   { per_min: 60000, burst: 1.5 }
+    scopes: [global, user, conversation]
+  embeddings.default:
+    requests: { rpm: 60, burst: 1.2 }
+    scopes: [user]
+
+route_map:
+  by_tag:
+    chat: chat.default
+    embeddings: embeddings.default
+  by_path:
+    "/api/v1/chat/*": chat.default
+    "/api/v1/embeddings*": embeddings.default
+```
+- When `RG_POLICY_STORE=db` is active, the loader merges the file’s `route_map` into the snapshot containing DB policies. File `route_map` takes precedence on conflicts.
 - Proxy/IP scoping (env):
   - `RG_TRUSTED_PROXIES`: comma-separated CIDRs of reverse proxies
   - `RG_CLIENT_IP_HEADER`: trusted header name (e.g., `X-Forwarded-For` or `CF-Connecting-IP`)
@@ -563,12 +746,52 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Test mode precedence:
   - `RG_TEST_BYPASS` overrides Resource Governor behavior when set; otherwise falls back to `TLDW_TEST_MODE`
  - `RG_ENABLE_SIMPLE_MIDDLEWARE`: `true|false` to enable the minimal pre-check middleware for `requests` category using route tags/path mapping.
+  - `RG_MIDDLEWARE_ENFORCE_TOKENS`: `true|false` to include `tokens` in middleware enforcement (adds precise tokens headers on success; per-minute headers on deny when policy defines `tokens.per_min`).
+  - `RG_MIDDLEWARE_ENFORCE_STREAMS`: `true|false` to include `streams` in middleware enforcement (sets `Retry-After` on deny).
+  - (Tests) `RG_REAL_REDIS_URL`: optional Redis URL used by RG integration tests; if absent, real-Redis tests are skipped. `REDIS_URL` is also honored.
 
 #### Simple Middleware (opt‑in)
 - Resolution order: path-based mapping (`route_map.by_path`) first, then tag-based mapping (`route_map.by_tag`). Wildcards like `/api/v1/chat/*` match by prefix.
 - Entity derivation: prefers authenticated user (`user:{id}`), then API key id/hash (`api_key:{id|hash}`), then trusted proxy IP header via `RG_CLIENT_IP_HEADER` when `RG_TRUSTED_PROXIES` contains the peer; otherwise falls back to `request.client.host`.
 - Behavior: performs a pre-check/reserve for the `requests` category before calling the endpoint and commits afterwards. On denial, sets `Retry-After` and `X-RateLimit-*` headers. On success, injects accurate `X-RateLimit-*` headers using a governor `peek` when available.
 - Enable by setting `RG_ENABLE_SIMPLE_MIDDLEWARE=true`. It only guards `requests` in this minimal form; streaming/tokens categories require explicit endpoint plumbing for reserve/commit.
+
+- Headers on success/deny:
+  - Deny (429): `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining=0`, `X-RateLimit-Reset` (seconds until retry).
+  - Success: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` computed via `peek_with_policy` for precision. When a tokens policy exists and is peek‑able, the middleware also sets `X-RateLimit-Tokens-Remaining` and, if `tokens.per_min` is defined in the active policy, `X-RateLimit-PerMinute-Limit`/`X-RateLimit-PerMinute-Remaining` (best‑effort; exact values depend on the configured backend and policy).
+  - When denial is caused by a category other than `requests` (e.g., `tokens`), the middleware maps `X-RateLimit-*` to that denying category’s effective limit and retry.
+
+#### Diagnostics
+- Capability probe (admin): `GET /api/v1/resource-governor/diag/capabilities`
+  - Returns a small diagnostics object indicating which backend is active and whether Redis Lua paths are available/used, e.g.
+    - `backend`: `memory|redis`
+    - `real_redis`: `true|false` (false when using the in-memory Redis stub)
+    - `tokens_lua_loaded`, `multi_lua_loaded`: booleans for script load state (Redis backend)
+    - `last_used_tokens_lua`, `last_used_multi_lua`: whether those paths were recently exercised
+  - Route is gated by admin auth; in single‑user mode admin is allowed by default.
+  - Requests/acceptance window note: to avoid flakiness near minute boundaries, the Redis backend maintains an acceptance‑window guard for requests and supports `RG_TEST_FORCE_STUB_RATE=1` to prefer local rails during CI.
+
+#### Testing (Real Redis)
+- Optional integration tests validate the multi-key Lua path on a real Redis.
+  - Set one of:
+    - `RG_REAL_REDIS_URL=redis://localhost:6379` (preferred for tests)
+    - or `REDIS_URL=redis://localhost:6379`
+  - Run the gated test:
+    - `pytest -q tldw_Server_API/tests/Resource_Governance/integration/test_redis_real_lua.py`
+  - The `real_redis` fixture verifies connectivity (no in-memory fallback) and skips the test if Redis is unavailable.
+  - Regular RG unit tests use an in-memory Redis stub and do not require a running Redis.
+
+#### Testing (Middleware)
+- Middleware tests run against tiny stub FastAPI apps and don’t require full server startup.
+- Useful env toggles during manual experiments:
+  - `RG_ENABLE_SIMPLE_MIDDLEWARE=1` — enable the minimal pre-check middleware
+  - `RG_MIDDLEWARE_ENFORCE_TOKENS=1` — include `tokens` in middleware reserve/deny
+  - `RG_MIDDLEWARE_ENFORCE_STREAMS=1` — include `streams` in middleware reserve/deny
+- Run the focused tests:
+  - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py`
+  - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_tokens_headers.py`
+  - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_enforcement_extended.py`
+  - These verify deny/success headers, tokens per-minute headers, and streams Retry-After behavior.
 
 ### OpenAI-Compatible Strict Mode (Local Providers)
 
@@ -821,6 +1044,7 @@ GNU General Public License v3.0 - see `LICENSE` for details.
 1. Information disclosure via developer print debugging statement in `chat_functions.py` - Thank you to @luca-ing for pointing this out!
     - Fixed in commit: `8c2484a`
 
+
 ---
 
 ## About
@@ -829,12 +1053,12 @@ tldw_server started as a tool to transcribe and summarize YouTube videos but has
 
 Long-term vision: Building towards a personal AI research assistant inspired by "The Young Lady's Illustrated Primer" from Neal Stephenson's "The Diamond Age" - a tool that helps you learn and research at your own pace.
 
----
-
 ### Getting Help
 - API Documentation: `http://localhost:8000/docs`
 - GitHub Issues: [Report bugs or request features](https://github.com/rmusser01/tldw_server/issues)
-- Discussions: [Community forum(for now)](https://github.com/rmusser01/tldw_server/discussions)
+- Discussions: [Community forum](https://github.com/rmusser01/tldw_server/discussions)
+
+
 
 ---
 
@@ -858,3 +1082,20 @@ Roadmap & WIP
 Privacy & Security
 - Self-hosted by design; no telemetry or data collection
 - Users own and control their data; see hardening guide for production
+- Metrics & Grafana
+  - Emitted metrics (core):
+    - `rg_decisions_total{category,scope,backend,result,policy_id}` — allow/deny decisions per category/scope/backend
+    - `rg_denials_total{category,scope,reason,policy_id}` — denial events by reason (e.g., `insufficient_capacity`)
+    - `rg_refunds_total{category,scope,reason,policy_id}` — refund events from commit/refund paths
+    - `rg_concurrency_active{category,scope,policy_id}` — active stream/job leases (gauge)
+  - Cardinality guard:
+    - By default, metrics DO NOT include `entity` labels to avoid high-cardinality pitfalls. If you truly need per-entity sampling, gate it behind `RG_METRICS_ENTITY_LABEL=true` and ensure hashing/masking is applied upstream.
+  - Quick Grafana panel examples:
+    - Allow vs Deny over time (per category):
+      - Query: `sum by (category, result) (rate(rg_decisions_total[5m]))`
+    - Denials by scope (top N):
+      - Query: `topk(5, sum by (scope) (rate(rg_denials_total[5m])))`
+    - Refund activity (tokens):
+      - Query: `sum by (policy_id) (rate(rg_refunds_total{category="tokens"}[5m]))`
+    - Active streams (per scope):
+      - Query: `avg by (scope) (rg_concurrency_active{category="streams"})`

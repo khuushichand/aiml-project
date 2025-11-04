@@ -2,144 +2,16 @@ from __future__ import annotations
 
 import os
 import uuid
-from dataclasses import dataclass
-
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-try:  # Optional dependency; mirror existing Postgres test patterns
-    import psycopg as _psycopg_v3  # type: ignore
-    _PG_DRIVER = "psycopg"
-except Exception:  # pragma: no cover - fall back to psycopg2 if available
-    try:
-        import psycopg2 as _psycopg2  # type: ignore
-        _PG_DRIVER = "psycopg2"
-    except Exception:
-        _PG_DRIVER = None
-
-
-pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not installed")
-
-
-@dataclass
-class TempPostgresConfig:
-    """Holds the temporary database configuration and admin connection details."""
-
-    config: DatabaseConfig
-    admin_db: str
-
-
-def _base_postgres_config() -> DatabaseConfig:
-    """Build a Postgres config using env overrides with sensible defaults."""
-
-    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
-    _pg = get_pg_env()
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=_pg.host,
-        pg_port=int(_pg.port),
-        pg_database=_pg.database,
-        pg_user=_pg.user,
-        pg_password=_pg.password,
-    )
-
-
-def _create_temp_postgres_database(base: DatabaseConfig) -> TempPostgresConfig:
-    """Create a throwaway Postgres database for test isolation."""
-
-    assert _PG_DRIVER is not None
-    admin_db = os.getenv("POSTGRES_TEST_ADMIN_DB", "postgres")
-    temp_db = f"tldw_test_{uuid.uuid4().hex[:8]}"
-
-    if _PG_DRIVER == "psycopg":
-        admin_conn = _psycopg_v3.connect(
-            host=base.pg_host,
-            port=base.pg_port,
-            dbname=admin_db,
-            user=base.pg_user,
-            password=base.pg_password,
-        )
-    else:
-        admin_conn = _psycopg2.connect(
-            host=base.pg_host,
-            port=base.pg_port,
-            database=admin_db,
-            user=base.pg_user,
-            password=base.pg_password,
-        )
-    admin_conn.autocommit = True
-    try:
-        with admin_conn.cursor() as cur:
-            cur.execute(f'CREATE DATABASE "{temp_db}" OWNER {base.pg_user}')
-    finally:
-        admin_conn.close()
-
-    return TempPostgresConfig(
-        config=DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host=base.pg_host,
-            pg_port=base.pg_port,
-            pg_database=temp_db,
-            pg_user=base.pg_user,
-            pg_password=base.pg_password,
-        ),
-        admin_db=admin_db,
-    )
-
-
-def _drop_temp_postgres_database(temp: TempPostgresConfig) -> None:
-    """Drop the temporary Postgres database created for the test."""
-
-    assert _PG_DRIVER is not None
-    config = temp.config
-    if _PG_DRIVER == "psycopg":
-        admin_conn = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname=temp.admin_db,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    else:
-        admin_conn = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database=temp.admin_db,
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    admin_conn.autocommit = True
-    try:
-        with admin_conn.cursor() as cur:
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s;",
-                (config.pg_database,),
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{config.pg_database}"')
-    finally:
-        admin_conn.close()
-
 
 @pytest.mark.integration
-def test_chacha_transaction_context_commits_if_available(tmp_path, pg_eval_params):
-    base_config = DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=pg_eval_params["host"],
-        pg_port=int(pg_eval_params["port"]),
-        pg_database=pg_eval_params["database"],
-        pg_user=pg_eval_params["user"],
-        pg_password=pg_eval_params.get("password"),
-    )
-
-    try:
-        temp_conf = _create_temp_postgres_database(base_config)
-    except Exception as exc:
-        pytest.skip(f"Unable to create Postgres test database: {exc}")
-
-    backend = DatabaseBackendFactory.create_backend(temp_conf.config)
+def test_chacha_transaction_context_commits_if_available(tmp_path, pg_database_config: DatabaseConfig):
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
     db = CharactersRAGDB(db_path=":memory:", client_id="txn-chacha", backend=backend)
 
     try:
@@ -198,8 +70,5 @@ def test_chacha_transaction_context_commits_if_available(tmp_path, pg_eval_param
             db.close_connection()
             if db.backend_type == BackendType.POSTGRESQL:
                 db.backend.get_pool().close_all()
-        finally:
-            try:
-                _drop_temp_postgres_database(temp_conf)
-            except Exception:
-                pass
+        except Exception:
+            pass

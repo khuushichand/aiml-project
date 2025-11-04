@@ -20,20 +20,8 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_event_seq_monotonic_under_contention(pg_eval_params):
-    # Build backend using shared pg_eval_params fixture; skip if psycopg unavailable
-    try:
-        cfg = DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host=pg_eval_params["host"],
-            pg_port=int(pg_eval_params["port"]),
-            pg_database=pg_eval_params["database"],
-            pg_user=pg_eval_params["user"],
-            pg_password=pg_eval_params.get("password"),
-        )
-        backend = DatabaseBackendFactory.create_backend(cfg)
-    except Exception:
-        pytest.skip("psycopg not available or backend creation failed")
+async def test_event_seq_monotonic_under_contention(pg_database_config: DatabaseConfig):
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
     db = WorkflowsDatabase(db_path=":memory:", backend=backend)
 
     # Create a run

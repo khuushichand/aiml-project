@@ -1,25 +1,27 @@
 import pytest
 
 psycopg = pytest.importorskip("psycopg")
-pytestmark = pytest.mark.pg_jobs
+pytestmark = [pytest.mark.pg_jobs]
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
+from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 
 
-pytestmark = pytest.mark.skipif(
-    not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"
-)
+@pytest.fixture(scope="function")
+def jobs_pg_dsn(request):
+    # Resolve per-module temporary Postgres database using unified plugin
+    temp = request.getfixturevalue("pg_temp_db")
+    dsn = temp["dsn"]
+    try:
+        ensure_jobs_tables_pg(dsn)
+    except Exception:
+        pytest.skip("Failed to initialize Jobs schema on Postgres")
+    return dsn
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
-
-
-def test_acquire_ordering_priority_asc_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+def test_acquire_ordering_priority_asc_postgres(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j1 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=1)
     j2 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=5)
     j3 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=10)
