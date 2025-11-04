@@ -107,3 +107,38 @@ def test_admin_usage_aggregates_schema_and_filters(monkeypatch) -> None:
         assert p2["offset"] == 0
 
         client.app.dependency_overrides.clear()
+
+
+@pytest.mark.unit
+def test_admin_idempotency_sort_asc_desc(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+        client.app.dependency_overrides[get_request_user] = _admin_user_dep
+        # Create two idempotent sessions with different times by patching time.time
+        import time as _time
+        base = _time.time()
+        import tldw_Server_API.app.core.Sandbox.store as store_mod
+        # First record
+        monkeypatch.setattr(store_mod.time, "time", lambda: base - 30)
+        r1 = client.post("/api/v1/sandbox/sessions", json={"spec_version": "1.0", "runtime": "docker"}, headers={"Idempotency-Key": "k-asc-1"})
+        assert r1.status_code == 200
+        # Second record later
+        monkeypatch.setattr(store_mod.time, "time", lambda: base + 30)
+        r2 = client.post("/api/v1/sandbox/sessions", json={"spec_version": "1.0", "runtime": "docker"}, headers={"Idempotency-Key": "k-asc-2"})
+        assert r2.status_code == 200
+
+        # Descending: k-asc-2 should appear before k-asc-1
+        lr_desc = client.get("/api/v1/sandbox/admin/idempotency", params={"endpoint": "sessions", "limit": 10, "offset": 0, "sort": "desc"})
+        assert lr_desc.status_code == 200
+        items_desc = lr_desc.json().get("items", [])
+        keys_desc = [it.get("key") for it in items_desc]
+        assert keys_desc.index("k-asc-2") < keys_desc.index("k-asc-1")
+
+        # Ascending: reverse order
+        lr_asc = client.get("/api/v1/sandbox/admin/idempotency", params={"endpoint": "sessions", "limit": 10, "offset": 0, "sort": "asc"})
+        assert lr_asc.status_code == 200
+        items_asc = lr_asc.json().get("items", [])
+        keys_asc = [it.get("key") for it in items_asc]
+        assert keys_asc.index("k-asc-1") < keys_asc.index("k-asc-2")
+
+        client.app.dependency_overrides.clear()

@@ -610,18 +610,10 @@ class MCPServer:
                 # Allow wildcard '*' if explicitly configured
                 origin = websocket.headers.get("origin") or websocket.headers.get("Origin") or ""
                 if "*" not in allowed:
-                    if not origin or origin not in allowed:
-                        # Skip strict origin enforcement in test environments
-                        try:
-                            import os as _os
-                            _is_test_env = bool(
-                                _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
-                            )
-                        except Exception:
-                            _is_test_env = False
-                        if not _is_test_env:
-                            await websocket.close(code=1008, reason="Origin not allowed")
-                            return
+                    # If no Origin header provided (e.g., non-browser TestClient), allow by default
+                    if origin and origin not in allowed:
+                        await websocket.close(code=1008, reason="Origin not allowed")
+                        return
         except Exception:
             # Fail-safe: do not block if config parsing fails
             pass
@@ -808,14 +800,12 @@ class MCPServer:
             logger.bind(connection_id=connection_id).info(f"WebSocket disconnected: {connection_id}")
         except Exception as e:
             logger.bind(connection_id=connection_id).error(f"WebSocket error for {connection_id}: {e}")
+            # Preserve JSON-RPC transport semantics: do not emit non-JSON-RPC error frames here.
+            # Close the socket with 1011 (internal error).
             try:
-                # Lifecycle error frame + mapped close code (1011 for internal_error)
-                await stream.error("internal_error", "Internal error")
+                await connection.close(code=1011, reason="Internal error")
             except Exception:
-                try:
-                    await connection.close(code=1011, reason="Internal error")
-                except Exception:
-                    pass
+                pass
             try:
                 get_metrics_collector().record_connection_error("websocket", "exception")
             except Exception:

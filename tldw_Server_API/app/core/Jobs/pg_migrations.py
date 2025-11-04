@@ -153,8 +153,10 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
     except Exception as e:  # pragma: no cover - environment dependent
         raise RuntimeError("psycopg is required for PostgreSQL Jobs backend. Install extras 'db_postgres'.") from e
 
+    from .pg_util import negotiate_pg_dsn
+    _dsn = negotiate_pg_dsn(db_url)
     try:
-        with psycopg.connect(db_url) as conn:
+        with psycopg.connect(_dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(JOBS_POSTGRES_DDL)
                 # Additional objects: queue controls, attachments, SLA policies
@@ -200,7 +202,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                 conn.commit()
         # Forward-migrate older installs: add missing columns that newer code expects
         try:
-            with psycopg.connect(db_url, autocommit=True) as cfix:
+            with psycopg.connect(_dsn, autocommit=True) as cfix:
                 with cfix.cursor() as f:
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS completion_token TEXT")
                     f.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failure_streak_code TEXT")
@@ -225,7 +227,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             pass
         # Create hot-path indexes concurrently (outside transaction) when possible
         try:
-            with psycopg.connect(db_url, autocommit=True) as c2:
+            with psycopg.connect(_dsn, autocommit=True) as c2:
                 with c2.cursor() as k:
                     # Ready vs scheduled scans
                     k.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_status_available_at ON jobs(status, available_at)")
@@ -259,7 +261,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             import psycopg  # noqa: F401
             import os as _os
             if str(_os.getenv("JOBS_PG_RLS_ENABLE", "")).lower() in {"1","true","yes","y","on"}:
-                with psycopg.connect(db_url, autocommit=True) as _c_rls:
+                with psycopg.connect(_dsn, autocommit=True) as _c_rls:
                     with _c_rls.cursor() as _p:
                         try:
                             _p.execute("ALTER TABLE jobs ENABLE ROW LEVEL SECURITY")
@@ -305,7 +307,7 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
                         if cur2.fetchone() is None:
                             cur2.execute(f"CREATE DATABASE {db_name}")
                 # Retry DDL
-                with psycopg.connect(db_url) as conn3:
+                with psycopg.connect(_dsn) as conn3:
                     with conn3.cursor() as cur3:
                         cur3.execute(JOBS_POSTGRES_DDL)
                     conn3.commit()
@@ -332,8 +334,10 @@ def ensure_job_events_pg(db_url: str) -> None:
         import psycopg
     except Exception:
         return
+    from .pg_util import normalize_pg_dsn
+    _dsn = normalize_pg_dsn(db_url)
     try:
-        with psycopg.connect(db_url, autocommit=True) as conn:
+        with psycopg.connect(_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -371,8 +375,10 @@ def ensure_jobs_rls_policies_pg(db_url: str) -> None:
         import psycopg  # type: ignore
     except Exception:
         return
+    from .pg_util import normalize_pg_dsn
+    _dsn = normalize_pg_dsn(db_url)
     try:
-        with psycopg.connect(db_url, autocommit=True) as conn:
+        with psycopg.connect(_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 # Enable RLS
                 try:
@@ -595,7 +601,7 @@ def ensure_job_counters_pg(db_url: str) -> None:
     except Exception:
         return
     try:
-        with psycopg.connect(db_url, autocommit=True) as conn:
+        with psycopg.connect(_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """

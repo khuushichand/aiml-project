@@ -336,13 +336,47 @@ VibeVoice:
 
 - JSON & headers
   - `HTTP_JSON_MAX_BYTES` (int, optional) — maximum allowed JSON response size for helpers that enable this guard
-  - `HTTP_DEFAULT_USER_AGENT` (string, default `tldw_server/<version> httpx`)
+  - `HTTP_DEFAULT_USER_AGENT` (string, overrides default `tldw_server/<version> (component)`)
 
 - Transport & TLS
-  - `HTTP3_ENABLED` (bool, default `false`) — HTTP/3 (QUIC) behind a flag (depends on stack support)
+  - `HTTP3_ENABLED` (bool, default `false`) — HTTP/3 (QUIC) behind a flag. Note: currently a no‑op; reserved for future QUIC support.
   - `TLS_ENFORCE_MIN_VERSION` (bool, default `false`) — optional TLS min version enforcement
   - `TLS_MIN_VERSION` (str, default `1.2`)
   - `TLS_CERT_PINS_SPKI_SHA256` (csv of SPKI SHA-256 pins; optional certificate pinning)
+
+- Proxies & Egress
+  - `PROXY_ALLOWLIST` (csv of proxy hostnames or URLs; deny-by-default when empty)
+
+TLS and certificate pinning
+
+By default the HTTP client follows system trust stores. You can optionally enforce a minimum TLS version and use certificate pinning on a per-host basis.
+
+- Env toggles for TLS minimum version:
+  - `HTTP_ENFORCE_TLS_MIN` or `TLS_ENFORCE_MIN_VERSION`: set to `1`/`true` to enable
+  - `HTTP_TLS_MIN_VERSION` or `TLS_MIN_VERSION`: `1.2` (default) or `1.3`
+
+- Programmatic per-host certificate pinning (leaf certificate SHA-256):
+
+```python
+from tldw_Server_API.app.core.http_client import create_async_client, afetch, RetryPolicy
+
+# Map of host -> set of allowed certificate fingerprints (hex sha256 of DER)
+pins = {
+    "api.openai.com": {"b1e5...deadbeef"},
+    "api.groq.com": {"a2c4...c0ffee"},
+}
+
+async with create_async_client(enforce_tls_min_version=True, tls_min_version="1.2", cert_pinning=pins) as client:
+    resp = await afetch(method="GET", url="https://api.openai.com/v1/models", client=client, retry=RetryPolicy())
+    print(resp.status_code)
+```
+
+Notes
+- Pinning checks the leaf certificate fingerprint (sha256 of the DER cert) before the request proceeds. A mismatch raises an egress/pinning error.
+- Env-driven pinning (built-in parser): set `HTTP_CERT_PINS` to a CSV-style mapping of host to pins
+  - Example: `HTTP_CERT_PINS="api.openai.com=ab12..|cd34..,api.groq.com=ef56.."`
+  - Format: `host=pin1|pin2[,host2=pin3]` where pins are lowercase sha256 hex of the leaf certificate DER.
+  - These pins are attached to clients created by `create_client`/`create_async_client` when `cert_pinning` is not provided.
 
 - Egress & SSRF policy
   - All helpers evaluate the central egress policy (`app/core/Security/egress.py`) before any network I/O and on each redirect hop, and validate proxies.
@@ -352,6 +386,65 @@ VibeVoice:
   - Structured logs redact sensitive headers and may include `request_id`, `method`, `host`, `status`, `duration_ms`.
   - Metrics (if telemetry enabled): `http_client_requests_total`, `http_client_request_duration_seconds`, `http_client_retries_total`, `http_client_egress_denials_total`.
   - When tracing is active, `traceparent` header is injected automatically where supported.
+
+X-Request-Id propagation
+
+Outbound helpers auto-inject `X-Request-Id` when present in trace baggage (set via RequestID middleware or `TracingManager.set_baggage('request_id', ...)`). Example:
+
+```
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+from tldw_Server_API.app.core.http_client import create_client, fetch
+
+tm = get_tracing_manager()
+tm.set_baggage('request_id', 'abc123')
+
+with create_client() as client:
+    r = fetch(method='GET', url='http://example.com', client=client)
+    assert r.status_code == 200
+```
+
+SSE streaming example
+
+```
+from tldw_Server_API.app.core.http_client import create_async_client, astream_sse, RetryPolicy
+
+async def consume():
+    async with create_async_client() as client:
+        policy = RetryPolicy(attempts=3)
+        async for ev in astream_sse(url='http://example.com/stream', client=client, retry=policy):
+            print(ev.event, ev.data)
+```
+
+Downloads with checksum and resume
+
+```
+from pathlib import Path
+from tldw_Server_API.app.core.http_client import download, adownload, RetryPolicy
+
+dest = Path('/tmp/file.bin')
+policy = RetryPolicy(attempts=3)
+
+# Sync
+download(
+    url='http://example.com/file.bin',
+    dest=dest,
+    checksum='deadbeef...',  # optional sha256
+    resume=True,
+    retry=policy,
+    require_content_type='application/pdf',  # optional strict content-type
+    max_bytes_total=50_000_000,              # optional disk quota guard (bytes)
+)
+
+# Async
+# await adownload(
+#     url='http://example.com/file.bin',
+#     dest=dest,
+#     resume=True,
+#     retry=policy,
+#     require_content_type='application/pdf',
+#     max_bytes_total=50_000_000,
+# )
+```
 
 Example (Python)
 ```

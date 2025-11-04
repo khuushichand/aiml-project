@@ -17,7 +17,7 @@ def _mock_transport(responses: dict[str, tuple[int, dict[str, str], bytes]]):
 
 
 def test_load_jsonl_via_http_monkeypatch(monkeypatch):
-    os.environ["EGRESS_ALLOWLIST"] = "example.com"
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
     url = "http://example.com/data.jsonl"
     payload = b"\n".join([b"{\"a\":1}", b"{\"b\":2}", b"{\"c\":3}"])
     transport = _mock_transport({
@@ -35,7 +35,7 @@ def test_load_jsonl_via_http_monkeypatch(monkeypatch):
 
 
 def test_load_csv_via_http_monkeypatch(monkeypatch):
-    os.environ["EGRESS_ALLOWLIST"] = "example.com"
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
     url = "http://example.com/data.csv"
     csv_text = "id,name\n1,Alice\n2,Bob\n"
     transport = _mock_transport({
@@ -52,7 +52,7 @@ def test_load_csv_via_http_monkeypatch(monkeypatch):
 
 
 def test_stream_large_file_jsonl_chunks_via_http(monkeypatch):
-    os.environ["EGRESS_ALLOWLIST"] = "example.com"
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
     url = "http://example.com/stream.jsonl"
     lines = [b"{\"i\":1}", b"{\"i\":2}", b"{\"i\":3}"]
     payload = b"\n".join(lines)
@@ -69,4 +69,3 @@ def test_stream_large_file_jsonl_chunks_via_http(monkeypatch):
     assert len(chunks) == 2
     assert chunks[0] == [{"i": 1}, {"i": 2}]
     assert chunks[1] == [{"i": 3}]
-

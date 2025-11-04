@@ -15,25 +15,10 @@ Notes
 - Use environment variables to override base URLs for testing/mocking.
 """
 #########################################
-# General LLM API Calling Library
-# This library is used to perform API Calls against commercial LLM endpoints.
-#
-####
-####################
-# Function List
-#
-# 1. extract_text_from_segments(segments: List[Dict]) -> str
-# 2. chat_with_openai(api_key, file_path, custom_prompt_arg, streaming=None)
-# 3. chat_with_anthropic(api_key, file_path, model, custom_prompt_arg, max_retries=3, retry_delay=5, streaming=None)
-# 4. chat_with_cohere(api_key, file_path, model, custom_prompt_arg, streaming=None)
-# 5. chat_with_qwen(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 6. chat_with_groq(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 7. chat_with_openrouter(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 8. chat_with_huggingface(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 9. chat_with_deepseek(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-#
-#
-####################
+# Centralized LLM API calling utilities (monolith, in gradual deprecation).
+# Public chat_* entrypoints for key providers now delegate to adapter-backed
+# shims; provider-specific legacy implementations are retained under legacy_*
+# until full parity is proven and branches can be removed safely.
 #
 # Import necessary libraries
 import asyncio
@@ -45,7 +30,7 @@ from typing import List, Any, Optional, Tuple, Dict, Union, Iterable
 # Import 3rd-Party Libraries
 import requests
 import httpx
-from tldw_Server_API.app.core.http_client import fetch, RetryPolicy
+from tldw_Server_API.app.core.http_client import fetch, afetch_json, RetryPolicy, create_async_client
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 #
@@ -281,8 +266,8 @@ def legacy_chat_with_anthropic(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
-    return anthropic_chat_handler(
+    # Delegate to the original implementation to avoid adapter/shim recursion
+    return chat_with_anthropic(
         input_data=input_data,
         model=model,
         api_key=api_key,
@@ -543,8 +528,8 @@ def legacy_chat_with_deepseek(
         frequency_penalty: Optional[float] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import deepseek_chat_handler
-    return deepseek_chat_handler(
+    # Delegate to the original implementation to avoid adapter/shim recursion
+    return chat_with_deepseek(
         input_data=input_data,
         model=model,
         api_key=api_key,
@@ -1457,6 +1442,32 @@ def legacy_chat_with_openai(
         custom_prompt_arg: Legacy, largely ignored.
         **kwargs: Catches any unexpected keyword arguments.
     """
+    # Adapter era: delegate to adapter-backed shim; keep legacy body unreachable
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    return openai_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
     loaded_config_data = app_config or load_and_log_configs()
     openai_config = loaded_config_data.get('openai_api', {})
 
@@ -1674,6 +1685,32 @@ async def chat_with_openai_async(
 
     Returns JSON dict for non-streaming, and an async iterator of SSE lines for streaming.
     """
+    # Adapter era: delegate to adapter-backed async shim; keep legacy body unreachable
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler_async
+    return await openai_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
     loaded_config_data = app_config or load_and_log_configs()
     openai_config = loaded_config_data.get('openai_api', {})
     final_api_key = api_key or openai_config.get('api_key')
@@ -1771,25 +1808,21 @@ async def chat_with_openai_async(
 
             return _stream_async()
         else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            status_code = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(status_code) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_httpx_chat_error("openai", e)
-                        return resp.json()
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="openai", message="Exceeded retry attempts for OpenAI request", status_code=504)
+            policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+            try:
+                data = await afetch_json(
+                    method="POST",
+                    url=api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                    retry=policy,
+                )
+                return data
+            except httpx.HTTPStatusError as e:
+                _raise_httpx_chat_error("openai", e)
+            except httpx.RequestError as e:
+                raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
     except ChatAPIError:
         raise
     except httpx.RequestError as e:
@@ -1822,6 +1855,23 @@ async def chat_with_groq_async(
         app_config: Optional[Dict[str, Any]] = None,
 ):
     """Async Groq provider using httpx.AsyncClient with SSE normalization."""
+    # Adapter era: delegate to adapter-backed async shim; keep legacy body unreachable
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler_async
+    return await anthropic_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        custom_prompt_arg=None,
+        app_config=app_config,
+    )
     cfg_source = app_config or load_and_log_configs()
     cfg = cfg_source.get('groq_api', {})
     final_api_key = api_key or cfg.get('api_key')
@@ -1897,25 +1947,21 @@ async def chat_with_groq_async(
 
             return _stream()
         else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            sc = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(sc) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_groq_http_error(e)
-                        return resp.json()
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="groq", message="Exceeded retry attempts for Groq request", status_code=504)
+            policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+            try:
+                data = await afetch_json(
+                    method="POST",
+                    url=api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                    retry=policy,
+                )
+                return data
+            except httpx.HTTPStatusError as e:
+                _raise_httpx_chat_error("groq", e)
+            except httpx.RequestError as e:
+                raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
     except ChatAPIError:
         raise
     except httpx.RequestError as e:
@@ -2011,7 +2057,7 @@ async def chat_with_anthropic_async(
             async def _stream():
                 for attempt in range(retry_limit + 1):
                     try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
+                        async with create_async_client(timeout=timeout) as client:
                             async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
                                 try:
                                     resp.raise_for_status()
@@ -2120,26 +2166,21 @@ async def chat_with_anthropic_async(
 
             return _stream()
         else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            sc = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(sc) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_anthropic_http_error(e)
-                        data = resp.json()
-                        return _normalize_anthropic_response(data, current_model)
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="anthropic", message="Exceeded retry attempts for Anthropic request", status_code=504)
+            policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+            try:
+                data = await afetch_json(
+                    method="POST",
+                    url=api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                    retry=policy,
+                )
+                return _normalize_anthropic_response(data, current_model)
+            except httpx.HTTPStatusError as e:
+                _raise_httpx_chat_error("anthropic", e)
+            except httpx.RequestError as e:
+                raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
     except ChatAPIError:
         raise
     except Exception as e:
@@ -2171,6 +2212,33 @@ async def chat_with_openrouter_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
+    # Adapter era: delegate to adapter-backed async shim; keep legacy body unreachable
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler_async
+    return await openrouter_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
     cfg_source = app_config or load_and_log_configs()
     cfg = cfg_source.get('openrouter_api', {})
     final_api_key = api_key or cfg.get('api_key')
@@ -2254,25 +2322,21 @@ async def chat_with_openrouter_async(
 
             return _stream()
         else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            sc = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(sc) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_openrouter_http_error(e)
-                        return resp.json()
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="openrouter", message="Exceeded retry attempts for OpenRouter request", status_code=504)
+            policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
+            try:
+                data = await afetch_json(
+                    method="POST",
+                    url=api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                    retry=policy,
+                )
+                return data
+            except httpx.HTTPStatusError as e:
+                _raise_httpx_chat_error("openrouter", e)
+            except httpx.RequestError as e:
+                raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
     except ChatAPIError:
         raise
     except httpx.RequestError as e:

@@ -130,13 +130,15 @@ def workflows_dual_backend_db(
         db_path = tmp_path / "workflows_sqlite.db"
         db_instance = create_workflows_database(db_path=db_path, backend=None)
     else:
+        from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+        _pg = get_pg_env()
         base_config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
-            pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-            pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-            pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-            pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-            pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+            pg_host=_pg.host,
+            pg_port=int(_pg.port),
+            pg_database=_pg.database,
+            pg_user=_pg.user,
+            pg_password=_pg.password,
         )
         config = _create_temp_postgres_database(base_config)
         backend = DatabaseBackendFactory.create_backend(config)

@@ -48,6 +48,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 
 def _utcnow_iso() -> str:
@@ -2972,12 +2973,21 @@ async def workflows_ws(
         raise RuntimeError("Forbidden")
 
     await websocket.accept()
+    # Wrap for metrics and activity tracking; keep domain frames unchanged
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "workflows", "endpoint": "workflows_ws"},
+    )
+    await stream.start()
     # Normalize event types if provided for server-side filtering
     types_norm = [t.strip() for t in (types or []) if str(t).strip()]
     last_seq: Optional[int] = None
     try:
         # On connect, send a snapshot event
-        await websocket.send_json(
+        await stream.send_json(
             {
                 "type": "snapshot",
                 "run": {
@@ -2991,12 +3001,12 @@ async def workflows_ws(
             if events:
                 for e in events:
                     payload = e.get("payload_json") or {}
-                    await websocket.send_json({"event_seq": e["event_seq"], "event_type": e["event_type"], "payload": payload, "ts": e["created_at"]})
+                    await stream.send_json({"event_seq": e["event_seq"], "event_type": e["event_type"], "payload": payload, "ts": e["created_at"]})
                     last_seq = e["event_seq"]
             else:
                 # Send a lightweight heartbeat so clients using blocking receive_json() don't hang indefinitely
                 try:
-                    await websocket.send_json({"type": "heartbeat", "ts": _utcnow_iso()})
+                    await stream.send_json({"type": "heartbeat", "ts": _utcnow_iso()})
                 except Exception:
                     # If sending heartbeat fails (e.g., client disconnect), let outer exception handling close
                     raise
@@ -3007,6 +3017,6 @@ async def workflows_ws(
     except Exception as e:
         logger.error(f"Workflows WS error: {e}")
         try:
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            await stream.ws.close(code=status.WS_1011_INTERNAL_ERROR)
         except Exception:
             pass

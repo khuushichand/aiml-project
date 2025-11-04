@@ -29,6 +29,14 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `ALLOW_NLTK_DOWNLOADS`: Force-enable NLTK downloads even when running tests (`1|true|yes`).
   - Overrides `TEST_MODE`/`DISABLE_NLTK_DOWNLOADS`/pytest auto-detection to allow downloads for development scenarios that require full NLTK resources.
 
+### Jobs Postgres (Test-only Helpers)
+- `RUN_PG_JOBS_TESTS`: Enable Jobs outbox Postgres tests (`1|true|yes`). Disabled by default due to environment variability.
+- `TLDW_TEST_NO_DOCKER`: When set (`1|true|yes`), disables auto-start of a local Postgres Docker container during Jobs tests.
+- `TLDW_TEST_PG_IMAGE`: Docker image for the optional local Postgres used by Jobs tests (default `postgres:15`).
+- `TLDW_TEST_PG_CONTAINER_NAME`: Container name for the optional local Postgres (default `tldw_jobs_postgres_test`).
+  - The Jobs tests/fixtures first try a TCP probe to the configured DSN; when unreachable and the host is local, they attempt to start this container unless `TLDW_TEST_NO_DOCKER` is set.
+  - You can also set `POSTGRES_TEST_*` vars or `JOBS_DB_URL` explicitly to point at an existing cluster.
+
 ## RAG Module
 - `tldw_production`: When `true`, RAG retrievers disable raw SQL fallbacks and require adapters (MediaDatabase/ChaChaNotesDB). Unified endpoints already pass adapters; direct pipeline usage must supply them.
 - `RAG_LLM_RERANK_TIMEOUT_SEC`: Per-document LLM rerank timeout (seconds). Default `10`.
@@ -306,10 +314,22 @@ Notes
 | `OTEL_EXPORTER_OTLP_PROTOCOL`   | `grpc`              | `grpc` or `http/protobuf` |
 | `OTEL_EXPORTER_OTLP_HEADERS`    | (empty)             | Optional headers string |
 | `OTEL_EXPORTER_OTLP_INSECURE`   | `true`              | Allow insecure transport |
-| `STREAMS_UNIFIED`               | `0`                 | Feature flag: unified SSE/WS streams in pilot endpoints (set `1` in non-prod) |
+| `STREAMS_UNIFIED`               | `0`                 | Feature flag: unified SSE/WS streams in pilot endpoints. Recommended `1` in non‑prod. Use the dev overlay: `Dockerfiles/Dockerfiles/docker-compose.dev.yml`. |
+
+Quick rollback
+
+- To disable unified streaming quickly, set `STREAMS_UNIFIED=0` and restart the app (or `docker compose up -d` to re‑create with the new env). This reverts pilot endpoints to legacy streaming code paths.
+
+Non‑prod defaults
+
+- `Dockerfiles/Dockerfiles/docker-compose.dev.yml` exports `STREAMS_UNIFIED=1` for dev/staging overlays.
+- `Dockerfiles/Dockerfiles/docker-compose.test.yml` also sets `STREAMS_UNIFIED=1` for test environments.
+  In production, keep the flag unset or `0` until you’re ready to flip more broadly.
 | `STREAM_HEARTBEAT_INTERVAL_S`   | `10`                | Default heartbeat interval for streams (seconds) |
 | `STREAM_HEARTBEAT_MODE`         | `comment`           | `comment` or `data` heartbeats (prefer `data` behind reverse proxies) |
 | `STREAM_IDLE_TIMEOUT_S`         | (disabled)          | Idle timeout for SSE streams (seconds) |
+| `AUDIO_WS_IDLE_TIMEOUT_S`       | (disabled)          | Optional idle timeout for Audio WebSocket (seconds); overrides `STREAM_IDLE_TIMEOUT_S` for audio handler |
+| `AUDIO_WS_QUOTA_CLOSE_1008`     | `0`                 | When `1`, Audio WS closes with 1008 for quota/rate-limit instead of legacy 4003 |
 | `STREAM_MAX_DURATION_S`         | (disabled)          | Maximum duration for SSE streams (seconds) |
 | `STREAM_QUEUE_MAXSIZE`          | `256`               | Default bounded queue size for SSE streams |
 | `STREAM_PROVIDER_CONTROL_PASSTHRU` | `0`              | Preserve provider SSE control lines (`event/id/retry`) when `1` |

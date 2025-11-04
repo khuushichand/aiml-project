@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 
-import requests
+from tldw_Server_API.app.core.http_client import fetch as http_fetch
 
 
 def check_robots_txt(url: str) -> Dict[str, Any]:
@@ -17,17 +17,17 @@ def check_robots_txt(url: str) -> Dict[str, Any]:
         robots_url = urlunparse((parsed_url.scheme, parsed_url.netloc, "robots.txt", "", "", ""))
 
         headers = {"User-Agent": "Mozilla/5.0 (compatible; caniscrape-bot/1.0)"}
-        response = requests.get(robots_url, timeout=10, headers=headers, allow_redirects=True)
+        resp = http_fetch(method="GET", url=robots_url, timeout=10, headers=headers, allow_redirects=True)
 
-        if response.status_code == 200:
-            if "text/html" in response.headers.get("Content-Type", "").lower():
+        if resp.status_code == 200:
+            if "text/html" in resp.headers.get("Content-Type", "").lower():
                 return {"status": "not_found"}
 
             crawl_delay: Optional[float] = None
             scraping_disallowed = False
             is_generic_agent_block = False
 
-            for raw_line in response.text.splitlines():
+            for raw_line in resp.text.splitlines():
                 line = raw_line.strip().lower()
                 if not line or line.startswith("#"):
                     continue
@@ -57,9 +57,9 @@ def check_robots_txt(url: str) -> Dict[str, Any]:
                 "scraping_disallowed": scraping_disallowed,
             }
 
-        if 400 <= response.status_code < 500:
+        if 400 <= resp.status_code < 500:
             return {"status": "not_found"}
 
-        return {"status": "error", "message": str(response.status_code)}
-    except requests.RequestException as exc:
+        return {"status": "error", "message": str(resp.status_code)}
+    except Exception as exc:
         return {"status": "error", "message": str(exc)}

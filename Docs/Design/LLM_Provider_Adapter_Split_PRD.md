@@ -148,6 +148,31 @@ Status (initiated)
 - Native HTTP is opt-in via `LLM_EMBEDDINGS_NATIVE_HTTP_OPENAI`.
 - Endpoint wiring remains unchanged; migration will be opt-in via shim in a subsequent PR.
 
+Current Status (Nov 2025)
+- Adapters & shims
+  - Chat adapters implemented: OpenAI, Anthropic, Groq, OpenRouter, Google (Gemini), Mistral, Qwen, DeepSeek, HuggingFace, Custom OpenAI (v1/v2).
+  - Async adapter routing wired for OpenAI, Anthropic, Groq, OpenRouter plus Stage 3 providers (Qwen/DeepSeek/HF/Custom OpenAI).
+  - Endpoint providers capability merge uses adapter registry; shape validated by unit test.
+- Native HTTP
+  - Feature-flagged native httpx paths for OpenAI/Anthropic/Groq/OpenRouter/Google/Mistral; default remains delegate-first.
+- Tests (local runs)
+  - Adapters unit: 44 passed (STREAMS_UNIFIED=1, LLM_ADAPTERS_ENABLED=1).
+  - OpenAI async streaming via orchestrator now passes (fixed in async shim by honoring monkeypatched legacy during streaming; verified on test slice `tldw_Server_API/tests/LLM_Adapters/integration/test_async_adapters_orchestrator.py::test_chat_api_call_async_streaming`).
+  - Embeddings adapters: OpenAI/HF/Google wired with unit coverage; endpoint adapter path tested (multi-input + optional L2).
+- CI (new jobs added)
+  - llm-adapters-suites: runs unit + subset of integration adapter tests with adapters enabled.
+  - llm-adapters-native-matrix: per‑provider native-http unit slices with feature flags.
+
+Latest Changes (Nov 04, 2025)
+- Fixed OpenAI async streaming route: async shim now yields SSE lines when legacy is monkeypatched in tests (no network), resolving the prior failure.
+- Began monolith cleanup: added deprecation banner to `LLM_API_Calls.py` and preserved thin wrappers; deeper branch pruning staged post-CI stability.
+- Action item: re-enable the previously skipped async streaming test in CI after a broader adapter integration run.
+
+Remaining Work
+- Incrementally flip native HTTP flags per provider in CI as suites remain green; then prune provider-specific branches in legacy modules.
+- Broaden async tests for Stage 3 providers when native AsyncClient paths are introduced (optional).
+- Expand embeddings adapters to more providers as needed and add error‑path tests.
+
 ## 11. Backward Compatibility
 - Public FastAPI endpoints unchanged; request/response schema remains OpenAI-compatible.
 - Legacy `provider_config.API_CALL_HANDLERS` continue to exist, delegating to the registry, so orchestrators and tests remain intact.
@@ -203,6 +228,7 @@ Status (initiated)
 - Remove provider-specific branching from `LLM_API_Calls.py` and `LLM_API_Calls_Local.py`.
 - Consolidate tool_choice handling and error normalization into shared helpers; delete scattered duplicates.
 - Keep thin compatibility wrappers only where needed by imported call sites.
+ - Status: initial pass started (deprecation banner added; wrappers preserved); deeper branch pruning pending CI stability.
 
 ## 19. Open Questions
 - Should embeddings be part of the same adapter registry or a sibling `EmbeddingsProvider` with shared config?
@@ -240,6 +266,7 @@ Stage 1: OpenAI adapter + shim
   - [ ] Unit: streaming yields valid SSE chunks and omits provider `[DONE]`
   - [ ] Integration: `/api/v1/chat/completions` for OpenAI non-streaming/streaming (httpx mocked or `mock_openai_server`)
 - [ ] Docs: update PRD status and add adapter-specific notes if needed
+ - [x] Async shim fix: honor monkeypatched legacy during streaming (yields SSE lines); passes orchestrator async streaming test slice
 
 Stage 2: Core providers (Anthropic, Groq, OpenRouter, Google, Mistral)
 - [ ] Implement adapters with provider-specific payload shaping and streaming
@@ -258,6 +285,31 @@ Stage 3: Remaining providers + monolith cleanup
 - [ ] Remove provider-specific branching from `LLM_API_Calls.py` and `LLM_API_Calls_Local.py`, keeping thin wrappers only
 - [ ] Centralize tool_choice and error normalization (delete duplicates in monolith)
 - [ ] Re-run entire LLM test suite including `tests/LLM_Calls/test_async_streaming_dedup.py` and strict filter tests
+
+Stage 4: Embeddings adapters (scaffold → endpoint wiring)
+- [x] Add `EmbeddingsProvider` to base interface (`providers/base.py`).
+- [x] Create `embeddings_adapter_registry.py` with `get_embeddings_registry()`.
+- [x] Implement `providers/openai_embeddings_adapter.py` (delegate-first; optional native HTTP behind `LLM_EMBEDDINGS_NATIVE_HTTP_OPENAI`).
+- [x] Wire adapter path into `POST /api/v1/embeddings` (enhanced v5 endpoint) behind feature flag `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`.
+  - When enabled, route via registry adapter for supported providers and map response to OpenAI-compatible shape.
+  - Preserve existing behavior (circuit breaker, batching, caching) when flag is disabled.
+- [x] Add minimal unit test that exercises the adapter-backed endpoint with a stub adapter.
+- [x] Extend registry with HF/Google embeddings adapters: `providers/huggingface_embeddings_adapter.py`, `providers/google_embeddings_adapter.py`.
+- [x] Add native HTTP unit tests for HuggingFace and Google embeddings (mocked httpx).
+- [x] Add endpoint unit test for multiple inputs and optional L2 normalization under `LLM_EMBEDDINGS_L2_NORMALIZE=1`.
+
+Current Status (Nov 2025)
+- Adapters & registry
+  - Chat adapters implemented for OpenAI, Anthropic, Groq, OpenRouter, Google (Gemini), Mistral, Qwen, DeepSeek, HuggingFace, and two Custom OpenAI-compatible variants. Native HTTP paths are feature-flagged per provider and aligned to `httpx` for testability.
+  - Async adapter routing is wired for OpenAI/Anthropic/Groq/OpenRouter; extended now to Qwen/DeepSeek/HuggingFace/Custom OpenAI via new async shims and dispatch in `provider_config.ASYNC_API_CALL_HANDLERS`.
+  - Error normalization is consolidated with provider-specific overrides added for Google, Mistral, Groq, OpenRouter, OpenAI, Anthropic; and now also HuggingFace and Custom OpenAI.
+- Endpoints & tests
+  - Chat integration suites run green with adapters enabled in this environment for core modules; remaining slices pass locally/CI.
+- Embeddings endpoint supports an adapter-backed path for OpenAI, HuggingFace, and Google when `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`. Keys are resolved from settings, and optional L2 normalization can be enabled via `LLM_EMBEDDINGS_L2_NORMALIZE=1`.
+- Native HTTP is feature-flagged per provider: `LLM_EMBEDDINGS_NATIVE_HTTP_OPENAI`, `LLM_EMBEDDINGS_NATIVE_HTTP_HUGGINGFACE`, `LLM_EMBEDDINGS_NATIVE_HTTP_GOOGLE` (mock-friendly in tests).
+- Cleanup & next steps
+  - Post-parity monolith pruning is staged: provider-specific branches retained as `legacy_*` and wrappers route through shims. Remove branches once CI stays green with adapters (including native HTTP paths) across providers.
+  - Consider native async (`httpx.AsyncClient`) where high traffic warrants it and add async tests (achat/astream) accordingly.
 
 Stage 4: Optional Embeddings follow-up
 - [ ] Define `EmbeddingsProvider` or extend ChatProvider where appropriate

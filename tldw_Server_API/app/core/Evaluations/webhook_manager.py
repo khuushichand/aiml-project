@@ -9,7 +9,6 @@ import json
 import hmac
 import hashlib
 import asyncio
-import httpx
 import aiohttp
 import os
 from datetime import datetime, timedelta, timezone
@@ -635,18 +634,12 @@ class WebhookManager:
                 except Exception:
                     pass
 
-                if use_aiohttp:
-                    import aiohttp
-                    timeout = aiohttp.ClientTimeout(total=min(5, int(webhook.get("timeout_seconds", 30))))
-                    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-                        async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
-                            status_code = resp.status
-                            response_text = await resp.text()
-                else:
-                    async with httpx.AsyncClient(timeout=webhook["timeout_seconds"], follow_redirects=False) as client:
-                        resp = await client.post(url, content=payload_json, headers=headers)
-                        status_code = resp.status_code
-                        response_text = getattr(resp, "text", "")
+                # Always use aiohttp for deliveries (test harness uses aioresponses)
+                timeout = aiohttp.ClientTimeout(total=min(5, int(webhook.get("timeout_seconds", 30))))
+                async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                    async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
+                        status_code = resp.status
+                        response_text = await resp.text()
 
                 response_time = (datetime.now() - start_time).total_seconds() * 1000
                 if not isinstance(response_text, str):

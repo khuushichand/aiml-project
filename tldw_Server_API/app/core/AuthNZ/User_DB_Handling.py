@@ -500,7 +500,10 @@ async def get_request_user(
                     path = ""
                 # Disallow synthesis for sensitive endpoints
                 _path_str = str(path)
-                _synth_disallowed_prefixes = ("/api/v1/audio/", "/api/v1/chat/")
+                # Allow synthesis for chat endpoints in test contexts to simplify adapter
+                # integration tests which rely on dependency overrides rather than headers.
+                # Still disallow for audio endpoints which exercise upload flows.
+                _synth_disallowed_prefixes = ("/api/v1/audio/",)
                 synth_allowed = in_test and not any(_path_str.startswith(p) for p in _synth_disallowed_prefixes)
                 if synth_allowed:
                     try:
@@ -520,7 +523,10 @@ async def get_request_user(
         # In explicit test contexts, normalize/accept bearer-style API keys to the configured single-user key
         try:
             import os as _os
-            if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            if (
+                _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                or _os.getenv("PYTEST_CURRENT_TEST") is not None
+            ):
                 # If settings key doesn't match env (early-init race), coerce api_key to the effective configured key
                 effective_key = (
                     get_settings().SINGLE_USER_API_KEY

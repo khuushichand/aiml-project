@@ -508,7 +508,7 @@ def test_api_key_used_from_config(
 @patch("tldw_Server_API.app.api.v1.endpoints.chat.apply_template_to_string")
 def test_missing_api_key_for_required_provider(
         mock_apply_template, mock_load_template,
-        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
+        client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db, monkeypatch
 ):
     # Simulate that the default template is found and is a passthrough
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
@@ -527,11 +527,16 @@ def test_missing_api_key_for_required_provider(
     # The endpoint's providers_requiring_keys list includes "openai".
     request_data_openai = default_chat_request_data.model_copy(update={"api_provider": "openai"})
 
-    response = client.post_with_csrf(
+    # Ensure endpoint prefers module-level API_KEYS for this test to avoid env/interference
+    # Do NOT enable TEST_MODE here, since TEST_MODE enables auto-mock for some providers and bypasses 503.
+    monkeypatch.delenv('TEST_MODE', raising=False)
+    from unittest.mock import patch as _patch
+    with _patch("tldw_Server_API.app.api.v1.endpoints.chat.get_api_keys", return_value={}):
+        response = client.post_with_csrf(
         "/api/v1/chat/completions",
         json=request_data_openai.model_dump(),
         headers={"token": valid_auth_token}
-    )
+        )
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     expected_detail = "Service for 'openai' is not configured (key missing)."  # Or the relevant provider

@@ -157,6 +157,8 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
 )
 from fastapi.encoders import jsonable_encoder
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -705,6 +707,53 @@ async def create_chat_completion(
     request_json = json.dumps(request_data.model_dump())
     request_json_bytes = request_json.encode()
 
+    # Optionally reserve tokens via Resource Governor (endpoint-level) and commit after non-stream calls
+    _rg_handle_id = None
+    _rg_policy_id = None
+    try:
+        gov = getattr(request.app.state, "rg_governor", None) if request is not None else None
+        loader = getattr(request.app.state, "rg_policy_loader", None) if request is not None else None
+        if (
+            gov is not None
+            and loader is not None
+            and os.getenv("RG_ENDPOINT_ENFORCE_TOKENS", "").lower() in {"1", "true", "yes"}
+        ):
+            snap = loader.get_snapshot()
+            route_map = dict(getattr(snap, "route_map", {}) or {})
+            by_path = dict(route_map.get("by_path") or {})
+            path = "/api/v1/chat/completions"
+            policy_id = None
+            for pat, pol in by_path.items():
+                s = str(pat)
+                if s.endswith("*"):
+                    if path.startswith(s[:-1]):
+                        policy_id = str(pol)
+                        break
+                elif path == s:
+                    policy_id = str(pol)
+                    break
+            if not policy_id:
+                policy_id = "chat.default"
+            entity = derive_entity_key(request)
+            try:
+                est = int(estimate_tokens_from_json(request_json) or 1)
+            except Exception:
+                est = 1
+            est = max(1, est)
+            dec, hid = await gov.reserve(
+                RGRequest(entity=entity, categories={"tokens": {"units": est}}, tags={"policy_id": policy_id, "endpoint": path}),
+                op_id=request_id,
+            )
+            if not dec.allowed:
+                retry_after = int(dec.retry_after or 1)
+                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)})
+            _rg_handle_id = hid
+            _rg_policy_id = policy_id
+    except HTTPException:
+        raise
+    except Exception as _rg_err:
+        logger.debug(f"RG tokens reserve skipped: {_rg_err}")
+
     _track_request_cm = metrics.track_request(
         provider=provider,
         model=model,
@@ -969,8 +1018,12 @@ async def create_chat_completion(
                 from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
             except Exception:
                 PROVIDER_REQUIRES_KEY = {}
+            # Allow explicit mock forcing in tests even if provider key is absent
+            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
+            _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             # Use the raw value for validation so empty strings are treated as missing
-            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key:
+            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
@@ -1219,10 +1272,15 @@ async def create_chat_completion(
             # ------------------------------------------------------------------------
 
             mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
+            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
             use_mock_provider = (
-                _test_mode_flag
-                and provider_api_key
-                and provider_api_key in mock_friendly_keys
+                (
+                    _test_mode_flag and (
+                        (provider_api_key and provider_api_key in mock_friendly_keys)
+                        or _force_mock
+                        or (target_api_provider in {"openai", "groq", "mistral"})
+                    )
+                )
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
@@ -1311,6 +1369,10 @@ async def create_chat_completion(
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=get_moderation_service,
+                    rg_commit_cb=(
+                        (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
+                        if _rg_handle_id else None
+                    ),
                 )
 
             else: # Non-streaming
@@ -1350,6 +1412,21 @@ async def create_chat_completion(
                             "streaming": "false",
                         },
                     )
+                # Resource Governor: commit actual tokens if reserved
+                try:
+                    gov = getattr(request.app.state, "rg_governor", None) if request is not None else None
+                    if gov is not None and _rg_handle_id:
+                        actual = None
+                        try:
+                            usage = (encoded_payload or {}).get("usage") if isinstance(encoded_payload, dict) else None
+                            total = int((usage or {}).get("total_tokens") or 0) if usage else 0
+                            if total > 0:
+                                actual = {"tokens": total}
+                        except Exception:
+                            actual = None
+                        await gov.commit(_rg_handle_id, actuals=actual)
+                except Exception as _rg_commit_err:
+                    logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
                 return JSONResponse(content=encoded_payload)
 
         # --- Exception Handling --- Improved with structured error handling

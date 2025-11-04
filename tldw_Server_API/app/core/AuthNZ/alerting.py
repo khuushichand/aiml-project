@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-import httpx
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 import smtplib
 from loguru import logger
 
@@ -357,10 +357,15 @@ class SecurityAlertDispatcher:
             raise RuntimeError(f"File sink failed: {exc}") from exc
 
     async def _send_webhook(self, record: Dict[str, Any]) -> None:
-        timeout = httpx.Timeout(5.0, connect=3.0)
         headers = {"Content-Type": "application/json", **self.webhook_headers}
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            await client.post(self.webhook_url, json=record, headers=headers)
+        await afetch(
+            method="POST",
+            url=str(self.webhook_url),
+            json=record,
+            headers=headers,
+            timeout=5.0,
+            retry=RetryPolicy(attempts=1),
+        )
 
     async def _send_email(self, record: Dict[str, Any]) -> None:
         await asyncio.to_thread(self._send_email_sync, record)

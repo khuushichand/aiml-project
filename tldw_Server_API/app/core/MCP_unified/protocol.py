@@ -381,14 +381,29 @@ class MCPProtocol:
                 if request.method == "tools/call":
                     _p = request.params or {}
                     _name = _p.get("name") if isinstance(_p, dict) else None
-                    if not isinstance(_name, str) or not self._tool_name_re.match(_name):
+                    if not _name:
+                        return self._error_response(
+                            ErrorCode.INVALID_PARAMS,
+                            "Tool name is required",
+                            request.id,
+                        )
+                    if not isinstance(_name, str):
+                        # Non-string name → invalid params
+                        return self._error_response(
+                            ErrorCode.INVALID_PARAMS,
+                            "Invalid tool name",
+                            request.id,
+                        )
+                    if not self._tool_name_re.match(_name):
+                        # Regex violation treated as internal error per legacy expectation
                         return self._error_response(
                             ErrorCode.INTERNAL_ERROR,
                             "Invalid tool name",
-                            request.id
+                            request.id,
                         )
             except Exception:
-                return self._error_response(ErrorCode.INTERNAL_ERROR, "Invalid tool name", request.id)
+                # Uniformly surface as INVALID_PARAMS for caller clarity
+                return self._error_response(ErrorCode.INVALID_PARAMS, "Invalid tool name", request.id)
 
             # Find handler
             handler = self.handlers.get(request.method)

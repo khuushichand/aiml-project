@@ -1,7 +1,7 @@
 # Stream Abstraction — PRD
 
-- Status: Draft
-- Last Updated: 2025-11-03
+- Status: Pilot Rollout (under STREAMS_UNIFIED)
+- Last Updated: 2025-11-04
 - Authors: Codex (coding agent)
 - Stakeholders: API (Chat/Embeddings), Audio, MCP, WebUI, Docs
 
@@ -36,6 +36,28 @@ Unifying principle: All outputs are streams — just different transports.
 ### 1.4 Non‑Goals
 - Changing wire payload shapes for domain data (e.g., audio partials, MCP JSON‑RPC responses). The abstraction standardizes framing/lifecycle, not domain schemas.
 - Introducing a new message bus or queueing layer.
+
+### 1.5 Current Status
+
+- Abstractions implemented with metrics: SSEStream and WebSocketStream (complete).
+- Provider control pass‑through + SSE idle/max enforcement (complete).
+- Chat SSE pilots behind STREAMS_UNIFIED (complete):
+  - Character chat SSE, main chat completions SSE, and document‑generation SSE paths unified; duplicate [DONE] suppressed; metrics flowing.
+- Embeddings orchestrator SSE behind flag (complete):
+  - Preserves `event: summary`; emits heartbeats and standardized non‑fatal error frames when configured.
+- Evaluations SSE (abtest events) unified (complete):
+  - Uses SSEStream with labels; standardized heartbeats; DONE semantics.
+- Jobs Admin SSE (events outbox) unified (complete):
+  - Uses SSEStream; preserves `id:` and `event:` lines for clients using Last‑Event‑ID.
+- Prompt Studio SSE fallback unified behind flag (new):
+  - Uses SSEStream when STREAMS_UNIFIED=1; retains legacy generator when flag is off.
+- Audio WS lifecycle standardized with WebSocketStream (complete):
+  - Compat alias `error_type` present; close‑code mapping in place; metrics emitting.
+- MCP WS lifecycle standardized with WebSocketStream (complete):
+  - JSON‑RPC payloads unchanged; ping/idle metrics emitting.
+
+Next operational step
+- Flip STREAMS_UNIFIED=1 in non‑prod (dev/staging), validate WebUI with two providers, and monitor streaming dashboards. Maintain rollback by toggling the flag.
 
 ---
 
@@ -384,6 +406,61 @@ Feature flag: `STREAMS_UNIFIED` (default off for one release; then on by default
 
 ---
 
+## 11. Implementation Plan (Staged)
+
+Stage 1: Abstractions & Baseline (Complete)
+- Goal: Implement `AsyncStream`, `SSEStream`, `WebSocketStream` with base metrics and tests.
+- Success: One Chat SSE path migrated; DONE/error/heartbeat semantics verified with unit tests.
+
+Stage 2: Pass‑through + Timeouts (Complete)
+- Goal: Provider control pass‑through, SSE idle/max enforcement, close‑code guidance.
+- Success: Normalization toggles in place; SSE idle/max tested; metrics labels available.
+
+Stage 3: Pilot Rollout (In Progress)
+- Goal: Adopt under `STREAMS_UNIFIED` for key endpoints; validate with WebUI and two providers.
+- Current pilots:
+  - Chat SSE: Character chat, main chat completions, document‑generation.
+  - Embeddings SSE orchestrator.
+  - Evaluations SSE (A/B tests and batch emitters).
+  - Jobs Admin SSE (events outbox, retains `id:` pass‑through).
+  - Prompt Studio SSE fallback (when flag enabled).
+  - Audio WS and MCP WS using `WebSocketStream` (JSON‑RPC preserved for MCP; compat `error_type` shims).
+- Remaining work for Stage 3:
+  - Non‑prod validation with WebUI across two providers; ensure no duplicate `[DONE]` and heartbeats visible.
+  - Expand unit/integration tests for backpressure and long‑running sessions (SSE heartbeats not starved; WS idle close behavior).
+  - Add/verify provider control pass‑through at call sites that depend on `event:`/`id:`.
+
+Stage 4: Broader Adoption (Planned)
+- Goal: Migrate any remaining bespoke streaming code paths, preserve domain payloads, and standardize lifecycle.
+- Targets to confirm/migrate:
+  - Any residual Chat/Character local SSE helpers (delete after flip).
+  - Embeddings orchestrator legacy code path (remove once default flips).
+  - Jobs PG outbox test hardening and re‑enablement.
+
+Stage 5: Cleanup & Default Flip (Planned)
+- Goal: Remove legacy helpers, flip `STREAMS_UNIFIED` default on in non‑prod → prod.
+- Rollback: Toggle `STREAMS_UNIFIED=0` to revert to legacy per‑endpoint implementations.
+
+Test Matrix (High‑level)
+- SSE
+  - Chat (character, completions, doc‑gen): DONE dedup, errors, heartbeats, backpressure.
+  - Embeddings orchestrator: `event: summary`, heartbeats, idle/max.
+  - Evaluations: event cadence, DONE.
+  - Jobs Admin: `id:` pass‑through, paging, SSE stream.
+  - Prompt Studio fallback: DONE and heartbeat parity.
+- WebSocket
+  - Audio: ping, compat `error_type`, quota → 1008, internal → 1011.
+  - MCP: ping/idle close, JSON‑RPC parse errors, no event‑frame wrapping.
+- Flags
+  - `STREAMS_UNIFIED` on/off parity; `STREAM_PROVIDER_CONTROL_PASSTHRU` per‑endpoint overrides.
+
+Rollback Notes
+- Primary rollback is configuration only: set `STREAMS_UNIFIED=0` to restore legacy paths.
+- Keep compat shims (`error_type`) until all clients migrate to `code`+`message`.
+- If SSE buffering observed under proxies, prefer `heartbeat_mode=data` and verify `X‑Accel‑Buffering: no` in ingress.
+
+---
+
 ## 10. Testing Strategy
 
 - Unit tests
@@ -484,8 +561,40 @@ Stage 3 — Chat SSE Pilot Integration
   - Replace endpoint-local SSE emission for a pilot endpoint (character chat streaming) with `SSEStream` gated by `STREAMS_UNIFIED`.
   - Replace local normalization with provider iterator output (`LLM_Calls/LLM_API_Calls.*iter_sse_lines_*`) and `normalize_provider_line` fallback for non-string chunks. Suppress provider `[DONE]`; call `stream.done()` once.
   - Route provider lines via `send_raw_sse_line` for minimal change.
-  - Validate under flag with two providers (e.g., OpenAI + Groq) and with the WebUI client; verify metrics populate and no duplicate `[DONE]`.
+ - Validate under flag with two providers (e.g., OpenAI + Groq) and with the WebUI client; verify metrics populate and no duplicate `[DONE]`.
   - If validation passes, flip `STREAMS_UNIFIED=1` in non-prod environments and stage a second chat endpoint migration.
+ - Rollback: set `STREAMS_UNIFIED=0` and restart the app to revert to legacy code paths (no code changes required).
+
+### Validation Checklist (non‑prod)
+
+Environment
+- Use dev/staging with unified streams enabled:
+  - Compose overlay: `-f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml`
+  - or export `STREAMS_UNIFIED=1` in the environment prior to starting the API.
+- Ensure provider keys are set for at least two providers (e.g., OpenAI and Groq).
+- Optional: behind reverse proxies/CDNs, set `STREAM_HEARTBEAT_MODE=data`.
+
+Functional
+- Chat SSE (main): stream completion; assert only one `data: [DONE]` and proper OpenAI deltas.
+- Character chat SSE: stream conversation; validate heartbeat presence during idle and single `DONE`.
+- Chat document-generation SSE: stream doc; validate heartbeat and final `DONE` without duplicates.
+- Embeddings orchestrator SSE (if used): confirm `event: summary` frames appear periodically.
+- Prompt Studio SSE fallback (if used): connect and observe initial state + heartbeats.
+
+WebSockets
+- Audio WS: open a session; observe `{type:"ping"}` frames; trigger an error path and confirm error frame + close code mapping.
+- MCP WS: open a session; confirm lifecycle frames (`ping`, `done` when closed) and that JSON‑RPC responses are unchanged.
+
+Metrics & Dashboards
+- Import `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json`.
+- Confirm:
+  - `sse_enqueue_to_yield_ms` histogram shows activity during SSE streams.
+  - `sse_queue_high_watermark` increases during bursts.
+  - `ws_send_latency_ms` histogram increments on WS sends.
+  - `ws_pings_total` increments for WS endpoints; `ws_ping_failures_total` remains 0.
+
+Rollback
+- Toggle `STREAMS_UNIFIED=0` and restart app to revert to legacy streaming.
 - Tests:
   - End-to-end chat SSE with at least two providers; no duplicate `[DONE]`.
   - Snapshot payloads pre/post match (except standardized error/heartbeat cadence).
@@ -502,30 +611,41 @@ Stage 3 — Chat SSE Pilot Integration
 - Success: No client changes required; metrics visible in dashboard.
 
 Stage 5 — Audio WS Standardization
+- Status: Complete
 - Goal: Adopt `WebSocketStream` for lifecycle (ping, error, done) without changing domain payloads.
 - Code:
-  - Wrap handler to use `WebSocketStream(..., compat_error_type=True)` during rollout.
-  - Standardize idle timeout close (1001); ping loop uses abstraction; retain domain messages.
+  - Unified handler uses `WebSocketStream(..., compat_error_type=True)` and labels `{component: audio, endpoint: audio_unified_ws}`.
+  - Standardized error/done semantics; retained legacy quota close (4003) and `error_type` for client compatibility.
+  - Routed status/summary frames via `stream.send_json` for metrics coverage; domain payloads unchanged.
 - Tests:
-  - Ping schedule, idle timeout counter increments, error/done frames, backwards-compatible error fields.
+  - Quota/concurrency WS tests pass; streaming unit tests cover WS metrics and error/done; additional ping/idle tests can be added if needed.
 - Success: Clients unaffected; improved observability in streaming dashboard.
 
 Stage 6 — MCP WS Lifecycle Adoption
+- Status: Complete
 - Goal: Use `WebSocketStream` for ping/idle/error; never wrap JSON‑RPC content or emit `done` as JSON‑RPC.
 - Code:
-  - Integrate ping loop and standardized error close mapping; keep JSON‑RPC untouched.
+  - MCP server uses `WebSocketStream` with labels `{component: mcp, endpoint: mcp_ws}`; origin/IP/auth guards in place.
+  - Standardized close-code mapping; JSON‑RPC payloads unchanged; lifecycle metrics emitted.
 - Tests:
-  - Ping behavior, idle timeout (1001), errors with `code` and (`error_type` during rollout if needed).
+  - Full MCP WS/HTTP test suite passes (JSON-RPC, security, rate limits, etc.).
+  - Unified WS lifecycle verified by tests; metrics available for dashboards.
 - Success: MCP dashboard unchanged for content; lifecycle metrics added.
 
 Stage 7 — Cleanup, Docs, and Flip Default
-- Goal: Remove endpoint-local helpers, update docs, and flip `STREAMS_UNIFIED` default.
-- Code:
-  - Delete duplicative SSE helpers; unify DONE suppression.
-  - Flip feature flag default to ON after one release; guard with rollback instructions.
-- Docs:
-  - API docs, Audio/MCP protocol notes, migration notes for `error_type` deprecation.
-- Success: Unified streams become the default with rollback path; client migrations completed.
+- Status: In Progress
+- Goal: Remove endpoint‑local helpers, update docs, and flip `STREAMS_UNIFIED` default after non‑prod validation.
+- Code (in progress):
+  - Prompt Studio SSE fallback now uses SSEStream behind the flag.
+  - Embeddings orchestrator, Evaluations SSE, Jobs Admin SSE, Chat SSE paths already unified.
+  - Plan removal of legacy local SSE helpers after one release window.
+  - Prepare default flip of `STREAMS_UNIFIED` in non‑prod configs (compose.test already sets it).
+- Docs (in progress):
+  - API docs and protocol notes reflect standardized lifecycle and close‑code mapping.
+  - Monitoring README includes labels guidance and references the Grafana Streaming Basics dashboard.
+- Success criteria for this stage:
+  - Non‑prod flip validated with WebUI + two providers; no duplicate [DONE]; dashboards show healthy SSE/WS metrics.
+  - Clear rollback documented (toggle `STREAMS_UNIFIED=0`).
 
 Risk Mitigation & Rollback
 - Feature flag per endpoint; can revert to legacy implementation immediately if regressions occur.
@@ -539,3 +659,31 @@ Ownership & Tracking
   - Docs touched
   - Rollout/flag steps
   - Validation (dashboards/alerts)
+
+---
+
+## Compatibility Follow-ups
+
+Audio WS legacy quota close code
+- Current behavior: For client compatibility, the Audio WS handler emits an `error` frame with `error_type: "quota_exceeded"` and closes with code `4003` when quotas are exceeded.
+- Target behavior: Migrate to standardized close code `1008` (Policy Violation) with structured `{type: "error", code: "quota_exceeded", message, data?}` and without the legacy `error_type` field once downstream clients have updated.
+- Migration plan:
+  - Phase 1 (current): Keep `4003` and include `error_type` alias (compat_error_type=True) in `WebSocketStream` for Audio. Documented in API/SDK release notes.
+  - Phase 2 (flagged pilot): Expose an opt‑in environment toggle (ops only) to switch close code to `1008` while still including `error_type` for a release.
+  - Phase 3 (default switch): Change default to `1008` and keep `error_type` for one additional release.
+  - Phase 4 (cleanup): Remove `error_type` alias for Audio WS and rely solely on `code` + `message`.
+  - Acceptance: No client breakages reported in non‑prod → prod flips; tests updated to assert `1008`.
+
+Endpoint audit and duplicate closes
+- WebSockets
+  - Workflows WS, Sandbox WS, Prompt Studio WS, MCP Unified WS, and Persona WS are wrapped with `WebSocketStream` and emit standardized lifecycle metrics/frames. Domain payloads remain untouched where required.
+  - Audio WS: outer endpoint still performs some direct `send_json/close` for auth/quota compatibility; the inner unified handler uses `WebSocketStream`. Double‑close risks are minimized (idempotent close), but a follow‑up refactor will consolidate closing into the unified layer after the quota close migration (above) to simplify logic.
+  - Parakeet Core demo WS (`/core/parakeet/stream`) is a portable minimal router not mounted in the main app; it intentionally does not use `WebSocketStream` (kept as a standalone sample core).
+- SSE
+  - Chat: pilot paths (character chat, chat completions, document‑generation) are unified behind `STREAMS_UNIFIED`.
+  - Embeddings orchestrator: unified to `SSEStream` behind `STREAMS_UNIFIED` while preserving `event: summary`.
+  - Evaluations SSE (`evaluations_unified.py`) currently uses a bespoke `StreamingResponse` generator; a low‑risk follow‑up item will migrate it to `SSEStream` to standardize heartbeats/metrics.
+
+Monitoring/dashboard validation
+- Import `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json` in Grafana (Prometheus datasource UID `prometheus`).
+- Confirm Persona WS series appear with labels `{component: persona, endpoint: persona_ws, transport: ws}` in the WS panels.

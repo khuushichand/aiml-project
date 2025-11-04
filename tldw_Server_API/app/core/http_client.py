@@ -24,6 +24,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any, TypedDict, Iterator, AsyncIterator, Tuple, Callable, Union
 from urllib.parse import urlparse
+import re
+
+try:
+    # Python 3.8+/backport safe import
+    from importlib import metadata as _importlib_metadata  # type: ignore
+except Exception:  # pragma: no cover
+    _importlib_metadata = None  # type: ignore
 
 from loguru import logger
 
@@ -53,6 +60,7 @@ from tldw_Server_API.app.core.Metrics import (
     MetricDefinition,
     MetricType,
 )
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 
 # --------------------------------------------------------------------------------------
@@ -86,6 +94,42 @@ def _httpx_timeout_from_defaults() -> "httpx.Timeout":
         write=DEFAULT_WRITE_TIMEOUT,
         pool=DEFAULT_POOL_TIMEOUT,
     )
+
+
+_CACHED_VERSION: Optional[str] = None
+
+
+def _get_project_version() -> str:
+    global _CACHED_VERSION
+    if _CACHED_VERSION:
+        return _CACHED_VERSION
+    # 1) Env override
+    v = os.getenv("TLDW_VERSION")
+    if v:
+        _CACHED_VERSION = v.strip()
+        return _CACHED_VERSION
+    # 2) Try package metadata if installed
+    try:
+        if _importlib_metadata is not None:
+            _CACHED_VERSION = _importlib_metadata.version("tldw-server")  # type: ignore[attr-defined]
+            if _CACHED_VERSION:
+                return _CACHED_VERSION
+    except Exception:
+        pass
+    # 3) Fallback: parse pyproject.toml in repo root
+    try:
+        root = Path(__file__).resolve().parents[3]
+        pp = root / "pyproject.toml"
+        if pp.exists():
+            text = pp.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r"^version\s*=\s*\"([^\"]+)\"", text, re.MULTILINE)
+            if m:
+                _CACHED_VERSION = m.group(1).strip()
+                return _CACHED_VERSION
+    except Exception:
+        pass
+    _CACHED_VERSION = "0.0.0"
+    return _CACHED_VERSION
 
 
 def _register_http_client_metrics_once() -> None:
@@ -126,6 +170,23 @@ def _register_http_client_metrics_once() -> None:
         )
     except Exception:
         pass
+    try:
+        reg.register_metric(
+            MetricDefinition(
+                name="http_client_egress_denials_total",
+                type=MetricType.COUNTER,
+                description="Total egress policy denials for outbound HTTP",
+                labels=["reason"],
+            )
+        )
+    except Exception:
+        pass
+
+# Ensure metrics are registered on import
+try:
+    _register_http_client_metrics_once()
+except Exception:
+    pass
     try:
         reg.register_metric(
             MetricDefinition(
@@ -200,6 +261,57 @@ def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
     return safe
 
 
+def _url_parts(u: Union[str, Any]) -> Tuple[str, str, str]:
+    """Return (scheme, host, path) for logging; redacts query by omission."""
+    try:
+        s = str(u)
+    except Exception:
+        s = ""
+    try:
+        p = urlparse(s)
+        scheme = (p.scheme or "").lower()
+        host = (p.hostname or "").lower()
+        path = p.path or "/"
+        return scheme, host, path
+    except Exception:
+        return "", "", ""
+
+
+def _log_outbound_request(
+    *,
+    method: str,
+    url: Union[str, Any],
+    status_code: int,
+    start_time: float,
+    attempt: int,
+    last_retry_delay_s: float = 0.0,
+    exception_class: str = "",
+) -> None:
+    """Emit a single structured log line for an outbound HTTP call.
+
+    Fields: request_id (from global log context), method, scheme, host, path,
+    status_code, duration_ms, attempt, retry_delay_ms, exception_class.
+    """
+    try:
+        duration_ms = int(max(0.0, time.time() - start_time) * 1000)
+        retry_delay_ms = int(max(0.0, last_retry_delay_s) * 1000)
+        scheme, host, path = _url_parts(url)
+        lvl = "warning" if (status_code >= 400 or exception_class) else "info"
+        logger.bind(
+            method=method.upper(),
+            scheme=scheme,
+            host=host,
+            path=path,
+            status_code=int(status_code),
+            duration_ms=duration_ms,
+            attempt=int(attempt),
+            retry_delay_ms=retry_delay_ms,
+            exception_class=exception_class,
+        ).log(lvl, "http.client outbound")
+    except Exception:
+        # Never raise on logging failures
+        pass
+
 def _parse_host_from_url(url: str) -> str:
     try:
         return (urlparse(url).hostname or "").lower()
@@ -220,6 +332,14 @@ def _inject_trace_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
                     out.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
         except Exception:
             pass
+    # Also propagate X-Request-Id from tracing baggage when available
+    try:
+        tm = get_tracing_manager()
+        req_id = tm.get_baggage("request_id")
+        if req_id:
+            out.setdefault("X-Request-Id", str(req_id))
+    except Exception:
+        pass
     return out
 
 
@@ -281,9 +401,15 @@ def _should_retry(method: str, status: Optional[int], exc: Optional[Exception], 
 
 
 def _build_default_headers(component: Optional[str] = None) -> Dict[str, str]:
-    ua = DEFAULT_USER_AGENT
+    # Standardize UA: tldw_server/<version> (<component>)
+    version = _get_project_version()
     if component:
-        ua = f"tldw_server/{component} httpx"
+        ua = f"tldw_server/{version} ({component})"
+    else:
+        ua = f"tldw_server/{version}"
+    # Allow env to override completely if provided
+    if os.getenv("HTTP_DEFAULT_USER_AGENT"):
+        ua = os.getenv("HTTP_DEFAULT_USER_AGENT") or ua
     return {"User-Agent": ua}
 
 
@@ -324,6 +450,30 @@ def _get_client_cert_pins(client: Any) -> Optional[Dict[str, set[str]]]:
         return out
     except Exception:
         return None
+
+
+def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
+    """Parse env-driven certificate pins: HTTP_CERT_PINS="hostA=pinA|pinB,hostB=pinC".
+
+    Returns a mapping host -> set of lowercase sha256 hex pins.
+    """
+    raw = os.getenv("HTTP_CERT_PINS", "").strip()
+    if not raw:
+        return None
+    out: Dict[str, set[str]] = {}
+    try:
+        parts = [p for p in re.split(r"[,;]", raw) if p]
+        for part in parts:
+            if "=" not in part:
+                continue
+            host, pins_str = part.split("=", 1)
+            host = host.strip().lower()
+            pins = {p.strip().lower() for p in pins_str.split("|") if p.strip()}
+            if host and pins:
+                out[host] = pins
+    except Exception:
+        return None
+    return out or None
 
 
 def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[str]) -> None:
@@ -423,6 +573,10 @@ def create_async_client(
     try:
         if cert_pinning:
             setattr(client, "_tldw_cert_pinning", cert_pinning)
+        else:
+            env_pins = _parse_pins_from_env()
+            if env_pins:
+                setattr(client, "_tldw_cert_pinning", env_pins)
     except Exception:
         pass
     return client
@@ -470,6 +624,10 @@ def create_client(
     try:
         if cert_pinning:
             setattr(client, "_tldw_cert_pinning", cert_pinning)
+        else:
+            env_pins = _parse_pins_from_env()
+            if env_pins:
+                setattr(client, "_tldw_cert_pinning", env_pins)
     except Exception:
         pass
     return client
@@ -505,10 +663,11 @@ async def afetch(
     sleep_s = 0.0
     t0 = time.time()
     last_exc: Optional[Exception] = None
+    tm = get_tracing_manager()
+    host_attr = _parse_host_from_url(url)
 
-    async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple["httpx.Response", str]:
+    async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
-        # Always disable internal redirects to enforce policy per hop
         try:
             # Optional cert pinning per host
             try:
@@ -520,7 +679,7 @@ async def afetch(
                         if host in pins_map:
                             _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
             except Exception as e:
-                return None, e.__class__.__name__  # type: ignore[return-value]
+                return None, e.__class__.__name__
             r = await ac.request(
                 method.upper(),
                 target_url,
@@ -533,8 +692,8 @@ async def afetch(
                 follow_redirects=False,
             )
             return r, "ok"
-        except Exception as e:  # transport error
-            return None, e.__class__.__name__  # type: ignore[return-value]
+        except Exception as e:
+            return None, e.__class__.__name__
 
     # Create ephemeral client if none provided
     need_close = False
@@ -544,67 +703,93 @@ async def afetch(
         need_close = True
 
     try:
-        for attempt in range(1, attempts + 1):
-            last_exc = None
-            cur_url = url
-            redirects = 0
-            # Manual redirect handling
-            while True:
-                _validate_egress_or_raise(cur_url)
-                resp, reason = await _do_once(ac, cur_url)
-                if resp is None:
-                    # network exception occurred
-                    last_exc = NetworkError(reason)
-                else:
-                    # Check for redirect
-                    if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
-                        location = resp.headers.get("location")
-                        try:
-                            await resp.aclose()
-                        except Exception:
-                            pass
-                        if not location:
-                            # malformed redirect, treat as error
-                            last_exc = NetworkError("Redirect without Location header")
-                        else:
-                            # Resolve relative redirects
-                            try:
-                                next_url = resp.request.url.join(httpx.URL(location)).human_repr()
-                            except Exception:
-                                # Fallback: absolute location or as-is
-                                try:
-                                    next_url = httpx.URL(location).human_repr()
-                                except Exception:
-                                    last_exc = NetworkError("Invalid redirect Location header")
-                                    break
-                            redirects += 1
-                            if redirects > DEFAULT_MAX_REDIRECTS:
-                                last_exc = NetworkError("Too many redirects")
-                            else:
-                                cur_url = next_url
-                                # Loop to enforce egress on hop
-                                continue
+        async with tm.async_span(
+            "http.client",
+            attributes={
+                "http.method": method.upper(),
+                "net.host.name": host_attr,
+                "url.full": url,
+            },
+        ):
+            for attempt in range(1, attempts + 1):
+                last_exc = None
+                cur_url = url
+                redirects = 0
+
+                # Manual redirect handling inside each attempt
+                while True:
+                    _validate_egress_or_raise(cur_url)
+                    resp, reason = await _do_once(ac, cur_url)
+                    if resp is None:
+                        # network exception occurred
+                        last_exc = NetworkError(reason)
                     else:
-                        # final response
-                        if resp.status_code < 400:
-                            # metrics for success
+                        # Handle redirects explicitly to enforce per-hop egress
+                        if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
+                            location = resp.headers.get("location")
                             try:
-                                host = _parse_host_from_url(str(resp.request.url))
-                                get_metrics_registry().increment(
-                                    "http_client_requests_total", 1, labels={"method": method.upper(), "host": host, "status": str(resp.status_code)}
-                                )
-                                get_metrics_registry().observe(
-                                    "http_client_request_duration_seconds",
-                                    time.time() - t0,
-                                    labels={"method": method.upper(), "host": host},
-                                )
+                                await resp.aclose()
                             except Exception:
                                 pass
-                            return resp
+                            if not location:
+                                last_exc = NetworkError("Redirect without Location header")
+                                break
+                            else:
+                                try:
+                                    next_url = str(resp.request.url.join(httpx.URL(location)))
+                                except Exception:
+                                    try:
+                                        next_url = str(httpx.URL(location))
+                                    except Exception:
+                                        last_exc = NetworkError("Invalid redirect Location header")
+                                        break
+                                redirects += 1
+                                if redirects > DEFAULT_MAX_REDIRECTS:
+                                    last_exc = NetworkError("Too many redirects")
+                                    break
+                                else:
+                                    cur_url = next_url
+                                    continue
                         else:
+                            # final response
+                            if resp.status_code < 400:
+                                # metrics for success
+                                try:
+                                    host = _parse_host_from_url(str(resp.request.url))
+                                    get_metrics_registry().increment(
+                                        "http_client_requests_total", 1, labels={"method": method.upper(), "host": host, "status": str(resp.status_code)}
+                                    )
+                                    get_metrics_registry().observe(
+                                        "http_client_request_duration_seconds",
+                                        time.time() - t0,
+                                        labels={"method": method.upper(), "host": host},
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    tm.set_attributes({"http.status_code": int(resp.status_code)})
+                                except Exception:
+                                    pass
+                                _log_outbound_request(
+                                    method=method,
+                                    url=resp.request.url,
+                                    status_code=int(resp.status_code),
+                                    start_time=t0,
+                                    attempt=attempt,
+                                    last_retry_delay_s=sleep_s,
+                                )
+                                return resp
                             # candidate for retry
                             should, rsn = _should_retry(method, resp.status_code, None, retry)
                             if not should or attempt == attempts:
+                                _log_outbound_request(
+                                    method=method,
+                                    url=resp.request.url,
+                                    status_code=int(resp.status_code),
+                                    start_time=t0,
+                                    attempt=attempt,
+                                    last_retry_delay_s=sleep_s,
+                                )
                                 return resp
                             reason = rsn
                             try:
@@ -626,15 +811,28 @@ async def afetch(
                             logger.debug(
                                 f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s url={cur_url}"
                             )
+                            try:
+                                tm.add_event("http.retry", {"attempt": attempt, "reason": reason})
+                            except Exception:
+                                pass
                             await asyncio.sleep(delay)
                             sleep_s = delay
-                            # restart outer attempt loop
+                            # Restart outer attempt
                             break
 
                 # network error path
                 if last_exc is not None:
                     should, rsn = _should_retry(method, None, last_exc, retry)
                     if not should or attempt == attempts:
+                        _log_outbound_request(
+                            method=method,
+                            url=cur_url,
+                            status_code=0,
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                            exception_class=last_exc.__class__.__name__,
+                        )
                         raise last_exc
                     try:
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
@@ -644,11 +842,24 @@ async def afetch(
                     logger.debug(
                         f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
                     )
+                    try:
+                        tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
+                    except Exception:
+                        pass
                     await asyncio.sleep(delay)
                     sleep_s = delay
-                    break
+                    continue
 
         # If we exit loop without return, attempts exhausted
+        _log_outbound_request(
+            method=method,
+            url=url,
+            status_code=0,
+            start_time=t0,
+            attempt=attempts,
+            last_retry_delay_s=sleep_s,
+            exception_class="RetryExhaustedError",
+        )
         raise RetryExhaustedError("All retry attempts exhausted")
     finally:
         if need_close:
@@ -683,6 +894,8 @@ def fetch(
     attempts = max(1, retry.attempts)
     sleep_s = 0.0
     t0 = time.time()
+    tm = get_tracing_manager()
+    host_attr = _parse_host_from_url(url)
 
     def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
@@ -720,90 +933,131 @@ def fetch(
         need_close = True
 
     try:
-        for attempt in range(1, attempts + 1):
-            cur_url = url
-            redirects = 0
-            while True:
-                _validate_egress_or_raise(cur_url)
-                resp, reason = _do_once(sc, cur_url)
-                if resp is None:
-                    should, rsn = _should_retry(method, None, NetworkError(reason), retry)
+        with tm.span(
+            "http.client",
+            attributes={
+                "http.method": method.upper(),
+                "net.host.name": host_attr,
+                "url.full": url,
+            },
+        ):
+            for attempt in range(1, attempts + 1):
+                cur_url = url
+                redirects = 0
+                while True:
+                    _validate_egress_or_raise(cur_url)
+                    resp, reason = _do_once(sc, cur_url)
+                    if resp is None:
+                        should, rsn = _should_retry(method, None, NetworkError(reason), retry)
+                        if not should or attempt == attempts:
+                            raise NetworkError(reason)
+                        try:
+                            get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
+                        except Exception:
+                            pass
+                        delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                        logger.debug(
+                            f"fetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
+                        )
+                        time.sleep(delay)
+                        sleep_s = delay
+                        break
+                    # redirect handling
+                    if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("location")
+                        try:
+                            resp.close()
+                        except Exception:
+                            pass
+                        if not location:
+                            if attempt == attempts:
+                                raise NetworkError("Redirect without Location header")
+                            delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                            time.sleep(delay)
+                            sleep_s = delay
+                            break
+                        try:
+                            next_url = str(resp.request.url.join(httpx.URL(location)))
+                        except Exception:
+                            try:
+                                next_url = str(httpx.URL(location))
+                            except Exception:
+                                raise NetworkError("Invalid redirect Location header")
+                        redirects += 1
+                        if redirects > DEFAULT_MAX_REDIRECTS:
+                            raise NetworkError("Too many redirects")
+                        cur_url = next_url
+                        continue
+                    if resp.status_code < 400:
+                        try:
+                            host = _parse_host_from_url(str(resp.request.url))
+                            get_metrics_registry().increment(
+                                "http_client_requests_total", 1, labels={"method": method.upper(), "host": host, "status": str(resp.status_code)}
+                            )
+                            get_metrics_registry().observe(
+                                "http_client_request_duration_seconds",
+                                time.time() - t0,
+                                labels={"method": method.upper(), "host": host},
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            tm.set_attributes({"http.status_code": int(resp.status_code)})
+                        except Exception:
+                            pass
+                        _log_outbound_request(
+                            method=method,
+                            url=resp.request.url,
+                            status_code=int(resp.status_code),
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                        )
+                        return resp
+                    should, rsn = _should_retry(method, resp.status_code, None, retry)
                     if not should or attempt == attempts:
-                        raise NetworkError(reason)
+                        _log_outbound_request(
+                            method=method,
+                            url=resp.request.url,
+                            status_code=int(resp.status_code),
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                        )
+                        return resp
                     try:
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
                     except Exception:
                         pass
-                    delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
+                    delay = 0.0
+                    if retry.respect_retry_after:
+                        ra = resp.headers.get("retry-after")
+                        if ra:
+                            try:
+                                delay = float(ra)
+                            except Exception:
+                                delay = 0.0
+                    if delay <= 0:
+                        delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
-                        f"fetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
+                        f"fetch retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
                     )
+                    try:
+                        tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
+                    except Exception:
+                        pass
                     time.sleep(delay)
                     sleep_s = delay
                     break
-                # redirect handling
-                if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
-                    location = resp.headers.get("location")
-                    try:
-                        resp.close()
-                    except Exception:
-                        pass
-                    if not location:
-                        if attempt == attempts:
-                            raise NetworkError("Redirect without Location header")
-                        delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
-                        time.sleep(delay)
-                        sleep_s = delay
-                        break
-                    try:
-                        next_url = resp.request.url.join(httpx.URL(location)).human_repr()
-                    except Exception:
-                        try:
-                            next_url = httpx.URL(location).human_repr()
-                        except Exception:
-                            raise NetworkError("Invalid redirect Location header")
-                    redirects += 1
-                    if redirects > DEFAULT_MAX_REDIRECTS:
-                        raise NetworkError("Too many redirects")
-                    cur_url = next_url
-                    continue
-                if resp.status_code < 400:
-                    try:
-                        host = _parse_host_from_url(str(resp.request.url))
-                        get_metrics_registry().increment(
-                            "http_client_requests_total", 1, labels={"method": method.upper(), "host": host, "status": str(resp.status_code)}
-                        )
-                        get_metrics_registry().observe(
-                            "http_client_request_duration_seconds",
-                            time.time() - t0,
-                            labels={"method": method.upper(), "host": host},
-                        )
-                    except Exception:
-                        pass
-                    return resp
-                should, rsn = _should_retry(method, resp.status_code, None, retry)
-                if not should or attempt == attempts:
-                    return resp
-                try:
-                    get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                except Exception:
-                    pass
-                delay = 0.0
-                if retry.respect_retry_after:
-                    ra = resp.headers.get("retry-after")
-                    if ra:
-                        try:
-                            delay = float(ra)
-                        except Exception:
-                            delay = 0.0
-                if delay <= 0:
-                    delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
-                logger.debug(
-                    f"fetch retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
-                )
-                time.sleep(delay)
-                sleep_s = delay
-                break
+        _log_outbound_request(
+            method=method,
+            url=url,
+            status_code=0,
+            start_time=t0,
+            attempt=attempts,
+            last_retry_delay_s=sleep_s,
+            exception_class="RetryExhaustedError",
+        )
         raise RetryExhaustedError("All retry attempts exhausted")
     finally:
         if need_close:
@@ -902,6 +1156,7 @@ async def astream_bytes(
         need_close = True
 
     req_headers = _inject_trace_headers(headers)
+    t0 = time.time()
     try:
         # Optional cert pinning
         try:
@@ -920,10 +1175,28 @@ async def astream_bytes(
             resp.raise_for_status()
             async for chunk in resp.aiter_bytes(chunk_size):
                 yield chunk
+            # per-request structured log on successful completion
+            _log_outbound_request(
+                method=method,
+                url=resp.request.url,
+                status_code=int(resp.status_code),
+                start_time=t0,
+                attempt=1,
+                last_retry_delay_s=0.0,
+            )
     except asyncio.CancelledError:
         # propagate cancellations cleanly
         raise
     except httpx.HTTPError as e:
+        _log_outbound_request(
+            method=method,
+            url=url,
+            status_code=0,
+            start_time=t0,
+            attempt=1,
+            last_retry_delay_s=0.0,
+            exception_class=e.__class__.__name__,
+        )
         raise NetworkError(e.__class__.__name__) from e
     finally:
         if need_close:
@@ -964,6 +1237,7 @@ async def astream_sse(
     sleep_s = 0.0
     cur_url = url
     redirects = 0
+    t0 = time.time()
 
     try:
         for attempt in range(1, attempts + 1):
@@ -994,10 +1268,10 @@ async def astream_sse(
                             if not location:
                                 raise NetworkError("Redirect without Location header")
                             try:
-                                next_url = resp.request.url.join(httpx.URL(location)).human_repr()
+                                next_url = str(resp.request.url.join(httpx.URL(location)))
                             except Exception:
                                 try:
-                                    next_url = httpx.URL(location).human_repr()
+                                    next_url = str(httpx.URL(location))
                                 except Exception:
                                     raise NetworkError("Invalid redirect Location header")
                             redirects += 1
@@ -1031,6 +1305,15 @@ async def astream_sse(
                                 event = _parse_sse_event(raw)
                                 if event is not None:
                                     yield event
+                        # per-request structured log on successful end of stream
+                        _log_outbound_request(
+                            method=method,
+                            url=resp.request.url,
+                            status_code=int(resp.status_code),
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                        )
                         return  # finished streaming without error
                 except asyncio.CancelledError:
                     raise
@@ -1044,6 +1327,15 @@ async def astream_sse(
                     sleep_s = delay
                     break  # next outer attempt
         # exhausted attempts
+        _log_outbound_request(
+            method=method,
+            url=cur_url,
+            status_code=0,
+            start_time=t0,
+            attempt=attempts,
+            last_retry_delay_s=sleep_s,
+            exception_class="RetryExhaustedError",
+        )
         raise RetryExhaustedError("All retry attempts exhausted (astream_sse)")
     finally:
         if need_close:
@@ -1056,6 +1348,9 @@ async def astream_sse(
 def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
     event = SSEEvent()
     data_lines: list[str] = []
+    saw_event = False
+    saw_id = False
+    saw_retry = False
     for line in raw.splitlines():
         if not line or line.startswith(":"):
             continue
@@ -1066,16 +1361,21 @@ def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
             field, val = line, ""
         if field == "event":
             event.event = val
+            saw_event = True
         elif field == "data":
             data_lines.append(val)
         elif field == "id":
             event.id = val
+            saw_id = True
         elif field == "retry":
             try:
                 event.retry = int(val)
+                saw_retry = True
             except Exception:
                 pass
     event.data = "\n".join(data_lines)
+    if not data_lines and not saw_event and not saw_id and not saw_retry:
+        return None
     return event
 
 
@@ -1097,11 +1397,15 @@ def download(
     resume: bool = False,
     retry: Optional[RetryPolicy] = None,
     cert_pinning: Optional[Dict[str, set[str]]] = None,
+    # Optional safety checks
+    max_bytes_total: Optional[int] = None,
+    require_content_type: Optional[str] = None,
 ) -> Path:
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
+    t0 = time.time()
     dest_path = Path(dest)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
@@ -1130,6 +1434,9 @@ def download(
                 if existing > 0:
                     req_headers = dict(req_headers)
                     req_headers["Range"] = f"bytes={existing}-"
+            # Enforce disk quota if resuming
+            if max_bytes_total is not None and existing > max_bytes_total:
+                raise DownloadError("Disk quota exceeded before download")
 
             last_exc: Optional[Exception] = None
             try:
@@ -1146,15 +1453,25 @@ def download(
                     raise DownloadError(str(e))
                 with sc.stream("GET", url, headers=req_headers, params=params, timeout=timeout) as resp:
                     if resp.status_code in (200, 206):
+                        # Optional content-type enforcement
+                        if require_content_type:
+                            ctype = (resp.headers.get("content-type") or "").lower()
+                            if require_content_type.lower() not in ctype:
+                                raise DownloadError("Unexpected Content-Type")
                         hasher = hashlib.new(checksum_alg) if checksum else None
                         mode = "ab" if (resume and existing > 0 and resp.status_code == 206) else "wb"
                         with open(tmp_path, mode) as f:
+                            written = existing if (resume and mode == "ab") else 0
                             for chunk in resp.iter_bytes():
                                 if not chunk:
                                     continue
+                                if max_bytes_total is not None:
+                                    if written + len(chunk) > max_bytes_total:
+                                        raise DownloadError("Disk quota exceeded")
                                 f.write(chunk)
                                 if hasher is not None:
                                     hasher.update(chunk)
+                                written += len(chunk)
                         # Validate checksum
                         if checksum and hasher is not None:
                             hex_val = hasher.hexdigest()
@@ -1169,10 +1486,28 @@ def download(
                             except Exception:
                                 raise
                         tmp_path.replace(dest_path)
+                        # per-request structured log
+                        _log_outbound_request(
+                            method="GET",
+                            url=resp.request.url if hasattr(resp.request, "url") else url,
+                            status_code=int(resp.status_code),
+                            start_time=t0,
+                            attempt=attempt,
+                            last_retry_delay_s=sleep_s,
+                        )
                         return dest_path
                     else:
                         should, rsn = _should_retry("GET", resp.status_code, None, retry)
                         if not should or attempt == attempts:
+                            # terminal error response
+                            _log_outbound_request(
+                                method="GET",
+                                url=resp.request.url if hasattr(resp.request, "url") else url,
+                                status_code=int(resp.status_code),
+                                start_time=t0,
+                                attempt=attempt,
+                                last_retry_delay_s=sleep_s,
+                            )
                             raise DownloadError(f"Download failed with status {resp.status_code}")
                         try:
                             get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
@@ -1202,6 +1537,16 @@ def download(
                             tmp_path.unlink()
                     except Exception:
                         pass
+                    # terminal network error
+                    _log_outbound_request(
+                        method="GET",
+                        url=url,
+                        status_code=0,
+                        start_time=t0,
+                        attempt=attempt,
+                        last_retry_delay_s=sleep_s,
+                        exception_class=(last_exc.__class__.__name__ if last_exc else "DownloadError"),
+                    )
                     if isinstance(last_exc, DownloadError):
                         raise last_exc
                     raise DownloadError(str(last_exc))
@@ -1216,6 +1561,15 @@ def download(
                 time.sleep(delay)
                 sleep_s = delay
                 continue
+        _log_outbound_request(
+            method="GET",
+            url=url,
+            status_code=0,
+            start_time=t0,
+            attempt=attempts,
+            last_retry_delay_s=sleep_s,
+            exception_class="RetryExhaustedError",
+        )
         raise RetryExhaustedError("All retry attempts exhausted (download)")
     finally:
         if need_close:
@@ -1239,6 +1593,8 @@ async def adownload(
     resume: bool = False,
     retry: Optional[RetryPolicy] = None,
     cert_pinning: Optional[Dict[str, set[str]]] = None,
+    max_bytes_total: Optional[int] = None,
+    require_content_type: Optional[str] = None,
 ) -> Path:
     # Reuse sync downloader in a thread to avoid blocking event loop on file I/O
     return await asyncio.to_thread(
@@ -1255,6 +1611,8 @@ async def adownload(
         resume=resume,
         retry=retry,
         cert_pinning=cert_pinning,
+        max_bytes_total=max_bytes_total,
+        require_content_type=require_content_type,
     )
 
 

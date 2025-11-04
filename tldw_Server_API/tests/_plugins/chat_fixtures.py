@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
+from fastapi import Request
 import datetime
 from httpx import AsyncClient
 
@@ -40,6 +41,7 @@ _SET_MOCK_OPENAI_BASE = False
 if not _ORIG_OPENAI_API_BASE and _SET_MOCK_OPENAI_KEY:
     os.environ["OPENAI_API_BASE"] = "http://localhost:8080/v1"
     _SET_MOCK_OPENAI_BASE = True
+
 
 # IMPORTANT: Ensure API_BEARER is not set - it causes wrong authentication path in single-user mode
 if "API_BEARER" in os.environ:
@@ -402,13 +404,13 @@ def mock_media_db(test_user):
 def setup_dependencies(test_user, mock_user_db, mock_chacha_db, mock_media_db):
     """Override all dependencies for testing."""
     settings = get_settings()
+    app = _get_app()
 
-    # Override authentication
-    if settings.AUTH_MODE == "multi_user":
-        # For multi-user mode, override to return test user
-        async def mock_get_request_user(api_key=None, token=None):
-            return test_user
-        app.dependency_overrides[get_request_user] = mock_get_request_user
+    # Override authentication for tests in both modes
+    async def mock_get_request_user(request: Request):
+        # Match FastAPI dependency signature to avoid 422 from varargs
+        return test_user
+    app.dependency_overrides[get_request_user] = mock_get_request_user
 
     # Override databases
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db

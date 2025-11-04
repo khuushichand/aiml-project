@@ -1799,11 +1799,62 @@ async def create_embedding_endpoint(
         )
 
         embeddings: List[List[float]] = []
+        embeddings_from_adapter = False
 
         original_provider = provider
         original_model = model
 
-        if use_synthetic_openai:
+        # Optional adapter-backed path (Stage 4 wiring): allow routing to
+        # Embeddings adapters when explicitly enabled via env flag.
+        try:
+            if (not use_synthetic_openai) and str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}:
+                # Currently wire OpenAI adapter; others can follow the same pattern
+                from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
+                registry = get_embeddings_registry()
+                adapter = registry.get_adapter(provider)
+                # Prepare adapter request
+                # Supply provider-specific API keys
+                _api_key: Optional[str] = None
+                if provider == "openai":
+                    _api_key = settings.get("OPENAI_API_KEY")
+                elif provider == "huggingface":
+                    _api_key = settings.get("HUGGINGFACE_API_KEY") or settings.get("HUGGINGFACE_TOKEN")
+                elif provider == "google":
+                    _api_key = settings.get("GOOGLE_API_KEY")
+
+                adapter_request: Dict[str, Any] = {
+                    "input": texts_to_embed if len(texts_to_embed) > 1 else texts_to_embed[0],
+                    "model": model,
+                    "api_key": _api_key,
+                }
+                result = adapter.embed(adapter_request) if adapter else None
+                if isinstance(result, dict) and isinstance(result.get("data"), list):
+                    embs: List[List[float]] = []
+                    for item in result["data"]:
+                        vec = item.get("embedding") if isinstance(item, dict) else None
+                        if isinstance(vec, list):
+                            embs.append(vec)
+                    if embs and len(embs) == len(texts_to_embed):
+                        # Optional L2 normalization for adapter vectors
+                        try:
+                            if str(os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")).lower() in {"1", "true", "yes", "on"}:
+                                import numpy as _np
+                                _normed = []
+                                for v in embs:
+                                    arr = _np.asarray(v, dtype=_np.float32)
+                                    n = _np.linalg.norm(arr)
+                                    _normed.append((arr / n).tolist() if n > 0 else arr.tolist())
+                                embs = _normed
+                        except Exception:
+                            pass
+                        embeddings = embs
+                        embeddings_from_adapter = True
+                # If adapter failed to produce vectors, fall through to legacy path
+        except Exception as _e:
+            # Log and fall back silently; adapter path is optional
+            logger.debug(f"Embeddings adapter path failed; falling back to legacy: {_e}")
+
+        if use_synthetic_openai and not embeddings:
             dim = 1536
             mid = (model or "").lower()
             if "3-large" in mid:
@@ -1818,7 +1869,7 @@ async def create_embedding_endpoint(
                 if nrm > 0:
                     vec = vec / nrm
                 embeddings.append(vec.tolist())
-        else:
+        elif not embeddings:
             # Try provider with fallback chain on failure
             last_error: Optional[Exception] = None
             # Fallback policy when explicit provider header is present:
@@ -1911,15 +1962,23 @@ async def create_embedding_endpoint(
         # Format response
         output_data = []
         for i, embedding in enumerate(embeddings):
-            # Ensure vectors are L2-normalized for numeric output
+            # L2-normalize numeric output unless adapters supplied vectors and L2 is not requested
             arr = np.array(embedding, dtype=np.float32)
             norm = np.linalg.norm(arr)
-            if norm > 0 and embedding_request.encoding_format != "base64":
+            do_l2 = embedding_request.encoding_format != "base64"
+            # If vectors came from adapters and global L2 flag is not enabled, keep as-is
+            try:
+                if embeddings_from_adapter and str(os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")).lower() not in {"1", "true", "yes", "on"}:
+                    do_l2 = False
+            except Exception:
+                pass
+            if norm > 0 and do_l2:
                 arr = arr / norm
             if embedding_request.encoding_format == "base64":
                 processed_value = base64.b64encode(arr.tobytes()).decode('utf-8')
             else:
-                processed_value = arr.tolist()
+                # Preserve exact adapter-supplied values when not L2-normalizing
+                processed_value = embedding if not do_l2 else arr.tolist()
 
             output_data.append(
                 EmbeddingData(

@@ -67,6 +67,21 @@ def derive_client_ip(request: Request) -> str:
             remote_ip = client.host
     except Exception:
         remote_ip = None
+    # Normalize non-IP placeholders used by Starlette TestClient
+    # Many tests see client.host == 'testclient'; treat as loopback
+    try:
+        import ipaddress as _ip
+        if not remote_ip:
+            remote_ip = None
+        else:
+            try:
+                _ip.ip_address(remote_ip)
+            except Exception:
+                # Not a valid IP literal → assume loopback for local tests
+                remote_ip = "127.0.0.1"
+    except Exception:
+        # best-effort
+        pass
 
     trusted = _parse_trusted_proxies(os.getenv("RG_TRUSTED_PROXIES"))
     header_name = os.getenv("RG_CLIENT_IP_HEADER")

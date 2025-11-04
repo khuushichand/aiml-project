@@ -516,6 +516,11 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     except Exception as _sb_err:  # noqa: BLE001
         logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sb_err}")
         _HAS_SANDBOX = False
+    # MCP Unified Endpoint (safe to import for tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
+    except Exception as _mcp_imp_err:  # noqa: BLE001
+        logger.debug(f"Skipping MCP unified import in minimal test app: {_mcp_imp_err}")
 else:
     # Research Endpoint
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
@@ -2254,10 +2259,18 @@ _startup_trace("FastAPI app created")
 from starlette.responses import JSONResponse  # noqa: E402
 import os as _os  # noqa: E402
 try:
-    if (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}:
+    _rg_env_enabled = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
+    _pytest_active = bool(_os.getenv("PYTEST_CURRENT_TEST"))
+    if _rg_env_enabled or _MINIMAL_TEST_APP or _pytest_active:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware as _RGMw  # noqa: E402
-        app.add_middleware(_RGMw)
-        logger.info("RGSimpleMiddleware enabled via RG_ENABLE_SIMPLE_MIDDLEWARE")
+        # Avoid double-adding
+        try:
+            already = any(getattr(m, "cls", None) is _RGMw for m in getattr(app, "user_middleware", []))
+        except Exception:
+            already = False
+        if not already:
+            app.add_middleware(_RGMw)
+            logger.info("RGSimpleMiddleware enabled (env or test/minimal mode)")
 except Exception as _rg_mw_err:  # pragma: no cover - best effort
     logger.debug(f"RGSimpleMiddleware not enabled: {_rg_mw_err}")
 
@@ -2531,6 +2544,7 @@ from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMid
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
+from tldw_Server_API.app.core.Sandbox.middleware import SandboxArtifactTraversalGuardMiddleware
 
 _TEST_MODE = (
     _env_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
@@ -2551,6 +2565,12 @@ if _TEST_MODE:
         app.add_middleware(WebUIAccessGuardMiddleware)
     except Exception as _e:
         logger.debug(f"Skipping WebUIAccessGuardMiddleware in tests: {_e}")
+
+    # Sandbox artifact traversal guard (pre-routing)
+    try:
+        app.add_middleware(SandboxArtifactTraversalGuardMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping SandboxArtifactTraversalGuardMiddleware in tests: {_e}")
 
     @app.middleware("http")
     async def _trace_headers_middleware(request: Request, call_next):
@@ -2619,11 +2639,24 @@ else:
     # HTTP request metrics middleware (records count and latency per route)
     app.add_middleware(HTTPMetricsMiddleware)
 
-    # Per-request usage logging (guarded by settings flag)
-    app.add_middleware(UsageLoggingMiddleware)
-
     # Request ID propagation (adds X-Request-ID header)
     app.add_middleware(RequestIDMiddleware)
+
+    # Structured access logs (request_id, method, host, status, duration)
+    try:
+        from tldw_Server_API.app.core.Logging.access_log_middleware import AccessLogMiddleware
+        app.add_middleware(AccessLogMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping AccessLogMiddleware: {_e}")
+
+    # Sandbox artifact traversal guard (pre-routing)
+    try:
+        app.add_middleware(SandboxArtifactTraversalGuardMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping SandboxArtifactTraversalGuardMiddleware: {_e}")
+
+    # Per-request usage logging (guarded by settings flag)
+    app.add_middleware(UsageLoggingMiddleware)
 
     # Add trace headers middleware: propagate trace context to HTTP responses
     @app.middleware("http")
@@ -2882,6 +2915,13 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    # Include audio endpoints (REST + WebSocket) for e2e middleware/header tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}", tags=["audio"])
+        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}", tags=["audio-ws"])
+    except Exception as _audio_min_err:
+        logger.debug(f"Skipping audio routers in minimal test app: {_audio_min_err}")
     # Include Jobs admin endpoints for tests that exercise jobs stats/counters
     try:
         from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
@@ -2901,6 +2941,20 @@ if _MINIMAL_TEST_APP:
     except Exception as _sandbox_err:
         # Never let optional sandbox break startup in tests
         logger.debug(f"Skipping sandbox router in minimal test app: {_sandbox_err}")
+    # Include MCP Unified WS/HTTP endpoints for tests (auth typically disabled via env/fixtures)
+    try:
+        # mcp_unified_router may already be imported above; if not, import here guarded
+        if 'mcp_unified_router' not in locals():
+            from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
+        app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
+        # MCP tool catalogs admin (lightweight) for unit tests
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
+            app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-catalogs"])
+        except Exception as _mcp_cat_err:  # noqa: BLE001
+            logger.debug(f"Skipping MCP catalogs router in minimal test app: {_mcp_cat_err}")
+    except Exception as _mcp_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping MCP unified router in minimal test app: {_mcp_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:
@@ -3082,7 +3136,11 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)
     _include_if_enabled("personalization", personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"], default_stable=False)
-    _include_if_enabled("persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=False)
+    # In tests, force-include persona endpoints regardless of route policy for WS/unit coverage
+    if _TEST_MODE:
+        app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
+    else:
+        _include_if_enabled("persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=False)
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])

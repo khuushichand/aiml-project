@@ -41,8 +41,9 @@ services:
   # Chunking Worker Pool
   chunking-workers:
     build:
-      context: .
-      dockerfile: tldw_Server_API/Dockerfiles/Dockerfile.worker
+      # Build from repo root so Dockerfile path resolves consistently
+      context: ../..
+      dockerfile: Dockerfiles/Dockerfiles/Dockerfile.worker
     container_name: tldw-chunking-workers
     environment:
       - REDIS_URL=redis://redis:6379
@@ -55,9 +56,9 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./tldw_Server_API:/app
-      - ./Config_Files:/app/Config_Files
-      - ./Databases:/app/Databases
+      - ../../tldw_Server_API:/app
+      - ../../Config_Files:/app/Config_Files
+      - ../../Databases:/app/Databases
     command: python -m tldw_Server_API.app.core.Embeddings.start_workers --type chunking
     restart: unless-stopped
     networks:
@@ -66,8 +67,8 @@ services:
   # Embedding Worker Pool
   embedding-workers:
     build:
-      context: .
-      dockerfile: tldw_Server_API/Dockerfiles/Dockerfile.worker
+      context: ../..
+      dockerfile: Dockerfiles/Dockerfiles/Dockerfile.worker
     container_name: tldw-embedding-workers
     environment:
       - REDIS_URL=redis://redis:6379
@@ -81,10 +82,10 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./tldw_Server_API:/app
-      - ./Config_Files:/app/Config_Files
-      - ./Databases:/app/Databases
-      - ./Models:/app/Models  # For model caching
+      - ../../tldw_Server_API:/app
+      - ../../Config_Files:/app/Config_Files
+      - ../../Databases:/app/Databases
+      - ../../models:/app/Models  # For model caching
     command: python -m tldw_Server_API.app.core.Embeddings.start_workers --type embedding
     restart: unless-stopped
     networks:
@@ -100,8 +101,8 @@ services:
   # Storage Worker Pool
   storage-workers:
     build:
-      context: .
-      dockerfile: tldw_Server_API/Dockerfiles/Dockerfile.worker
+      context: ../..
+      dockerfile: Dockerfiles/Dockerfiles/Dockerfile.worker
     container_name: tldw-storage-workers
     environment:
       - REDIS_URL=redis://redis:6379
@@ -114,9 +115,9 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./tldw_Server_API:/app
-      - ./Config_Files:/app/Config_Files
-      - ./Databases:/app/Databases
+      - ../../tldw_Server_API:/app
+      - ../../Config_Files:/app/Config_Files
+      - ../../Databases:/app/Databases
     command: python -m tldw_Server_API.app.core.Embeddings.start_workers --type storage
     restart: unless-stopped
     networks:
@@ -125,8 +126,8 @@ services:
   # Worker Orchestrator
   worker-orchestrator:
     build:
-      context: .
-      dockerfile: tldw_Server_API/Dockerfiles/Dockerfile.worker
+      context: ../..
+      dockerfile: Dockerfiles/Dockerfiles/Dockerfile.worker
     container_name: tldw-worker-orchestrator
     environment:
       - REDIS_URL=redis://redis:6379
@@ -137,9 +138,9 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./tldw_Server_API:/app
-      - ./Config_Files:/app/Config_Files
-      - ./Databases:/app/Databases
+      - ../../tldw_Server_API:/app
+      - ../../Config_Files:/app/Config_Files
+      - ../../Databases:/app/Databases
     command: python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
     restart: unless-stopped
     ports:
@@ -152,7 +153,7 @@ services:
     image: prom/prometheus:latest
     container_name: tldw-prometheus
     volumes:
-      - ../Config_Files/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ../../Config_Files/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'

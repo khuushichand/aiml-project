@@ -1,3 +1,14 @@
+"""
+SSE line helpers and provider line normalization.
+
+Highlights:
+- Normalization drops provider control lines (`event:`, `id:`, `retry:`) and comments by default.
+- To preserve provider control lines, set the global env `STREAM_PROVIDER_CONTROL_PASSTHRU=1`
+  or pass `provider_control_passthru=True` to iterators/streams (per-endpoint override).
+- Unknown/dropped control/comment lines are logged at debug level to aid troubleshooting.
+- Use `sse_done()` to emit a single terminal `[DONE]` marker; do not forward provider DONE lines.
+"""
+
 import json
 from typing import Any, Dict, Iterable, Optional, Callable, Tuple
 from loguru import logger

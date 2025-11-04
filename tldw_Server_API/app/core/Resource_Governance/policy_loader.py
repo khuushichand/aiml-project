@@ -63,19 +63,42 @@ class PolicyLoader:
     async def load_once(self) -> PolicySnapshot:
         """Load the policy file once and update the in‑memory snapshot."""
         if self._store is not None:
-            # DB-backed: fetch latest policy snapshot, and merge route_map from file (per PRD)
-            version, policies, tenant, updated_at = await self._store.get_latest_policy()
+            # DB-backed: fetch latest policy snapshot
+            res = await self._store.get_latest_policy()
+            version, policies, tenant = int(res[0]), dict(res[1] or {}), dict(res[2] or {})
+            updated_at = float(res[3]) if len(res) >= 4 else self._time_source()
+            db_route_map = dict(res[3] or {}) if len(res) == 5 else {}
             mtime = float(updated_at)
-            route_map = {}
+            # Merge route_map from file and DB consistently (DB overrides file)
+            file_route_map: Dict[str, Any] = {}
             try:
                 if self._path.exists():
                     with self._path.open("r", encoding="utf-8") as f:
                         data = yaml.safe_load(f) or {}
-                    route_map = dict(data.get("route_map") or {})
-                    # Consider file route_map mtime for reload comparisons
+                    file_route_map = dict(data.get("route_map") or {})
                     mtime = max(mtime, self._path.stat().st_mtime)
             except Exception as e:
                 logger.debug("PolicyLoader: failed to read route_map from file: {}", e)
+
+            def _merge_route_map(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+                out: Dict[str, Any] = {}
+                base = dict(base or {})
+                override = dict(override or {})
+                # Merge known nested maps with override precedence
+                by_path = dict(base.get("by_path") or {})
+                by_path.update(dict(override.get("by_path") or {}))
+                by_tag = dict(base.get("by_tag") or {})
+                by_tag.update(dict(override.get("by_tag") or {}))
+                # Start with base and overlay override keys
+                out.update(base)
+                out.update(override)
+                if by_path:
+                    out["by_path"] = by_path
+                if by_tag:
+                    out["by_tag"] = by_tag
+                return out
+
+            route_map = _merge_route_map(file_route_map, db_route_map)
         else:
             if not self._path.exists():
                 raise FileNotFoundError(f"Policy file not found: {self._path}")

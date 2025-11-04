@@ -67,8 +67,8 @@ def _enable(monkeypatch):
 
 def test_openrouter_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    import tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter as or_mod
+    monkeypatch.setattr(or_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = OpenRouterAdapter()
     r = a.chat({"messages": [{"role": "user", "content": "hi"}], "model": "meta-llama/llama-3-8b", "api_key": "k"})
     assert r.get("object") == "chat.completion"
@@ -76,8 +76,8 @@ def test_openrouter_adapter_native_http_non_streaming(monkeypatch):
 
 def test_openrouter_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    import tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter as or_mod
+    monkeypatch.setattr(or_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = OpenRouterAdapter()
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "meta-llama/llama-3-8b", "api_key": "k", "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)

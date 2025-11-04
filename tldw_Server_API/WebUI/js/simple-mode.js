@@ -100,12 +100,12 @@
     const container = document.getElementById('simpleIngest');
     if (!resp || !container) return;
 
-    const mediaType = document.getElementById('simpleIngest_media_type').value || 'document';
-    const url = (document.getElementById('simpleIngest_url').value || '').trim();
-    const file = document.getElementById('simpleIngest_file').files[0] || null;
-    const model = document.getElementById('simpleIngest_model').value || '';
-    const performAnalysis = !!document.getElementById('simpleIngest_perform_analysis').checked;
-    const doChunk = !!document.getElementById('simpleIngest_chunking').checked;
+    const mediaType = document.getElementById('simpleIngest_media_type')?.value || 'document';
+    const url = (document.getElementById('simpleIngest_url')?.value || '').trim();
+    const file = document.getElementById('simpleIngest_file')?.files?.[0] || null;
+    const model = document.getElementById('simpleIngest_model')?.value || '';
+    const performAnalysis = !!document.getElementById('simpleIngest_perform_analysis')?.checked;
+    const doChunk = !!document.getElementById('simpleIngest_chunking')?.checked;
 
     const isWeb = (mediaType === 'web');
     const webUrl = (document.getElementById('simpleIngest_web_url')?.value || '').trim();
@@ -185,7 +185,7 @@
   }
 
   function simpleIngestClear() {
-    try { document.getElementById('simpleIngest_url').value = ''; } catch(_){}
+    try { const el = document.getElementById('simpleIngest_url'); if (el) el.value = ''; } catch(_){}
     try { const f = document.getElementById('simpleIngest_file'); if (f) f.value=''; } catch(_){}
     try { document.getElementById('simpleIngest_response').textContent = '---'; } catch(_){}
     try { const job = document.getElementById('simpleIngest_job'); if (job) { job.style.display='none'; job.innerHTML=''; } } catch(_){}
@@ -268,7 +268,7 @@
               if (btn && window.webUI) {
                 window.webUI.activateTopTab(btn).then(() => {
                   setTimeout(() => {
-                    try { document.getElementById('getMediaItem_media_id').value = String(id || ''); } catch(_){}
+                    try { const mid = document.getElementById('getMediaItem_media_id'); if (mid) mid.value = String(id || ''); } catch(_){}
                     try { makeRequest('getMediaItem', 'GET', '/api/v1/media/{media_id}', 'none'); } catch(_){}
                   }, 200);
                 });

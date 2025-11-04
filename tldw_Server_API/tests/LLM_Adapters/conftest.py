@@ -1,13 +1,14 @@
 """Local conftest for LLM_Adapters tests.
 
-Provides a lightweight stub for tldw_Server_API.app.main to prevent importing
-the full FastAPI app (which pulls heavy modules) during unit tests in this
-subtree. Integration tests in this package should import their own TestClient
-or rely on explicit fixtures within the file.
+Provides:
+- Lightweight stub for app.main when real app import fails (unit-only cases)
+- Access to shared chat fixtures (client, authenticated_client, auth headers)
+- Backward-compat fixture alias client_user_only used by some tests
 """
 
 import sys
 import types
+import pytest
 
 # If the real app.main is importable, leave it alone; otherwise, install a stub
 try:  # pragma: no cover - defensive guard
@@ -21,3 +22,11 @@ except Exception:
     m.app = _StubApp()
     sys.modules["tldw_Server_API.app.main"] = m
 
+# Register shared chat fixtures for this subtree
+pytest_plugins = ("tldw_Server_API.tests._plugins.chat_fixtures",)
+
+
+@pytest.fixture
+def client_user_only(authenticated_client):  # noqa: D401 - simple alias
+    """Compatibility alias used by some adapter tests."""
+    return authenticated_client

@@ -67,8 +67,8 @@ def _enable_native(monkeypatch):
 
 def test_anthropic_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anth_mod
+    monkeypatch.setattr(anth_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = AnthropicAdapter()
     r = a.chat({"messages": [{"role": "user", "content": "hi"}], "model": "claude-sonnet", "api_key": "k", "max_tokens": 32})
     assert r.get("object") == "chat.completion"
@@ -76,10 +76,9 @@ def test_anthropic_adapter_native_http_non_streaming(monkeypatch):
 
 def test_anthropic_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anth_mod
+    monkeypatch.setattr(anth_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = AnthropicAdapter()
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "claude-sonnet", "api_key": "k", "max_tokens": 32, "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
-

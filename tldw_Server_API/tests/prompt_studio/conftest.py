@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_st
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 # Set test environment variables
@@ -45,13 +46,14 @@ _HAS_POSTGRES = (_PG_DRIVER is not None)
 
 
 def _build_postgres_config() -> DatabaseConfig:
+    _pg = get_pg_env()
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
-        pg_host=os.environ["POSTGRES_TEST_HOST"],
-        pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
-        pg_database=os.environ["POSTGRES_TEST_DB"],
-        pg_user=os.environ["POSTGRES_TEST_USER"],
-        pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
+        pg_host=_pg.host,
+        pg_port=int(_pg.port),
+        pg_database=_pg.database,
+        pg_user=_pg.user,
+        pg_password=_pg.password,
     )
 
 
@@ -242,13 +244,14 @@ def prompt_studio_dual_backend_db(request, tmp_path):
         if not _HAS_POSTGRES:
             pytest.skip("psycopg not available; skipping Postgres backend")
 
+        _pg = get_pg_env()
         base_config = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
-            pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-            pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-            pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-            pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-            pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+            pg_host=_pg.host,
+            pg_port=int(_pg.port),
+            pg_database=_pg.database,
+            pg_user=_pg.user,
+            pg_password=_pg.password,
         )
         # Fast availability probe with 2s timeout
         if not _probe_postgres(base_config, timeout=2):

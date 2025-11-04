@@ -11,7 +11,8 @@ import psutil
 # Third-party Imports
 #
 # Local Imports
-from tldw_Server_API.app.core.Utils.Utils import logger
+# Avoid importing Utils to prevent circular deps (Utils imports http_client in some paths).
+from loguru import logger
 #
 ############################################################################################################
 #

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 from getpass import getpass
 from loguru import logger
+from dotenv import load_dotenv
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
@@ -49,24 +50,53 @@ def print_banner():
     print()
 
 def check_environment():
-    """Check and validate environment configuration"""
+    """Check and validate environment configuration
+
+    Preference order for .env resolution:
+      1) tldw_Server_API/Config_Files/.env (project Config_Files directory)
+      2) ./.env (current working directory)
+    The first found file is loaded into process env (non-overriding).
+    """
     print("📋 Checking environment configuration...")
 
-    # Check if .env file exists
-    env_file = Path(".env")
-    if not env_file.exists():
-        print("❌ No .env file found!")
-        print("   Creating from template...")
+    # Resolve project root (tldw_Server_API) and candidate .env paths
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    cfg_env = project_root / "Config_Files" / ".env"
+    cfg_env_upper = project_root / "Config_Files" / ".ENV"
+    cwd_env = Path(".env").resolve()
+    cwd_env_upper = Path(".ENV").resolve()
+
+    selected_env: Optional[Path] = None
+    if cfg_env.exists():
+        selected_env = cfg_env
+    elif cfg_env_upper.exists():
+        selected_env = cfg_env_upper
+    elif cwd_env.exists():
+        selected_env = cwd_env
+    elif cwd_env_upper.exists():
+        selected_env = cwd_env_upper
+
+    if selected_env is None:
+        # No .env found in preferred locations; fall back to legacy behavior
+        print("❌ No .env file found in Config_Files/ or current directory!")
+        print("   Creating from template in current directory (if available)...")
 
         template_file = Path(".env.authnz.template")
         if template_file.exists():
-            env_file.write_text(template_file.read_text())
+            Path(".env").write_text(template_file.read_text())
             print("✅ Created .env file from template")
             print("⚠️  Please edit .env and set secure values before continuing!")
             return False
         else:
             print("❌ Template file not found!")
             return False
+
+    # Load the chosen .env without overriding any already-set environment vars
+    try:
+        load_dotenv(dotenv_path=str(selected_env), override=False)
+        print(f"✅ Loaded environment variables from: {selected_env}")
+    except Exception as e:
+        print(f"⚠️  Failed to load .env at {selected_env}: {e}")
 
     # Load settings
     settings = get_settings()

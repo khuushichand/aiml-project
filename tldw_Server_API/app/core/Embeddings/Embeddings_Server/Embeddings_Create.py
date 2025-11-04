@@ -1257,10 +1257,11 @@ def create_embeddings_batch(
             payload = {"texts": texts, "model": model_spec.model_name_or_path}
 
             # The requests.post call is already wrapped by @exponential_backoff and @limiter
-            response = requests.post(model_spec.api_url, json=payload, headers=headers, timeout=60)  # Default timeout
-            response.raise_for_status()  # Raises HTTPError for bad responses (4xx or 5xx)
-
-            response_data = response.json()
+            from tldw_Server_API.app.core.http_client import fetch as _fetch
+            resp = _fetch(method="POST", url=model_spec.api_url, headers=headers, json=payload, timeout=60)
+            if resp.status_code >= 400:
+                resp.raise_for_status()
+            response_data = resp.json()
             if 'embeddings' not in response_data or not isinstance(response_data['embeddings'], list):
                 logging.error(f"Local API at {model_spec.api_url} returned unexpected data format: {response_data}")
                 raise ValueError("Local API embedding response format error.")

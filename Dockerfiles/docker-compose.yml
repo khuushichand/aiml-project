@@ -3,8 +3,9 @@
 services:
   app:
     build:
-      context: .
-      dockerfile: tldw_Server_API/Dockerfiles/Dockerfile.prod
+      # Build context is the repo root (one level up from this compose file)
+      context: ..
+      dockerfile: Dockerfiles/Dockerfiles/Dockerfile.prod
     image: tldw-server:prod
     container_name: tldw-app
     ports:

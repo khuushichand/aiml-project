@@ -79,3 +79,25 @@ get_registry().register_adapter("myprovider", "tldw_Server_API.app.core.LLM_Call
 - See TTS adapters under `tldw_Server_API/app/core/TTS/adapters/` for the pattern.
 - Reuse `http_client.py` for consistent timeouts, retries, and egress policy when appropriate.
 
+## Async Examples
+- Implement async variants when providers offer native async SDKs or when throughput matters:
+```python
+class MyProviderAdapter(ChatProvider):
+    async def achat(self, request: dict, *, timeout: float | None = None) -> dict:
+        # Async JSON request via httpx.AsyncClient
+        # Return OpenAI-compatible response
+        ...
+
+    async def astream(self, request: dict, *, timeout: float | None = None):
+        # Async SSE stream via httpx.AsyncClient.stream
+        # Yield normalized SSE lines; do not yield [DONE]
+        ...
+```
+- Wire async shims in `adapter_shims.py` and register in `provider_config.ASYNC_API_CALL_HANDLERS` so the orchestrator can route without blocking threads.
+
+## Embeddings Adapters
+- For embeddings, implement `EmbeddingsProvider` in `providers/base.py` and return an OpenAI-like shape:
+  `{ "data": [{"index": 0, "embedding": [...]}, ...], "model": "...", "object": "list" }`.
+- Register in `embeddings_adapter_registry.DEFAULT_ADAPTERS`.
+- The enhanced embeddings endpoint can route to adapters when `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`.
+- Optional: support native HTTP behind flags like `LLM_EMBEDDINGS_NATIVE_HTTP_<PROVIDER>` to allow mock-friendly tests.

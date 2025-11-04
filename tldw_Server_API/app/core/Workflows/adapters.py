@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_ra
 from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 
 
 class AdapterError(Exception):
@@ -1321,7 +1322,7 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
                     continue
                 host = urlparse(u).hostname or ""
                 timeout = float(_os.getenv("WORKFLOWS_RSS_TIMEOUT", "8"))
-                with httpx.Client(timeout=timeout) as client:
+                with _wf_create_client(timeout=timeout) as client:
                     resp = client.get(u)
                     if resp.status_code // 100 != 2:
                         continue
@@ -1553,7 +1554,7 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
         if subject:
             body["subject"] = subject
         timeout = float(_os.getenv("WORKFLOWS_NOTIFY_TIMEOUT", "10"))
-        with httpx.Client(timeout=timeout) as client:
+        with _wf_create_client(timeout=timeout) as client:
             resp = client.post(url, json=body, headers=headers)
             ok = 200 <= resp.status_code < 300
         host = urlparse(url).hostname or ""
@@ -1960,7 +1961,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                     if used_fallback and str(os.getenv("WORKFLOWS_VALIDATE_DEFAULT_AUTH", "")).lower() in {"1", "true", "yes", "on"} and not context.get("_wf_default_auth_checked"):
                         base = os.getenv("WORKFLOWS_INTERNAL_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
                         _url = f"{base}/api/v1/workflows/auth/check"
-                        with httpx.Client(timeout=5.0, trust_env=False) as _client:
+                        with _wf_create_client(timeout=5.0, trust_env=False) as _client:
                             _resp = _client.get(_url, headers=headers_r)
                             if _resp.status_code // 100 != 2:
                                 return {"dispatched": False, "error": "default_auth_validation_failed", "status_code": _resp.status_code}
@@ -2004,9 +2005,9 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 headers_r["X-Hub-Signature-256"] = f"sha256={sig}"
             timeout = float(config.get("timeout_seconds") or os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
             try:
-                client_ctx = httpx.Client(timeout=timeout, trust_env=False)
+                client_ctx = _wf_create_client(timeout=timeout, trust_env=False)
             except TypeError:
-                client_ctx = httpx.Client(timeout=timeout)
+                client_ctx = _wf_create_client(timeout=timeout)
             with client_ctx as client:
                 # Dispatch
                 req_fn = client.post

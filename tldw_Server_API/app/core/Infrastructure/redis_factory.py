@@ -32,7 +32,7 @@ try:  # pragma: no cover - optional metrics dependency
 except Exception:  # pragma: no cover - metrics optional during early startup
     _get_metrics_registry = None  # type: ignore[assignment]
 
-DEFAULT_REDIS_URL = "redis://localhost:6379"
+DEFAULT_REDIS_URL = "redis://127.0.0.1:6379"
 
 
 def _settings_lookup(*keys: str) -> Optional[str]:
@@ -446,6 +446,36 @@ class _InMemoryRedisCore:
     def zcard(self, key: str) -> int:
         return len(self._sorted_sets.get(key, {}))
 
+    def zrange(self, key: str, start: int, stop: int) -> List[str]:
+        """Return members in score order (ascending) from start to stop inclusive.
+
+        This is a minimal emulation adequate for tests that need to list ZSET members.
+        """
+        z = self._sorted_sets.get(key, {})
+        if not z:
+            return []
+        # Sort members by score ascending, then by member name to stabilize
+        items = sorted(z.items(), key=lambda kv: (kv[1], kv[0]))
+        members = [m for m, _ in items]
+        n = len(members)
+        # Normalize negative indices like Redis
+        if start < 0:
+            start = n + start
+        if stop < 0:
+            stop = n + stop
+        # Clamp
+        start = max(0, start)
+        stop = min(n - 1, stop) if n > 0 else -1
+        if start > stop or stop < 0:
+            return []
+        return members[start: stop + 1]
+
+    def zscore(self, key: str, member: str) -> Optional[float]:
+        z = self._sorted_sets.get(key, {})
+        if not z:
+            return None
+        return float(z.get(str(member))) if str(member) in z else None
+
     # ------------------------------------------------------------------
     # Hash operations
     # ------------------------------------------------------------------
@@ -620,6 +650,14 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.zcard(key)
 
+    async def zrange(self, key: str, start: int, stop: int) -> List[str]:
+        async with self._lock:
+            return self._core.zrange(key, start, stop)
+
+    async def zscore(self, key: str, member: str) -> Optional[float]:
+        async with self._lock:
+            return self._core.zscore(key, member)
+
     async def hset(self, key: str, mapping: Dict[str, Any]) -> int:
         async with self._lock:
             return self._core.hset(key, mapping)
@@ -733,6 +771,19 @@ class InMemorySyncRedis:
     def get(self, key: str):
         with self._lock:
             return self._core.get(key)
+
+    # Minimal ZSET API for tests
+    def zcard(self, key: str) -> int:
+        with self._lock:
+            return self._core.zcard(key)
+
+    def zrange(self, key: str, start: int, stop: int) -> List[str]:
+        with self._lock:
+            return self._core.zrange(key, start, stop)
+
+    def zscore(self, key: str, member: str) -> Optional[float]:
+        with self._lock:
+            return self._core.zscore(key, member)
 
     def set(self, key: str, value: Any, ex: Optional[int] = None):
         with self._lock:

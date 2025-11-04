@@ -531,34 +531,63 @@ async def stream_embeddings_abtest_events(
     _: None = Depends(check_evaluation_rate_limit),
     current_user: User = Depends(get_request_user),
 ):
-    """SSE stream of progress and updates for an A/B test."""
+    """SSE stream of progress and updates for an A/B test, using SSEStream for heartbeats and metrics."""
     from fastapi.responses import StreamingResponse
     import asyncio as _aio
     import json as _json
+
+    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
     svc = get_unified_evaluation_service_for_user(current_user.id)
 
-    async def event_generator():
+    stream = SSEStream(
+        # Use env-driven heartbeat defaults; standard labels for dashboards
+        heartbeat_interval_s=None,
+        heartbeat_mode=None,
+        labels={"component": "evaluations", "endpoint": "embeddings_abtest_events"},
+    )
+
+    async def _produce() -> None:
         last_payload = None
         while True:
             row = svc.db.get_abtest(test_id)
             if not row:
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'not_found'})}\n\n"
-                break
-            status = row.get('status', 'pending')
-            stats = row.get('stats_json')
+                await stream.error("not_found", "A/B test not found")
+                return
+            status = row.get("status", "pending")
+            stats = row.get("stats_json")
             payload = {"type": "status", "status": status}
             try:
                 payload["stats"] = _json.loads(stats) if stats else {}
             except Exception:
                 payload["stats"] = {}
+
             if payload != last_payload:
-                yield f"data: {_json.dumps(payload)}\n\n"
+                await stream.send_json(payload)
                 last_payload = payload
+
             if status in ("completed", "failed", "canceled"):
-                break
+                await stream.done()
+                return
             await _aio.sleep(1.0)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+    async def _gen():
+        producer = _aio.create_task(_produce())
+        try:
+            async for line in stream.iter_sse():
+                yield line
+        finally:
+            try:
+                producer.cancel()
+                await _aio.gather(producer, return_exceptions=True)
+            except Exception:
+                pass
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers=headers)
 
 
 @router.delete("/embeddings/abtest/{test_id}")

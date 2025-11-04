@@ -807,10 +807,10 @@ class SQLiteStore(SandboxStore):
         if key:
             where.append("key = ?")
             params.append(key)
-        if created_at_from:
+        if created_at_from is not None:
             where.append("created_at >= ?")
             params.append(self._coerce_created_at(created_at_from))
-        if created_at_to:
+        if created_at_to is not None:
             where.append("created_at <= ?")
             params.append(self._coerce_created_at(created_at_to))
         sql = (
@@ -857,10 +857,10 @@ class SQLiteStore(SandboxStore):
         if key:
             where.append("key = ?")
             params.append(key)
-        if created_at_from:
+        if created_at_from is not None:
             where.append("created_at >= ?")
             params.append(self._coerce_created_at(created_at_from))
-        if created_at_to:
+        if created_at_to is not None:
             where.append("created_at <= ?")
             params.append(self._coerce_created_at(created_at_to))
         sql = f"SELECT COUNT(*) FROM sandbox_idempotency WHERE {' AND '.join(where)}"

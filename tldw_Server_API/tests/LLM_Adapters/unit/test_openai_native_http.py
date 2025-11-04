@@ -71,10 +71,9 @@ def _enable_native_http(monkeypatch):
 
 def test_openai_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
-
-    # Replace httpx.Client with our fake
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    # Patch adapter factory to return our fake client
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+    monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
 
     adapter = OpenAIAdapter()
     req = {
@@ -89,9 +88,8 @@ def test_openai_adapter_native_http_non_streaming(monkeypatch):
 
 def test_openai_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
-
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+    monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
 
     adapter = OpenAIAdapter()
     req = {
@@ -105,4 +103,3 @@ def test_openai_adapter_native_http_streaming(monkeypatch):
     # Should produce SSE lines with double newlines
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
-

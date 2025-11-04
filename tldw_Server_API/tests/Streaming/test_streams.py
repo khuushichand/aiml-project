@@ -160,6 +160,82 @@ async def test_sse_stream_send_json_and_raw_line():
     assert out[-1].strip().lower() == "data: [done]"
 
 
+@pytest.mark.asyncio
+async def test_sse_stream_send_event_without_data_dispatches_blank():
+    stream = SSEStream(heartbeat_interval_s=10.0)  # suppress heartbeats
+
+    async def producer():
+        await stream.send_event("summary")
+        await stream.done()
+
+    lines = []
+
+    async def consumer():
+        async for ln in stream.iter_sse():
+            lines.append(ln)
+
+    await asyncio.gather(producer(), consumer())
+    # Expect an event line followed by a blank line then DONE at end
+    assert any(x.startswith("event: summary") for x in lines)
+    # Find the event line index and assert next line is blank
+    idx = next(i for i, v in enumerate(lines) if v.startswith("event: summary"))
+    assert lines[idx + 1] == "\n"
+    assert lines[-1].strip().lower() == "data: [done]"
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_idle_timeout_env_vars(monkeypatch):
+    # Drive idle timeout via env; ensure heartbeat longer than idle
+    monkeypatch.setenv("STREAM_IDLE_TIMEOUT_S", "0.2")
+    stream = SSEStream(heartbeat_interval_s=1.0)
+
+    async def collect_first_n(n):
+        out = []
+        async for ln in stream.iter_sse():
+            out.append(ln)
+            if len(out) >= n:
+                break
+        return out
+
+    out = await asyncio.wait_for(collect_first_n(2), timeout=2.0)
+    assert any("\"idle_timeout\"" in x for x in out)
+    assert any(x.strip().lower() == "data: [done]" for x in out)
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_max_duration_env_vars(monkeypatch):
+    # Drive max duration via env and suppress heartbeat
+    monkeypatch.setenv("STREAM_MAX_DURATION_S", "0.2")
+    stream = SSEStream(heartbeat_interval_s=10.0)
+
+    async def collect_first_n(n):
+        out = []
+        async for ln in stream.iter_sse():
+            out.append(ln)
+            if len(out) >= n:
+                break
+        return out
+
+    out = await asyncio.wait_for(collect_first_n(2), timeout=2.0)
+    assert any("\"max_duration_exceeded\"" in x for x in out)
+    assert any(x.strip().lower() == "data: [done]" for x in out)
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_comment_heartbeat_mode(monkeypatch):
+    # Force comment-mode heartbeats with a short interval
+    monkeypatch.setenv("STREAM_HEARTBEAT_MODE", "comment")
+    stream = SSEStream(heartbeat_interval_s=0.05)
+
+    async def collect_first_heartbeat():
+        async for ln in stream.iter_sse():
+            if ln.startswith(":"):
+                return ln
+
+    hb = await asyncio.wait_for(collect_first_heartbeat(), timeout=1.0)
+    assert hb.startswith(":")
+
+
 class _StubWebSocket:
     def __init__(self):
         self.sent = []
@@ -232,6 +308,40 @@ async def test_ws_stream_idle_timeout_counter_and_close():
 
 
 @pytest.mark.asyncio
+async def test_ws_stream_idle_edge_and_mark_activity():
+    # Disable pings; set an idle timeout and simulate client activity before threshold
+    ws = _StubWebSocket()
+    stream = WebSocketStream(ws, heartbeat_interval_s=0, idle_timeout_s=0.12)
+    await stream.start()
+    # Nearly hit the threshold, then mark activity
+    await asyncio.sleep(0.06)
+    stream.mark_activity()
+    await asyncio.sleep(0.07)
+    # Should not be closed yet
+    assert ws.closed is False
+    # Now let it cross the threshold
+    await asyncio.sleep(0.12)
+    assert ws.closed is True
+    assert ws.close_code == 1001
+
+
+@pytest.mark.asyncio
+async def test_ws_stream_close_code_transport_and_done_without_close():
+    ws = _StubWebSocket()
+    # close_on_done=False should not close on done()
+    stream = WebSocketStream(ws, heartbeat_interval_s=0, close_on_done=False)
+    await stream.start()
+    await stream.done()
+    assert ws.closed is False
+    assert any(msg.get("type") == "done" for msg in ws.sent)
+
+    # transport_error should map to 1011
+    await stream.error("transport_error", "network failure")
+    assert ws.closed is True
+    assert ws.close_code == 1011
+
+
+@pytest.mark.asyncio
 async def test_sse_metrics_enqueue_to_yield_and_high_watermark():
     reg = get_metrics_registry()
     stream = SSEStream(heartbeat_interval_s=10.0)  # avoid heartbeat noise
@@ -255,3 +365,62 @@ async def test_sse_metrics_enqueue_to_yield_and_high_watermark():
     assert e2y_stats.get("count", 0) >= 3
     hwm_stats = reg.get_metric_stats("sse_queue_high_watermark")
     assert hwm_stats.get("latest", 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_sse_backpressure_heartbeats_under_load():
+    """Under heavy producer pressure, ensure a heartbeat is eventually emitted once idle.
+
+    We stress the queue with a small max size so producer backpressure engages, then
+    verify that a heartbeat (comment mode) appears shortly after the producer stops.
+    """
+    stream = SSEStream(heartbeat_interval_s=0.05, heartbeat_mode="comment", queue_maxsize=5)
+
+    producer_done = asyncio.Event()
+    heartbeat_seen = asyncio.Event()
+
+    async def producer():
+        for i in range(100):
+            await stream.send_json({"i": i})
+        producer_done.set()
+
+    async def consumer():
+        async for ln in stream.iter_sse():
+            if ln.startswith(":"):
+                heartbeat_seen.set()
+                # We can break after first heartbeat to keep the test short
+                break
+            # If producer is done and queue drains, the next emission should be a heartbeat within interval
+            if producer_done.is_set():
+                # Keep looping until heartbeat is encountered
+                continue
+
+    # Run both concurrently with a timeout guard
+    await asyncio.wait_for(asyncio.gather(producer(), consumer()), timeout=2.0)
+    assert heartbeat_seen.is_set(), "heartbeat not observed under backpressure after producer finished"
+
+
+@pytest.mark.asyncio
+async def test_sse_event_without_data_emits_blank_line():
+    """send_event without data should produce an event line and a blank line."""
+    stream = SSEStream(heartbeat_interval_s=10.0)  # avoid heartbeat noise
+
+    async def producer():
+        await stream.send_event("summary")  # no data
+        await stream.done()
+
+    out = []
+
+    async def consumer():
+        async for ln in stream.iter_sse():
+            out.append(ln)
+            if len(out) >= 3:
+                break
+
+    await asyncio.gather(producer(), consumer())
+
+    # Expect: event line, a blank line (separator), and DONE
+    assert out[0].startswith("event: summary")
+    # Second line should be exactly a blank line (single newline) or a double-terminated event line
+    assert out[1] in {"\n", "\r\n"}
+    assert out[-1].strip().lower() == "data: [done]"

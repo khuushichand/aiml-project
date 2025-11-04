@@ -55,19 +55,15 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
 
         # Native HTTP path (opt-in)
         if self._use_native_http():
-            try:
-                import httpx
-            except Exception as e:  # pragma: no cover
-                from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+            from tldw_Server_API.app.core.http_client import fetch as _fetch
             url = f"{self._base_url().rstrip('/')}/embeddings"
             payload = {"input": inputs, "model": model}
             headers = self._headers(api_key)
             try:
-                with httpx.Client(timeout=timeout or 60.0) as client:
-                    resp = client.post(url, json=payload, headers=headers)
+                resp = _fetch(method="POST", url=url, headers=headers, json=payload, timeout=timeout or 60.0)
+                if resp.status_code >= 400:
                     resp.raise_for_status()
-                    return resp.json()
+                return resp.json()
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
                 raise ChatProviderError(provider=self.name, message=str(e))
@@ -82,4 +78,3 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
         else:
             vec = legacy.get_openai_embeddings(inputs, model)
             return self._normalize_response(vec, multi=False)
-

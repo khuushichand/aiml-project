@@ -408,7 +408,7 @@ async def process_code_endpoint(
                     batch["errors_count"] += 1
         # Handle URLs
         if form_data.urls:
-            async with httpx.AsyncClient() as client:
+            async with _m_create_async_client() as client:
                 tasks = [
                     _download_url_async(
                         client=client, url=u, target_dir=temp_dir,
@@ -6172,7 +6172,7 @@ async def process_ebooks_endpoint(
     local_paths_to_process: List[Tuple[str, Path]] = [] # (original_ref, local_path)
 
     # Use httpx.AsyncClient for concurrent downloads
-    async with httpx.AsyncClient() as client:
+    async with _m_create_async_client() as client:
         with temp_dir_manager as tmp_dir_path:
             temp_dir = FilePath(tmp_dir_path)
             logger.info(f"Using temporary directory: {temp_dir}")
@@ -7000,7 +7000,7 @@ async def process_documents_endpoint(
             url_task_map = {}  # Initialize outside the client block
 
             # --- MODIFICATION: Create client first ---
-            async with httpx.AsyncClient() as client:
+            async with _m_create_async_client() as client:
                 # Enforce allowed extensions for documents from URLs; still block generic HTML/XHTML/etc
                 allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
                 download_tasks = [
@@ -7574,7 +7574,7 @@ async def process_pdfs_endpoint(
 
         # Handle URLs (download bytes) with strict extension/content-type checking
         if form_data.urls:
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            async with _m_create_async_client(timeout=120) as client:
                 download_tasks = [
                     _download_url_async(
                         client=client,
@@ -8562,6 +8562,13 @@ async def debug_schema(
 # End of Debugging and Diagnostics
 #####################################################################################
 
+from tldw_Server_API.app.core.http_client import (
+    afetch as _m_afetch,
+    adownload as _m_adownload,
+    RetryPolicy as _MRetryPolicy,
+    create_async_client as _m_create_async_client,
+)
+
 async def _download_url_async(
         client: httpx.AsyncClient,
         url: str,
@@ -8586,114 +8593,127 @@ async def _download_url_async(
         except Exception:  # Broad catch for URL parsing issues
             seed_segment = f"downloaded_{hash(url)}.tmp"
 
-        async with client.stream("GET", url, follow_redirects=True, timeout=60.0) as response:
-            response.raise_for_status()  # Raise HTTPStatusError for 4xx/5xx
+        # Use centralized HTTP client: HEAD for metadata + adownload for atomic file write
+        # HEAD (best-effort) to derive naming and validate content-type when necessary
+        try:
+            head_resp = await _m_afetch(method="HEAD", url=url, timeout=60.0)
+            # Build a lightweight object to reuse existing logic for naming
+            class _RespLike:
+                def __init__(self, u, headers):
+                    self.url = u
+                    self.headers = headers
+            response = _RespLike(httpx.URL(url), head_resp.headers)
+        except Exception:
+            # If HEAD fails, synthesize minimal headers
+            class _RespLike:
+                def __init__(self, u, headers):
+                    self.url = u
+                    self.headers = headers
+            response = _RespLike(httpx.URL(url), {})
 
-            # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
-            candidate_name = None
-            content_disposition = response.headers.get('content-disposition')
-            if content_disposition:
-                # Try RFC 5987 filename* then fallback to filename
-                match_star = re.search(r"filename\*=(?:UTF-8''|)([^;]+)", content_disposition)
-                if match_star:
-                    candidate_name = match_star.group(1).strip('"\' ')
-                if not candidate_name:
-                    match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
-                    candidate_name = (match.group(1) if match else None)
-
+        # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
+        candidate_name = None
+        content_disposition = response.headers.get('content-disposition')
+        if content_disposition:
+            # Try RFC 5987 filename* then fallback to filename
+            match_star = re.search(r"filename\*=(?:UTF-8''|)([^;]+)", content_disposition)
+            if match_star:
+                candidate_name = match_star.group(1).strip('"\' ')
             if not candidate_name:
+                match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
+                candidate_name = (match.group(1) if match else None)
+
+        if not candidate_name:
+            try:
+                final_path_seg = response.url.path.split('/')[-1]
+                candidate_name = final_path_seg or seed_segment
+            except Exception:
+                candidate_name = seed_segment
+
+        # Basic sanitization
+        candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
+
+        # Determine effective suffix with fallbacks
+        effective_suffix = FilePath(candidate_name).suffix.lower()
+        # If suffix missing or not allowed, try alternatives
+        if check_extension and allowed_extensions:
+            if not effective_suffix or effective_suffix not in allowed_extensions:
+                # Attempt to derive from response URL path
                 try:
-                    final_path_seg = response.url.path.split('/')[-1]
-                    candidate_name = final_path_seg or seed_segment
+                    alt_seg = response.url.path.split('/')[-1]
+                    alt_suffix = FilePath(alt_seg).suffix.lower()
                 except Exception:
-                    candidate_name = seed_segment
-
-            # Basic sanitization
-            candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
-
-            # Determine effective suffix with fallbacks
-            effective_suffix = FilePath(candidate_name).suffix.lower()
-            # If suffix missing or not allowed, try alternatives
-            if check_extension and allowed_extensions:
-                if not effective_suffix or effective_suffix not in allowed_extensions:
-                    # Attempt to derive from response URL path
+                    alt_suffix = ''
+                if alt_suffix and alt_suffix in allowed_extensions:
+                    effective_suffix = alt_suffix
+                    # ensure filename has this suffix
+                    base = FilePath(candidate_name).stem
+                    candidate_name = f"{base}{effective_suffix}"
+                else:
+                    # As a last resort, rely on Content-Type for known mappings
+                    content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
+                    # Special-case: avoid accepting generic example.com HTML with no extension
                     try:
-                        alt_seg = response.url.path.split('/')[-1]
-                        alt_suffix = FilePath(alt_seg).suffix.lower()
+                        host = getattr(response.url, 'host', None) or getattr(response.url, 'hostname', None)
                     except Exception:
-                        alt_suffix = ''
-                    if alt_suffix and alt_suffix in allowed_extensions:
-                        effective_suffix = alt_suffix
-                        # ensure filename has this suffix
+                        host = None
+                    if isinstance(host, str) and host.lower() in {"example.com", "www.example.com"}:
+                        allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
+                        raise ValueError(
+                            f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+                    # If the caller provided disallowed content-types (e.g., text/html for documents), enforce here
+                    if disallow_content_types and content_type in disallow_content_types:
+                        allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
+                        raise ValueError(
+                            f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+                    content_type_map = {
+                        'application/epub+zip': '.epub',
+                        'application/pdf': '.pdf',
+                        'text/plain': '.txt',
+                        'text/markdown': '.md',
+                        'text/x-markdown': '.md',
+                        'text/html': '.html',
+                        'application/xhtml+xml': '.html',
+                        'application/xml': '.xml',
+                        'text/xml': '.xml',
+                        'application/rtf': '.rtf',
+                        'text/rtf': '.rtf',
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                        'application/json': '.json',
+                    }
+                    mapped_ext = content_type_map.get(content_type)
+                    if mapped_ext and (mapped_ext in allowed_extensions):
+                        effective_suffix = mapped_ext
                         base = FilePath(candidate_name).stem
                         candidate_name = f"{base}{effective_suffix}"
                     else:
-                        # As a last resort, rely on Content-Type for known mappings
-                        content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
-                        # Special-case: avoid accepting generic example.com HTML with no extension
-                        try:
-                            host = getattr(response.url, 'host', None) or getattr(response.url, 'hostname', None)
-                        except Exception:
-                            host = None
-                        if isinstance(host, str) and host.lower() in {"example.com", "www.example.com"}:
-                            allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
-                            raise ValueError(
-                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-                        # If the caller provided disallowed content-types (e.g., text/html for documents), enforce here
-                        if disallow_content_types and content_type in disallow_content_types:
-                            allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
-                            raise ValueError(
-                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-                        content_type_map = {
-                            'application/epub+zip': '.epub',
-                            'application/pdf': '.pdf',
-                            'text/plain': '.txt',
-                            'text/markdown': '.md',
-                            'text/x-markdown': '.md',
-                            'text/html': '.html',
-                            'application/xhtml+xml': '.html',
-                            'application/xml': '.xml',
-                            'text/xml': '.xml',
-                            'application/rtf': '.rtf',
-                            'text/rtf': '.rtf',
-                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-                            'application/json': '.json',
-                        }
-                        mapped_ext = content_type_map.get(content_type)
-                        if mapped_ext and (mapped_ext in allowed_extensions):
-                            effective_suffix = mapped_ext
-                            base = FilePath(candidate_name).stem
-                            candidate_name = f"{base}{effective_suffix}"
-                        else:
-                            allowed_list = ', '.join(sorted(allowed_extensions))
-                            raise ValueError(
-                                f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+                        allowed_list = ', '.join(sorted(allowed_extensions))
+                        raise ValueError(
+                            f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
 
-            # Finalize target path and ensure uniqueness
-            target_path = target_dir / (candidate_name or seed_segment)
-            counter = 1
-            base_name = target_path.stem
-            suffix = target_path.suffix
-            while target_path.exists():
-                target_path = target_dir / f"{base_name}_{counter}{suffix}"
-                counter += 1
+        # Finalize target path and ensure uniqueness
+        target_path = target_dir / (candidate_name or seed_segment)
+        counter = 1
+        base_name = target_path.stem
+        suffix = target_path.suffix
+        while target_path.exists():
+            target_path = target_dir / f"{base_name}_{counter}{suffix}"
+            counter += 1
 
-            async with aiofiles.open(target_path, 'wb') as f:
-                async for chunk in response.aiter_bytes(chunk_size=8192):
-                    await f.write(chunk)
+        # Perform the actual download (atomic via .part rename)
+        await _m_adownload(url=url, dest=target_path, timeout=60.0, retry=_MRetryPolicy())
 
-            logger.info(f"Successfully downloaded {url} to {target_path}")
-            return target_path
+        logger.info(f"Successfully downloaded {url} to {target_path}")
+        return target_path
 
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"HTTP error downloading {url}: {e.response.status_code} - {e.response.text[:200]}...")  # Log snippet of text
-        # Attempt cleanup of potentially partially downloaded file
+            f"HTTP error downloading {url}: {e.response.status_code} - {e.response.text[:200]}...")
         if 'target_path' in locals() and target_path.exists():
             try:
                 target_path.unlink()
-            except OSError as e:
-                logger.debug(f"Failed to remove temporary file {target_path}: {e}")
+            except OSError as e2:
+                logger.debug(f"Failed to remove temporary file {target_path}: {e2}")
         raise ConnectionError(f"HTTP error {e.response.status_code} for {url}") from e
     except httpx.RequestError as e:
         logger.error(f"Request error downloading {url}: {e}")

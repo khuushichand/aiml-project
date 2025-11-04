@@ -13,7 +13,7 @@ import asyncio
 import time
 import statistics
 from contextlib import suppress
-import httpx
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 from loguru import logger
@@ -1800,20 +1800,22 @@ class EvaluationRunner:
     ):
         """Send webhook notification"""
         try:
-            async with httpx.AsyncClient() as client:
-                payload = {
-                    "event": f"run.{status}",
-                    "run_id": run_id,
-                    "eval_id": eval_id,
-                    "status": status,
-                    "completed_at": int(datetime.utcnow().timestamp()),
-                    "results_url": f"/api/v1/runs/{run_id}/results",
-                    "summary": summary
-                }
-
-                response = await client.post(webhook_url, json=payload, timeout=10)
-                response.raise_for_status()
-                logger.info(f"Webhook sent to {webhook_url} for run {run_id}")
+            payload = {
+                "event": f"run.{status}",
+                "run_id": run_id,
+                "eval_id": eval_id,
+                "status": status,
+                "completed_at": int(datetime.utcnow().timestamp()),
+                "results_url": f"/api/v1/runs/{run_id}/results",
+                "summary": summary,
+            }
+            resp = await afetch(method="POST", url=webhook_url, json=payload, timeout=10, retry=RetryPolicy(attempts=1))
+            if resp.status_code >= 400:
+                try:
+                    resp.raise_for_status()
+                except Exception as e:
+                    raise e
+            logger.info(f"Webhook sent to {webhook_url} for run {run_id}")
 
         except Exception as e:
             logger.error(f"Failed to send webhook to {webhook_url}: {e}")

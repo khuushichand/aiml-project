@@ -210,17 +210,9 @@ class HTTPConnectionPool:
                         base_url=base_url,
                         limits=limits,
                     )
-                except Exception:
-                    # Fallback to direct httpx client if factory unavailable
-                    client = httpx.AsyncClient(
-                        limits=httpx.Limits(
-                            max_connections=self.max_connections,
-                            max_keepalive_connections=self.max_keepalive_connections,
-                            keepalive_expiry=self.keepalive_expiry,
-                        ),
-                        timeout=httpx.Timeout(self.timeout),
-                        base_url=base_url,
-                    )
+                except Exception as e:
+                    # If central factory is unavailable, surface an error instead of constructing directly
+                    raise TTSNetworkError(f"Failed to create HTTP client via factory: {e}")
 
                 self._pools[provider] = client
                 self._pool_metrics[provider] = ResourceMetrics(

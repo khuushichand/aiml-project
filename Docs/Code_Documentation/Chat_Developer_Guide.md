@@ -184,6 +184,40 @@ async def chat_stream_endpoint():
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 ```
 
+### Provider Control Pass-through (Advanced)
+
+Some providers emit meaningful SSE control lines (e.g., `event: ...`, `id: ...`, `retry: ...`). By default, normalization drops these. When clients or adapters depend on them, enable pass-through per endpoint and optionally filter/rename controls:
+
+```python
+from fastapi.responses import StreamingResponse
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+def _control_filter(name: str, value: str):
+    # Example: rename event to a standard value; drop ids
+    if name.lower() == "event":
+        return ("event", "provider_event")
+    if name.lower() == "id":
+        return None
+    return (name, value)
+
+async def chat_stream_passthru():
+    stream = SSEStream(
+        heartbeat_interval_s=10,
+        provider_control_passthru=True,
+        control_filter=_control_filter,
+        labels={"component": "chat", "endpoint": "chat_stream"},
+    )
+
+    async def gen():
+        async for line in stream.iter_sse():
+            yield line
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+```
+
 
 ## Rate Limiting
 

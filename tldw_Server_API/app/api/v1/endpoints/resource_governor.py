@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import os
 
 from fastapi import APIRouter, Depends, Query, Path, Body
 from fastapi.responses import JSONResponse
@@ -22,15 +23,43 @@ async def get_resource_governor_policy(include: Optional[str] = Query(None, desc
     try:
         loader = getattr(_app.state, "rg_policy_loader", None)
         store = getattr(_app.state, "rg_policy_store", None)
+        # If loader missing or points to a different path than RG_POLICY_PATH, (re)initialize
+        try:
+            env_path = os.getenv("RG_POLICY_PATH")
+        except Exception:
+            env_path = None
+        snap = None
+        try:
+            snap = loader.get_snapshot() if loader else None
+        except Exception:
+            snap = None
+        needs_reload = False
         if loader is None:
+            needs_reload = True
+        elif env_path and snap and str(getattr(snap, "source_path", "")) != str(env_path):
+            needs_reload = True
+        if needs_reload:
             # Best-effort fallback to a default file-based loader using env
             try:
-                from tldw_Server_API.app.core.Resource_Governance.policy_loader import default_policy_loader as _rg_default_loader
-                loader = _rg_default_loader()
+                from tldw_Server_API.app.core.Resource_Governance.policy_loader import PolicyLoader, PolicyReloadConfig, default_policy_loader as _rg_default_loader
+                if env_path:
+                    reload_enabled = (os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"})
+                    interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
+                    loader = PolicyLoader(env_path, PolicyReloadConfig(enabled=reload_enabled, interval_sec=interval))
+                else:
+                    loader = _rg_default_loader()
                 await loader.load_once()
                 _app.state.rg_policy_loader = loader
                 if store is None:
                     store = "file"
+                _app.state.rg_policy_store = store
+                # Update snapshot metadata for health/routes that read app.state
+                try:
+                    snap_meta = loader.get_snapshot()
+                    _app.state.rg_policy_version = int(getattr(snap_meta, "version", 0) or 0)
+                    _app.state.rg_policy_count = len(getattr(snap_meta, "policies", {}) or {})
+                except Exception:
+                    pass
             except Exception:
                 return JSONResponse({"status": "unavailable", "reason": "policy_loader_not_initialized"}, status_code=503)
         snap = loader.get_snapshot()

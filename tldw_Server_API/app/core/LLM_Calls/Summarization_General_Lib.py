@@ -23,9 +23,7 @@ import time
 from typing import Optional, Union, Generator, Any, Dict, List, Callable
 #
 # 3rd-Party Imports
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+# Removed legacy requests/HTTPAdapter/Retry usage; centralized http client is used elsewhere
 from tldw_Server_API.app.core.http_client import fetch_json, fetch, create_client, RetryPolicy
 #
 # Import Local
@@ -691,17 +689,16 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
                 logging.warning(f"OpenAI: Summary not found in response: {response_data}")
                 return "Error: OpenAI Summary not found in response."
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logging.error(f"OpenAI: API request failed: {str(e)}", exc_info=True)
-        # Try to get more detailed error from response
-        if hasattr(e, 'response') and e.response is not None:
+        # Try to get more detailed error from response when available
+        if hasattr(e, 'response') and getattr(e, 'response') is not None:
             try:
-                error_detail = e.response.json()
+                error_detail = getattr(e, 'response').json()
                 logging.error(f"OpenAI: API error details: {error_detail}")
             except Exception as parse_err:
                 logging.debug(f"OpenAI error JSON parse failed: error={parse_err}")
         return f"Error: OpenAI API request failed: {str(e)}"
-    except Exception as e:
         logging.error(f"OpenAI: Unexpected error: {str(e)}", exc_info=True)
         return f"Error: OpenAI unexpected error: {str(e)}"
 
@@ -1154,7 +1151,6 @@ def summarize_with_groq(api_key, input_data, custom_prompt_arg, temp=None, syste
 
 
 def summarize_with_openrouter(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False,):
-    import requests
     import json
     global openrouter_model, openrouter_api_key
     try:
@@ -1846,12 +1842,9 @@ def summarize_with_google(api_key, input_data, custom_prompt_arg, temp=None, sys
     except json.JSONDecodeError as e:
         logging.error(f"Google: Error decoding JSON: {str(e)}", exc_info=True)
         return f"Google: Error decoding JSON input: {str(e)}"
-    except requests.RequestException as e:
+    except Exception as e:
         logging.error(f"Google: Error making API request: {str(e)}", exc_info=True)
         return f"Google: Error making API request: {str(e)}"
-    except Exception as e:
-        logging.error(f"Google: Unexpected error: {str(e)}", exc_info=True)
-        return f"Google: Unexpected error occurred: {str(e)}"
 
 def summarize_with_mock_llm(text_to_summarize: str, custom_prompt_arg: Optional[str], api_key: Optional[str] = None, temp: Optional[float] = None, system_message: Optional[str] = None, streaming: bool = False):
     """

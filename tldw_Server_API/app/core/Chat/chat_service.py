@@ -685,6 +685,7 @@ async def execute_streaming_call(
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
     moderation_getter: Optional[Callable[[], Any]] = None,
+    rg_commit_cb: Optional[Callable[[int], Any]] = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -813,7 +814,23 @@ async def execute_streaming_call(
             success=False,
             error_type=type(he).__name__,
         )
-        raise
+        # For streaming endpoint semantics, emit SSE error + DONE instead of HTTP error
+        async def _err_gen():
+            try:
+                import json as _json
+                payload = {"error": {"message": str(he.detail) if hasattr(he, "detail") else str(he), "type": type(he).__name__}}
+                yield f"data: {_json.dumps(payload)}\n\n"
+            except Exception:
+                yield f"data: {{\"error\":{{\"message\":\"{str(he)}\",\"type\":\"{type(he).__name__}\"}}}}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(
+            _err_gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as e:
         metrics.track_llm_call(
             selected_provider,
@@ -868,11 +885,47 @@ async def execute_streaming_call(
                         provider_manager.record_failure(fallback_provider, fallback_error)
                         raise fallback_error
                 else:
-                    raise
+                    # No fallback available: stream SSE error (200) instead of raising
+                    pass
             else:
-                raise
+                # Client/config errors in streaming mode: stream SSE error (200)
+                pass
         else:
-            raise
+            # Queue path: stream SSE error as well
+            pass
+
+        # Safely capture exception details for streaming outside the closure
+        _err_message = str(e)
+        _err_type = type(e).__name__
+
+        # Emit a minimal SSE error stream and finish with [DONE]
+        async def _err_stream():
+            try:
+                import json as _json
+                payload = {"error": {"message": str(e), "type": type(e).__name__}}
+                yield f"data: {_json.dumps(payload)}\n\n"
+            except Exception:
+                yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"type\":\"{type(e).__name__}\"}}}}\n\n"
+            yield "data: [DONE]\n\n"
+
+        # New safe variant that does not reference the except-scope variable directly
+        async def _safe_err_stream():
+            try:
+                import json as _json
+                payload = {"error": {"message": _err_message, "type": _err_type}}
+                yield f"data: {_json.dumps(payload)}\n\n"
+            except Exception:
+                yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            _safe_err_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
@@ -927,6 +980,7 @@ async def execute_streaming_call(
             except Exception:
                 pass
             latency_ms = int((time.time() - llm_start_time) * 1000)
+            total_est = int(pt_est + ct_est)
             await log_llm_usage(
                 user_id=user_id,
                 key_id=api_key_id,
@@ -938,10 +992,19 @@ async def execute_streaming_call(
                 latency_ms=latency_ms,
                 prompt_tokens=int(pt_est),
                 completion_tokens=int(ct_est),
-                total_tokens=int(pt_est + ct_est),
+                total_tokens=total_est,
                 request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
                 estimated=True,
             )
+        except Exception:
+            pass
+        # Commit reserved tokens to Resource Governor, if provided
+        try:
+            if callable(rg_commit_cb):
+                # rg_commit_cb may be async or sync; call accordingly
+                res = rg_commit_cb(total_est)
+                if hasattr(res, "__await__"):
+                    await res  # type: ignore[misc]
         except Exception:
             pass
         # Audit success

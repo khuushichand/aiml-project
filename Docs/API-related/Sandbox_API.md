@@ -128,8 +128,51 @@ Frames:
 - Authenticated: GET `/api/v1/sandbox/health` (includes store timings and Redis ping)
 - Public: GET `/api/v1/sandbox/health/public` (no auth)
 
+## Egress Policy and DNS Pinning
+
+Some deployments enforce an egress allowlist for sandboxed runs. The Docker runner supports a deny‑all baseline (network=none) and, when enabled, a granular host‑level allowlist using iptables on the DOCKER-USER chain.
+
+Utilities exposed in `tldw_Server_API.app.core.Sandbox.network_policy` help you prepare and manage rules:
+
+- `expand_allowlist_to_targets(raw_allowlist, resolver=..., wildcard_subdomains=("", "www", "api"))`
+  - Accepts a mix of CIDR (e.g., `10.0.0.0/8`), literal IPs (`8.8.8.8`), hostnames (`example.com`), wildcard prefixes (`*.example.com`), and suffix tokens (`.example.com`).
+  - Resolves hostnames to A records and promotes to `/32`; returns a de‑duplicated list like `['1.2.3.4/32', '10.0.0.0/8']`.
+
+- `pin_dns_map(raw_allowlist, resolver=...)`
+  - Returns a mapping `{ host -> [IPs] }` after resolution for observability/debugging.
+
+- `refresh_egress_rules(container_ip, raw_allowlist, label, resolver=..., wildcard_subdomains=...)`
+  - Best‑effort revocation + re‑apply: deletes all rules in DOCKER‑USER containing `label` and applies an updated set of `ACCEPT` rules for resolved targets, followed by a final `DROP` for the container IP.
+
+Examples:
+```
+from tldw_Server_API.app.core.Sandbox.network_policy import (
+    expand_allowlist_to_targets, pin_dns_map, refresh_egress_rules
+)
+
+# Allowlist with CIDR, IP, wildcard and suffix tokens
+raw = ["10.0.0.0/8", "8.8.8.8", "*.example.com", ".example.org"]
+targets = expand_allowlist_to_targets(raw)
+# e.g., ['10.0.0.0/8', '8.8.8.8/32', '93.184.216.34/32', ...]
+
+# Inspect pinned DNS map (for logs/metrics)
+pins = pin_dns_map(raw)
+# e.g., {'example.com': ['93.184.216.34', ...], 'example.org': ['203.0.113.10', ...]}
+
+# Apply (or refresh) rules for a given container
+apply_specs = refresh_egress_rules(
+    container_ip="172.18.0.2",
+    raw_allowlist=raw,
+    label="tldw-run-<short-id>",
+)
+```
+
+Notes:
+- Suffix tokens (like `.example.com`) behave like wildcards for a few common subdomains plus the apex (configurable).
+- If `iptables-restore` is unavailable, the code falls back to iterative `iptables` commands.
+- To revoke rules for a finished container, the runner labels and deletes rules by that label.
+
 ## Notes
 - Spec versions are validated against server config. Default: `["1.0","1.1"]`.
 - Interactivity requires runtime and policy support; fields are ignored otherwise.
 - `log_stream_url` may be unsigned; prefer Authorization headers if signed URLs are disabled.
-

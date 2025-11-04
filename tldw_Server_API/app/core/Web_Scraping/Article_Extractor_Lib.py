@@ -42,7 +42,7 @@ from playwright.async_api import (
     async_playwright
 )
 from playwright.sync_api import sync_playwright
-import requests
+from tldw_Server_API.app.core.http_client import fetch as http_fetch
 import trafilatura
 from tqdm import tqdm
 
@@ -255,17 +255,17 @@ def _strip_boilerplate_sections(text: str) -> str:
 
 def get_page_title(url: str) -> str:
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
+        resp = http_fetch(method="GET", url=url, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
             title_tag = soup.find('title')
             title = title_tag.string.strip() if title_tag and title_tag.string else "Untitled"
             log_counter("page_title_extracted", labels={"success": "true"})
             return title
         else: #debug code for problem in suceeded request but non 200 code
-            logging.error(f"Failed to fetch {url}, status code: {response.status_code}")
+            logging.error(f"Failed to fetch {url}, status code: {resp.status_code}")
             return "Untitled"
-    except requests.RequestException as e:
+    except Exception as e:
         logging.error(f"Error fetching page title: {e}")
         log_counter("page_title_extracted", labels={"success": "false"})
         return "Untitled"
@@ -583,14 +583,13 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
             return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress policy evaluation failed: {_e}"}
 
         headers = {"User-Agent": web_scraping_user_agent}
-        session = requests.Session()
-        session.headers.update(headers)
-        # If cookies are provided in Playwright-style dicts, reduce to name->value
+        # If cookies are provided in Playwright-style dicts, reduce to name->value and set Cookie header
         if custom_cookies:
-            for c in custom_cookies:
-                if isinstance(c, dict) and "name" in c and "value" in c:
-                    session.cookies.set(c["name"], c["value"])
-        resp = session.get(url, timeout=30)
+            cookie_map = _merge_cookie_list_to_map(custom_cookies)
+            if cookie_map:
+                cookie_hdr = "; ".join([f"{k}={v}" for k, v in cookie_map.items()])
+                headers["Cookie"] = cookie_hdr
+        resp = http_fetch(method="GET", url=url, timeout=30, headers=headers)
         if resp.status_code != 200:
             logging.error(f"Failed to fetch {url}, status: {resp.status_code}")
             return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
@@ -902,9 +901,10 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
             return []
 
         # Avoid passing kwargs to allow simple monkeypatch fakes in tests
-        response = requests.get(sitemap_url)
-        response.raise_for_status()
-        root = xET.fromstring(response.content)
+        resp = http_fetch(method="GET", url=sitemap_url, timeout=10)
+        if resp.status_code >= 400:
+            return []
+        root = xET.fromstring(resp.content)
 
         results = []
         for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
@@ -944,9 +944,10 @@ def collect_internal_links(base_url: str) -> set:
             continue
 
         try:
-            response = requests.get(current_url, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
+            resp = http_fetch(method="GET", url=current_url, timeout=10)
+            if resp.status_code >= 400:
+                continue
+            soup = BeautifulSoup(resp.text, 'html.parser')
 
             # Collect internal links
             for link in soup.find_all('a', href=True):
@@ -957,7 +958,7 @@ def collect_internal_links(base_url: str) -> set:
                         to_visit.add(full_url)
 
             visited.add(current_url)
-        except requests.RequestException as e:
+        except Exception as e:
             logging.error(f"Error visiting {current_url}: {e}")
             continue
 

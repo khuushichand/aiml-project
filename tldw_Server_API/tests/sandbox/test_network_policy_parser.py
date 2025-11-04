@@ -29,3 +29,18 @@ def test_expand_allowlist_hostname_and_wildcard():
     out2 = expand_allowlist_to_targets(["*.example.org"], resolver=res)
     assert "203.0.113.10/32" in out2 and "203.0.113.11/32" in out2
 
+
+def test_expand_allowlist_suffix_and_scheme_handling():
+    mapping = {
+        "example.net": ["198.51.100.10"],
+        "www.example.net": ["198.51.100.11"],
+        "api.example.net": ["198.51.100.12"],
+    }
+    res = _stub_resolver_factory(mapping)
+    # Suffix token should behave like wildcard and include apex + common subs
+    out = expand_allowlist_to_targets([".example.net"], resolver=res)
+    for ip in ("198.51.100.10/32", "198.51.100.11/32", "198.51.100.12/32"):
+        assert ip in out
+    # Scheme should be stripped
+    out2 = expand_allowlist_to_targets(["https://example.net"], resolver=res)
+    assert "198.51.100.10/32" in out2

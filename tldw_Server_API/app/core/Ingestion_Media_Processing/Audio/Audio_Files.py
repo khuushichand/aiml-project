@@ -267,9 +267,9 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
 
         logging.info(f"Downloading {url} to: {save_path}")
         try:
-            # Use centralized downloader with retries
+            # Use centralized downloader with retries and strict audio content-type enforcement
             policy = RetryPolicy()
-            http_download(url=url, dest=save_path, headers=headers, retry=policy)
+            http_download(url=url, dest=save_path, headers=headers, retry=policy, require_content_type="audio/")
         except Exception as e:
             # Clean up on failure
             try:

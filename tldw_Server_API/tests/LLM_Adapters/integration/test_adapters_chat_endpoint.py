@@ -27,7 +27,7 @@ def _payload(stream: bool = False):
     }
 
 
-def test_chat_completions_non_streaming_via_adapter(monkeypatch, client_user_only):
+def test_chat_completions_non_streaming_via_adapter(monkeypatch, client, auth_token):
     # Provide a non-mock key via module-level API_KEYS so config is not required
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
     chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
@@ -54,15 +54,14 @@ def test_chat_completions_non_streaming_via_adapter(monkeypatch, client_user_onl
 
     monkeypatch.setattr(llm_calls, "chat_with_openai", _fake_openai)
 
-    client = client_user_only
-    r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
-    assert r.status_code == 200
+    r = client.post_with_auth("/api/v1/chat/completions", auth_token, json=_payload(stream=False))
+    assert r.status_code == 200, f"Body: {r.text}"
     data = r.json()
     assert data["object"] == "chat.completion"
     assert data["choices"][0]["message"]["content"] == "Hello there"
 
 
-def test_chat_completions_streaming_via_adapter(monkeypatch, client_user_only):
+def test_chat_completions_streaming_via_adapter(monkeypatch, client, auth_token):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
     chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
 
@@ -75,8 +74,10 @@ def test_chat_completions_streaming_via_adapter(monkeypatch, client_user_only):
 
     monkeypatch.setattr(llm_calls, "chat_with_openai", _fake_stream_openai)
 
-    client = client_user_only
-    with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:
+    # Prepare headers for stream using helper
+    from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
+    headers = get_auth_headers(auth_token, getattr(client, "csrf_token", ""))
+    with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True), headers=headers) as resp:
         assert resp.status_code == 200
         ct = resp.headers.get("content-type", "").lower()
         assert ct.startswith("text/event-stream")
@@ -84,4 +85,3 @@ def test_chat_completions_streaming_via_adapter(monkeypatch, client_user_only):
         # Should include chunks and single DONE
         assert any(l.startswith("data: ") and "[DONE]" not in l for l in lines)
         assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1
-

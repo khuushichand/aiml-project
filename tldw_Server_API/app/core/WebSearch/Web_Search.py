@@ -17,7 +17,7 @@ from lxml.etree import _Element
 from lxml.html import document_fromstring
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from tldw_Server_API.app.core.http_client import fetch, fetch_json, RetryPolicy
 #
 # Local Imports
 from tldw_Server_API.app.core.config import loaded_config_data
@@ -1344,8 +1344,8 @@ def search_web_brave(
     # Drop None values to keep the request clean
     filtered_params = {key: value for key, value in params.items() if value is not None}
 
-    # Keep requests.get here for test seam compatibility; other providers use centralized client
-    response = requests.get(search_url, headers=headers, params=filtered_params)
+    # Use wrapper seam to allow clean monkeypatching in tests while using central client in production
+    response = brave_http_get(search_url, headers=headers, params=filtered_params)
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     brave_search_results = response.json()
     return brave_search_results
@@ -2069,3 +2069,11 @@ def parse_yandex_results(yandex_search_results, web_search_results_dict):
 #
 # End of Web_Search.py
 #######################################################################################################################
+def brave_http_get(url: str, *, headers: Dict[str, str], params: Dict[str, Any]):
+    """Wrapper seam for Brave HTTP GET used by tests to monkeypatch easily.
+
+    Production path routes through centralized http client with retries and egress checks.
+    Tests can patch this symbol to inject a fake response without relying on requests.get.
+    """
+    policy = RetryPolicy()
+    return fetch(method="GET", url=url, headers=headers, params=params, retry=policy)

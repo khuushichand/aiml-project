@@ -107,3 +107,28 @@ def test_admin_list_filter_by_user_and_phase(monkeypatch):
         assert j.get("total") == 1
 
     app.dependency_overrides.clear()
+
+
+def test_admin_list_sort_asc_desc(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+    app.dependency_overrides[get_request_user] = _admin_user_dep
+
+    with _client(monkeypatch) as client:
+        # Seed runs with precise ordering gaps
+        _seed_run("s_desc_1", 1, "dA", 500)
+        _seed_run("s_desc_2", 1, "dA", 300)
+        _seed_run("s_desc_3", 1, "dA", 100)
+
+        # Descending (default): newest first -> s_desc_3 first
+        r_desc = client.get("/api/v1/sandbox/admin/runs", params={"image_digest": "dA", "limit": 3, "offset": 0, "sort": "desc"})
+        assert r_desc.status_code == 200
+        ids_desc = [it["id"] for it in r_desc.json().get("items", [])]
+        assert ids_desc[:1] == ["s_desc_3"]
+
+        # Ascending: oldest first -> s_desc_1 first
+        r_asc = client.get("/api/v1/sandbox/admin/runs", params={"image_digest": "dA", "limit": 3, "offset": 0, "sort": "asc"})
+        assert r_asc.status_code == 200
+        ids_asc = [it["id"] for it in r_asc.json().get("items", [])]
+        assert ids_asc[:1] == ["s_desc_1"]
+
+    app.dependency_overrides.clear()

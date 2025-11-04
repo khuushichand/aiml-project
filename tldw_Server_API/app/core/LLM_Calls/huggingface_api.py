@@ -293,6 +293,15 @@ class HuggingFaceAPI:
                     except Exception:
                         pass
                     return False
+        except Exception as e:
+            # Catch any unexpected errors outside inner blocks
+            logger.error(f"Unexpected error downloading {filename} from {repo_id}: {e}")
+            try:
+                if temp_file.exists():
+                    temp_file.unlink()
+            except Exception:
+                pass
+            return False
         
     async def get_model_readme(self, repo_id: str) -> Optional[str]:
         """

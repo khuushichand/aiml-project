@@ -222,11 +222,59 @@ async def sse_endpoint(
     """
     Server-Sent Events endpoint as fallback for WebSocket.
 
+    Uses unified SSEStream when STREAMS_UNIFIED is on; otherwise falls back
+    to a simple generator that emits JSON `data:` frames.
+
     Args:
         client_id: Client identifier
         project_id: Optional project to subscribe to
         db: Database instance
     """
+    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+    use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+
+    if use_unified:
+        stream = SSEStream(
+            heartbeat_interval_s=None,  # env-driven
+            heartbeat_mode=None,
+            labels={"component": "prompt_studio", "endpoint": "ps_sse"},
+        )
+
+        async def _produce() -> None:
+            try:
+                # Initial connection event
+                await stream.send_json({"type": "connection", "status": "connected", "client_id": client_id})
+                # Optional initial state
+                if project_id:
+                    job_manager = JobManager(db)
+                    jobs = job_manager.list_jobs(limit=10)
+                    await stream.send_json({"type": "initial_state", "project_id": project_id, "jobs": jobs})
+                # Periodic heartbeats are handled by SSEStream; also emit a data heartbeat for clients that expect it
+                # (SSEStream will emit comment/data heartbeats per configuration.)
+            except Exception as e:
+                safe_error_msg = sanitize_error_message(e, "SSE streaming")
+                await stream.error("internal_error", safe_error_msg)
+
+        async def _gen():
+            prod = asyncio.create_task(_produce())
+            try:
+                async for ln in stream.iter_sse():
+                    yield ln
+            finally:
+                if not prod.done():
+                    prod.cancel()
+                    try:
+                        await prod
+                    except Exception:
+                        pass
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+        return StreamingResponse(_gen(), media_type="text/event-stream", headers=headers)
+
+    # Legacy path: simple generator without unified metrics/heartbeats
     async def event_generator():
         """Generate SSE events."""
         # Send initial connection event
@@ -306,7 +354,7 @@ async def websocket_endpoint_base(websocket: WebSocket):
     # Wrap socket for lifecycle metrics; keep domain payloads unchanged
     stream = WebSocketStream(
         websocket,
-        heartbeat_interval_s=None,  # leave heartbeats to domain logic if needed
+        heartbeat_interval_s=0.0,  # disable WS ping; domain heartbeats only
         idle_timeout_s=None,
         close_on_done=False,
         labels={"component": "prompt_studio", "endpoint": "ps_ws_base"},
@@ -364,7 +412,7 @@ async def websocket_endpoint(
     """
     stream = WebSocketStream(
         websocket,
-        heartbeat_interval_s=None,
+        heartbeat_interval_s=0.0,
         idle_timeout_s=None,
         close_on_done=False,
         labels={"component": "prompt_studio", "endpoint": "ps_ws_project"},

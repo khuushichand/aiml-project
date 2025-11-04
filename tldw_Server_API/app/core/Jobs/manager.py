@@ -129,6 +129,12 @@ class JobManager:
         if self.backend == "postgres":
             if not (self.db_url and str(self.db_url).startswith("postgres")):
                 raise ValueError("Postgres backend selected but no valid db_url provided; set JOBS_DB_URL or pass db_url")
+            # Normalize DSN and negotiate options for server compatibility
+            try:
+                from .pg_util import negotiate_pg_dsn
+                self.db_url = negotiate_pg_dsn(self.db_url)
+            except Exception:
+                pass
             ensure_jobs_tables_pg(self.db_url)
             try:
                 ensure_job_counters_pg(self.db_url)
@@ -3747,7 +3753,10 @@ class JobManager:
                 # Ensure updates are committed
                 with conn:
                     with self._pg_cursor(conn) as cur:
+                        # Track per-phase counts for diagnostics while returning a single total.
                         affected = 0
+                        affected_age = 0
+                        affected_runtime = 0
                         if age_seconds is not None:
                             now_ts = reference_time or self._clock.now_utc()
                             where = ["status='queued'", "created_at <= (%s - (%s || ' seconds')::interval)"]
@@ -3819,7 +3828,8 @@ class JobManager:
                                     f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = %s WHERE {' AND '.join(where)}",
                                     tuple([now_ts] + params),
                                 )
-                            affected += cur.rowcount or 0
+                            affected_age = int(cur.rowcount or 0)
+                            affected += affected_age
                         if runtime_seconds is not None:
                             now_ts2 = reference_time or self._clock.now_utc()
                             where = ["status='processing'", "COALESCE(started_at, acquired_at) <= (%s - (%s || ' seconds')::interval)"]
@@ -3872,13 +3882,16 @@ class JobManager:
                                     f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = %s, leased_until = NULL WHERE {' AND '.join(where)}",
                                     tuple([now_ts2] + params2),
                                 )
-                            affected += cur.rowcount or 0
+                            affected_runtime = int(cur.rowcount or 0)
+                            affected += affected_runtime
                         try:
                             emit_job_event(
                                 "jobs.ttl_sweep",
                                 job=None,
                                 attrs={
                                     "affected": int(affected),
+                                    "affected_age": int(affected_age),
+                                    "affected_runtime": int(affected_runtime),
                                     "action": action,
                                     "age_seconds": int(age_seconds or 0),
                                     "runtime_seconds": int(runtime_seconds or 0),
@@ -3893,6 +3906,8 @@ class JobManager:
             else:
                 # Ensure updates are committed by using an explicit transaction block
                 affected2 = 0
+                affected2_age = 0
+                affected2_runtime = 0
                 with conn:
                     ref_dt = reference_time or self._clock.now_utc()
                     now_str = ref_dt.astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -3962,7 +3977,8 @@ class JobManager:
                                 logger.debug(f"TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}")
                         except Exception:
                             pass
-                        affected2 += cur.rowcount or 0
+                        affected2_age = int(cur.rowcount or 0)
+                        affected2 += affected2_age
                     if runtime_seconds is not None:
                         where = ["status='processing'", "COALESCE(started_at, acquired_at) <= DATETIME(?, ?)"]
                         params4: List[Any] = [now_str, f"-{int(runtime_seconds)} seconds"]
@@ -4011,13 +4027,16 @@ class JobManager:
                                 logger.debug(f"TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}")
                         except Exception:
                             pass
-                        affected2 += cur2.rowcount or 0
+                        affected2_runtime = int(cur2.rowcount or 0)
+                        affected2 += affected2_runtime
                 try:
                     emit_job_event(
                         "jobs.ttl_sweep",
                         job=None,
                         attrs={
                             "affected": int(affected2),
+                            "affected_age": int(affected2_age),
+                            "affected_runtime": int(affected2_runtime),
                             "action": action,
                             "age_seconds": int(age_seconds or 0),
                             "runtime_seconds": int(runtime_seconds or 0),

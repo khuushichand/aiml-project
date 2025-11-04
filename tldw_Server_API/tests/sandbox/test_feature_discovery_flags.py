@@ -64,3 +64,26 @@ def test_runtimes_notes_reflect_granular_allowlist(monkeypatch) -> None:
         docker = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "docker"), None)
         assert docker is not None
         assert isinstance(docker.get("notes"), str) and "Granular egress allowlist" in docker["notes"]
+
+
+def test_firecracker_egress_supported_only_when_enforced(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
+    # Ensure enforcement not set: expect False
+    monkeypatch.delenv("SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT", raising=False)
+    clear_config_cache()
+    with TestClient(app) as client:
+        r = client.get("/api/v1/sandbox/runtimes")
+        data = r.json()
+        fc = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "firecracker"), None)
+        assert fc is not None
+        assert fc.get("egress_allowlist_supported") is False
+    # Now flip enforcement on
+    monkeypatch.setenv("SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT", "true")
+    clear_config_cache()
+    with TestClient(app) as client:
+        r2 = client.get("/api/v1/sandbox/runtimes")
+        d2 = r2.json()
+        fc2 = next((rt for rt in d2.get("runtimes", []) if rt.get("name") == "firecracker"), None)
+        assert fc2 is not None
+        assert fc2.get("egress_allowlist_supported") is True

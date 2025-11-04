@@ -9,6 +9,11 @@ import os
 from typing import Any, Generator, Union, Dict, Optional, List
 
 import httpx
+from tldw_Server_API.app.core.http_client import (
+    create_client as _hc_create_client,
+    fetch as _hc_fetch,
+    RetryPolicy as _HC_RetryPolicy,
+)
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatBadRequestError, ChatConfigurationError
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -213,36 +218,14 @@ def _chat_with_openai_compatible_local_server(
     logging.debug(f"{provider_name}: Payload metadata: {payload_metadata}")
 
 
-    def _post_with_retries(client: httpx.Client):
-        attempts = 0
-        while True:
-            resp: Optional[httpx.Response] = None
-            try:
-                resp = client.post(full_api_url, headers=headers, json=payload, timeout=timeout)
-                if resp.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
-                    attempts += 1
-                    import time
-                    time.sleep(api_retry_delay * attempts)
-                    resp.close()
-                    continue
-                resp.raise_for_status()
-                return resp
-            except httpx.HTTPStatusError as http_error:
-                if resp is not None:
-                    resp.close()
-                _raise_chat_error_from_httpx(provider_name, http_error)
-            except httpx.RequestError as e_req:
-                if resp is not None:
-                    resp.close()
-                if attempts < api_retries:
-                    attempts += 1
-                    import time
-                    time.sleep(api_retry_delay * attempts)
-                    continue
-                logging.error(f"{provider_name}: Request Exception: {e_req}", exc_info=True)
-                raise ChatProviderError(provider=provider_name, message=f"Network error making request to {provider_name}: {e_req}", status_code=503)
+    def _post_with_retries() -> httpx.Response:
+        # Map retries/delay to centralized RetryPolicy
+        attempts = max(1, int(api_retries)) + 1
+        base_ms = max(50, int(api_retry_delay * 1000))
+        policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
+        return _hc_fetch(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
 
-    client = httpx.Client()
+    session = _hc_create_client(timeout=timeout)
     try:
         if streaming:
             logging.debug(f"{provider_name}: Opening streaming connection to {full_api_url}")
@@ -252,7 +235,7 @@ def _chat_with_openai_compatible_local_server(
                 response_obj: Optional[httpx.Response] = None
                 try:
                     try:
-                        with client.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
+                        with session.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
                             response_obj = response
                             response.raise_for_status()
                             logging.debug(f"{provider_name}: Streaming response received.")
@@ -295,12 +278,13 @@ def _chat_with_openai_compatible_local_server(
                             yield tail
                 finally:
                     try:
-                        client.close()
+                        session.close()
                     except Exception:
                         pass
             return stream_generator()
         else:
-            response = _post_with_retries(client)
+            response = _post_with_retries()
+            response.raise_for_status()
             try:
                 data = response.json()
                 logging.debug(f"{provider_name}: Non-streaming request successful.")
@@ -319,7 +303,7 @@ def _chat_with_openai_compatible_local_server(
     finally:
         if not streaming:
             try:
-                client.close()
+                session.close()
             except Exception:
                 pass
 
@@ -648,18 +632,9 @@ def chat_with_kobold(
 
 
     try:
-        attempts = 0
-        with httpx.Client() as client:
-            while True:
-                response = client.post(api_url, headers=headers, json=payload, timeout=timeout)
-                if response.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
-                    attempts += 1
-                    import time
-                    time.sleep(api_retry_delay * attempts)
-                    continue
-                response.raise_for_status()
-                response_data = response.json()
-                break
+        policy = _HC_RetryPolicy(attempts=max(1, int(api_retries)) + 1, backoff_base_ms=max(50, int(api_retry_delay * 1000)))
+        response = _hc_fetch(method="POST", url=api_url, headers=headers, json=payload, retry=policy)
+        response_data = response.json()
 
         if response_data and 'results' in response_data and len(response_data['results']) > 0:
             # Kobold /generate usually returns a list of results, each with 'text'
@@ -1269,6 +1244,62 @@ def chat_with_ollama(
 
 
 # Custom OpenAI API 1
+def legacy_chat_with_custom_openai(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    maxp: Optional[float] = None,
+    topp: Optional[float] = None,
+    minp: Optional[float] = None,
+    topk: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    # Delegate to existing implementation to preserve legacy behavior
+    return chat_with_custom_openai(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_arg=custom_prompt_arg,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        maxp=maxp,
+        topp=topp,
+        minp=minp,
+        topk=topk,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
+
 def chat_with_custom_openai(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None,
@@ -1381,6 +1412,55 @@ def chat_with_custom_openai(
 
 
 # Custom OpenAI API 2
+def legacy_chat_with_custom_openai_2(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    topp: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    return chat_with_custom_openai_2(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_arg=custom_prompt_arg,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        topp=topp,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
+
 def chat_with_custom_openai_2(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None,

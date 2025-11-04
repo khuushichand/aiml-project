@@ -63,17 +63,29 @@ async def persona_stream(
 ):
     """Bi-directional placeholder stream.
 
+    Standardized with WebSocketStream lifecycle/metrics; domain payloads unchanged.
     Accepts JSON text frames and echoes minimal notices.
     """
-    # Accept early and send initial notice using raw ws for maximal compatibility
-    await ws.accept()
+    # Wrap socket for lifecycle and metrics; keep domain payloads unchanged
+    stream = WebSocketStream(
+        ws,
+        heartbeat_interval_s=0.0,  # disable WS pings for this scaffold
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "persona", "endpoint": "persona_ws"},
+    )
+    await stream.start()
+
     if not is_persona_enabled():
-        await ws.send_text(json.dumps({"event": "notice", "level": "error", "message": "Persona disabled"}))
-        await ws.close(code=1000)
+        await stream.send_json({"event": "notice", "level": "error", "message": "Persona disabled"})
+        try:
+            await stream.ws.close(code=1000)
+        except Exception:
+            pass
         return
     try:
-        await ws.send_text(json.dumps({"event": "notice", "message": "persona stream connected (scaffold)"}))
-        # Continue using raw WebSocket for this scaffold endpoint to preserve existing test behavior
+        await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
+        # Resolve user_id from token/api_key similar to MCP ws
         # Resolve user_id from token/api_key similar to MCP ws
         user_id: Optional[str] = None
         try:
@@ -130,7 +142,7 @@ async def persona_stream(
                 text = (msg.get("text") or msg.get("message") or "").strip()
                 plan = await _propose_plan(text)
                 plan_id = uuid.uuid4().hex
-                await ws.send_text(json.dumps({"event": "tool_plan", "plan_id": plan_id, **plan}))
+                await stream.send_json({"event": "tool_plan", "plan_id": plan_id, **plan})
             elif mtype == "confirm_plan":
                 plan_id = msg.get("plan_id")
                 steps = msg.get("approved_steps", [])
@@ -141,17 +153,17 @@ async def persona_stream(
                     except StopIteration:
                         # If steps not included in message, re-propose
                         continue
-                    await ws.send_text(json.dumps({"event": "tool_call", "step_idx": idx, "tool": step.get("tool")}))
+                    await stream.send_json({"event": "tool_call", "step_idx": idx, "tool": step.get("tool")})
                     result = await _call_tool(step.get("tool"), step.get("args") or {})
-                    await ws.send_text(json.dumps({"event": "tool_result", "step_idx": idx, **result}))
+                    await stream.send_json({"event": "tool_result", "step_idx": idx, **result})
             else:
-                await ws.send_text(json.dumps({"event": "assistant_delta", "text_delta": "(scaffold)"}))
-                await ws.send_text(json.dumps({"event": "notice", "message": f"echo: {mtype}"}))
+                await stream.send_json({"event": "assistant_delta", "text_delta": "(scaffold)"})
+                await stream.send_json({"event": "notice", "message": f"echo: {mtype}"})
     except WebSocketDisconnect:
         logger.info("Persona stream disconnected")
     except Exception as e:
         logger.warning(f"Persona stream error: {e}")
         try:
-            await ws.close(code=1011)
+            await stream.error("internal_error", "Internal error")
         except Exception:
             pass

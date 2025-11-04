@@ -84,11 +84,15 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
             from pathlib import Path as _Path
             cursor_path = str(_Path(__file__).resolve().parents[3] / "Databases" / "jobs_webhooks_cursor.txt")
     # Resume from persisted cursor if present, unless explicitly overridden by env.
-    # In TEST_MODE, when no explicit cursor path is provided, skip loading a global cursor file
-    # to avoid cross-test interference.
+    # In TEST_MODE: allow resume only when an explicit JOBS_WEBHOOKS_CURSOR_PATH is provided,
+    # to avoid cross-test interference with a shared global file.
     persisted_after = None
     try:
-        if cursor_path and os.path.exists(cursor_path) and not _truthy(os.getenv("TEST_MODE")):
+        _is_test = _truthy(os.getenv("TEST_MODE"))
+        allow_resume = True
+        if _is_test and not os.getenv("JOBS_WEBHOOKS_CURSOR_PATH"):
+            allow_resume = False
+        if cursor_path and os.path.exists(cursor_path) and allow_resume:
             with open(cursor_path, "r", encoding="utf-8") as f:
                 persisted_after = int((f.read() or "0").strip() or 0)
     except Exception as e:
@@ -138,12 +142,8 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
                 logger.debug("metrics increment failed for egress_policy_check_failed")
             return
 
-    # In TEST_MODE, prefer module-level httpx.AsyncClient so tests can monkeypatch it
-    if _is_test and httpx is not None and getattr(httpx, "AsyncClient", None) is not None:
-        _client_ctx = httpx.AsyncClient(timeout=timeout_s)
-    else:
-        from tldw_Server_API.app.core.http_client import create_async_client
-        _client_ctx = create_async_client(timeout=timeout_s)
+    from tldw_Server_API.app.core.http_client import create_async_client
+    _client_ctx = create_async_client(timeout=timeout_s)
     async with _client_ctx as client:
         while True:
             if stop_event and stop_event.is_set():

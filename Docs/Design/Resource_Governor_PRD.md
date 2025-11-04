@@ -190,6 +190,7 @@ class ResourceGovernor:
 - New standardized env vars (legacy aliases maintained via mapping during migration):
   - `RG_BACKEND`: `memory` | `redis`
   - `RG_REDIS_URL`: Redis URL
+  - `REDIS_URL`: Redis URL (alias; used across infrastructure helpers)
   - `RG_TEST_BYPASS`: `true|false` (defaults to honoring `TEST_MODE`)
   - `RG_REDIS_FAIL_MODE`: `fail_closed` | `fail_open` | `fallback_memory` (defaults to `fail_closed`). Controls behavior on Redis outages.
     - Default `fail_closed` is recommended for write paths and global-coordination categories; use `fallback_memory` only for non-critical categories where local over-admission is acceptable.
@@ -197,7 +198,43 @@ class ResourceGovernor:
   - `RG_TRUSTED_PROXIES`: Comma-separated CIDRs for trusted reverse proxies; when unset, IP scope uses the direct remote address only.
   - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`). If true, include hashed entity label in metrics; otherwise exclude to avoid high cardinality.
   - `RG_POLICY_STORE`: `file` | `db` (default `file`). In production, prefer `db` and use AuthNZ DB as SoT; in dev, `file` + env overrides.
+  - Test‑harness flags (diagnostics only):
+    - `RG_TEST_FORCE_STUB_RATE`: `true|false` forces in‑process sliding‑window logic for requests/tokens in Redis backend. Useful to make burst/steady tests deterministic when real Redis timing or clock skew affects retry_after near window boundaries.
+    - `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`: `true|false` best‑effort purge of expired leases before reserve in tests to reduce flakiness.
+
+### Acceptance‑Window Fallback (Requests)
+
+Real Redis can occasionally report window counts near boundaries that admit a request even when a prior denial suggested a small retry_after. To keep behavior deterministic (especially in CI), the Redis backend maintains a per‑(policy, entity) “acceptance‑window” tracker for requests:
+
+- When the tracker observes that `limit` requests were accepted within the current window, further requests are denied until the window end (floor). This is an additive guard over ZSET counts, not a replacement.
+- On denial, the guard sets a deny‑until floor to the end of the window to avoid early admits caused by rounding/drift.
+- In test contexts, you can prefer the acceptance‑window path by setting `RG_TEST_FORCE_STUB_RATE=1`.
+
+### Policy Composition & Retry‑After
+
+- Composition (strictest wins): for each category, compute headroom per applicable scope (global, tenant, user, conversation); the effective headroom is the minimum across scopes.
+- Deny when effective headroom < requested units.
+- Retry‑After aggregation: per category, compute the maximum retry_after across denying scopes; the overall decision retry_after is the maximum across denied categories. This prevents premature retries when multiple scopes deny with different windows.
+
+### Metrics Labels & Cardinality
+
+- Counters/gauges:
+  - `rg_decisions_total{category,scope,backend,result,policy_id}`
+  - `rg_denials_total{category,scope,reason,policy_id}`
+  - `rg_refunds_total{category,scope,reason,policy_id}`
+  - `rg_concurrency_active{category,scope,policy_id}`
+- Entity labels are excluded by default to avoid high cardinality; enable only for targeted debugging with `RG_METRICS_ENTITY_LABEL=true` and prefer sampled logs for per‑entity traces.
   - `RG_POLICY_DB_CACHE_TTL_SEC`: TTL for DB policy cache (default 10s) when `RG_POLICY_STORE=db`.
+
+### Middleware Options (opt-in)
+
+- `RG_ENABLE_SIMPLE_MIDDLEWARE`: enable minimal pre-check middleware (requests category) using `route_map` resolution.
+- `RG_MIDDLEWARE_ENFORCE_TOKENS`: when true, include `tokens` in middleware reserve/deny path and expose precise success headers + per-minute deny headers.
+- `RG_MIDDLEWARE_ENFORCE_STREAMS`: when true, include `streams` in middleware reserve/deny path; on deny, return 429 with `Retry-After`.
+
+### Testing (integration)
+
+- `RG_REAL_REDIS_URL`: optional real Redis URL used by integration tests to validate multi-key Lua path; if absent or unreachable, those tests are skipped. `REDIS_URL` is also honored.
   - Category defaults (fallbacks applied per module if unspecified):
     - `RG_REQUESTS_RPM_DEFAULT`, `RG_REQUESTS_BURST`
     - `RG_TOKENS_PER_MIN_DEFAULT`, `RG_TOKENS_BURST`
@@ -333,6 +370,22 @@ Phase 7 — Cleanup & removal
   - `X-RateLimit-Reset: <epoch_seconds>` or `<seconds>` until reset, aligned to the governing window.
 - For concurrency denials (e.g., `streams`), return `429` with `Retry-After` set from the category decision; do not emit misleading `X-RateLimit-*` unless the route is also governed by `requests`.
 - Maintain SlowAPI-compatible behavior on migrated routes to avoid client regressions.
+
+- Tokens and per-minute headers (when applicable):
+  - When a `tokens` policy is active for a route and the middleware/enforcement layer peeks token usage, include:
+    - `X-RateLimit-Tokens-Remaining: <remaining_tokens>`
+    - If policy defines `tokens.per_min`, also include `X-RateLimit-PerMinute-Limit: <per_min>` and `X-RateLimit-PerMinute-Remaining: <remaining_tokens>`.
+  - Success-path headers use a precise governor `peek` (strictest scope) to populate Remaining/Reset. Reset is computed as the maximum across governed categories to avoid premature retries.
+
+### Diagnostics
+
+- Capability probe (admin-only): `GET /api/v1/resource-governor/diag/capabilities`
+  - Returns a compact diagnostic payload indicating backend and code paths in use:
+    - `backend`: `memory` or `redis`
+    - `real_redis`: boolean indicating whether a real Redis client is connected (vs. an in-memory stub)
+    - `tokens_lua_loaded`, `multi_lua_loaded`: booleans for loaded scripts (Redis backend)
+    - `last_used_tokens_lua`, `last_used_multi_lua`: booleans indicating whether those code paths were exercised recently
+  - Use this endpoint to verify Lua/script capabilities and troubleshoot fallbacks in production.
 
 ## Security & Privacy
 

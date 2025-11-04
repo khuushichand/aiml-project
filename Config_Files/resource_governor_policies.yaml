@@ -1,0 +1,79 @@
+# Resource Governor Policies (stub)
+#
+# This file defines example policies for development and local testing.
+# In production, prefer RG_POLICY_STORE=db with policies managed via AuthNZ.
+
+schema_version: 1
+
+hot_reload:
+  enabled: true
+  interval_sec: 5  # watcher/TTL interval for file store
+
+metadata:
+  description: Default example policies for tldw_server Resource Governor
+  owner: core-platform
+  version: 1
+
+# Global defaults applied when a policy omits a field.
+defaults:
+  fail_mode: fail_closed  # can be overridden per policy
+  algorithm:
+    requests: token_bucket   # token_bucket | sliding_window
+    tokens: token_bucket     # preferred for model tokens
+  scopes_order: [global, tenant, user, conversation, client, ip, service]
+
+policies:
+  # Chat API: per-user and per-conversation controls
+  chat.default:
+    requests: { rpm: 120, burst: 2.0 }
+    tokens:   { per_min: 60000, burst: 1.5 }
+    scopes: [global, user, conversation]
+    fail_mode: fail_closed
+
+  # MCP ingestion/read paths
+  mcp.ingestion:
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [global, client]
+    fail_mode: fallback_memory  # acceptable local over-admission during outages
+
+  # Embeddings service (OpenAI-compatible)
+  embeddings.default:
+    requests: { rpm: 60, burst: 1.2 }
+    scopes: [user]
+
+  # Audio: concurrency via streams + durable minutes cap
+  audio.default:
+    streams: { max_concurrent: 2, ttl_sec: 90 }
+    minutes: { daily_cap: 120, rounding: ceil }
+    scopes: [user]
+    fail_mode: fail_closed
+
+  # SlowAPI façade defaults (ingress IP-based when auth scopes unavailable)
+  slowapi.default:
+    requests: { rpm: 300, burst: 2.0 }
+    scopes: [ip]
+
+  # Evaluations module
+  evals.default:
+    requests: { rpm: 30, burst: 1.0 }
+    scopes: [user]
+
+# Route/tag mapping helpers. Middleware may use these to resolve policy_id.
+route_map:
+  by_tag:
+    chat: chat.default
+    mcp.ingestion: mcp.ingestion
+    embeddings: embeddings.default
+    audio: audio.default
+    evals: evals.default
+    slowapi: slowapi.default
+  by_path:
+    "/api/v1/chat/*": chat.default
+    "/api/v1/mcp/*": mcp.ingestion
+    "/api/v1/embeddings*": embeddings.default
+    "/api/v1/audio/*": audio.default
+    "/api/v1/evaluations/*": evals.default
+
+# Observability note: Do not include entity label in metrics by default.
+# Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.
+

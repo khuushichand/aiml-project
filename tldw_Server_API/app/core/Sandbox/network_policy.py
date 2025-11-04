@@ -4,7 +4,7 @@ import ipaddress
 import os
 import socket
 import subprocess
-from typing import Callable, Iterable, List, Optional, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence, Dict, Tuple
 from loguru import logger
 
 
@@ -27,6 +27,38 @@ def default_resolver(host: str) -> List[str]:
     except Exception:
         return []
     return out
+
+
+def _normalize_host_token(token: str) -> Tuple[str, bool, bool]:
+    """Normalize a hostname-like token and detect wildcard/suffix semantics.
+
+    Returns (host, is_wildcard, is_suffix).
+    - Accepts tokens like '*.example.com', '.example.com', 'https://example.com'.
+    - Lowercases host, strips trailing dot, removes URL schemes.
+    """
+    tok = str(token).strip()
+    # Drop URL scheme if present
+    for scheme in ("http://", "https://"):
+        if tok.lower().startswith(scheme):
+            tok = tok[len(scheme):]
+            break
+    # Strip path/port if accidentally included
+    # e.g., example.com:80/foo -> example.com
+    for sep in ("/", ":"):
+        if sep in tok:
+            tok = tok.split(sep, 1)[0]
+    is_wild = False
+    is_suffix = False
+    if tok.startswith("*."):
+        is_wild = True
+        tok = tok[2:]
+    elif tok.startswith('.'):
+        # Suffix-style token: treat like wildcard for a domain suffix
+        is_wild = True
+        is_suffix = True
+        tok = tok[1:]
+    host = tok.rstrip('.').lower()
+    return host, is_wild, is_suffix
 
 
 def expand_allowlist_to_targets(
@@ -68,12 +100,8 @@ def expand_allowlist_to_targets(
             continue
         except Exception:
             pass
-        # Hostname (supports wildcard prefix "*.")
-        host = tok
-        is_wild = False
-        if host.startswith("*."):
-            is_wild = True
-            host = host[2:]
+        # Hostname (supports wildcard prefix "*." and suffix ".domain")
+        host, is_wild, _is_suffix = _normalize_host_token(tok)
         if not host:
             continue
         # Resolve apex and a small set of common subdomains for wildcard tokens
@@ -93,6 +121,84 @@ def expand_allowlist_to_targets(
                 except Exception:
                     continue
     return sorted(results)
+
+
+def pin_dns_map(
+    raw_allowlist: Sequence[str] | str | None,
+    *,
+    resolver: Callable[[str], List[str]] = default_resolver,
+    wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
+) -> Dict[str, List[str]]:
+    """Return a mapping of normalized host tokens to resolved IPv4 addresses.
+
+    CIDR and literal IP inputs are returned as themselves (keyed by the token),
+    hostnames and wildcards are expanded and grouped by the base host.
+    """
+    if raw_allowlist is None:
+        return {}
+    if isinstance(raw_allowlist, str):
+        tokens = [t.strip() for t in raw_allowlist.split(',') if t.strip()]
+    else:
+        tokens = [str(t).strip() for t in raw_allowlist if str(t).strip()]
+    out: Dict[str, List[str]] = {}
+    for tok in tokens:
+        # CIDR or IP
+        try:
+            if "/" in tok:
+                ipaddress.ip_network(tok, strict=False)
+                out.setdefault(tok, [])
+                continue
+        except Exception:
+            pass
+        try:
+            ipaddress.ip_address(tok)
+            out.setdefault(tok, [tok])
+            continue
+        except Exception:
+            pass
+        # Host tokens
+        host, is_wild, _is_suffix = _normalize_host_token(tok)
+        if not host:
+            continue
+        hosts: List[str] = []
+        if is_wild:
+            for sub in list(wildcard_subdomains or ("",)):
+                fqdn = f"{sub}.{host}" if sub else host
+                hosts.append(fqdn)
+        else:
+            hosts.append(host)
+        ips: List[str] = []
+        for h in hosts:
+            for ip in resolver(h):
+                try:
+                    ipaddress.ip_address(ip)
+                    if ip not in ips:
+                        ips.append(ip)
+                except Exception:
+                    continue
+        out[host] = ips
+    return out
+
+
+def refresh_egress_rules(
+    container_ip: str,
+    raw_allowlist: Sequence[str] | str | None,
+    label: str,
+    *,
+    resolver: Callable[[str], List[str]] = default_resolver,
+    wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
+) -> List[str]:
+    """Revoke existing rules by label and apply pinned rules for the current allowlist.
+
+    Performs a best-effort deletion via delete_rules_by_label(), then applies
+    new rules computed from the current DNS resolution of hostnames.
+    """
+    try:
+        delete_rules_by_label(label)
+    except Exception:
+        pass
+    targets = expand_allowlist_to_targets(raw_allowlist, resolver=resolver, wildcard_subdomains=wildcard_subdomains)
+    return apply_egress_rules_atomic(container_ip, targets, label)
 
 
 def _build_restore_blob(container_ip: str, targets: Iterable[str], label: str) -> str:
@@ -196,4 +302,3 @@ def delete_rules_by_label(label: str) -> None:
                         pass
     except Exception:
         pass
-

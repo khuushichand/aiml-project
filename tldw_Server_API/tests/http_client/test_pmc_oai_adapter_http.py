@@ -12,7 +12,7 @@ def _mock_transport(handler):
 
 
 def test_pmc_oai_identify(monkeypatch):
-    os.environ["EGRESS_ALLOWLIST"] = "pmc.ncbi.nlm.nih.gov"
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "pmc.ncbi.nlm.nih.gov")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "pmc.ncbi.nlm.nih.gov"
@@ -48,7 +48,7 @@ def test_pmc_oai_identify(monkeypatch):
 
 
 def test_pmc_oai_listsets_with_resumption(monkeypatch):
-    os.environ["EGRESS_ALLOWLIST"] = "pmc.ncbi.nlm.nih.gov"
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "pmc.ncbi.nlm.nih.gov")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "pmc.ncbi.nlm.nih.gov"
@@ -96,4 +96,3 @@ def test_pmc_oai_listsets_with_resumption(monkeypatch):
     sets2, token2, err2 = pmc_oai.pmc_oai_list_sets(resumption_token=token)
     assert err2 is None and token2 is None
     assert sets2 and sets2[0]["setSpec"] == "pmc-open"
-

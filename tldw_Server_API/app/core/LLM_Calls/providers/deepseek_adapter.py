@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator
+from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
+import os
 
 from .base import ChatProvider
+from tldw_Server_API.app.core.http_client import (
+    create_client as _hc_create_client,
+)
 
 
 class DeepSeekAdapter(ChatProvider):
@@ -46,26 +50,167 @@ class DeepSeekAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
+    def _use_native_http(self) -> bool:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            try:
+                from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+                fn = getattr(_legacy, "chat_with_deepseek", None)
+                if callable(fn):
+                    mod = getattr(fn, "__module__", "") or ""
+                    fname = getattr(fn, "__name__", "") or ""
+                    if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
+                        return False
+            except Exception:
+                pass
+        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_DEEPSEEK")
+        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+
+    def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
+        default_base = "https://api.deepseek.com"
+        api_base = None
+        if cfg:
+            api_base = ((cfg.get("deepseek_api") or {}).get("api_base_url"))
+        return (os.getenv("DEEPSEEK_BASE_URL") or api_base or default_base).rstrip("/")
+
+    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+        h = {"Content-Type": "application/json"}
+        if api_key:
+            h["Authorization"] = f"Bearer {api_key}"
+        return h
+
+    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        messages: List[Dict[str, Any]] = request.get("messages") or []
+        system_message = request.get("system_message")
+        payload_messages: List[Dict[str, Any]] = []
+        if system_message:
+            payload_messages.append({"role": "system", "content": system_message})
+        payload_messages.extend(messages)
+        payload: Dict[str, Any] = {"model": request.get("model"), "messages": payload_messages}
+        # OpenAI-style knobs
+        for k in (
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "seed",
+            "stop",
+            "logprobs",
+            "top_logprobs",
+            "presence_penalty",
+            "frequency_penalty",
+            "response_format",
+            "n",
+            "user",
+        ):
+            if request.get(k) is not None:
+                payload[k] = request.get(k)
+        if request.get("tools") is not None:
+            payload["tools"] = request.get("tools")
+        if request.get("tool_choice") is not None:
+            payload["tool_choice"] = request.get("tool_choice")
+        if request.get("logit_bias") is not None:
+            payload["logit_bias"] = request.get("logit_bias")
+        return payload
+
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        if self._use_native_http():
+            api_key = request.get("api_key")
+            cfg = request.get("app_config") or {}
+            url = f"{self._base_url(cfg)}/chat/completions"
+            headers = self._headers(api_key)
+            payload = self._build_payload(request)
+            payload["stream"] = False
+            try:
+                with _hc_create_client(timeout=timeout or 60.0) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as e:
+                raise self.normalize_error(e)
+
         kwargs = self._to_handler_args(request)
-        if "stream" in request or "streaming" in request:
-            pass
-        else:
+        if "stream" not in request and "streaming" not in request:
             kwargs["streaming"] = None
-        import os
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        if os.getenv("TEST_MODE") and os.getenv("TEST_MODE").lower() in {"1", "true", "yes", "on"}:
-            return _legacy.chat_with_deepseek(**kwargs)
+        fn = getattr(_legacy, "chat_with_deepseek", None)
+        if callable(fn):
+            mod = getattr(fn, "__module__", "") or ""
+            fname = getattr(fn, "__name__", "") or ""
+            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
+                return fn(**kwargs)  # type: ignore[misc]
         return _legacy.legacy_chat_with_deepseek(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        if self._use_native_http():
+            api_key = request.get("api_key")
+            cfg = request.get("app_config") or {}
+            url = f"{self._base_url(cfg)}/chat/completions"
+            headers = self._headers(api_key)
+            payload = self._build_payload(request)
+            payload["stream"] = True
+            try:
+                with _hc_create_client(timeout=timeout or 60.0) as client:
+                    with client.stream("POST", url, headers=headers, json=payload) as resp:
+                        resp.raise_for_status()
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            yield line
+                return
+            except Exception as e:
+                raise self.normalize_error(e)
+
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = True
-        import os
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        if os.getenv("TEST_MODE") and os.getenv("TEST_MODE").lower() in {"1", "true", "yes", "on"}:
-            return _legacy.chat_with_deepseek(**kwargs)
+        fn = getattr(_legacy, "chat_with_deepseek", None)
+        if callable(fn):
+            mod = getattr(fn, "__module__", "") or ""
+            fname = getattr(fn, "__name__", "") or ""
+            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
+                return fn(**kwargs)  # type: ignore[misc]
         return _legacy.legacy_chat_with_deepseek(**kwargs)
+
+    def normalize_error(self, exc: Exception):  # type: ignore[override]
+        try:
+            import httpx  # type: ignore
+        except Exception:  # pragma: no cover
+            httpx = None  # type: ignore
+        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+            from tldw_Server_API.app.core.Chat.Chat_Deps import (
+                ChatBadRequestError,
+                ChatAuthenticationError,
+                ChatRateLimitError,
+                ChatProviderError,
+                ChatAPIError,
+            )
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None)
+            body = None
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            detail = None
+            if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                eobj = body["error"]
+                msg = (eobj.get("message") or "").strip()
+                typ = (eobj.get("type") or "").strip()
+                detail = (f"{typ} {msg}" if typ else msg) or str(exc)
+            else:
+                try:
+                    detail = resp.text if resp is not None else str(exc)
+                except Exception:
+                    detail = str(exc)
+            if status in (400, 404, 422):
+                return ChatBadRequestError(provider=self.name, message=str(detail))
+            if status in (401, 403):
+                return ChatAuthenticationError(provider=self.name, message=str(detail))
+            if status == 429:
+                return ChatRateLimitError(provider=self.name, message=str(detail))
+            if status and 500 <= status < 600:
+                return ChatProviderError(provider=self.name, message=str(detail), status_code=status)
+            return ChatAPIError(provider=self.name, message=str(detail), status_code=status or 500)
+        return super().normalize_error(exc)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)

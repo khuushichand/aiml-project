@@ -38,6 +38,7 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 from tldw_Server_API.app.core.AuthNZ.permissions import RoleChecker
 import mimetypes
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 import hmac
 import hashlib
 import time
@@ -58,6 +59,9 @@ class SandboxArtifactGuardRoute(APIRoute):
             try:
                 raw_path = request.scope.get("raw_path")
                 path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path or "")
+                # Reject traversal early for any sandbox runs path if raw_path reveals '..'
+                if "/api/v1/sandbox/runs/" in path_raw and "/../" in path_raw:
+                    return JSONResponse({"detail": "invalid_path"}, status_code=400)
                 if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
                     from urllib.parse import unquote
                     import posixpath as _pp
@@ -1110,6 +1114,15 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             return
 
     await websocket.accept()
+    # Wrap for WS metrics; keep domain frames unchanged
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "sandbox", "endpoint": "sandbox_run_ws"},
+    )
+    await stream.start()
     hub = get_hub()
     hub.set_loop(asyncio.get_running_loop())
     # Optional resume from specific sequence
@@ -1201,6 +1214,10 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             while True:
                 try:
                     msg = await websocket.receive_json()
+                    try:
+                        stream.mark_activity()
+                    except Exception:
+                        pass
                 except WebSocketDisconnect:
                     return
                 except Exception:
@@ -1270,7 +1287,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                     except Exception:
                         pass
                     try:
-                        await websocket.close()
+                        await stream.ws.close()
                     except Exception:
                         pass
                     return
@@ -1290,7 +1307,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 frame = await asyncio.wait_for(q.get(), timeout=poll_timeout)
             except asyncio.TimeoutError:
                 continue
-            await websocket.send_json(frame)
+            await stream.send_json(frame)
             # Do not forcibly close on 'end'; allow clients/tests to disconnect.
             # This avoids race conditions with the Starlette TestClient where the
             # server closing first can lead to ClosedResourceError during reads.
@@ -1326,7 +1343,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         except Exception:
             pass
         try:
-            await websocket.close()
+            await stream.ws.close()
         except Exception:
             pass
 
@@ -1435,10 +1452,40 @@ async def sandbox_runs_fallback_guard(
     request: Request = None,
 ):
     try:
-        raw_path = request.scope.get("raw_path") if request else None
-        path_raw = raw_path.decode("utf-8", "ignore") if isinstance(raw_path, (bytes, bytearray)) else (request.url.path if request else "")
-        # If the original raw URL contained an artifacts traversal, return 400
-        if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/../" in path_raw:
+        # Collect multiple candidates for the original request path across ASGI implementations
+        candidates: list[str] = []
+        if request is not None:
+            try:
+                rp = request.scope.get("raw_path")
+                if isinstance(rp, (bytes, bytearray)):
+                    candidates.append(rp.decode("utf-8", "ignore"))
+            except Exception:
+                pass
+            try:
+                rp2 = getattr(request.url, "raw_path", None)
+                if isinstance(rp2, str):
+                    candidates.append(rp2)
+            except Exception:
+                pass
+            try:
+                candidates.append(request.url.path)
+            except Exception:
+                pass
+            try:
+                # HTTP/2 pseudo-header path may be present
+                pseudo = None
+                for (hk, hv) in request.scope.get("headers", []) or []:
+                    try:
+                        if hk.decode("latin-1").lower() == ":path":
+                            pseudo = hv.decode("utf-8", "ignore")
+                            break
+                    except Exception:
+                        continue
+                if pseudo:
+                    candidates.append(pseudo)
+            except Exception:
+                pass
+        if any(("/api/v1/sandbox/runs/" in c and "/artifacts/../" in c) for c in candidates if c):
             raise HTTPException(status_code=400, detail="invalid_path")
     except HTTPException:
         raise

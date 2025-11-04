@@ -31,6 +31,13 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     anthropic_chat_handler_async,
     groq_chat_handler_async,
     openrouter_chat_handler_async,
+    qwen_chat_handler_async,
+    deepseek_chat_handler_async,
+    huggingface_chat_handler_async,
+    custom_openai_chat_handler_async,
+    custom_openai_2_chat_handler_async,
+    google_chat_handler_async,
+    mistral_chat_handler_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -83,6 +90,13 @@ ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
     'groq': groq_chat_handler_async,
     'anthropic': anthropic_chat_handler_async,
     'openrouter': openrouter_chat_handler_async,
+    'qwen': qwen_chat_handler_async,
+    'deepseek': deepseek_chat_handler_async,
+    'huggingface': huggingface_chat_handler_async,
+    'custom-openai-api': custom_openai_chat_handler_async,
+    'custom-openai-api-2': custom_openai_2_chat_handler_async,
+    'google': google_chat_handler_async,
+    'mistral': mistral_chat_handler_async,
 }
 
 # 2. Parameter mapping for each provider

@@ -1,0 +1,35 @@
+groups:
+  - name: tldw_server_http_client
+    rules:
+      - alert: HighHTTPClientRetryRate
+        expr: sum(rate(http_client_retries_total[5m])) / clamp_min(sum(rate(http_client_requests_total[5m])), 1) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP client retry rate"
+          description: ">
+            More than 20% of outbound HTTP requests are retried over 10 minutes.
+            Investigate upstream availability or egress policy configuration."
+
+      - alert: EgressDenialsDetected
+        expr: increase(http_client_egress_denials_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Egress policy denials detected"
+          description: ">
+            One or more outbound egress denials occurred in the last 10 minutes.
+            Check EGRESS_ALLOWLIST/PROXY_ALLOWLIST and redirect chains."
+
+      - alert: HighHTTPClientLatencyP99
+        expr: histogram_quantile(0.99, sum by (le) (rate(http_client_request_duration_seconds_bucket[10m]))) > 2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 outbound HTTP latency"
+          description: ">
+            The 99th percentile outbound HTTP latency is above 2s for 15 minutes."
+

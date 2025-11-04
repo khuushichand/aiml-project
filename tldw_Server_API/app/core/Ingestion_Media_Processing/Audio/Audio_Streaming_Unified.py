@@ -16,6 +16,7 @@
 ####################
 
 import asyncio
+import os
 import base64
 import json
 import time
@@ -1207,12 +1208,19 @@ async def handle_unified_websocket(
     logger.info("=== handle_unified_websocket STARTED ===")
 
     # Wrap the WebSocket with standardized lifecycle (ping/error/done) and metrics.
+    # Optional idle timeout for WS via env (tests/ops); default None leaves it off here
+    try:
+        _raw_idle = os.getenv("AUDIO_WS_IDLE_TIMEOUT_S") or os.getenv("STREAM_IDLE_TIMEOUT_S")
+        _idle_timeout = float(_raw_idle) if _raw_idle else None
+    except Exception:
+        _idle_timeout = None
+
     stream = WebSocketStream(
         websocket,
         heartbeat_interval_s=None,  # use env default
         compat_error_type=True,     # include error_type for rollout compatibility
         close_on_done=True,
-        idle_timeout_s=None,
+        idle_timeout_s=_idle_timeout,
         labels={"component": "audio", "endpoint": "audio_unified_ws"},
     )
     await stream.start()
@@ -1459,7 +1467,7 @@ async def handle_unified_websocket(
                 ready = await diarizer.ensure_ready()
                 if not ready:
                     logger.warning("Streaming diarizer unavailable during initialization; disabling diarization.")
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "warning",
                         "state": "diarization_unavailable",
                         "message": "Diarization disabled: dependencies missing or initialization failed",
@@ -1467,7 +1475,7 @@ async def handle_unified_websocket(
                     })
                     diarizer = None
                 else:
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "status",
                         "state": "diarization_enabled",
                         "diarization": {
@@ -1577,7 +1585,7 @@ async def handle_unified_websocket(
                 elif data.get("type") == "commit":
                     # Get final transcript
                     full_transcript = transcriber.get_full_transcript()
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "full_transcript",
                         "text": full_transcript,
                         "timestamp": time.time()
@@ -1599,7 +1607,7 @@ async def handle_unified_websocket(
                                     }
                                     for seg_id, info in sorted(mapping.items())
                                 ]
-                                await websocket.send_json({
+                                await stream.send_json({
                                     "type": "diarization_summary",
                                     "speaker_map": speaker_map,
                                     "audio_path": audio_path,
@@ -1666,18 +1674,19 @@ async def handle_unified_websocket(
             except json.JSONDecodeError:
                 await stream.error("validation_error", "Invalid JSON message")
             except QuotaExceeded as qe:
-                # Emit compatibility error frame and close with application-specific code (4003)
+                # Standardized error frame with compatibility fields for legacy clients
+                _quota = getattr(qe, "quota", "daily_minutes")
+                await stream.send_json({
+                    "type": "error",
+                    "code": "quota_exceeded",
+                    "message": "Streaming transcription quota exceeded",
+                    "data": {"quota": _quota},
+                    # Compatibility shims during rollout
+                    "error_type": "quota_exceeded",
+                    "quota": _quota,
+                })
                 try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "error_type": "quota_exceeded",
-                        "quota": getattr(qe, "quota", "daily_minutes"),
-                        "message": "Streaming transcription quota exceeded",
-                    })
-                except Exception:
-                    pass
-                try:
-                    await websocket.close(code=4003, reason="quota_exceeded")
+                    await stream.ws.close(code=WebSocketStream._map_close_code("quota_exceeded"))
                 except Exception:
                     pass
                 return

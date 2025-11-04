@@ -2,7 +2,70 @@ PRD: HTTP Client Consolidation
 
   - Owner: Platform / Core
   - Version: 1.0
-  - Status: Proposed
+  - Status: Completed (Stage 7)
+
+  Summary of Outcomes
+
+  - Centralization: 100% of outbound HTTP in app/core and app/services now uses centralized helpers/factories (documented exceptions appear only in documentation examples).
+  - Security: Egress enforced per hop and on proxies (deny-by-default allowlist). Optional TLS minimum version and env-driven leaf-cert pinning supported and tested.
+  - Reliability: Unified retries with decorrelated jitter and Retry-After support; no auto-retry after first body byte for streaming.
+  - Streaming: Standardized SSE helper with deterministic cancellation and final [DONE] ordering; added stress tests for high-chunk scenarios.
+  - Downloads: Atomic rename, checksum and Content-Length validation, resume support; strict Content-Type enabled at call sites where required (audio path enabled).
+  - Observability: Structured outbound logs; metrics exposed (http_client_requests_total, http_client_request_duration_seconds_bucket, http_client_retries_total, http_client_egress_denials_total); optional traceparent injection for OTel.
+  - Monitoring: Grafana dashboard JSON and Prometheus alert rules added (Docs/Monitoring/http_client_grafana_dashboard.json, Docs/Monitoring/http_client_alerts_prometheus.yaml).
+  - Developer experience: Config and .env examples updated (PROXY_ALLOWLIST, TLS flags, HTTP_CERT_PINS); comprehensive MockTransport-based tests for JSON helpers, redirects, proxies, downloads, SSE parsing, TLS, and perf microbenches (PERF=1).
+  - CI enforcement: HTTP usage guard is blocking and passing; prevents direct httpx/requests usage outside approved core files.
+
+  How to Monitor
+
+  - Prometheus metrics endpoints (gated by route toggles):
+      - Prometheus text: GET `/metrics`
+      - JSON metrics: GET `/api/v1/metrics`
+      - Quick checks:
+        - `curl -s http://127.0.0.1:8000/metrics | head`
+        - `curl -s http://127.0.0.1:8000/api/v1/metrics`
+  - OpenTelemetry (optional):
+      - Install exporters (see `tldw_Server_API/app/core/Metrics/README.md`).
+      - Example env:
+        - `OTEL_SERVICE_NAME=tldw_server`
+        - `OTEL_SERVICE_VERSION=1.0.0`
+        - `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`
+        - `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`
+        - `OTEL_METRICS_EXPORTER=prometheus,otlp`
+        - `OTEL_TRACES_EXPORTER=otlp`
+      - Server logs indicate OTEL availability on startup.
+  - Dashboards & Alerts:
+      - Grafana: import `Docs/Monitoring/http_client_grafana_dashboard.json`.
+      - Prometheus: load alert rules from `Docs/Monitoring/http_client_alerts_prometheus.yaml`.
+
+  Troubleshooting
+
+  - Egress denials (NetworkError/EgressPolicyError):
+      - Confirm host and scheme are allowed by the server’s egress policy and allowlists.
+      - Redirects are re‑validated per hop; check each `Location` host in the chain.
+      - Proxies are deny‑by‑default; set `PROXY_ALLOWLIST` (hosts or URLs) if a proxy is required.
+      - Metrics: `http_client_egress_denials_total{reason}` increments with the reason label.
+  - Proxy blocked or ignored:
+      - Central client validates proxies against `PROXY_ALLOWLIST`. Dict form (`{"http": "...", "https": "..."}`) is supported.
+      - When `HTTP_TRUST_ENV=false` (default), system proxies are ignored.
+  - Redirect loops or missing Location:
+      - Loops surface as `RetryExhaustedError` or `NetworkError("Invalid/without Location")` depending on hop.
+      - Cap is `HTTP_MAX_REDIRECTS` (default 5). Validate final URL/content‑type matches expectations.
+  - HTTP/2 disabled unexpectedly:
+      - If `h2` is not installed, factories automatically downgrade to HTTP/1.1.
+      - Install `httpx[h2]` to re‑enable HTTP/2; no code change needed.
+  - JSON decode errors:
+      - Helpers validate `Content-Type: application/json`. Pass `require_json_ct=False` (or `accept_mismatch=True` at call sites that permit it) to allow decoding regardless of header.
+      - Large payloads: enforce or raise `HTTP_JSON_MAX_BYTES` at call sites using `max_bytes`.
+  - Streaming stalls/DONE ordering:
+      - SSE helper never retries after first body byte; cancellation propagates via `CancelledError`.
+      - Unified path emits a single final `[DONE]`; for issues check provider adapters and heartbeat intervals.
+  - TLS pinning/min-version failures:
+      - Pinning uses leaf cert SHA‑256 hashes from `HTTP_CERT_PINS` (`host=pinA|pinB,...`).
+      - Enforce min version via `TLS_ENFORCE_MIN_VERSION=true` and `TLS_MIN_VERSION=1.2|1.3`.
+  - Downloads resume anomalies:
+      - If server ignores `Range` and returns 200, downloader overwrites the partial file with full content.
+      - Use `checksum`/`Content-Length` validation and optional `require_content_type` for strictness.
 
   Overview
 
@@ -46,9 +109,20 @@ PRD: HTTP Client Consolidation
 
   Current State
 
-  - Central client exists with egress guard and basic fetch: tldw_Server_API/app/core/http_client.py:1
-  - Egress policy engine: tldw_Server_API/app/core/Security/egress.py:146
-  - Multiple local retry/backoff implementations and direct httpx/requests usages across modules.
+  - Central client fully implemented with egress enforcement, retries, SSE/bytes streaming, and downloads: tldw_Server_API/app/core/http_client.py
+  - Egress policy engine: tldw_Server_API/app/core/Security/egress.py
+  - Broad migration complete across core/services:
+      - LLM providers (non‑streaming + streaming): OpenAI, Anthropic, Cohere, Groq, OpenRouter, HuggingFace, DeepSeek, Mistral, Google.
+      - WebSearch, Third_Party sources, Evaluations loaders, and OCR backends centralized to helpers.
+      - Audio/document downloads consolidated via download/adownload with checksum/length validation; audio path enforces MIME.
+  - Observability:
+      - Per‑request structured logs; http_client_* metrics registered (requests_total, duration histogram, retries_total, egress_denials_total).
+      - Optional OpenTelemetry spans and traceparent injection in place.
+      - Grafana dashboard and Prometheus alerts provided under Docs/Monitoring/.
+  - Security:
+      - TLS minimum version enforcement (optional) and env‑driven leaf‑cert pinning map (HTTP_CERT_PINS) supported and tested.
+  - CI enforcement:
+      - HTTP usage guard is blocking; direct requests/httpx usage outside approved core files is prevented.
 
   Proposed Solution
 
@@ -209,12 +283,19 @@ PRD: HTTP Client Consolidation
       - Notification webhook sender switched to fetch.
   - Ingestion/audio:
       - External transcription provider now uses afetch with create_async_client; downloads previously consolidated to download/adownload.
+      - Audio downloads now enforce strict content‑type; document handlers keep HEAD‑time MIME checks.
   - Docs updated:
       - README and Config_Files/README document streaming (astream_sse) and download (download/adownload) usage examples.
       - JSON: success, bad JSON, wrong content-type, max_bytes enforcement.
       - Streaming: normal end, mid-stream error surfaced, cancellation propagation (CancelledError), proper close; SSE parsing.
       - Download: atomic rename, partial cleanup, checksum and Content-Length validation, basic Range-resume (when enabled).
       - Observability: metrics counters/labels update; structured logs redact secrets; optional OTel spans emitted when enabled.
+      - Monitoring: Grafana dashboard JSON and Prometheus alert rules for http_client_* metrics added.
+  - What Changed (recent):
+      - Added TLS minimum-version enforcement in client factories with unit tests; optional leaf-cert pinning map via HTTP_CERT_PINS and tests.
+      - Added SSE stress test to validate final [DONE] ordering and cancellation under high-chunk conditions; improved unified SSE stability.
+      - Added performance checks (optional, PERF=1) for non‑streaming, streaming, and download hot paths using httpx MockTransport.
+      - Provided Grafana dashboard JSON and Prometheus alert rules for http_client_* metrics (requests_total, duration histogram, retries_total, egress_denials_total).
   - Integration tests
       - Swap target modules to central helpers; validate same behavior via mock servers and test markers already used in repo.
       - Redirect chains with mixed hosts; ensure egress rechecks and final content-type validation.
@@ -306,21 +387,28 @@ PRD: HTTP Client Consolidation
       - Streaming call sites: standardize on astream_sse + existing SSE normalizers in `tldw_Server_API/app/core/LLM_Calls/streaming.py`.
       - Success: Majority (>80%) of outbound HTTP uses helpers; regression tests pass.
 
-  - Stage 5: Observability & Security Hardening
+  - Stage 5: Observability & Security Hardening — Completed
       - Ensure per-request structured logs include request_id, method, host, status, duration.
       - Wire optional OpenTelemetry spans for client calls and retries; confirm traceparent propagation to providers that support it.
       - Verify egress denials produce clear errors and increment `http_client_egress_denials_total` with reason.
       - Success: Dashboards reflect client metrics; SLO alerts (if any) unaffected.
 
-  - Stage 6: Documentation & Examples
+  What Changed (Stage 5)
+
+  - Added per-request outbound log lines in `http_client` on success and terminal failures with fields: `request_id`, `method`, `scheme`, `host`, `path`, `status_code`, `duration_ms`, `attempt`, `retry_delay_ms`, `exception_class`.
+  - Trace context: `traceparent` injection already present; retry events (`http.retry`) annotated on spans.
+  - Egress denials: now increment `http_client_egress_denials_total` with a reason label; tests assert message clarity and counter increments.
+  - TLS security: optional minimum TLS version enforcement and per-host leaf-cert SHA-256 pinning supported by factories and enforced pre-I/O when configured.
+
+  - Stage 6: Documentation & Examples — Completed
       - Update developer docs with examples for fetch_json, SSE streaming, and downloads with checksum.
       - Document configuration keys in Config_Files/README.md and .env templates; add migration tips for requests→httpx.
       - Success: Docs merged; example snippets validated.
 
-  - Stage 7: Cleanup & Enforcement
-      - Remove deprecated local retry/session code and ad-hoc clients listed under "What Will Be Removed".
-      - Add a lightweight CI guard to flag direct `requests` or `httpx` usage outside `app/core/http_client.py` and tests.
-      - Success: 100% of outbound HTTP uses helpers (documented exceptions only); CI guard enforced.
+  - Stage 7: Cleanup & Enforcement — Completed
+      - Deprecated local retry/session code and ad‑hoc clients removed or refactored to use centralized helpers.
+      - CI guard to block direct `requests`/`httpx` usage outside approved core files is active and passing in CI.
+      - Success: 100% of outbound HTTP in app/core and app/services uses centralized helpers/factories (documented exceptions are examples in docs only).
 
   - Rollout & Risk Mitigation
       - Canary: enable helpers per-module behind lightweight toggles if needed; default to safe timeouts and trust_env=False.
