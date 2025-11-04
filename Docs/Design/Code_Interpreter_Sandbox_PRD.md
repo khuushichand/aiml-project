@@ -64,6 +64,13 @@ Spec 1.1 additions now implemented
 - Public and authenticated sandbox health endpoints.
 - Error semantics: 409 idempotency returns `prior_id`, `key`, `prior_created_at`; 503 `runtime_unavailable` includes the failing `details.runtime`.
 
+Update: Egress Allowlist & DNS Pinning (v0.3)
+- Added helpers to harden allowlist parsing and make DNS pinning explicit:
+  - `expand_allowlist_to_targets(...)` now supports CIDR, IPs, hostnames, wildcard prefixes (`*.example.com`) and suffix tokens (`.example.com`), promoting resolved A records to `/32` CIDRs.
+  - `pin_dns_map(...)` returns `{ host -> [IPs] }` for observability.
+  - `refresh_egress_rules(container_ip, raw_allowlist, label, ...)` revokes labeled rules then reapplies pinned `ACCEPT` targets followed by a `DROP` for the container IP.
+  - Rules are labeled for later cleanup; falls back from `iptables-restore` to iterative `iptables` if needed.
+
 Not yet (planned or in progress)
 - Egress allowlist enforcement and DNS pinning (capability flag present; enforcement WIP).
 - Firecracker runner: real execution parity (scaffold implemented).

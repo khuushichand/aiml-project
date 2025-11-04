@@ -92,14 +92,7 @@ class SandboxOrchestrator:
         except Exception:
             return ""
 
-    def _cleanup_idem(self) -> None:
-        now = time.time()
-        expired: list[Tuple[str, str, str]] = []
-        for k, rec in self._idem.items():
-            if now - rec.created_at > self._idem_ttl_sec:
-                expired.append(k)
-        for k in expired:
-            self._idem.pop(k, None)
+    
 
     def _check_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:

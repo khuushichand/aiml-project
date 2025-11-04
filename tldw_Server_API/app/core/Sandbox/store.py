@@ -131,6 +131,15 @@ class SandboxStore:
     ) -> int:
         raise NotImplementedError
 
+    # Optional: TTL GC for idempotency
+    def gc_idempotency(self) -> int:
+        """Garbage-collect expired idempotency records.
+
+        Returns the number of records deleted. Default implementation does
+        nothing and returns 0; concrete backends may override.
+        """
+        return 0
+
 
 class InMemoryStore(SandboxStore):
     def __init__(self, idem_ttl_sec: int = 600) -> None:
@@ -155,11 +164,12 @@ class InMemoryStore(SandboxStore):
         except Exception:
             return ""
 
-    def _gc_idem(self) -> None:
+    def _gc_idem(self) -> int:
         now = time.time()
         expired = [k for k, (ts, _fp, _resp, _oid) in self._idem.items() if now - ts > self.idem_ttl_sec]
         for k in expired:
             self._idem.pop(k, None)
+        return len(expired)
 
     def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not key:
@@ -184,6 +194,10 @@ class InMemoryStore(SandboxStore):
             idx = (endpoint, self._user_key(user_id), key)
             if idx not in self._idem:
                 self._idem[idx] = (time.time(), self._fp(body), response, object_id)
+
+    def gc_idempotency(self) -> int:
+        with self._lock:
+            return self._gc_idem()
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
         with self._lock:
@@ -542,13 +556,17 @@ class SQLiteStore(SandboxStore):
         except Exception:
             return ""
 
-    def _gc_idem(self, con: sqlite3.Connection) -> None:
+    def _gc_idem(self, con: sqlite3.Connection) -> int:
         try:
             ttl = max(1, int(self.idem_ttl_sec))
         except Exception:
             ttl = 600
         cutoff = time.time() - ttl
+        cur = con.execute("SELECT COUNT(*) FROM sandbox_idempotency WHERE created_at < ?", (cutoff,))
+        row = cur.fetchone()
+        n = int(row[0]) if row else 0
         con.execute("DELETE FROM sandbox_idempotency WHERE created_at < ?", (cutoff,))
+        return n
 
     def check_idempotency(self, endpoint: str, user_id: Any, key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not key:
@@ -594,6 +612,14 @@ class SQLiteStore(SandboxStore):
                 )
             except Exception as e:
                 logger.debug(f"idempotency store failed: {e}")
+
+    def gc_idempotency(self) -> int:
+        """One-shot TTL GC for idempotency rows; returns number of deleted rows."""
+        with self._lock, self._conn() as con:
+            try:
+                return self._gc_idem(con)
+            except Exception:
+                return 0
 
     def put_run(self, user_id: Any, st: RunStatus) -> None:
         """

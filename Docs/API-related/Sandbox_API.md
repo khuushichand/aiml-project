@@ -110,7 +110,30 @@ Frames:
 ## Artifacts
 - List: GET `/api/v1/sandbox/runs/{id}/artifacts`
 - Download: GET `/api/v1/sandbox/runs/{id}/artifacts/{path}`
-  - Single Range supported: `Range: bytes=start-end`; multi-range returns 416.
+  - Supports single HTTP Range only. Use `Range: bytes=start-end` or suffix `bytes=-N`.
+  - Multiple ranges are not supported; the server returns `416 Range Not Satisfiable` with `Content-Range: bytes */<size>`.
+  - Responses include `Accept-Ranges: bytes`. A valid partial response includes `206 Partial Content` and `Content-Range: bytes <start>-<end>/<size>`.
+
+Example:
+```
+# First 5 bytes
+GET /api/v1/sandbox/runs/<id>/artifacts/out.txt
+Range: bytes=0-4
+
+HTTP/1.1 206 Partial Content
+Accept-Ranges: bytes
+Content-Range: bytes 0-4/10
+Content-Length: 5
+
+01234
+
+# Unsupported multi-range
+GET /api/v1/sandbox/runs/<id>/artifacts/out.txt
+Range: bytes=0-1,3-4
+
+HTTP/1.1 416 Range Not Satisfiable
+Content-Range: bytes */10
+```
 
 ## Idempotency conflicts
 409, example:

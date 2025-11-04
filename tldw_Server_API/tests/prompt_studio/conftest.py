@@ -16,7 +16,6 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_st
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
-from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 # Set test environment variables
@@ -24,148 +23,7 @@ os.environ["TEST_MODE"] = "true"
 os.environ["AUTH_MODE"] = "single_user"
 os.environ["CSRF_ENABLED"] = "false"
 
-try:  # Postgres optional dependency for dual-backend runs (prefer psycopg v3)
-    import psycopg as _psycopg_v3  # type: ignore
-    _PG_DRIVER = "psycopg"
-except ImportError:  # pragma: no cover - handled by skip marker
-    try:
-        import psycopg2 as _psycopg2  # type: ignore
-        _PG_DRIVER = "psycopg2"
-    except Exception:
-        _PG_DRIVER = None
-
-_POSTGRES_ENV_VARS = (
-    "POSTGRES_TEST_HOST",
-    "POSTGRES_TEST_PORT",
-    "POSTGRES_TEST_DB",
-    "POSTGRES_TEST_USER",
-    "POSTGRES_TEST_PASSWORD",
-)
-
-_HAS_POSTGRES = (_PG_DRIVER is not None)
-
-
-def _build_postgres_config() -> DatabaseConfig:
-    _pg = get_pg_env()
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=_pg.host,
-        pg_port=int(_pg.port),
-        pg_database=_pg.database,
-        pg_user=_pg.user,
-        pg_password=_pg.password,
-    )
-
-
-def _probe_postgres(config: DatabaseConfig, timeout: int = 2) -> bool:
-    """Quickly check if Postgres is reachable with a short timeout.
-
-    Attempts a lightweight connection to the default 'postgres' DB using
-    provided host/port/user/password. Returns False on any exception.
-    """
-    if _PG_DRIVER is None:
-        return False
-
-    try:
-        if _PG_DRIVER == "psycopg":
-            conn = _psycopg_v3.connect(
-                host=config.pg_host,
-                port=config.pg_port,
-                dbname="postgres",
-                user=config.pg_user,
-                password=config.pg_password,
-                connect_timeout=timeout,
-            )
-        else:
-            conn = _psycopg2.connect(
-                host=config.pg_host,
-                port=config.pg_port,
-                database="postgres",
-                user=config.pg_user,
-                password=config.pg_password,
-                connect_timeout=timeout,
-            )
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-        finally:
-            conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def _create_temp_postgres_database(config: DatabaseConfig) -> DatabaseConfig:
-    if _PG_DRIVER is None:  # pragma: no cover - guarded by skip
-        raise RuntimeError("psycopg (or psycopg2) is required for Postgres-backed tests")
-
-    db_name = f"tldw_test_{uuid.uuid4().hex[:8]}"
-    if _PG_DRIVER == "psycopg":
-        admin = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-            connect_timeout=2,
-        )
-    else:
-        admin = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-            connect_timeout=2,
-        )
-    admin.autocommit = True
-    try:
-        with admin.cursor() as cur:
-            cur.execute(f"CREATE DATABASE {db_name} OWNER {config.pg_user};")
-    finally:
-        admin.close()
-
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=config.pg_host,
-        pg_port=config.pg_port,
-        pg_database=db_name,
-        pg_user=config.pg_user,
-        pg_password=config.pg_password,
-    )
-
-
-def _drop_postgres_database(config: DatabaseConfig) -> None:
-    if _PG_DRIVER is None:  # pragma: no cover
-        return
-    if _PG_DRIVER == "psycopg":
-        admin = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-            connect_timeout=2,
-        )
-    else:
-        admin = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-            connect_timeout=2,
-        )
-    admin.autocommit = True
-    try:
-        with admin.cursor() as cur:
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s;",
-                (config.pg_database,),
-            )
-            cur.execute(f"DROP DATABASE IF EXISTS {config.pg_database};")
-    finally:
-        admin.close()
+# Postgres setup is unified via tests._plugins.postgres.
 
 @pytest.fixture(autouse=True)
 def enable_test_mode(monkeypatch):
@@ -240,26 +98,8 @@ def prompt_studio_dual_backend_db(request, tmp_path):
         db_path = tmp_path / f"prompt_studio_{label}.sqlite"
         db_instance = PromptStudioDatabase(str(db_path), f"dual-{label}")
     else:
-        # Skip quickly if Postgres driver is missing
-        if not _HAS_POSTGRES:
-            pytest.skip("psycopg not available; skipping Postgres backend")
-
-        _pg = get_pg_env()
-        base_config = DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host=_pg.host,
-            pg_port=int(_pg.port),
-            pg_database=_pg.database,
-            pg_user=_pg.user,
-            pg_password=_pg.password,
-        )
-        # Fast availability probe with 2s timeout
-        if not _probe_postgres(base_config, timeout=2):
-            # Allow CI to require Postgres explicitly so we fail fast instead of silently skipping
-            if os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "0").lower() in {"1", "true", "yes", "on"}:
-                pytest.fail("Postgres required for tests but not reachable")
-            pytest.skip("Postgres not reachable; skipping Postgres backend")
-        config = _create_temp_postgres_database(base_config)
+        # Use unified pg temp database fixture (lazy to avoid resolving when running sqlite branch)
+        config: DatabaseConfig = request.getfixturevalue("pg_database_config")
         backend = DatabaseBackendFactory.create_backend(config)
         db_instance = PromptStudioDatabase(
             db_path=str(tmp_path / "prompt_studio_pg_placeholder.sqlite"),
@@ -286,11 +126,7 @@ def prompt_studio_dual_backend_db(request, tmp_path):
                 backend.get_pool().close_all()
             except Exception:
                 pass
-        if label == "postgres":
-            try:
-                _drop_postgres_database(config)  # type: ignore[name-defined]
-            except Exception:
-                pass
+        # No explicit drop needed; pg_database_config fixture handles DB cleanup
 
 
 @pytest.fixture

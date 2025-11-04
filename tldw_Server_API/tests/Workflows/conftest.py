@@ -14,107 +14,6 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-try:
-    import psycopg as _psycopg_v3  # type: ignore
-    _PG_DRIVER = "psycopg"
-except Exception:  # pragma: no cover - optional dependency
-    try:
-        import psycopg2 as _psycopg2  # type: ignore
-        _PG_DRIVER = "psycopg2"
-    except Exception:
-        _PG_DRIVER = None
-
-_POSTGRES_ENV_VARS = (
-    "POSTGRES_TEST_HOST",
-    "POSTGRES_TEST_PORT",
-    "POSTGRES_TEST_DB",
-    "POSTGRES_TEST_USER",
-    "POSTGRES_TEST_PASSWORD",
-)
-
-_HAS_POSTGRES = (_PG_DRIVER is not None)
-
-
-def _build_postgres_config() -> DatabaseConfig:
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=os.environ["POSTGRES_TEST_HOST"],
-        pg_port=int(os.environ["POSTGRES_TEST_PORT"]),
-        pg_database=os.environ["POSTGRES_TEST_DB"],
-        pg_user=os.environ["POSTGRES_TEST_USER"],
-        pg_password=os.environ["POSTGRES_TEST_PASSWORD"],
-    )
-
-
-def _create_temp_postgres_database(config: DatabaseConfig) -> DatabaseConfig:
-    """Create a temporary database for this test and return a derived config."""
-    if _PG_DRIVER is None:  # pragma: no cover - guarded by skip
-        raise RuntimeError("psycopg (or psycopg2) is required for postgres workflow tests")
-
-    db_name = f"tldw_test_{uuid.uuid4().hex[:8]}"
-    if _PG_DRIVER == "psycopg":
-        admin = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    else:
-        admin = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    admin.autocommit = True
-    try:
-        with admin.cursor() as cur:
-            cur.execute(f"CREATE DATABASE {db_name} OWNER {config.pg_user};")
-    finally:
-        admin.close()
-
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=config.pg_host,
-        pg_port=config.pg_port,
-        pg_database=db_name,
-        pg_user=config.pg_user,
-        pg_password=config.pg_password,
-    )
-
-
-def _drop_postgres_database(config: DatabaseConfig) -> None:
-    if _PG_DRIVER is None:  # pragma: no cover
-        return
-    if _PG_DRIVER == "psycopg":
-        admin = _psycopg_v3.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            dbname="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    else:
-        admin = _psycopg2.connect(
-            host=config.pg_host,
-            port=config.pg_port,
-            database="postgres",
-            user=config.pg_user,
-            password=config.pg_password,
-        )
-    admin.autocommit = True
-    try:
-        with admin.cursor() as cur:
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s;",
-                (config.pg_database,),
-            )
-            cur.execute(f"DROP DATABASE IF EXISTS {config.pg_database};")
-    finally:
-        admin.close()
-
 
 @pytest.fixture(params=["sqlite", "postgres"])
 def workflows_dual_backend_db(
@@ -130,17 +29,8 @@ def workflows_dual_backend_db(
         db_path = tmp_path / "workflows_sqlite.db"
         db_instance = create_workflows_database(db_path=db_path, backend=None)
     else:
-        from tldw_Server_API.tests.helpers.pg_env import get_pg_env
-        _pg = get_pg_env()
-        base_config = DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host=_pg.host,
-            pg_port=int(_pg.port),
-            pg_database=_pg.database,
-            pg_user=_pg.user,
-            pg_password=_pg.password,
-        )
-        config = _create_temp_postgres_database(base_config)
+        # Resolve unified pg temp database config only for the postgres branch
+        config: DatabaseConfig = request.getfixturevalue("pg_database_config")
         backend = DatabaseBackendFactory.create_backend(config)
         db_instance = create_workflows_database(
             db_path=tmp_path / "workflows_pg_placeholder.db",
@@ -155,8 +45,4 @@ def workflows_dual_backend_db(
                 backend.get_pool().close_all()
             except Exception:
                 pass
-        if label == "postgres":
-            try:
-                _drop_postgres_database(config)  # type: ignore[name-defined]
-            except Exception:
-                pass
+        # No explicit drop; pg_database_config fixture cleans up the temp DB
