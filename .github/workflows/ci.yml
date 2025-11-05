@@ -82,8 +82,8 @@ jobs:
       postgres:
         image: postgres:18-bookworm
         env:
-          POSTGRES_USER: tldw
-          POSTGRES_PASSWORD: tldw
+          POSTGRES_USER: tldw_user
+          POSTGRES_PASSWORD: TestPassword123!
           POSTGRES_DB: tldw_content
         ports:
           - 5432/tcp
@@ -102,11 +102,11 @@ jobs:
       # Expose Postgres service to tests
       POSTGRES_TEST_HOST: 127.0.0.1
       POSTGRES_TEST_DB: tldw_content
-      POSTGRES_TEST_USER: tldw
-      POSTGRES_TEST_PASSWORD: tldw
+      POSTGRES_TEST_USER: tldw_user
+      POSTGRES_TEST_PASSWORD: TestPassword123!
       TEST_DB_HOST: 127.0.0.1
-      TEST_DB_USER: tldw
-      TEST_DB_PASSWORD: tldw
+      TEST_DB_USER: tldw_user
+      TEST_DB_PASSWORD: TestPassword123!
       # Align AuthNZ_Postgres conftest default DB name with tests
       TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
@@ -134,7 +134,7 @@ jobs:
         with:
           host: 127.0.0.1
           port: ${{ job.services.postgres.ports[5432] }}
-          user: tldw
+          user: tldw_user
 
       - name: Export PG env vars
         shell: bash
@@ -142,17 +142,17 @@ jobs:
           echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
           echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
           # Provide a unified DSN so any test preferring TEST_DATABASE_URL uses the right DB
-          echo "TEST_DATABASE_URL=postgresql://tldw:tldw@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
-          echo "DATABASE_URL=postgresql://tldw:tldw@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
 
       - name: Ensure base DB exists
         shell: bash
         env:
-          PGPASSWORD: tldw
+          PGPASSWORD: TestPassword123!
         run: |
           PORT="${{ job.services.postgres.ports[5432] }}"
-          psql -h 127.0.0.1 -p "$PORT" -U tldw -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='tldw_content'" | grep -q 1 || \
-            psql -h 127.0.0.1 -p "$PORT" -U tldw -d postgres -c "CREATE DATABASE tldw_content"
+          psql -h 127.0.0.1 -p "$PORT" -U tldw_user -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='tldw_content'" | grep -q 1 || \
+            psql -h 127.0.0.1 -p "$PORT" -U tldw_user -d postgres -c "CREATE DATABASE tldw_content"
 
       - name: Install additional deps for PG tests
         run: |
