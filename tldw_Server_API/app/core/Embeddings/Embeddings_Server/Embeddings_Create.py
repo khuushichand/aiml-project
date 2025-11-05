@@ -1259,7 +1259,7 @@ def create_embeddings_batch(
             # The requests.post call is already wrapped by @exponential_backoff and @limiter
             from tldw_Server_API.app.core.http_client import fetch as _fetch
             resp = _fetch(method="POST", url=model_spec.api_url, headers=headers, json=payload, timeout=60)
-            if resp.status_code >= 400:
+            if resp.status_code() >= 400:
                 resp.raise_for_status()
             response_data = resp.json()
             if 'embeddings' not in response_data or not isinstance(response_data['embeddings'], list):

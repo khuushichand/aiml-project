@@ -37,7 +37,8 @@
 
       // Stream events
       try { if (jobsStreamHandle && jobsStreamHandle.abort) jobsStreamHandle.abort(); } catch (_) {}
-      const domainWhitelist = new Set(['media','webscrape','web_scrape','webscraping']);
+      // Only include domains actually emitted by the backend
+      const domainWhitelist = new Set(['media','webscrape']);
       jobsStreamHandle = apiClient.streamSSE('/api/v1/jobs/events/stream', {
         onEvent: (obj) => {
           if (!obj || !domainWhitelist.has(String(obj.domain))) return;
@@ -175,7 +176,11 @@
       Loading.show(container, 'Ingesting...');
       startInlineJobsFeedback(container);
       const data = await apiClient.post(requestPath, requestOptions.body, { timeout: requestOptions.timeout });
-      resp.textContent = Utils.syntaxHighlight ? Utils.syntaxHighlight(data) : JSON.stringify(data, null, 2);
+      if (typeof Utils !== 'undefined' && typeof Utils.syntaxHighlightJSON === 'function') {
+        resp.innerHTML = Utils.syntaxHighlightJSON(data);
+      } else {
+        resp.textContent = JSON.stringify(data, null, 2);
+      }
     } catch (e) {
       resp.textContent = (e && e.message) ? String(e.message) : 'Failed';
     } finally {
@@ -269,7 +274,7 @@
                 window.webUI.activateTopTab(btn).then(() => {
                   setTimeout(() => {
                     try { const mid = document.getElementById('getMediaItem_media_id'); if (mid) mid.value = String(id || ''); } catch(_){}
-                    try { makeRequest('getMediaItem', 'GET', '/api/v1/media/{media_id}', 'none'); } catch(_){}
+                    try { if (typeof window.makeRequest === 'function') window.makeRequest('getMediaItem', 'GET', '/api/v1/media/{media_id}', 'none'); } catch(_){}
                   }, 200);
                 });
               }

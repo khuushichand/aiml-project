@@ -583,55 +583,99 @@ class WebUI {
         attrs.forEach((attr) => {
             const nodes = scope.querySelectorAll(`[${attr}]`);
             nodes.forEach((el) => {
-                const code = el.getAttribute(attr);
-                if (!code) return;
-                el.removeAttribute(attr);
+                const original = el.getAttribute(attr);
+                if (!original) return;
+                const code = original.trim();
                 const evt = attrToEvent(attr);
                 let bound = false;
-                // Case 1: makeRequest(...) forms
-                const mr = code.match(/^\s*(?:if\s*\(.*?\)\s*)?makeRequest\((.*)\)\s*;?\s*$/s);
+
+                // Helpers: detect wrappers and build runtime arg resolver
+                const endsWithReturnFalse = /;\s*return\s+false\s*;?\s*$/s.test(code);
+                const startsWithReturn = /^\s*return\b/s.test(code);
+                const confirmMatch = code.match(/confirm\((['\"])(.*?)\1\)/s);
+                const confirmMessage = confirmMatch ? confirmMatch[2] : null;
+                const resolveArgs = (rawParts, event) => rawParts.map((p) => {
+                    const t = String(p).trim();
+                    if (!t) return t;
+                    if (t === 'event') return event;
+                    if (t === 'this') return el;
+                    if (t.startsWith('{') || t.startsWith('[')) {
+                        try { return JSON.parse(t); } catch (_) { return t; }
+                    }
+                    return stripQuotes(t);
+                });
+
+                // Case 1: makeRequest(...) with optional return/return false wrappers
+                const mr = code.match(/^\s*(?:if\s*\(.*?\)\s*)?(?:return\s*)?makeRequest\((.*)\)\s*;?\s*(?:return\s+false\s*;?)?\s*$/s);
                 if (mr) {
                     const argStr = mr[1] || '';
-                    const parts = splitArgs(argStr);
-                    const args = parts.map(p => {
-                        const t = p.trim();
-                        if (t.startsWith('{') || t.startsWith('[')) {
-                            try { return JSON.parse(t); } catch(_) { return t; }
-                        }
-                        return stripQuotes(t);
-                    });
-                    const cm = code.match(/confirm\((['\"])(.*?)\1\)/s);
-                    const message = cm ? cm[2] : null;
+                    const rawParts = splitArgs(argStr);
                     const listener = (event) => {
                         try {
-                            if (message && !window.confirm(message)) return;
-                            window.makeRequest && window.makeRequest.apply(null, args);
-                        } catch (e) { console.error('makeRequest handler failed', e); }
+                            if (confirmMessage && !window.confirm(confirmMessage)) return;
+                            const args = resolveArgs(rawParts, event);
+                            const ret = (window.makeRequest && typeof window.makeRequest === 'function') ? window.makeRequest.apply(el, args) : undefined;
+                            // Preserve return semantics: prevent default if explicit wrapper asked for it or handler returns false
+                            if (endsWithReturnFalse || ret === false || startsWithReturn) {
+                                // If startsWithReturn: honor returned false; if truthy, let default occur
+                                if (ret === false || endsWithReturnFalse) {
+                                    try { event.preventDefault(); event.stopPropagation(); } catch (_) {}
+                                }
+                            }
+                        } catch (e) {
+                            console.error('makeRequest handler failed', e);
+                        }
                     };
                     el.addEventListener(evt, listener);
                     if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
                     bound = true;
                 }
-                // Case 2: simple function call like foo() or foo(arg)
+
+                // Case 2: simple function call like foo() or foo(arg) with optional wrappers
                 if (!bound) {
-                    const m = code.match(/^\s*([A-Za-z_$][\w$]*)\s*\((.*)\)\s*;?\s*$/s);
+                    const m = code.match(/^\s*(?:return\s*)?([A-Za-z_$][\w$]*)\s*\((.*)\)\s*;?\s*(?:return\s+false\s*;?)?\s*$/s);
                     if (m) {
                         const fname = m[1];
                         const argStr = m[2] || '';
-                        const args = argStr ? splitArgs(argStr).map(a => {
-                            const t = a.trim();
-                            if (t.startsWith('{') || t.startsWith('[')) { try { return JSON.parse(t); } catch(_) { return t; } }
-                            return stripQuotes(t);
-                        }) : [];
-                        el.addEventListener(evt, (event) => {
-                            try { const fn = window[fname]; if (typeof fn === 'function') fn.apply(el, args); } catch (e) { console.error('Handler failed', e); }
-                        });
+                        const rawParts = argStr ? splitArgs(argStr) : [];
+                        const listener = (event) => {
+                            try {
+                                const fn = window[fname];
+                                if (typeof fn === 'function') {
+                                    const args = resolveArgs(rawParts, event);
+                                    const ret = fn.apply(el, args);
+                                    if (endsWithReturnFalse || startsWithReturn) {
+                                        if (ret === false || endsWithReturnFalse) {
+                                            try { event.preventDefault(); event.stopPropagation(); } catch (_) {}
+                                        }
+                                    }
+                                }
+                            } catch (e) { console.error('Handler failed', e); }
+                        };
+                        el.addEventListener(evt, listener);
                         if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
                         bound = true;
                     }
                 }
+
+                // Case 3: bare "return false;" handlers
                 if (!bound) {
-                    // As a last resort, ignore to keep CSP-safe; log debug for devs
+                    const rf = code.match(/^\s*return\s+false\s*;?\s*$/s);
+                    if (rf) {
+                        const listener = (event) => {
+                            try { event.preventDefault(); event.stopPropagation(); } catch (_) {}
+                        };
+                        el.addEventListener(evt, listener);
+                        if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
+                        bound = true;
+                    }
+                }
+
+                if (bound) {
+                    // Only remove the inline attribute after we have a bound listener
+                    try { el.removeAttribute(attr); } catch (_) {}
+                } else {
+                    // As a last resort, leave inline attribute in place to avoid breaking flows; log for devs
                     try { console.debug('Skipped inline handler migration for:', code.slice(0,120)); } catch(_){}
                 }
             });

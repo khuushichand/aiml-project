@@ -6,7 +6,6 @@ from pathlib import Path
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
-from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError
 
@@ -112,25 +111,6 @@ async def create_organization(
 ) -> Dict[str, Any]:
     pool: DatabasePool = await get_db_pool()
     import json
-    # Defensive: on SQLite, ensure org/team tables exist before attempting insert.
-    # Some CI environments report partial migration application (up to v10),
-    # causing a "no such table: organizations" error on first use. Proactively
-    # check and run AuthNZ migrations once if needed.
-    try:
-        if not getattr(pool, "pool", None):  # SQLite backend
-            exists = await pool.fetchone(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='organizations'"
-            )
-            if not exists:
-                db_fs_path = getattr(pool, "_sqlite_fs_path", None)
-                if db_fs_path:
-                    try:
-                        await asyncio.to_thread(ensure_authnz_tables, Path(str(db_fs_path)))
-                    except Exception as _mig_err:
-                        logger.debug(f"SQLite org schema ensure skipped/failed: {_mig_err}")
-    except Exception:
-        # Non-fatal; fall through to standard transaction handling
-        pass
     async with pool.transaction() as conn:
         if hasattr(conn, 'fetchrow'):
             # PostgreSQL path

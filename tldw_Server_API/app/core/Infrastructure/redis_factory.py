@@ -785,6 +785,14 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.zscore(key, member)
 
+    def zrem(self, key: str, member: str) -> int:
+        """Remove a member from a sorted set; returns number of removed members (0 or 1).
+
+        Matches the signature/behavior of the in-memory core and async wrapper.
+        """
+        with self._lock:
+            return self._core.zrem(key, member)
+
     def set(self, key: str, value: Any, ex: Optional[int] = None):
         with self._lock:
             self._core.set(key, value, ex=ex)

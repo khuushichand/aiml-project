@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.integration
 
 
-def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path):
+def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path, authnz_schema_ready_sync):
     # Isolate AuthNZ DB and enable TEST_MODE
     base_dir = tmp_path / "test_admin_org_settings"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -23,11 +23,8 @@ def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path):
     # Reset cached settings / DB pool and ensure schema for isolated DB
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-
     reset_settings()
     asyncio.run(reset_db_pool())
-    ensure_authnz_tables(db_path)
 
     # Spin up app and override admin requirement
     mod = import_module("tldw_Server_API.app.main")
@@ -90,7 +87,7 @@ def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path):
     app.dependency_overrides.pop(require_admin, None)
 
 
-def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path):
+def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_schema_ready_sync):
     # Isolate DB; verify second creation conflicts
     base_dir = tmp_path / "test_admin_org_settings_conflict"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -101,11 +98,8 @@ def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path):
 
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-
     reset_settings()
     asyncio.run(reset_db_pool())
-    ensure_authnz_tables(db_path)
 
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
@@ -127,7 +121,7 @@ def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path):
     app.dependency_overrides.pop(require_admin, None)
 
 
-def test_admin_watchlists_org_settings_404(monkeypatch):
+def test_admin_watchlists_org_settings_404(monkeypatch, authnz_schema_ready_sync):
     # Isolate DB
     base_dir = Path.cwd() / "Databases" / "test_admin_org_settings_404"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -139,11 +133,8 @@ def test_admin_watchlists_org_settings_404(monkeypatch):
     # Reset cached settings / DB pool and ensure schema for isolated DB
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-
     reset_settings()
     asyncio.run(reset_db_pool())
-    ensure_authnz_tables(db_path)
 
     # App + admin override
     mod = import_module("tldw_Server_API.app.main")

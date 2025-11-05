@@ -260,9 +260,21 @@ async def sse_endpoint(
             try:
                 async for ln in stream.iter_sse():
                     yield ln
-            finally:
+            except asyncio.CancelledError:
+                # Cancel producer promptly on client disconnect
                 if not prod.done():
-                    prod.cancel()
+                    try:
+                        prod.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await prod
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                raise
+            else:
+                # Ensure producer completes cleanly on normal shutdown
+                if not prod.done():
                     try:
                         await prod
                     except Exception:

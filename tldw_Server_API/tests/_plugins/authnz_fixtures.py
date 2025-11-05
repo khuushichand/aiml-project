@@ -31,3 +31,64 @@ async def real_audit_service(tmp_path):
             await _shutdown_all()
         except Exception:
             pass
+
+
+@pytest_asyncio.fixture
+async def authnz_schema_ready():
+    """Ensure AuthNZ schema is present for the configured per-test DB.
+
+    Usage:
+    - First set DATABASE_URL (and AUTH_MODE if needed) for this test via monkeypatch.
+    - Then depend on this fixture to ensure the AuthNZ SQLite schema is initialized once.
+      For Postgres backends, this is a no-op.
+    """
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+        await _reset_db_pool()
+        _reset_settings()
+    except Exception:
+        # Proceed best-effort even if reset hooks are unavailable
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once as _ensure_once
+        await _ensure_once()
+    except Exception as _e:
+        from loguru import logger as _logger
+        _logger.debug(f"authnz_schema_ready fixture skipped ensure: {_e}")
+    return None
+
+
+def _run_async(coro):
+    import asyncio as _asyncio
+    try:
+        loop = _asyncio.get_event_loop()
+        if loop.is_running():
+            # In a running loop context (rare for sync tests), schedule and wait
+            return _asyncio.get_event_loop().run_until_complete(coro)  # type: ignore[misc]
+    except RuntimeError:
+        pass
+    return _asyncio.run(coro)
+
+
+import pytest
+
+@pytest.fixture
+def authnz_schema_ready_sync():
+    """Sync-friendly variant to ensure AuthNZ schema for SQLite tests.
+
+    Use in synchronous tests that set DATABASE_URL and need AuthNZ tables.
+    """
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+        _run_async(_reset_db_pool())
+        _reset_settings()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once as _ensure_once
+        _run_async(_ensure_once())
+    except Exception:
+        pass
+    return None

@@ -131,21 +131,21 @@ class ResourceDailyLedger:
                 )
                 # Prefer rowcount when available: 1 if inserted, 0 if ignored
                 try:
-                    rc = int(getattr(res, "rowcount", -1))
-                    if rc in (0, 1):
-                        return rc == 1
-                except Exception:
-                    pass
-                # Fallback: presence check (returns True both times, so only use when rowcount is unavailable)
-                check = await self.db_pool.fetchval(
-                    "SELECT 1 FROM resource_daily_ledger WHERE day_utc=? AND entity_scope=? AND entity_value=? AND category=? AND op_id=?",
-                    day,
-                    entry.entity_scope,
-                    entry.entity_value,
-                    entry.category,
-                    entry.op_id,
+                    rc_attr = getattr(res, "rowcount", None)
+                    rc = int(rc_attr) if rc_attr is not None else -1
+                except (AttributeError, TypeError, ValueError) as rc_err:
+                    logger.warning(
+                        "ResourceDailyLedger.add: SQLite rowcount unavailable; treating as no-insert. "
+                        f"day={day}, scope={entry.entity_scope}, value={entry.entity_value}, "
+                        f"category={entry.category}, op_id={entry.op_id}, res={res!r}, err={rc_err}"
+                    )
+                    return False
+                if rc in (0, 1):
+                    return rc == 1
+                logger.debug(
+                    f"ResourceDailyLedger.add: unexpected SQLite rowcount={rc}; treating as no-insert. res={res!r}"
                 )
-                return bool(check)
+                return False
         except Exception as e:
             logger.error(f"ResourceDailyLedger.add failed: {e}")
             raise

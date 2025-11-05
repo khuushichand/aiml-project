@@ -307,12 +307,29 @@ class JobManager:
         """
         try:
             dom = (domain or "").strip()
-            cands = [
-                f"JOBS_{backend.upper()}_ACQUIRE_TIE_BREAK_{dom.upper()}",
-                f"JOBS_{backend.upper()}_ACQUIRE_TIE_BREAK",
-                f"JOBS_ACQUIRE_TIE_BREAK_{dom.upper()}",
-                "JOBS_ACQUIRE_TIE_BREAK",
-            ]
+            b = (backend or "").strip().lower()
+            # Build alias list mirroring _priority_dir_for semantics and adding common variants
+            aliases: List[str] = []
+            if b in {"pg", "postgres", "postgresql"}:
+                # Preserve caller's preferred token first
+                base_order = [b, "postgres", "postgresql", "pg"]
+                seen = set()
+                for t in base_order:
+                    if t not in seen:
+                        aliases.append(t)
+                        seen.add(t)
+            else:
+                aliases = [b]
+
+            cands: List[str] = []
+            # Backend/alias-scoped overrides (domain-specific then general)
+            for a in aliases:
+                cands.append(f"JOBS_{a.upper()}_ACQUIRE_TIE_BREAK_{dom.upper()}")
+            for a in aliases:
+                cands.append(f"JOBS_{a.upper()}_ACQUIRE_TIE_BREAK")
+            # Global fallbacks (domain-specific then general)
+            cands.append(f"JOBS_ACQUIRE_TIE_BREAK_{dom.upper()}")
+            cands.append("JOBS_ACQUIRE_TIE_BREAK")
             for k in cands:
                 v = os.getenv(k)
                 if v:

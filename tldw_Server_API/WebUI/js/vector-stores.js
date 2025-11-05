@@ -23,7 +23,16 @@
       const li = document.createElement('li');
       li.setAttribute('tabindex', '0');
       const nameSpan = document.createElement('span');
-      nameSpan.innerHTML = `${s.name} (<code>${s.id}</code>) - dim=${s.dimensions}`;
+      // Safely compose: name (code(id)) - dim=dimensions
+      const nameText = document.createTextNode(String(s.name || ''));
+      const openParen = document.createTextNode(' (');
+      const codeEl = document.createElement('code');
+      codeEl.textContent = String(s.id || '');
+      const closeText = document.createTextNode(`) - dim=${String(s.dimensions)}`);
+      nameSpan.appendChild(nameText);
+      nameSpan.appendChild(openParen);
+      nameSpan.appendChild(codeEl);
+      nameSpan.appendChild(closeText);
       li.appendChild(nameSpan);
       const space = document.createTextNode(' ');
       li.appendChild(space);
@@ -448,8 +457,18 @@
     if (!sel) return;
     const res = await apiClient.get('/api/v1/vector_stores');
     const list = (res.data || []);
-    sel.innerHTML = '<option value="">-- Select Existing Store --</option>' +
-      list.map(s => `<option value="${s.id}">${s.name} (${s.id})</option>`).join('');
+    // Rebuild options safely without injecting HTML
+    sel.innerHTML = '';
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = '-- Select Existing Store --';
+    sel.appendChild(def);
+    list.forEach((s) => {
+      const opt = document.createElement('option');
+      opt.value = String(s.id || '');
+      opt.textContent = `${String(s.name || '')} (${String(s.id || '')})`;
+      sel.appendChild(opt);
+    });
   }
 
   async function uiRenameSelectedStore() {
@@ -495,7 +514,22 @@
       const res = await apiClient.get('/api/v1/vector_stores/admin/users');
       const rows = res.data || [];
       if (!rows.length) { if (info) info.textContent = 'No users found.'; return; }
-      if (sel) sel.innerHTML = '<option value="">-- Select User --</option>' + rows.map(u => `<option value="${u.user_id}">${u.user_id} (stores: ${u.store_count}, batches: ${u.batch_count})</option>`).join('');
+      if (sel) {
+        // Safely rebuild user options without injecting raw HTML
+        sel.innerHTML = '';
+        const def = document.createElement('option');
+        def.value = '';
+        def.textContent = '-- Select User --';
+        sel.appendChild(def);
+        rows.forEach((u) => {
+          const opt = document.createElement('option');
+          opt.value = String(u.user_id ?? '');
+          const stores = String(u.store_count ?? 0);
+          const batches = String(u.batch_count ?? 0);
+          opt.textContent = `${String(u.user_id ?? '')} (stores: ${stores}, batches: ${batches})`;
+          sel.appendChild(opt);
+        });
+      }
       if (sel) sel.addEventListener('change', () => {
         const val = sel.value; const vbUser = document.getElementById('vb_user'); if (vbUser) vbUser.value = val;
       });

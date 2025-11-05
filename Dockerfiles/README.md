@@ -33,31 +33,31 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
   - `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.proxy-nginx.yml up -d --build`
   - Mount `Samples/Nginx/nginx.conf` and your certs.
 
-- Postgres (basic standalone): `Dockerfiles/Dockerfiles/docker-compose.postgres.yml`
+- Postgres (basic standalone): `Dockerfiles/docker-compose.postgres.yml`
   - Start a standalone Postgres you can point `DATABASE_URL` to.
   - Example:
     - `export DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users`
-    - `docker compose -f Dockerfiles/Dockerfiles/docker-compose.postgres.yml up -d`
+    - `docker compose -f Dockerfiles/docker-compose.postgres.yml up -d`
 
 - Postgres + pgvector + pgbouncer (dev): `Dockerfiles/docker-compose.pg.yml`
   - `docker compose -f Dockerfiles/docker-compose.pg.yml up -d`
 
-- Dev overlay (unified streaming pilot): `Dockerfiles/Dockerfiles/docker-compose.dev.yml`
-  - `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml up -d --build`
+- Dev overlay (unified streaming pilot): `Dockerfiles/docker-compose.dev.yml`
+  - `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
   - Sets `STREAMS_UNIFIED=1` (keep off in production until validated).
 
-- Embeddings workers + monitoring: `Dockerfiles/Dockerfiles/docker-compose.embeddings.yml`
-  - Base workers only: `docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml up -d`
+- Embeddings workers + monitoring: `Dockerfiles/docker-compose.embeddings.yml`
+  - Base workers only: `docker compose -f Dockerfiles/docker-compose.embeddings.yml up -d`
   - With monitoring profile (Prometheus + Grafana):
-    - `docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d`
+    - `docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d`
   - With debug profile (Redis Commander):
-    - `docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml --profile debug up -d`
-  - Scale workers: `docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml up -d --scale chunking-workers=3`
+    - `docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile debug up -d`
+  - Scale workers: `docker compose -f Dockerfiles/docker-compose.embeddings.yml up -d --scale chunking-workers=3`
 
 ## Images
 
-- App image: `Dockerfiles/Dockerfiles/Dockerfile.prod` (built by base compose)
-- Worker image: `Dockerfiles/Dockerfiles/Dockerfile.worker` (used by embeddings compose)
+- App image: `Dockerfiles/Dockerfile.prod` (built by base compose)
+- Worker image: `Dockerfiles/Dockerfile.worker` (used by embeddings compose)
 
 ## Notes
 
@@ -72,4 +72,3 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 - If the app fails waiting for DB, verify `DATABASE_URL` and Postgres readiness.
 - Initialize AuthNZ after first boot if running multi-user, or set a strong `SINGLE_USER_API_KEY` for single-user.
 - View full logs: `docker compose ... logs -f`
-

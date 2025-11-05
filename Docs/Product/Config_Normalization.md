@@ -5,7 +5,7 @@ Owner: Core Maintainers
 Target Release: 0.2.x
 
 ## 1. Summary
-Normalize configuration across rate limiting, embeddings, and audio quota by introducing one typed settings object per domain. Replace ad‑hoc env/config parsing with a Pydantic Settings façade layered over `tldw_Server_API/app/core/config.py`. Standardize testing via a single `TEST_MODE` switch and unified defaults while retaining backward compatibility for legacy keys.
+Normalize configuration across rate limiting, embeddings, and audio quota by introducing one typed settings object per domain. Replace ad-hoc env/config parsing with a Pydantic Settings façade layered over `tldw_Server_API/app/core/config.py`. Standardize testing via a single `TEST_MODE` switch and unified defaults while retaining backward compatibility for legacy keys.
 
 ## 2. Problem Statement
 Multiple modules parse environment variables and `config.txt` independently with custom fallbacks and test overrides, creating drift and brittleness.
@@ -77,7 +77,7 @@ Consequences: inconsistent precedence rules, scattered defaults, harder testing,
   - Log effective settings at startup (redacted secrets), including source markers `[env|config|default]`.
 
 ## 8. Non‑Functional Requirements
-- Backwards compatible defaults; no material behavior changes for existing deployments.
+- Backward-compatible defaults; no material behavior changes for existing deployments.
 - Minimal overhead; settings load once and are cached for reuse.
 - Consistent error messages and Loguru logging.
 
@@ -95,7 +95,7 @@ Consequences: inconsistent precedence rules, scattered defaults, harder testing,
   - Singleton instances resolved at app startup; overridable in tests via fixtures.
 
 ## 10. Data Model
-- In‑memory Pydantic models; no new DB schema.
+- In-memory Pydantic models; no new DB schema.
 - Helper: `ConfigSourceAdapter` for section/key access via `config.py`.
 - Merge function to compute final effective settings per domain with per‑field source metadata.
 

@@ -1,8 +1,6 @@
 import asyncio
 import json
 from types import SimpleNamespace
-
-import httpx
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.alerting import SecurityAlertDispatcher
@@ -73,22 +71,11 @@ def test_security_alert_dispatcher_writes_file(tmp_path):
 
 def test_security_alert_dispatcher_handles_webhook_failure(tmp_path, monkeypatch):
     log_file = tmp_path / "alerts.log"
-
-    class FailingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, *args, **kwargs):
-            raise httpx.HTTPError("boom")
+    async def failing_afetch(*args, **kwargs):
+        raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.alerting.httpx.AsyncClient", FailingClient
+        "tldw_Server_API.app.core.AuthNZ.alerting.afetch", failing_afetch
     )
 
     settings = SimpleNamespace(
@@ -180,16 +167,12 @@ def test_security_alert_status_snapshot(tmp_path):
 def test_security_alert_per_sink_thresholds(tmp_path, monkeypatch):
     log_file = tmp_path / "alerts.log"
 
-    class BombClient:
-        async def __aenter__(self):
-            raise AssertionError("webhook should not be invoked")
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    async def should_not_call_afetch(*args, **kwargs):
+        raise AssertionError("webhook should not be invoked")
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.alerting.httpx.AsyncClient",
-        BombClient,
+        "tldw_Server_API.app.core.AuthNZ.alerting.afetch",
+        should_not_call_afetch,
     )
 
     settings = SimpleNamespace(
@@ -226,23 +209,12 @@ def test_security_alert_per_sink_thresholds(tmp_path, monkeypatch):
 
 def test_security_alert_backoff(tmp_path, monkeypatch):
     log_file = tmp_path / "alerts.log"
-
-    class FailingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, *args, **kwargs):
-            raise httpx.HTTPError("boom")
+    async def failing_afetch(*args, **kwargs):
+        raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.alerting.httpx.AsyncClient",
-        FailingClient,
+        "tldw_Server_API.app.core.AuthNZ.alerting.afetch",
+        failing_afetch,
     )
 
     settings = SimpleNamespace(

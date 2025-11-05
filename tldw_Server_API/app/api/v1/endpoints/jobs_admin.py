@@ -761,11 +761,25 @@ async def stream_job_events(
         try:
             async for ln in stream.iter_sse():
                 yield ln
-        finally:
-            try:
-                prod_task.cancel()
-            except Exception:
-                pass
+        except asyncio.CancelledError:
+            # Client cancelled: cancel producer promptly and re-raise
+            if not prod_task.done():
+                try:
+                    prod_task.cancel()
+                except Exception:
+                    pass
+                try:
+                    await prod_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise
+        else:
+            # Normal shutdown: ensure producer completes without forced cancel
+            if not prod_task.done():
+                try:
+                    await prod_task
+                except Exception:
+                    pass
 
     # Advise proxies/servers not to buffer SSE
     sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}

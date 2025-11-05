@@ -170,11 +170,13 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
                 timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
                 store_info["healthy"] = True
             except Exception as e:
+                logger.exception("Sandbox health: store connectivity check failed")
                 store_info["healthy"] = False
-                store_info["error"] = str(e)
+                store_info["code"] = "internal_error"
     except Exception as e:
+        logger.exception("Sandbox health: store mode detection failed")
         store_info["healthy"] = False
-        store_info["error"] = str(e)
+        store_info["code"] = "internal_error"
     # Redis status via hub
     try:
         hub = get_hub()  # type: ignore[attr-defined]

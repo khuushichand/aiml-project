@@ -306,7 +306,7 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
         raise
     except requests.exceptions.Timeout:
          logging.error(f"Timeout occurred while downloading audio file: {url}")
-         raise AudioDownloadError(f"Download timed out for {url}")
+         raise AudioDownloadError(f"Download timed out for {url}") from None
     except requests.exceptions.RequestException as e:
         logging.error(f"Error downloading audio file from {url}: {type(e).__name__} - {e}")
         err_msg = str(e)

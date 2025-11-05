@@ -1210,9 +1210,21 @@ async def execute_streaming_call(
             try:
                 async for line in sse_stream.iter_sse():
                     yield line
-            finally:
+            except asyncio.CancelledError:
+                # Cancel producer promptly on client disconnect
                 if not prod.done():
-                    prod.cancel()
+                    try:
+                        prod.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await prod
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                raise
+            else:
+                # Normal shutdown: ensure producer completes cleanly
+                if not prod.done():
                     try:
                         await prod
                     except Exception:

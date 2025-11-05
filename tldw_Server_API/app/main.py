@@ -741,31 +741,27 @@ async def lifespan(app: FastAPI):
         db_pool = await get_db_pool()
         logger.info("App Startup: Database pool initialized")
 
-        # Ensure AuthNZ schema/migrations
+        # Ensure AuthNZ schema/migrations (centralized helper for SQLite; PG extras as before)
         try:
-            if getattr(db_pool, 'pool', None) is None and getattr(db_pool, 'db_path', None):
-                # SQLite path: run migration manager
-                from pathlib import Path as _Path
-                from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz
-                _ensure_authnz(_Path(db_pool.db_path))
-                logger.info("App Startup: Ensured AuthNZ migrations (SQLite)")
-            else:
-                # Postgres path: ensure additive extras (tool catalogs) exist
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
-                        ensure_tool_catalogs_tables_pg,
-                        ensure_privilege_snapshots_table_pg,
-                    )
-                    ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
-                    if ok_catalogs:
-                        logger.info("App Startup: Ensured PG tool catalogs tables")
-                    ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
-                    if ok_priv_snapshots:
-                        logger.info("App Startup: Ensured PG privilege_snapshots table")
-                except Exception as _pg_e:
-                    logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
+            from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+            await ensure_authnz_schema_ready_once()
         except Exception as _e:
-            logger.debug(f"App Startup: Skipped AuthNZ migration ensure: {_e}")
+            logger.debug(f"App Startup: Skipped AuthNZ SQLite migration ensure: {_e}")
+        # Postgres-only: ensure additive extras (tool catalogs, privilege snapshots)
+        try:
+            if getattr(db_pool, 'pool', None):
+                from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                    ensure_tool_catalogs_tables_pg,
+                    ensure_privilege_snapshots_table_pg,
+                )
+                ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
+                if ok_catalogs:
+                    logger.info("App Startup: Ensured PG tool catalogs tables")
+                ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
+                if ok_priv_snapshots:
+                    logger.info("App Startup: Ensured PG privilege_snapshots table")
+        except Exception as _pg_e:
+            logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
         try:
             await ensure_single_user_rbac_seed_if_needed()

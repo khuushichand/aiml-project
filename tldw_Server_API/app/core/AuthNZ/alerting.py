@@ -358,7 +358,7 @@ class SecurityAlertDispatcher:
 
     async def _send_webhook(self, record: Dict[str, Any]) -> None:
         headers = {"Content-Type": "application/json", **self.webhook_headers}
-        await afetch(
+        resp = await afetch(
             method="POST",
             url=str(self.webhook_url),
             json=record,
@@ -366,6 +366,11 @@ class SecurityAlertDispatcher:
             timeout=5.0,
             retry=RetryPolicy(attempts=1),
         )
+        if resp.status_code >= 400:
+            try:
+                resp.raise_for_status()
+            except Exception as e:
+                raise e
 
     async def _send_email(self, record: Dict[str, Any]) -> None:
         await asyncio.to_thread(self._send_email_sync, record)

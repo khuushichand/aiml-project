@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.AuthNZ.migrations import (
     ensure_authnz_tables,
     check_migration_status
 )
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.DB_Management.Users_DB import (
     get_users_db,
@@ -556,6 +557,57 @@ async def setup_database():
             return False
 
     return True
+
+
+#######################################################################################################################
+#
+# Async startup helpers (app/tests)
+
+_SCHEMA_ENSURED_KEYS: set[str] = set()
+_SCHEMA_ENSURE_LOCK = asyncio.Lock()
+
+
+async def ensure_authnz_schema_ready_once() -> None:
+    """Ensure AuthNZ schema is present for SQLite backends exactly once per process.
+
+    - Obtains the shared DB pool via get_db_pool.
+    - If backend is SQLite, calls ensure_authnz_tables in a thread (safe to call repeatedly).
+    - Guarded by an in‑memory flag + lock to avoid repeated work across startup and tests.
+    """
+    global _SCHEMA_ENSURED_KEYS
+    async with _SCHEMA_ENSURE_LOCK:
+        try:
+            pool = await get_db_pool()
+        except Exception as e:
+            try:
+                logger.debug(f"AuthNZ schema ensure: failed to acquire DB pool; skipping: {e}")
+            except Exception:
+                pass
+            return
+
+        try:
+            # If asyncpg pool exists, we're on Postgres; no SQLite migration ensure needed.
+            if getattr(pool, 'pool', None):
+                return
+
+            db_fs_path = getattr(pool, '_sqlite_fs_path', None) or getattr(pool, 'db_path', None)
+            key = str(db_fs_path or '')
+            if key in _SCHEMA_ENSURED_KEYS:
+                return
+            if db_fs_path and str(db_fs_path) != ':memory:':
+                try:
+                    await asyncio.to_thread(ensure_authnz_tables, Path(str(db_fs_path)))
+                    logger.info(f"AuthNZ Startup: ensured SQLite schema at {db_fs_path}")
+                except Exception as mig_err:
+                    logger.debug(f"AuthNZ Startup: ensure_authnz_tables skipped/failed: {mig_err}")
+            _SCHEMA_ENSURED_KEYS.add(key)
+        except Exception as e:
+            # Do not raise during startup; log for diagnostics
+            logger.debug(f"AuthNZ Startup: schema ensure encountered error: {e}")
+            try:
+                _SCHEMA_ENSURED_KEYS.add(str(getattr(pool, '_sqlite_fs_path', '') or getattr(pool, 'db_path', '') or ''))
+            except Exception:
+                pass
 
 
 async def ensure_single_user_rbac_seed_if_needed() -> None:

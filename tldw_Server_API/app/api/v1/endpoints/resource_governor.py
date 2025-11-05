@@ -183,7 +183,7 @@ async def rg_diag_peek(
         if gov is None:
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         cats = [c.strip() for c in categories.split(",") if c.strip()]
-        data = await gov.peek(entity, cats)
+        data = gov.peek(entity, cats)
         return JSONResponse({"status": "ok", "entity": entity, "data": data})
     except Exception as e:
         logger.warning(f"rg_diag_peek failed: {e}")
@@ -209,7 +209,7 @@ async def rg_diag_query(
                 pass
         if gov is None:
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
-        data = await gov.query(entity, category)
+        data = gov.query(entity, category)
         return JSONResponse({"status": "ok", "entity": entity, "category": category, "data": data})
     except Exception as e:
         logger.warning(f"rg_diag_query failed: {e}")

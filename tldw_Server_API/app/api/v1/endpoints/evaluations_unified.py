@@ -576,12 +576,25 @@ async def stream_embeddings_abtest_events(
         try:
             async for line in stream.iter_sse():
                 yield line
-        finally:
-            try:
-                producer.cancel()
-                await _aio.gather(producer, return_exceptions=True)
-            except Exception:
-                pass
+        except _aio.CancelledError:
+            # On client cancellation, stop the producer promptly
+            if not producer.done():
+                try:
+                    producer.cancel()
+                except Exception:
+                    pass
+                try:
+                    await _aio.gather(producer, return_exceptions=True)
+                except Exception:
+                    pass
+            raise
+        else:
+            # Normal shutdown: ensure producer completes without forced cancel
+            if not producer.done():
+                try:
+                    await _aio.gather(producer, return_exceptions=True)
+                except Exception:
+                    pass
 
     headers = {
         "Cache-Control": "no-cache",

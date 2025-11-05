@@ -394,14 +394,19 @@ def add_csrf_protection(app):
     # CSRF_ENABLED can override the default behavior for testing
     csrf_enabled = global_settings.get('CSRF_ENABLED', None)
     # Allow explicit environment override to take precedence when provided
-    try:
-        import os as _os
-        _env_ce = _os.getenv('CSRF_ENABLED')
-        if _env_ce is not None:
-            _val = _env_ce.strip().lower() in {"1", "true", "yes", "on", "y"}
+    import os as _os
+    _env_ce = _os.getenv('CSRF_ENABLED')
+    if _env_ce is not None:
+        try:
+            _normalized = str(_env_ce).strip().lower()
+            _val = _normalized in {"1", "true", "yes", "on", "y"}
             csrf_enabled = True if _val else False
-    except Exception:
-        pass
+        except (AttributeError, TypeError, ValueError) as _e:
+            # Invalid value provided; keep existing default and log for visibility
+            logger.debug(f"Invalid CSRF_ENABLED value {repr(_env_ce)}: {_e}; using default/fallback")
+        except Exception as _e:  # pragma: no cover - defensive
+            # Unexpected error; log with traceback to aid debugging, keep fallback
+            logger.exception(f"Unexpected error parsing CSRF_ENABLED: {_e}")
     # In test mode, default to disabled unless explicitly enabled in settings
     try:
         import os as _os, sys as _sys

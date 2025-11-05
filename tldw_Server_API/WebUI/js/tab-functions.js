@@ -272,7 +272,10 @@ function _audioTTSDownloadBtnHandler() {
         if (player && player.src) {
             const a = document.createElement('a');
             a.href = player.src;
-            a.download = 'tts_output';
+            let fmt = (document.getElementById('audioTTS_response_format')?.value || 'mp3');
+            try { fmt = String(fmt).replace(/[^a-z0-9]/gi, '').toLowerCase(); } catch (_) {}
+            if (!fmt) fmt = 'mp3';
+            a.download = `tts_output.${fmt}`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);

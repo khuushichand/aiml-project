@@ -3664,12 +3664,25 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
             try:
                 async for line in stream.iter_sse():
                     yield line
-            finally:
-                try:
-                    producer.cancel()
-                    await asyncio.gather(producer, return_exceptions=True)
-                except Exception:
-                    pass
+            except asyncio.CancelledError:
+                # Client cancelled: cancel producer promptly and re-raise
+                if not producer.done():
+                    try:
+                        producer.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.gather(producer, return_exceptions=True)
+                    except Exception:
+                        pass
+                raise
+            else:
+                # Normal shutdown: ensure producer completes without forced cancel
+                if not producer.done():
+                    try:
+                        await asyncio.gather(producer, return_exceptions=True)
+                    except Exception:
+                        pass
         finally:
             try:
                 orchestrator_sse_connections.dec()

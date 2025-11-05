@@ -48,6 +48,7 @@ except Exception as e:
     _log.exception("Failed to apply test environment setup in conftest.py")
 import pytest
 from fastapi.testclient import TestClient
+import contextlib
 
 
 # Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.
@@ -166,3 +167,63 @@ def _shutdown_executors_and_evaluations_pool():
 
 
 # Unified Postgres fixtures are provided by tldw_Server_API.tests._plugins.postgres
+
+
+@pytest.fixture()
+def bypass_api_limits(monkeypatch):
+    """Context manager to bypass ingress rate limiting for a given FastAPI app.
+
+    Usage:
+        with bypass_api_limits(app, limiters=(audio_ep.limiter,)):
+            ... make requests ...
+
+    - Sets TEST_MODE=true for deterministic behavior
+    - Disables RGSimpleMiddleware by removing it from app.user_middleware
+    - Disables any provided SlowAPI limiter(s) during the context
+    """
+
+    @contextlib.contextmanager
+    def _bypass(app, *, limiters: tuple = ()):  # type: ignore[override]
+        # Ensure test-friendly behaviors
+        monkeypatch.setenv("TEST_MODE", "true")
+        monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "0")
+
+        # Snapshot existing middleware stack
+        original_user_middleware = getattr(app, "user_middleware", [])[:]
+        # Remove RGSimpleMiddleware if present
+        try:
+            from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
+            app.user_middleware = [
+                m for m in original_user_middleware if getattr(m, "cls", None) is not RGSimpleMiddleware
+            ]
+            app.middleware_stack = app.build_middleware_stack()
+        except Exception:
+            pass
+
+        # Disable provided SlowAPI limiter(s)
+        limiter_states = []
+        for lim in limiters or ():
+            try:
+                limiter_states.append((lim, getattr(lim, "enabled", True)))
+                lim.enabled = False
+            except Exception:
+                limiter_states.append((lim, None))
+
+        try:
+            yield
+        finally:
+            # Restore limiter states
+            for lim, prev in limiter_states:
+                if prev is not None:
+                    try:
+                        lim.enabled = prev
+                    except Exception:
+                        pass
+            # Restore middleware stack
+            try:
+                app.user_middleware = original_user_middleware
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
+
+    return _bypass

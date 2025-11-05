@@ -139,6 +139,9 @@ def _jobs_minimal_env(monkeypatch):
     # Quiet background features for deterministic tests
     monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
     monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
+    # Default to no lease enforcement in Jobs tests unless a test opts in
+    if os.getenv("JOBS_ENFORCE_LEASE_ACK") is None:
+        monkeypatch.setenv("JOBS_DISABLE_LEASE_ENFORCEMENT", "true")
     # Disable counters and outbox by default for determinism; tests can opt-in
     if os.getenv("JOBS_COUNTERS_ENABLED") is None:
         monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "false")

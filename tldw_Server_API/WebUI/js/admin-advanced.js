@@ -479,7 +479,8 @@ async function moderationLintManagedAll() {
     if (!lines.length) { window._moderationManagedLint = {}; return; }
     const res = await window.apiClient.post('/api/v1/moderation/blocklist/lint', { lines });
     const map = {};
-    (res.items || []).forEach((it, i) => { map[String(i)] = it; });
+    // Key lint results by blocklist entry ID instead of array index
+    (res.items || []).forEach((it) => { map[String(it.id)] = it; });
     window._moderationManagedLint = map;
     renderManagedBlocklist();
     const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = 'Linted';
@@ -698,14 +699,32 @@ async function loadSecurityAlertStatus() {
       tbody.innerHTML = '';
       (resp.sinks || []).forEach(sink => {
         const row = document.createElement('tr');
-        row.innerHTML = `
-          <td>${sink.sink}</td>
-          <td>${sink.configured ? 'Yes' : 'No'}</td>
-          <td>${sink.min_severity || resp.min_severity}</td>
-          <td>${sink.last_status === true ? 'success' : sink.last_status === false ? 'failure' : 'n/a'}</td>
-          <td>${sink.last_error || ''}</td>
-          <td>${sink.backoff_until || ''}</td>
-        `;
+
+        const tdSink = document.createElement('td');
+        tdSink.textContent = String(sink?.sink ?? '');
+        row.appendChild(tdSink);
+
+        const tdConfigured = document.createElement('td');
+        tdConfigured.textContent = sink && sink.configured ? 'Yes' : 'No';
+        row.appendChild(tdConfigured);
+
+        const tdMinSeverity = document.createElement('td');
+        tdMinSeverity.textContent = String((sink && sink.min_severity) || resp.min_severity || '');
+        row.appendChild(tdMinSeverity);
+
+        const tdLastStatus = document.createElement('td');
+        const lastStatus = sink && sink.last_status === true ? 'success' : (sink && sink.last_status === false ? 'failure' : 'n/a');
+        tdLastStatus.textContent = lastStatus;
+        row.appendChild(tdLastStatus);
+
+        const tdLastError = document.createElement('td');
+        tdLastError.textContent = String((sink && sink.last_error) || '');
+        row.appendChild(tdLastError);
+
+        const tdBackoff = document.createElement('td');
+        tdBackoff.textContent = String((sink && sink.backoff_until) || '');
+        row.appendChild(tdBackoff);
+
         tbody.appendChild(row);
       });
     }

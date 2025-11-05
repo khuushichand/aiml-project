@@ -192,11 +192,9 @@ async def test_org_team_scoped_catalog_management():
     # Reset settings and DB pool to honor DATABASE_URL for this test
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     reset_settings()
     await reset_db_pool()
     pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
 
     # Clear cached MCP config and IP allowlist controller to pick up env
     try:
@@ -215,9 +213,7 @@ async def test_org_team_scoped_catalog_management():
     # Ensure base tables and a single-user admin row
     _ensure_tables_for_users()
     _ensure_single_user_row()
-    # Ensure AuthNZ migrations (orgs/teams tables)
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-    ensure_authnz_tables(_get_db_path_from_env())
+    # App startup ensures AuthNZ migrations when using SQLite
 
     admin_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
     admin_headers = {"X-API-KEY": admin_key}

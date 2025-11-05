@@ -600,6 +600,12 @@ def ensure_job_counters_pg(db_url: str) -> None:
         import psycopg
     except Exception:
         return
+    # Normalize DSN to include timeouts and libpq options, similar to other helpers
+    try:
+        from .pg_util import normalize_pg_dsn
+        _dsn = normalize_pg_dsn(db_url)
+    except Exception:
+        _dsn = db_url
     try:
         with psycopg.connect(_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:

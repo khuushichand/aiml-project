@@ -122,12 +122,25 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 
 # Initialize rate limiter
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
+    limiter,
+    get_test_aware_remote_address as _test_mode_key_func,
+)
+
+
 def _rate_limit_key(request: _FastAPIRequest) -> str:
     """Rate limit key that prefers authenticated user id over IP.
 
     - Multi-user: per-user limits (fairness across users)
     - Single-user or unauthenticated: fall back to client IP
     """
+    # In TEST_MODE, align with global limiter behavior by delegating to the
+    # test-aware key resolver (which returns None to bypass limits).
+    try:
+        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            return _test_mode_key_func(request)
+    except Exception:
+        pass
     try:
         uid = getattr(request.state, "user_id", None)
         if uid is not None:
@@ -137,7 +150,6 @@ def _rate_limit_key(request: _FastAPIRequest) -> str:
     return get_remote_address(request)
 
 # Use central limiter instance; override key_func per-route where needed
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 
 
 router = APIRouter(

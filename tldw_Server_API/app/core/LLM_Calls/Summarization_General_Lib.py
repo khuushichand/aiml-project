@@ -791,6 +791,11 @@ def summarize_with_anthropic(api_key, input_data, custom_prompt_arg, temp=None, 
 
         # Centralized client usage
         api_url = 'https://api.anthropic.com/v1/messages'
+        # Restore timeout lost during refactor; support both 'timeout' and 'api_timeout' keys
+        try:
+            timeout = float(loaded_config_data['anthropic_api'].get('timeout', loaded_config_data['anthropic_api'].get('api_timeout', 120)) or 120)
+        except Exception:
+            timeout = 120.0
         if streaming:
             def stream_generator():
                 client = create_client()
@@ -833,8 +838,10 @@ def summarize_with_anthropic(api_key, input_data, custom_prompt_arg, temp=None, 
                         pass
             return stream_generator()
         else:
-            policy = RetryPolicy(attempts=int(loaded_config_data['anthropic_api'].get('api_retries', 3)) + 1,
-                                 backoff_base_ms=int(float(loaded_config_data['anthropic_api'].get('api_retry_delay', 1)) * 1000))
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['anthropic_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['anthropic_api'].get('api_retry_delay', 1)) * 1000),
+            )
             response_data = fetch_json(method="POST", url=api_url, headers=headers, json=data, timeout=timeout, retry=policy)
             try:
                 content_blocks = response_data.get('content', [])
