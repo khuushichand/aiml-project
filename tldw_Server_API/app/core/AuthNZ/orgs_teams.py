@@ -169,7 +169,6 @@ async def create_organization(
                 (name, slug, owner_user_id, json.dumps(metadata) if metadata else None),
             )
             org_id = cur.lastrowid
-            await conn.commit()
             cur2 = await conn.execute(
                 "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
                 (org_id,),
