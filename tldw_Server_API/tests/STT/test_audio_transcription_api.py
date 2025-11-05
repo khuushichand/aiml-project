@@ -12,6 +12,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
 
 # Mock audio data for testing
@@ -24,7 +25,7 @@ def create_test_audio(duration=1.0, sample_rate=16000):
 
 
 @pytest.mark.asyncio
-async def test_transcription_endpoint():
+async def test_transcription_endpoint(bypass_api_limits):
     """Test the /v1/audio/transcriptions endpoint."""
     from tldw_Server_API.app.main import app
 
@@ -37,28 +38,30 @@ async def test_transcription_endpoint():
         tmp_path = tmp_file.name
 
     try:
+        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            # Read file for upload
-            with open(tmp_path, 'rb') as f:
-                files = {'file': ('test.wav', f, 'audio/wav')}
-                data = {
-                    'model': 'whisper-1',
-                    'response_format': 'json'
-                }
-                settings = get_settings()
-                headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-                response = await client.post(
-                    "/api/v1/audio/transcriptions",
-                    headers=headers,
-                    files=files,
-                    data=data
-                )
+        with ctx:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                # Read file for upload
+                with open(tmp_path, 'rb') as f:
+                    files = {'file': ('test.wav', f, 'audio/wav')}
+                    data = {
+                        'model': 'whisper-1',
+                        'response_format': 'json'
+                    }
+                    settings = get_settings()
+                    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+                    response = await client.post(
+                        "/api/v1/audio/transcriptions",
+                        headers=headers,
+                        files=files,
+                        data=data
+                    )
 
-            assert response.status_code == 200
-            result = response.json()
-            assert 'text' in result
-            print(f"Transcription result: {result}")
+                assert response.status_code == 200
+                result = response.json()
+                assert 'text' in result
+                print(f"Transcription result: {result}")
 
     finally:
         # Clean up
@@ -67,7 +70,7 @@ async def test_transcription_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_transcription_with_parakeet():
+async def test_transcription_with_parakeet(bypass_api_limits):
     """Test transcription using Parakeet model."""
     from tldw_Server_API.app.main import app
 
@@ -80,31 +83,33 @@ async def test_transcription_with_parakeet():
         tmp_path = tmp_file.name
 
     try:
+        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            with open(tmp_path, 'rb') as f:
-                files = {'file': ('test.wav', f, 'audio/wav')}
-                data = {
-                    'model': 'parakeet',
-                    'response_format': 'json',
-                    'language': 'en'
-                }
-                settings = get_settings()
-                headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-                response = await client.post(
-                    "/api/v1/audio/transcriptions",
-                    headers=headers,
-                    files=files,
-                    data=data
-                )
+        with ctx:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                with open(tmp_path, 'rb') as f:
+                    files = {'file': ('test.wav', f, 'audio/wav')}
+                    data = {
+                        'model': 'parakeet',
+                        'response_format': 'json',
+                        'language': 'en'
+                    }
+                    settings = get_settings()
+                    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+                    response = await client.post(
+                        "/api/v1/audio/transcriptions",
+                        headers=headers,
+                        files=files,
+                        data=data
+                    )
 
-            # Parakeet might not be available in test environment
-            if response.status_code == 200:
-                result = response.json()
-                assert 'text' in result
-                print(f"Parakeet transcription: {result}")
-            else:
-                print(f"Parakeet not available: {response.status_code}")
+                # Parakeet might not be available in test environment
+                if response.status_code == 200:
+                    result = response.json()
+                    assert 'text' in result
+                    print(f"Parakeet transcription: {result}")
+                else:
+                    print(f"Parakeet not available: {response.status_code}")
 
     finally:
         if os.path.exists(tmp_path):
@@ -112,7 +117,7 @@ async def test_transcription_with_parakeet():
 
 
 @pytest.mark.asyncio
-async def test_transcription_formats():
+async def test_transcription_formats(bypass_api_limits):
     """Test different response formats."""
     from tldw_Server_API.app.main import app
 
@@ -125,43 +130,45 @@ async def test_transcription_formats():
         tmp_path = tmp_file.name
 
     try:
+        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            # Test different formats
-            formats = ['json', 'text', 'srt', 'vtt', 'verbose_json']
+        with ctx:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                # Test different formats
+                formats = ['json', 'text', 'srt', 'vtt', 'verbose_json']
 
-            for fmt in formats:
-                with open(tmp_path, 'rb') as f:
-                    files = {'file': ('test.wav', f, 'audio/wav')}
-                    data = {
-                        'model': 'whisper-1',
-                        'response_format': fmt
-                    }
-                    settings = get_settings()
-                    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-                    response = await client.post(
-                        "/api/v1/audio/transcriptions",
-                        headers=headers,
-                        files=files,
-                        data=data
-                    )
+                for fmt in formats:
+                    with open(tmp_path, 'rb') as f:
+                        files = {'file': ('test.wav', f, 'audio/wav')}
+                        data = {
+                            'model': 'whisper-1',
+                            'response_format': fmt
+                        }
+                        settings = get_settings()
+                        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+                        response = await client.post(
+                            "/api/v1/audio/transcriptions",
+                            headers=headers,
+                            files=files,
+                            data=data
+                        )
 
-                assert response.status_code == 200
+                    assert response.status_code == 200
 
-                if fmt == 'json' or fmt == 'verbose_json':
-                    result = response.json()
-                    assert 'text' in result
-                    if fmt == 'verbose_json':
-                        assert 'task' in result
-                        assert 'duration' in result
-                elif fmt == 'text':
-                    assert isinstance(response.text, str)
-                elif fmt == 'srt':
-                    assert '00:00:00,000' in response.text
-                elif fmt == 'vtt':
-                    assert 'WEBVTT' in response.text
+                    if fmt == 'json' or fmt == 'verbose_json':
+                        result = response.json()
+                        assert 'text' in result
+                        if fmt == 'verbose_json':
+                            assert 'task' in result
+                            assert 'duration' in result
+                    elif fmt == 'text':
+                        assert isinstance(response.text, str)
+                    elif fmt == 'srt':
+                        assert '00:00:00,000' in response.text
+                    elif fmt == 'vtt':
+                        assert 'WEBVTT' in response.text
 
-                print(f"Format {fmt} test passed")
+                    print(f"Format {fmt} test passed")
 
     finally:
         if os.path.exists(tmp_path):
@@ -169,7 +176,7 @@ async def test_transcription_formats():
 
 
 @pytest.mark.asyncio
-async def test_translation_endpoint():
+async def test_translation_endpoint(bypass_api_limits):
     """Test the /v1/audio/translations endpoint."""
     from tldw_Server_API.app.main import app
 
@@ -182,38 +189,40 @@ async def test_translation_endpoint():
         tmp_path = tmp_file.name
 
     try:
+        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            with open(tmp_path, 'rb') as f:
-                files = {'file': ('test.wav', f, 'audio/wav')}
-                data = {
-                    'model': 'whisper-1',
-                    'response_format': 'json'
-                }
-                settings = get_settings()
-                headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-                response = await client.post(
-                    "/api/v1/audio/translations",
-                    headers=headers,
-                    files=files,
-                    data=data
-                )
+        with ctx:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                with open(tmp_path, 'rb') as f:
+                    files = {'file': ('test.wav', f, 'audio/wav')}
+                    data = {
+                        'model': 'whisper-1',
+                        'response_format': 'json'
+                    }
+                    settings = get_settings()
+                    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+                    response = await client.post(
+                        "/api/v1/audio/translations",
+                        headers=headers,
+                        files=files,
+                        data=data
+                    )
 
-            assert response.status_code == 200
-            result = response.json()
-            assert 'text' in result
-            print(f"Translation result: {result}")
+                assert response.status_code == 200
+                result = response.json()
+                assert 'text' in result
+                print(f"Translation result: {result}")
 
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
 
-def test_sync_transcription():
+def test_sync_transcription(bypass_api_limits):
     """Test synchronous transcription using TestClient."""
     from tldw_Server_API.app.main import app
 
-    with TestClient(app) as client:
+    with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
         # Create test audio
         audio_data, sample_rate = create_test_audio()
 

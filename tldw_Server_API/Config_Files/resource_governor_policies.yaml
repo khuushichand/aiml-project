@@ -43,9 +43,13 @@ policies:
 
   # Audio: concurrency via streams + durable minutes cap
   audio.default:
+    # Permit reasonable request rate for all audio endpoints so RG middleware
+    # does not deny purely informational GET routes (e.g., /stream/status, /stream/limits).
+    # Concurrency and minutes caps are enforced separately.
+    requests: { rpm: 300, burst: 2.0 }
     streams: { max_concurrent: 2, ttl_sec: 90 }
     minutes: { daily_cap: 120, rounding: ceil }
-    scopes: [user]
+    scopes: [user, ip]
     fail_mode: fail_closed
 
   # SlowAPI façade defaults (ingress IP-based when auth scopes unavailable)
@@ -76,4 +80,3 @@ route_map:
 
 # Observability note: Do not include entity label in metrics by default.
 # Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.
-

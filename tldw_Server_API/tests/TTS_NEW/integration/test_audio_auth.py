@@ -13,8 +13,8 @@ from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 pytestmark = [pytest.mark.integration]
 
 
-def test_speech_requires_auth_401():
-    with TestClient(app) as client:
+def test_speech_requires_auth_401(bypass_api_limits):
+    with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
         payload = {
             "model": "kokoro",
             "input": "Hello",
@@ -26,8 +26,8 @@ def test_speech_requires_auth_401():
         assert resp.status_code == 401
 
 
-def test_speech_ok_with_override(monkeypatch):
-    with TestClient(app) as client:
+def test_speech_ok_with_override(monkeypatch, bypass_api_limits):
+    with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
 
