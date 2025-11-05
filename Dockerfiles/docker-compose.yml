@@ -20,7 +20,7 @@ services:
       # Database URL: use Postgres in multi_user
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./Databases/users.db}
       # Jobs module backend (optional): set to Postgres DSN to use the postgres service
-      # Example: postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+      # Example: postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
       - JOBS_DB_URL=${JOBS_DB_URL:-}
       # Optional OpenTelemetry envs can be passed through here
       - UVICORN_WORKERS=${UVICORN_WORKERS:-4}
@@ -44,7 +44,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
       POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeMeStrong123!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-TestPassword123!}
     ports:
       - "5432:5432"
     healthcheck:
@@ -81,7 +81,7 @@ volumes:
 #   #   docker compose up --build
 #   # Multi-user (Postgres):
 #   #   export AUTH_MODE=multi_user
-#   #   export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+#   #   export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 #   #   # Optional: point Jobs to Postgres as well (uses same DB by default)
-#   #   export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+#   #   export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 #   #   docker compose up --build

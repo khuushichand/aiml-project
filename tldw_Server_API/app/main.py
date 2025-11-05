@@ -2256,8 +2256,10 @@ from starlette.responses import JSONResponse  # noqa: E402
 import os as _os  # noqa: E402
 try:
     _rg_env_enabled = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
-    _pytest_active = bool(_os.getenv("PYTEST_CURRENT_TEST"))
-    if _rg_env_enabled or _MINIMAL_TEST_APP or _pytest_active:
+    # Only enable RGSimpleMiddleware when explicitly requested via env, or when running the
+    # minimal test app mode. Do not enable solely due to pytest detection to avoid unintended
+    # 429 responses in tests that don't expect global rate limiting.
+    if _rg_env_enabled or _MINIMAL_TEST_APP:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware as _RGMw  # noqa: E402
         # Avoid double-adding
         try:
@@ -2266,7 +2268,7 @@ try:
             already = False
         if not already:
             app.add_middleware(_RGMw)
-            logger.info("RGSimpleMiddleware enabled (env or test/minimal mode)")
+            logger.info("RGSimpleMiddleware enabled (env/minimal mode)")
 except Exception as _rg_mw_err:  # pragma: no cover - best effort
     logger.debug(f"RGSimpleMiddleware not enabled: {_rg_mw_err}")
 

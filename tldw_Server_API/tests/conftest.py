@@ -24,6 +24,14 @@ try:
     # Enable deterministic test behaviors across subsystems
     os.environ.setdefault("TEST_MODE", "1")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+    # Ensure Postgres helpers see consistent defaults immediately at import time.
+    # Many PG tests call get_pg_env() at module import; set test user/password
+    # here so precedence falls to the correct, compose-aligned credentials.
+    os.environ.setdefault("POSTGRES_TEST_USER", "tldw_user")
+    os.environ.setdefault("POSTGRES_TEST_PASSWORD", "TestPassword123!")
+    # Also mirror to generic POSTGRES_* if unset to avoid helper drift.
+    os.environ.setdefault("POSTGRES_USER", "tldw_user")
+    os.environ.setdefault("POSTGRES_PASSWORD", "TestPassword123!")
     # Ensure Postgres tests use a proper DSN instead of falling back to a SQLite DATABASE_URL.
     # If a dedicated DSN is provided via TEST_DATABASE_URL or POSTGRES_TEST_DSN, prefer it.
     # Otherwise, if POSTGRES_TEST_HOST/USER/DB are present, synthesize a DSN.

@@ -11,7 +11,7 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
   - `docker compose -f Dockerfiles/docker-compose.yml up -d --build`
 - Start (multi-user, Postgres users DB):
   - `export AUTH_MODE=multi_user`
-  - `export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users`
+  - `export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users`
   - `docker compose -f Dockerfiles/docker-compose.yml up -d --build`
 - Initialize AuthNZ inside the app container (first run):
   - `docker compose -f Dockerfiles/docker-compose.yml exec app python -m tldw_Server_API.app.core.AuthNZ.initialize`

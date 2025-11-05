@@ -238,7 +238,7 @@ def pg_temp_db(pg_server) -> Generator[Dict[str, object], None, None]:
         msg = (
             f"Unable to create temporary Postgres database as user '{user}' on {host}:{port}. "
             f"This usually means the resolved credentials lack CREATEDB privileges or are incorrect.\n"
-            f"Hint: set POSTGRES_TEST_DSN (or JOBS_DB_URL/TEST_DATABASE_URL) to a superuser DSN, e.g. postgresql://postgres:postgres@127.0.0.1:{port}/postgres.\n"
+            f"Hint: set POSTGRES_TEST_DSN (or JOBS_DB_URL/TEST_DATABASE_URL) to a superuser DSN, e.g. postgresql://tldw_user:TestPassword123!@127.0.0.1:{port}/postgres (or postgres:postgres).\n"
             + ("Tried Docker fallback on alternate port and still failed.\n" if tried_docker else "")
             + f"Error: {e}"
         )

@@ -126,11 +126,11 @@ Key settings in `.env`:
 - Configure PostgreSQL via `DATABASE_URL` (examples):
   - Local:
     ```bash
-    export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
+    export DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users
     ```
   - With docker-compose (service name `postgres`):
     ```bash
-    export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+    export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
     ```
   - See Multi-User Deployment Guide for more details.
 
@@ -207,14 +207,14 @@ You can configure authentication and the AuthNZ database in `tldw_Server_API/Con
 [AuthNZ]
 auth_mode = multi_user
 # Option A: full URL
-database_url = postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users
+database_url = postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users
 # Option B: structured fields (used if DATABASE_URL not set)
 db_type = postgresql
 pg_host = localhost
 pg_port = 5432
 pg_db = tldw_users
 pg_user = tldw_user
-pg_password = ChangeMeStrong123!
+pg_password = TestPassword123!
 pg_sslmode = prefer
 enable_registration = true
 require_registration_code = false

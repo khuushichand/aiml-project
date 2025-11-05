@@ -80,7 +80,7 @@ When a key is missing, the individual test will usually skip with a descriptive 
 ### Postgres DSN for Tests
 - Preferred: export a full DSN and all tests will use it:
   - `export TEST_DATABASE_URL=postgresql://USER:PASS@HOST:PORT/DB`
-  - Example for the default dev container: `postgresql://tldw:tldw@127.0.0.1:5432/tldw_content`
+  - Example for the default dev container: `postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content`
 - If no DSN is set, tests fall back in this order when building connection params:
   1) Container-style `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (+ `POSTGRES_TEST_HOST`/`POSTGRES_TEST_PORT` if set)
   2) `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER`, `TEST_DB_PASSWORD`

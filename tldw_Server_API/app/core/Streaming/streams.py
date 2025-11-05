@@ -342,6 +342,9 @@ class WebSocketStream:
                 task.cancel()
                 try:
                     await task
+                except asyncio.CancelledError:
+                    # Python 3.11+ raises CancelledError as BaseException; ignore on shutdown
+                    pass
                 except Exception:
                     pass
 

@@ -1435,21 +1435,21 @@ async def handle_unified_websocket(
                     )
                     return
             else:
-                # Fallback disabled or already using Whisper
+                # Fallback disabled or already using Whisper: emit explicit model_unavailable error
                 suggestion = ""
                 if config.model.lower() in ['parakeet', 'canary']:
                     suggestion = "Install nemo_toolkit[asr]: pip install nemo_toolkit[asr]"
                 elif config.model.lower() == 'whisper':
                     suggestion = "Ensure faster-whisper is installed: pip install faster-whisper"
 
-                # Standardized error + close mapping (internal error)
+                # Standardized error with compatibility field 'error_type' via compat_error_type=True
                 await stream.error(
-                    "internal_error",
-                    error_msg,
+                    "model_unavailable",
+                    "Requested model/variant unavailable and fallback disabled",
                     data={
                         "model": config.model,
-                        "error_type": type(e).__name__,
-                        "error_details": str(e),
+                        "variant": getattr(config, 'model_variant', None),
+                        "error": str(e),
                         "fallback_enabled": fallback_enabled,
                         "suggestion": suggestion,
                     },

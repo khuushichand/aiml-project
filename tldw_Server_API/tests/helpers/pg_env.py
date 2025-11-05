@@ -4,7 +4,7 @@ Precedence for connection settings (container/dev-first):
 1) `JOBS_DB_URL` (explicit for Jobs/PG tests), then `POSTGRES_TEST_DSN`
 2) `TEST_DATABASE_URL` (used by some AuthNZ tests), then `DATABASE_URL`
 3) Container-style envs: `POSTGRES_TEST_*` then `POSTGRES_*`
-4) Project defaults aligned with dev compose (tldw/tldw/tldw_content on 127.0.0.1:5432)
+4) Project defaults aligned with dev compose (tldw_user/TestPassword123!/tldw_content on 127.0.0.1:5432)
 
 This order avoids accidentally picking an unrelated global `TEST_DATABASE_URL`
 for Jobs tests while still allowing suites that rely on it to work when no
@@ -74,13 +74,13 @@ def get_pg_env() -> PGEnv:
         os.getenv("POSTGRES_TEST_USER")
         or os.getenv("POSTGRES_USER")
         or os.getenv("TEST_DB_USER")
-        or "tldw"
+        or "tldw_user"
     )
     password = (
         os.getenv("POSTGRES_TEST_PASSWORD")
         or os.getenv("POSTGRES_PASSWORD")
         or os.getenv("TEST_DB_PASSWORD")
-        or "tldw"
+        or "TestPassword123!"
     )
     db = (
         os.getenv("POSTGRES_TEST_DB")

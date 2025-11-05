@@ -31,7 +31,7 @@ PLACEHOLDER_VALUES = {
     "default-secret-key-for-single-user",
     "test-api-key-12345",
     "CHANGE_ME_TO_SECURE_API_KEY",
-    "ChangeMeStrong123!",
+    "TestPassword123!",
     "change-me-in-production",
 }
 

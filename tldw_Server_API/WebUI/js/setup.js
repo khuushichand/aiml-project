@@ -6,7 +6,7 @@
     'YOUR_API_KEY_HERE',
     'default-secret-key-for-single-user',
     'CHANGE_ME_TO_SECURE_API_KEY',
-    'ChangeMeStrong123!',
+    'TestPassword123!',
     'change-me-in-production',
   ]);
   const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;

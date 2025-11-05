@@ -292,9 +292,9 @@ docker compose -f Dockerfiles/docker-compose.yml up -d --build
 
 # Option B) Multi-user (Postgres users DB)
 export AUTH_MODE=multi_user
-export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 # Optional: route Jobs module to Postgres as well
-export JOBS_DB_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users
+export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.override.yml up -d --build
 
 # Option C) Dev overlay — enable unified streaming (non-prod)

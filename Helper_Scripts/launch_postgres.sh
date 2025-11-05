@@ -10,19 +10,19 @@ set -euo pipefail
 #   PG_CONTAINER   (default: tldw_postgres_dev)
 #   PG_IMAGE       (default: postgres:18)
 #   PG_PORT        (default: 55432)
-#   PG_USER        (default: tldw)
-#   PG_PASSWORD    (default: tldw)
+#   PG_USER        (default: tldw_user)
+#   PG_PASSWORD    (default: TestPassword123!)
 #   PG_DB_PRIMARY  (default: tldw_content)  # Jobs/outbox default
 #   PG_DB_AUTHNZ   (default: tldw_users)    # AuthNZ default
 #
 # Example:
-#   PG_PORT=55432 PG_USER=tldw PG_PASSWORD=tldw ./Helper_Scripts/launch_postgres.sh
+#   PG_PORT=55432 PG_USER=tldw_user PG_PASSWORD=TestPassword123! ./Helper_Scripts/launch_postgres.sh
 
 PG_CONTAINER=${PG_CONTAINER:-tldw_postgres_dev}
 PG_IMAGE=${PG_IMAGE:-postgres:18}
 PG_PORT=${PG_PORT:-55432}
-PG_USER=${PG_USER:-tldw}
-PG_PASSWORD=${PG_PASSWORD:-tldw}
+PG_USER=${PG_USER:-tldw_user}
+PG_PASSWORD=${PG_PASSWORD:-TestPassword123!}
 PG_DB_PRIMARY=${PG_DB_PRIMARY:-tldw_content}
 PG_DB_AUTHNZ=${PG_DB_AUTHNZ:-tldw_users}
 

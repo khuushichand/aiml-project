@@ -21,7 +21,7 @@ services:
       # AuthNZ
       SINGLE_USER_API_KEY: ${SINGLE_USER_API_KEY:-}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://tldw_user:${POSTGRES_PASSWORD:-ChangeMeStrong123!}@postgres:5432/${POSTGRES_DB:-tldw_users}}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://tldw_user:${POSTGRES_PASSWORD:-TestPassword123!}@postgres:5432/${POSTGRES_DB:-tldw_users}}
 
       # Networking / CORS
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://your.domain.com}
@@ -38,7 +38,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
       POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeMeStrong123!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-TestPassword123!}
 
   redis:
     restart: unless-stopped
