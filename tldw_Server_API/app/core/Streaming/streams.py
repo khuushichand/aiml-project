@@ -375,6 +375,12 @@ class WebSocketStream:
             payload["data"] = data
         if self.compat_error_type:
             payload["error_type"] = code
+            # Compatibility shim: surface certain data fields at top-level
+            try:
+                if isinstance(data, dict) and "quota" in data:
+                    payload["quota"] = data.get("quota")
+            except Exception:
+                pass
         await self._send_json_with_metrics(payload, kind="error")
         close_code = self._map_close_code(code)
         try:
