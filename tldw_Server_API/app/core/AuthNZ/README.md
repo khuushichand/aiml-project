@@ -57,6 +57,17 @@ Note: This README follows the project-wide template to help contributors quickly
   - `ENABLE_REGISTRATION`, `REQUIRE_REGISTRATION_CODE`, `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS`.
   - `SESSION_COOKIE_SECURE`, `CSRF_BIND_TO_USER`, `SERVICE_ACCOUNT_RATE_LIMIT`, `SINGLE_USER_API_KEY`.
   - Settings merge env, `.env` files, and project config via `load_comprehensive_config`.
+
+### Session Encryption Key
+
+- Purpose: Encrypts session tokens at rest using Fernet.
+- Configure explicitly with `SESSION_ENCRYPTION_KEY` (urlsafe base64, 32-byte key when decoded). If not set, a key is persisted to disk.
+- Persistence locations (searched in order):
+  - Default: `PROJECT_ROOT/Config_Files/session_encryption.key` (tests set `core_settings["PROJECT_ROOT"]`).
+  - Fallback/alternate: `tldw_Server_API/Config_Files/session_encryption.key`.
+- Force API path storage: set `SESSION_KEY_STORAGE=api` to persist and prefer `tldw_Server_API/Config_Files/session_encryption.key`.
+  - On startup, if a valid key exists at project root and the API path is missing/invalid, the manager migrates the key to the API path (0600 perms) and logs a notice.
+- Security: file must be a regular file, owned by the current user, and is written with `0600` permissions; symlinks and invalid contents are rejected.
 - Concurrency & Performance:
   - Async DB paths for asyncpg/aiosqlite; Redis-backed counters when available.
   - Token/JTI blacklist checks cached; rate limits use token buckets with burst support.
@@ -116,4 +127,3 @@ Example Quick Start (optional)
 python -m tldw_Server_API.app.core.AuthNZ.run_migrations
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
-

@@ -347,29 +347,50 @@ class SessionManager:
     def _load_persisted_session_key(self) -> Optional[bytes]:
         """Load persisted session encryption key if available.
 
-        Preferred location: PROJECT_ROOT/Config_Files/session_encryption.key
+        Preferred location (default): PROJECT_ROOT/Config_Files/session_encryption.key
         Back-compat fallback: tldw_Server_API/Config_Files/session_encryption.key
+
+        You can override the preference to use the API component path first by setting
+        environment variable SESSION_KEY_STORAGE=api (keeps tests/backwards-compat default otherwise).
         """
-        # Prefer PROJECT_ROOT/Config_Files first (tests monkeypatch this)
+        # Build candidate paths honoring optional override
+        prefer_api_path = str(os.getenv("SESSION_KEY_STORAGE", "")).strip().lower() in {"api", "tldw", "tldw_api", "tldw_server_api"}
         candidate_paths: list[Path] = []
+        primary_path: Optional[Path] = None
+        api_path: Optional[Path] = None
+        # Resolve both paths safely
         try:
-            preferred_root = None
-            if core_settings:
-                preferred_root = core_settings.get("PROJECT_ROOT")
+            if self._persisted_key_path:
+                api_path = self._persisted_key_path
+            else:
+                api_path = self._resolve_api_key_path()
+        except Exception:
+            api_path = None
+        try:
+            preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
             preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
             primary_path = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
-            candidate_paths.append(primary_path)
         except Exception:
-            # If anything goes wrong, fall back to API path resolution below
-            pass
+            primary_path = None
 
-        # Backward-compat: API component Config_Files
-        try:
-            api_path = self._persisted_key_path or self._resolve_persisted_key_path()
+        if prefer_api_path:
+            if api_path:
+                candidate_paths.append(api_path)
+            if primary_path:
+                candidate_paths.append(primary_path)
+        else:
+            if primary_path:
+                candidate_paths.append(primary_path)
             if api_path and (not candidate_paths or api_path != candidate_paths[0]):
                 candidate_paths.append(api_path)
-        except Exception:
-            pass
+
+        # If API path preference is enabled, migrate a valid key from project root
+        # to the API component path when the latter is missing or invalid.
+        if prefer_api_path and api_path and primary_path:
+            try:
+                self._maybe_migrate_key_to_api_path(primary_path, api_path)
+            except Exception as exc:
+                logger.debug(f"Session key migration skipped due to error: {exc}")
 
         for path in candidate_paths:
             try:
@@ -384,24 +405,38 @@ class SessionManager:
                     continue
                 # Use the first valid candidate found
                 self._persisted_key_path = path
-                if path != primary_path:
-                    logger.warning(
-                        f"Using legacy session_encryption.key at {path}. Migrate to tldw_Server_API/Config_Files."
-                    )
+                if primary_path and path != primary_path:
+                    logger.warning(f"Using persisted session_encryption.key at alternate location: {path}")
                 return content.encode("utf-8")
             except Exception as exc:
                 logger.warning(f"Failed to read persisted session encryption key from {path}: {exc}")
                 continue
         return None
 
+    def _resolve_api_key_path(self) -> Optional[Path]:
+        """Return the tldw_Server_API/Config_Files path for the key."""
+        try:
+            api_root = Path(__file__).resolve().parent.parent.parent.parent
+            return (api_root / "Config_Files" / "session_encryption.key").resolve()
+        except Exception:
+            return None
+
     def _resolve_persisted_key_path(self) -> Optional[Path]:
         """Determine filesystem location for persisted session key.
 
-        Prefer the project root's Config_Files directory if available via
-        core_settings["PROJECT_ROOT"], otherwise fall back to the API component
-        directory (tldw_Server_API/Config_Files).
+        By default, prefer the project root's Config_Files directory if available via
+        core_settings["PROJECT_ROOT"], otherwise fall back to the API component directory
+        (tldw_Server_API/Config_Files).
+
+        Set environment variable SESSION_KEY_STORAGE=api to always use the API component
+        path (tldw_Server_API/Config_Files) for persistence.
         """
-        # Try PROJECT_ROOT first (tests patch this to a tmp dir)
+        prefer_api_path = str(os.getenv("SESSION_KEY_STORAGE", "")).strip().lower() in {"api", "tldw", "tldw_api", "tldw_server_api"}
+        if prefer_api_path:
+            path = self._resolve_api_key_path()
+            if path is not None:
+                return path
+        # Try PROJECT_ROOT first (tests patch this to a tmp dir) when not overridden
         try:
             project_root = None
             if core_settings:
@@ -412,11 +447,73 @@ class SessionManager:
             pass
 
         # Fallback to API component path
+        return self._resolve_api_key_path()
+
+    def _is_valid_key_content(self, content: str) -> bool:
         try:
-            api_root = Path(__file__).resolve().parent.parent.parent.parent
-            return (api_root / "Config_Files" / "session_encryption.key").resolve()
+            decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
+            return len(decoded) == 32
         except Exception:
-            return None
+            return False
+
+    def _is_valid_key_file(self, path: Path) -> bool:
+        try:
+            if not path.exists():
+                return False
+            if not path.is_file():
+                return False
+            content = path.read_text(encoding="utf-8").strip()
+            return bool(content) and self._is_valid_key_content(content)
+        except Exception:
+            return False
+
+    def _maybe_migrate_key_to_api_path(self, source_primary: Path, dest_api: Path) -> None:
+        """If a valid key exists at project root but not at API path, copy it over.
+
+        Preconditions: This runs only when SESSION_KEY_STORAGE=api is set.
+        """
+        try:
+            # If API path already has a valid key, nothing to do
+            if self._is_valid_key_file(dest_api):
+                return
+            # If source has a valid key, copy to dest
+            if not self._is_valid_key_file(source_primary):
+                return
+            try:
+                dest_api.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            payload = source_primary.read_text(encoding="utf-8").strip()
+
+            # Write atomically; if file exists but is invalid, replace it
+            tmp_path = dest_api.with_suffix(".tmp")
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                os.chmod(tmp_path, 0o600)
+                # Replace destination
+                try:
+                    tmp_path.replace(dest_api)
+                except Exception:
+                    # If replace fails, try unlink + rename
+                    try:
+                        dest_api.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    tmp_path.rename(dest_api)
+            finally:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
+            # Validate destination and record
+            if not self._is_valid_key_file(dest_api):
+                raise RuntimeError("Migrated session key failed validation at API path")
+            self._persisted_key_path = dest_api
+            logger.info(f"Migrated session_encryption.key to API path: {dest_api}")
+        except Exception as exc:
+            logger.warning(f"Failed to migrate session_encryption.key to API path: {exc}")
 
     def _token_hash_candidates(self, token: str) -> List[str]:
         """Return ordered hash candidates for a token across active/legacy secrets."""

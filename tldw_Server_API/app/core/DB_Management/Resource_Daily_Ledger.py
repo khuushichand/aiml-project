@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Optional, List, Dict, Any
 
 from loguru import logger
@@ -111,7 +111,18 @@ class ResourceDailyLedger:
                     "INSERT INTO resource_daily_ledger (day_utc, entity_scope, entity_value, category, units, op_id, occurred_at, created_at) "
                     "VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) ON CONFLICT (day_utc, entity_scope, entity_value, category, op_id) DO NOTHING"
                 )
-                res = await self.db_pool.execute(q, day, entry.entity_scope, entry.entity_value, entry.category, int(entry.units), entry.op_id, entry.occurred_at)
+                # asyncpg expects a Python date for DATE columns
+                day_param: date = date.fromisoformat(day)
+                res = await self.db_pool.execute(
+                    q,
+                    day_param,
+                    entry.entity_scope,
+                    entry.entity_value,
+                    entry.category,
+                    int(entry.units),
+                    entry.op_id,
+                    entry.occurred_at,
+                )
                 # asyncpg returns 'INSERT 0 1' on insert; 'INSERT 0 0' on conflict/no-op
                 return str(res).endswith(" 1")
             else:
@@ -158,8 +169,12 @@ class ResourceDailyLedger:
             q = (
                 "SELECT COALESCE(SUM(units), 0) FROM resource_daily_ledger WHERE day_utc = ? AND entity_scope = ? AND entity_value = ? AND category = ?"
             )
-            # DatabasePool will adapt '?' to '$N' when using Postgres
-            val = await self.db_pool.fetchval(q, day, entity_scope, entity_value, category)
+            # DatabasePool will adapt '?' to '$N' when using Postgres; for Postgres send a Python date
+            if await is_postgres_backend():
+                day_param: date = date.fromisoformat(day)
+                val = await self.db_pool.fetchval(q, day_param, entity_scope, entity_value, category)
+            else:
+                val = await self.db_pool.fetchval(q, day, entity_scope, entity_value, category)
             return int(val or 0)
         except Exception as e:
             logger.error(f"ResourceDailyLedger.total_for_day failed: {e}")
@@ -203,7 +218,16 @@ class ResourceDailyLedger:
                 "WHERE entity_scope = ? AND entity_value = ? AND category = ? AND day_utc BETWEEN ? AND ? "
                 "GROUP BY day_utc ORDER BY day_utc"
             )
-            rows = await self.db_pool.fetchall(q, entity_scope, entity_value, category, start_day_utc, end_day_utc)
+            if await is_postgres_backend():
+                start_param: date = date.fromisoformat(start_day_utc)
+                end_param: date = date.fromisoformat(end_day_utc)
+                rows = await self.db_pool.fetchall(
+                    q, entity_scope, entity_value, category, start_param, end_param
+                )
+            else:
+                rows = await self.db_pool.fetchall(
+                    q, entity_scope, entity_value, category, start_day_utc, end_day_utc
+                )
             days: List[Dict[str, Any]] = []
             total = 0
             for r in rows:

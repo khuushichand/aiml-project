@@ -1132,6 +1132,66 @@ def adjust_dimensions(
                 adjusted.append(arr.tolist())
     return adjusted
 
+def decide_and_apply_l2(
+    embedding: Union[List[float], np.ndarray],
+    encoding_format: str,
+    embeddings_from_adapter: bool,
+) -> Tuple[np.ndarray, bool]:
+    """Decide and apply L2-normalization policy.
+
+    Policy:
+    - Base64 outputs: never L2-normalize (numeric representation is not returned).
+    - Numeric outputs: L2-normalize by default.
+    - Adapter-supplied vectors are preserved as-is unless LLM_EMBEDDINGS_L2_NORMALIZE is truthy.
+
+    Returns (arr, did_l2) where arr is a float32 numpy array (possibly normalized).
+    If an unexpected error occurs while reading env vars or applying L2, logs with context
+    and preserves default behavior (numeric outputs normalized; adapter vectors preserved
+    unless normalization is explicitly requested via env flag).
+    """
+    # Default: normalize for numeric outputs; never for base64
+    do_l2 = encoding_format != "base64"
+
+    normalize_requested: Optional[bool] = None
+    try:
+        env_val = os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")
+        normalize_requested = str(env_val).lower() in {"1", "true", "yes", "on"}
+    except Exception as e:
+        # Preserve default behavior on error; log with context
+        logger.warning(
+            "Error reading env var LLM_EMBEDDINGS_L2_NORMALIZE in decide_and_apply_l2; "
+            f"encoding_format={encoding_format}, embeddings_from_adapter={embeddings_from_adapter}: {e}"
+        )
+        normalize_requested = None
+
+    # Adapter vectors: preserve as-is unless normalization explicitly requested
+    if embeddings_from_adapter:
+        if normalize_requested is True:
+            do_l2 = encoding_format != "base64"
+        else:
+            do_l2 = False
+
+    try:
+        arr = np.asarray(embedding, dtype=np.float32)
+        if do_l2:
+            norm = np.linalg.norm(arr)
+            if norm > 0:
+                arr = arr / norm
+        return arr, do_l2
+    except Exception as e:
+        # Log error and return original values (converted to float32 if possible)
+        logger.error(
+            "Error applying L2 policy in decide_and_apply_l2 "
+            f"(LLM_EMBEDDINGS_L2_NORMALIZE, encoding_format={encoding_format}, "
+            f"embeddings_from_adapter={embeddings_from_adapter}): {e}"
+        )
+        try:
+            arr = np.asarray(embedding, dtype=np.float32)
+        except Exception:
+            # Last resort: best-effort array without dtype guarantee
+            arr = np.array(embedding)
+        return arr, False
+
 def _should_enforce_policy(user: Optional[User] = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
@@ -1835,19 +1895,17 @@ async def create_embedding_endpoint(
                         if isinstance(vec, list):
                             embs.append(vec)
                     if embs and len(embs) == len(texts_to_embed):
-                        # Optional L2 normalization for adapter vectors
-                        try:
-                            if str(os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")).lower() in {"1", "true", "yes", "on"}:
-                                import numpy as _np
-                                _normed = []
-                                for v in embs:
-                                    arr = _np.asarray(v, dtype=_np.float32)
-                                    n = _np.linalg.norm(arr)
-                                    _normed.append((arr / n).tolist() if n > 0 else arr.tolist())
-                                embs = _normed
-                        except Exception:
-                            pass
-                        embeddings = embs
+                        # Adapter-provided vectors may already be normalized. Preserve them as-is
+                        # unless LLM_EMBEDDINGS_L2_NORMALIZE explicitly requests normalization.
+                        processed: List[List[float]] = []
+                        for v in embs:
+                            arr, did_l2 = decide_and_apply_l2(
+                                v,
+                                embedding_request.encoding_format,
+                                embeddings_from_adapter=True,
+                            )
+                            processed.append(arr.tolist() if did_l2 else v)
+                        embeddings = processed
                         embeddings_from_adapter = True
                 # If adapter failed to produce vectors, fall through to legacy path
         except Exception as _e:
@@ -1962,23 +2020,18 @@ async def create_embedding_endpoint(
         # Format response
         output_data = []
         for i, embedding in enumerate(embeddings):
-            # L2-normalize numeric output unless adapters supplied vectors and L2 is not requested
-            arr = np.array(embedding, dtype=np.float32)
-            norm = np.linalg.norm(arr)
-            do_l2 = embedding_request.encoding_format != "base64"
-            # If vectors came from adapters and global L2 flag is not enabled, keep as-is
-            try:
-                if embeddings_from_adapter and str(os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")).lower() not in {"1", "true", "yes", "on"}:
-                    do_l2 = False
-            except Exception:
-                pass
-            if norm > 0 and do_l2:
-                arr = arr / norm
+            # Adapter-provided vectors may already be normalized. Preserve them as-is
+            # unless LLM_EMBEDDINGS_L2_NORMALIZE explicitly requests normalization.
+            arr, did_l2 = decide_and_apply_l2(
+                embedding,
+                embedding_request.encoding_format,
+                embeddings_from_adapter=embeddings_from_adapter,
+            )
             if embedding_request.encoding_format == "base64":
                 processed_value = base64.b64encode(arr.tobytes()).decode('utf-8')
             else:
                 # Preserve exact adapter-supplied values when not L2-normalizing
-                processed_value = embedding if not do_l2 else arr.tolist()
+                processed_value = embedding if not did_l2 else arr.tolist()
 
             output_data.append(
                 EmbeddingData(
@@ -3604,9 +3657,10 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
             # Jittered interval around 5s
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
         except Exception as e:
-            # keep the stream alive; emit error info once
+            # Keep the stream alive; emit a sanitized error and log details server-side
             try:
-                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                logger.exception("Orchestrator stream error")
+                yield f"event: error\ndata: {json.dumps({'error': 'Temporary service error'})}\n\n"
             except Exception:
                 pass
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
@@ -3655,8 +3709,9 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
                         payload = await _build_orchestrator_snapshot(client)
                         await stream.send_event("summary", payload)
                     except Exception as e:
-                        # Emit a non-fatal error frame and continue
-                        await stream.error("provider_error", str(e), data=None, close=False)
+                        # Emit a non-fatal sanitized error frame and continue; log details server-side
+                        logger.exception("Provider error during orchestrator snapshot")
+                        await stream.error("provider_error", "Temporary service error", data=None, close=False)
                     # Jittered ~5s cadence
                     await asyncio.sleep(_random.uniform(4.5, 5.5))
 

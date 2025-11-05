@@ -220,13 +220,18 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
                 if isinstance(cookies, str): # Only raise if it was a string that failed to parse
                     raise ValueError(f"Invalid JSON format for cookies: {e}") from e
 
-        # Use centralized HEAD to validate content-length against MAX_FILE_SIZE
+        # Use centralized HEAD to validate content-length against MAX_FILE_SIZE.
+        # Some CDNs/hosts disallow HEAD or require signed GETs; treat HEAD failures as advisory.
+        head_headers = {}
         try:
             head_resp = http_fetch(method="HEAD", url=url, headers=headers, timeout=120)
+            head_headers = getattr(head_resp, "headers", {}) or {}
+        except requests.exceptions.RequestException as e:
+            logging.debug(f"HEAD preflight failed for {url} ({type(e).__name__}); continuing without it.")
         except Exception as e:
-            raise AudioDownloadError(f"HEAD request failed for {url}: {e}")
+            logging.debug(f"HEAD preflight failed for {url} ({type(e).__name__}); continuing without it.")
 
-        file_size_header = head_resp.headers.get('content-length', 0)
+        file_size_header = head_headers.get('content-length', 0)
         try:
             file_size = int(file_size_header)
         except (TypeError, ValueError):
@@ -237,7 +242,7 @@ def download_audio_file(url: str, target_temp_dir: str, use_cookies: bool = Fals
                 f"File size ({file_size / (1024*1024):.2f} MB) exceeds the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit for URL {url}."
             )
 
-        content_disposition = head_resp.headers.get('content-disposition')
+        content_disposition = head_headers.get('content-disposition')
         original_filename = None
         if content_disposition:
             parts = content_disposition.split('filename=')

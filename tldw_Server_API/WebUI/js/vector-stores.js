@@ -495,7 +495,8 @@
     const out = document.getElementById('vb_result'); if (out) out.textContent = JSON.stringify(res, null, 2);
     const list = document.getElementById('vb_list');
     const rows = (res.data || []).map(r => {
-      const err = r.error ? `<span style='color:var(--color-danger)'>${(r.error || '').slice(0, 120)}</span>` : '';
+      const safeError = r.error ? Utils.escapeHtml(String(r.error).slice(0, 120)) : '';
+      const err = safeError ? `<span style='color:var(--color-danger-emphasis)'>${safeError}</span>` : '';
       return `<div class='list-row' style='display:flex; gap:8px; border-bottom:1px solid var(--color-border); padding:6px 0;'>
       <code style='flex:0 0 220px;'>${r.id}</code>
       <code style='flex:0 0 220px;'>${r.store_id}</code>

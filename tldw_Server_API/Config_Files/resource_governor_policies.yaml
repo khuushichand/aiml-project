@@ -43,9 +43,8 @@ policies:
 
   # Audio: concurrency via streams + durable minutes cap
   audio.default:
-    # Permit reasonable request rate for all audio endpoints so RG middleware
-    # does not deny purely informational GET routes (e.g., /stream/status, /stream/limits).
-    # Concurrency and minutes caps are enforced separately.
+    # Allow reasonable request rate so informational GETs (status/limits)
+    # are not denied by middleware. Concurrency/minutes are enforced separately.
     requests: { rpm: 300, burst: 2.0 }
     streams: { max_concurrent: 2, ttl_sec: 90 }
     minutes: { daily_cap: 120, rounding: ceil }

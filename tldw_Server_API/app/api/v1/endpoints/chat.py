@@ -2642,37 +2642,6 @@ async def generate_document(
                         try:
                             async for ln in stream.iter_sse():
                                 yield ln
-                            # After draining the SSE stream, persist the collected content.
-                            try:
-                                document_body = "".join(collected_chunks).strip()
-                                if document_body:
-                                    generation_time_ms = int(
-                                        (time.perf_counter() - stream_started_at) * 1000
-                                    )
-                                    await asyncio.to_thread(
-                                        service.record_streamed_document,
-                                        conversation_id=request.conversation_id,
-                                        document_type=doc_type,
-                                        content=document_body,
-                                        provider=provider_name,
-                                        model=request.model,
-                                        generation_time_ms=generation_time_ms,
-                                    )
-                                else:
-                                    logger.info(
-                                        "Streamed document produced no content for conversation %s; "
-                                        "skipping persistence",
-                                        request.conversation_id,
-                                    )
-                            except asyncio.CancelledError:
-                                # Propagate cancellation; client disconnected mid-persistence.
-                                raise
-                            except Exception as persist_exc:  # pragma: no cover - defensive logging
-                                logger.error(
-                                    "Failed to persist streamed document for conversation %s: %s",
-                                    request.conversation_id,
-                                    persist_exc,
-                                )
                         except asyncio.CancelledError:
                             # Client disconnected: cancel producer promptly and re-raise
                             if not prod.done():

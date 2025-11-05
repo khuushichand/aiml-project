@@ -492,7 +492,7 @@ async def get_request_user(
                     )
                 except Exception:
                     in_test = False
-                # Path-based guard: do NOT synthesize for audio endpoints
+                # Path-based guard: do NOT synthesize for sensitive endpoints
                 path = ""
                 try:
                     path = getattr(getattr(request, "url", None), "path", "") or getattr(request, "scope", {}).get("path", "")
@@ -500,10 +500,10 @@ async def get_request_user(
                     path = ""
                 # Disallow synthesis for sensitive endpoints
                 _path_str = str(path)
-                # Allow synthesis for chat endpoints in test contexts to simplify adapter
-                # integration tests which rely on dependency overrides rather than headers.
-                # Still disallow for audio endpoints which exercise upload flows.
-                _synth_disallowed_prefixes = ("/api/v1/audio/",)
+                # Historically, synthesis was allowed for chat to ease some adapter tests,
+                # but this caused unauthorized access to pass. Block synthesis for both
+                # audio and chat to ensure 401 on missing credentials.
+                _synth_disallowed_prefixes = ("/api/v1/audio/", "/api/v1/chat/")
                 synth_allowed = in_test and not any(_path_str.startswith(p) for p in _synth_disallowed_prefixes)
                 if synth_allowed:
                     try:

@@ -225,7 +225,7 @@ async def rg_diag_capabilities(user=Depends(RoleChecker("admin"))):
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         caps_fn = getattr(gov, "capabilities", None)
         if callable(caps_fn):
-            caps = await caps_fn()
+            caps = caps_fn()
         else:
             caps = {"backend": "unknown"}
         return JSONResponse({"status": "ok", "capabilities": caps})

@@ -792,19 +792,7 @@ async def character_chat_completion(
                             async for line in stream.iter_sse():
                                 yield line
                         except asyncio.CancelledError:
-                            # If the client cancels the SSE response, promptly cancel
-                            # the producer so the provider call is torn down.
-                            if not producer.done():
-                                try:
-                                    producer.cancel()
-                                except Exception:
-                                    pass
-                                try:
-                                    await producer
-                                except (asyncio.CancelledError, Exception):
-                                    # Swallow any cancellation/other errors from producer teardown
-                                    pass
-                            # Re-raise to propagate cancellation to FastAPI/Starlette
+                            # Preserve cancellation semantics; cleanup happens in finally
                             raise
                         else:
                             # Ensure producer completes if stream ended without explicit DONE
@@ -819,6 +807,18 @@ async def character_chat_completion(
                                     yield sse_done()
                             except Exception:
                                 pass
+                        finally:
+                            # Always tear down the background producer to avoid leaks
+                            if not producer.done():
+                                try:
+                                    producer.cancel()
+                                except Exception:
+                                    pass
+                                try:
+                                    await producer
+                                except (asyncio.CancelledError, Exception):
+                                    # Swallow any errors from producer teardown
+                                    pass
 
                     headers = {
                         "Cache-Control": "no-cache",

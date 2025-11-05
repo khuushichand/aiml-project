@@ -1685,8 +1685,9 @@ async def handle_unified_websocket(
                     "error_type": "quota_exceeded",
                     "quota": _quota,
                 })
+                # Close via stream abstraction to ensure proper framing/metrics
                 try:
-                    await stream.ws.close(code=WebSocketStream._map_close_code("quota_exceeded"))
+                    await stream.error("quota_exceeded", "Streaming transcription quota exceeded", data={"quota": _quota})
                 except Exception:
                     pass
                 return
