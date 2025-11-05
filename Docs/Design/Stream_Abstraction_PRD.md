@@ -145,7 +145,12 @@ Usage guidance:
   - Heartbeat: `":"\n\n"` comments at configurable interval (default 10s). Configurable mode to send `data: {"heartbeat": true}` if needed.
   - Termination: single `data: [DONE]\n\n`.
   - Errors: `data: {"error": {"code", "message", "data"}}`.
-    - Closure policy: configurable. Default closes stream on error. Per-call override available on `SSEStream.error(..., close=bool)`.
+    - Closure policy: configurable (default `close_on_error=True`). Per-call override available on `SSEStream.error(..., close=bool)`.
+    - Example (non-fatal error that keeps the stream open):
+      ```python
+      await stream.error("transient_provider_issue", "upstream timeout; continuing", close=False)
+      await stream.send_json({"status": "retrying"})
+      ```
 - WebSocket
   - Heartbeat: `{type: "ping"}` at configurable interval (default 10s) with optional client `{type: "pong"}`.
   - Termination: `{type: "done"}` followed by close (default 1000; configurable).
@@ -162,7 +167,8 @@ class AsyncStream(Protocol):
 
 class SSEStream(AsyncStream):
     # queue-backed; exposes iter_sse() to yield SSE lines; supports optional send_raw_sse_line();
-    # configurable error closure policy via close_on_error (and per-call override)
+    # note: send_raw_sse_line is SSE-only (not on AsyncStream) to aid hot-path migrations; prefer structured send_json over time
+    # configurable error closure policy via close_on_error (default True; per-call override)
     # constructors accept optional labels: Dict[str,str] to tag metrics (e.g., {"component":"chat"})
     ...
 
@@ -218,6 +224,7 @@ async def chat_stream():
    - Endpoints compose:
      - Option A (hot path): `for line in iter_sse_lines_requests(...): await sse_stream.send_raw_sse_line(line)`.
      - Option B (structured): build OpenAI‑compatible deltas and `await stream.send_json(openai_delta)`.
+   - Recommendation: prefer Option B for new endpoints; use Option A only to minimize churn during migration.
 3. Heartbeats
    - Shared config: `STREAM_HEARTBEAT_INTERVAL_S` (default 10), `STREAM_IDLE_TIMEOUT_S`, `STREAM_MAX_DURATION_S` — overridable per endpoint.
    - SSE: comment line `":"` (or `data: {"heartbeat": true}` when configured).
@@ -251,6 +258,15 @@ async def chat_stream():
   - When pass-through is enabled, preserve `event:`/`id:`/`retry:` lines and forward them unchanged alongside `data:` payloads.
   - Add an optional hook for custom filtering/mapping (e.g., `control_filter(name: str, value: str) -> tuple[str, str] | None`) to rename/whitelist provider events.
   - Intended for providers whose clients rely on SSE event names; default remains normalized mode.
+
+Example (provider control pass-through)
+```python
+# Preserve provider control fields as-is
+stream = SSEStream(provider_control_passthru=True)
+# Or whitelist specific controls
+stream = SSEStream(provider_control_passthru=True,
+                   control_filter=lambda n, v: (n, v) if n in {"event", "id", "retry"} else None)
+```
 
 ### 5.3 WS Event Frames Guardrails
 - Explicitly forbid wrapping domain WS payloads for MCP and Audio in `{type: "event"}` frames.
@@ -365,6 +381,8 @@ async def mcp_ws_handler(websocket):
 | Lines of duplicate streaming code removed | > 60% in affected files |
 | Server-side latency regression (enqueue→yield or send_json) | ≤ ±1% vs baseline |
 
+Note: Keep metrics labels low-cardinality (e.g., `component`, `endpoint`); avoid user/session IDs.
+
 ---
 
 ## 9. Rollout Plan
@@ -406,61 +424,6 @@ Feature flag: `STREAMS_UNIFIED` (default off for one release; then on by default
 
 ---
 
-## 11. Implementation Plan (Staged)
-
-Stage 1: Abstractions & Baseline (Complete)
-- Goal: Implement `AsyncStream`, `SSEStream`, `WebSocketStream` with base metrics and tests.
-- Success: One Chat SSE path migrated; DONE/error/heartbeat semantics verified with unit tests.
-
-Stage 2: Pass‑through + Timeouts (Complete)
-- Goal: Provider control pass‑through, SSE idle/max enforcement, close‑code guidance.
-- Success: Normalization toggles in place; SSE idle/max tested; metrics labels available.
-
-Stage 3: Pilot Rollout (In Progress)
-- Goal: Adopt under `STREAMS_UNIFIED` for key endpoints; validate with WebUI and two providers.
-- Current pilots:
-  - Chat SSE: Character chat, main chat completions, document‑generation.
-  - Embeddings SSE orchestrator.
-  - Evaluations SSE (A/B tests and batch emitters).
-  - Jobs Admin SSE (events outbox, retains `id:` pass‑through).
-  - Prompt Studio SSE fallback (when flag enabled).
-  - Audio WS and MCP WS using `WebSocketStream` (JSON‑RPC preserved for MCP; compat `error_type` shims).
-- Remaining work for Stage 3:
-  - Non‑prod validation with WebUI across two providers; ensure no duplicate `[DONE]` and heartbeats visible.
-  - Expand unit/integration tests for backpressure and long‑running sessions (SSE heartbeats not starved; WS idle close behavior).
-  - Add/verify provider control pass‑through at call sites that depend on `event:`/`id:`.
-
-Stage 4: Broader Adoption (Planned)
-- Goal: Migrate any remaining bespoke streaming code paths, preserve domain payloads, and standardize lifecycle.
-- Targets to confirm/migrate:
-  - Any residual Chat/Character local SSE helpers (delete after flip).
-  - Embeddings orchestrator legacy code path (remove once default flips).
-  - Jobs PG outbox test hardening and re‑enablement.
-
-Stage 5: Cleanup & Default Flip (Planned)
-- Goal: Remove legacy helpers, flip `STREAMS_UNIFIED` default on in non‑prod → prod.
-- Rollback: Toggle `STREAMS_UNIFIED=0` to revert to legacy per‑endpoint implementations.
-
-Test Matrix (High‑level)
-- SSE
-  - Chat (character, completions, doc‑gen): DONE dedup, errors, heartbeats, backpressure.
-  - Embeddings orchestrator: `event: summary`, heartbeats, idle/max.
-  - Evaluations: event cadence, DONE.
-  - Jobs Admin: `id:` pass‑through, paging, SSE stream.
-  - Prompt Studio fallback: DONE and heartbeat parity.
-- WebSocket
-  - Audio: ping, compat `error_type`, quota → 1008, internal → 1011.
-  - MCP: ping/idle close, JSON‑RPC parse errors, no event‑frame wrapping.
-- Flags
-  - `STREAMS_UNIFIED` on/off parity; `STREAM_PROVIDER_CONTROL_PASSTHRU` per‑endpoint overrides.
-
-Rollback Notes
-- Primary rollback is configuration only: set `STREAMS_UNIFIED=0` to restore legacy paths.
-- Keep compat shims (`error_type`) until all clients migrate to `code`+`message`.
-- If SSE buffering observed under proxies, prefer `heartbeat_mode=data` and verify `X‑Accel‑Buffering: no` in ingress.
-
----
-
 ## 10. Testing Strategy
 
 - Unit tests
@@ -494,8 +457,7 @@ Rollback Notes
 
 ## 12. Open Questions
 
-- Should `SSEStream.send_raw_sse_line` remain, or should hot paths convert lines to structured payloads for `send_json`? (current plan: keep `send_raw_sse_line` on `SSEStream` only; not part of `AsyncStream`).
-- Default heartbeat interval: 5s (as embeddings) vs 10s — choose one default with per‑endpoint override.
+None at this time.
 
 ---
 
@@ -517,6 +479,9 @@ Rollback Notes
 - `STREAM_MAX_DURATION_S`: default disabled
 - `STREAM_HEARTBEAT_MODE`: `comment` or `data` (default `comment`)
 - `STREAM_PROVIDER_CONTROL_PASSTHRU`: `0|1` (default `0`), preserves provider SSE control fields when `1`
+- `STREAM_QUEUE_MAXSIZE`: default 256 (bounded SSE queue size)
+
+Label guidance: Use low-cardinality labels (e.g., `component`, `endpoint`); avoid user/session IDs. Default suggested: `STREAM_HEARTBEAT_INTERVAL_S=10` with per-endpoint overrides.
 
 ---
 
@@ -662,17 +627,18 @@ Ownership & Tracking
 
 ---
 
-## Compatibility Follow-ups
+## 16. Compatibility Follow-ups
 
 Audio WS legacy quota close code
 - Current behavior: For client compatibility, the Audio WS handler emits an `error` frame with `error_type: "quota_exceeded"` and closes with code `4003` when quotas are exceeded.
 - Target behavior: Migrate to standardized close code `1008` (Policy Violation) with structured `{type: "error", code: "quota_exceeded", message, data?}` and without the legacy `error_type` field once downstream clients have updated.
 - Migration plan:
   - Phase 1 (current): Keep `4003` and include `error_type` alias (compat_error_type=True) in `WebSocketStream` for Audio. Documented in API/SDK release notes.
-  - Phase 2 (flagged pilot): Expose an opt‑in environment toggle (ops only) to switch close code to `1008` while still including `error_type` for a release.
-  - Phase 3 (default switch): Change default to `1008` and keep `error_type` for one additional release.
-  - Phase 4 (cleanup): Remove `error_type` alias for Audio WS and rely solely on `code` + `message`.
+  - Phase 2 (flagged pilot): Expose an opt‑in environment toggle (ops only) to switch close code to `1008` while still including `error_type` for a release. Target: next minor release (v0.1.1).
+  - Phase 3 (default switch): Change default to `1008` and keep `error_type` for one additional release. Target: following minor (v0.1.2).
+  - Phase 4 (cleanup): Remove `error_type` alias for Audio WS and rely solely on `code` + `message`. Target: subsequent minor (v0.1.3).
   - Acceptance: No client breakages reported in non‑prod → prod flips; tests updated to assert `1008`.
+  - Tracking: See Docs/Issues/STREAMS_UNIFIED_Rollout_Tracking.md (Audio `error_type` deprecation task).
 
 Endpoint audit and duplicate closes
 - WebSockets

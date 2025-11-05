@@ -898,16 +898,6 @@ async def execute_streaming_call(
         _err_message = str(e)
         _err_type = type(e).__name__
 
-        # Emit a minimal SSE error stream and finish with [DONE]
-        async def _err_stream():
-            try:
-                import json as _json
-                payload = {"error": {"message": str(e), "type": type(e).__name__}}
-                yield f"data: {_json.dumps(payload)}\n\n"
-            except Exception:
-                yield f"data: {{\"error\":{{\"message\":\"{str(e)}\",\"type\":\"{type(e).__name__}\"}}}}\n\n"
-            yield "data: [DONE]\n\n"
-
         # New safe variant that does not reference the except-scope variable directly
         async def _safe_err_stream():
             try:

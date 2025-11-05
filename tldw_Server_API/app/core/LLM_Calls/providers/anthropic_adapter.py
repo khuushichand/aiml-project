@@ -39,6 +39,8 @@ class AnthropicAdapter(ChatProvider):
         import os
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
+        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+            return True
         v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_ANTHROPIC")
         return bool(v and v.lower() in {"1", "true", "yes", "on"})
 

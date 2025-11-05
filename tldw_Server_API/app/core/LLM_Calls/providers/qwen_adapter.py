@@ -63,6 +63,8 @@ class QwenAdapter(ChatProvider):
                         return False
             except Exception:
                 pass
+        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+            return True
         v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_QWEN")
         return bool(v and v.lower() in {"1", "true", "yes", "on"})
 

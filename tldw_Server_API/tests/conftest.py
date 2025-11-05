@@ -4,17 +4,12 @@ Pytest configuration for the main test suite.
 Registers shared test plugins and provides common fixtures.
 """
 
-# Shared Chat/AuthNZ fixtures used across multiple test packages
-pytest_plugins = (
-    "tldw_Server_API.tests._plugins.chat_fixtures",
-    "tldw_Server_API.tests._plugins.authnz_fixtures",
-    # Expose isolated Chat fixtures (unit_test_client, isolated_db, etc.) globally
-    "tldw_Server_API.tests.Chat.integration.conftest_isolated",
-    # Unified Postgres fixtures (temp DBs, reachability, DatabaseConfig)
-    "tldw_Server_API.tests._plugins.postgres",
-    # Optional pgvector fixtures for tests that need live PG
-    "tldw_Server_API.tests.helpers.pgvector",
-)
+"""Local pytest configuration for tests subtree.
+
+Note: pytest>=8 forbids defining `pytest_plugins` in non-top-level conftest
+files. Global plugin registration now lives in the repository root
+`conftest.py`. Keep this file focused on environment setup and local fixtures.
+"""
 
 import os
 import logging

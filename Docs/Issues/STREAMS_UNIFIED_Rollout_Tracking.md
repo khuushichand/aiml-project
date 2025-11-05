@@ -28,6 +28,7 @@ Phase A — Dev validation
 
 Phase B — Staging flip
 - [ ] Enable `STREAMS_UNIFIED=1` in staging
+- [ ] Use dev overlay in non‑prod: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml up -d --build`
 - [ ] Import Grafana dashboard and confirm labels for key endpoints
 - [ ] Soak for 48h; watch idle timeouts and ping failures
 - [ ] Document any client compatibility issues (Audio `error_type` alias still on)
@@ -43,3 +44,11 @@ Notes
 - Prefer `STREAM_HEARTBEAT_MODE=data` behind reverse proxies/CDNs.
 - For provider control lines (`event/id/retry`), keep `STREAM_PROVIDER_CONTROL_PASSTHRU=0` unless a specific integration requires it.
 
+Follow-ups
+
+- [x] Remove legacy SSE helpers no longer used by pilot endpoints
+  - Removed `_extract_sse_data_lines` from `tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py`.
+  - Remaining legacy fallbacks guarded by `STREAMS_UNIFIED` will be removed after the default flip.
+- [ ] Confirm Audio `error_type` deprecation timeline with owners (PRD phases target v0.1.1 → v0.1.3)
+  - Align release notes and client notices; keep `compat_error_type=True` until v0.1.3.
+- [ ] Monitor dashboards after staging flip; record p95 WS send latency and SSE enqueue→yield p95 snapshots pre/post flip.

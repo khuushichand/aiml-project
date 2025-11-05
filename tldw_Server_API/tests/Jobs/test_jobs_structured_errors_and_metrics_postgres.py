@@ -3,9 +3,7 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 pytestmark = pytest.mark.pg_jobs
 
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 
 
 class StubRegistry:
@@ -25,26 +23,19 @@ class StubRegistry:
         return None
 
 
-pytestmark = pytest.mark.skipif(
-    not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"
-)
+@pytest.fixture(autouse=True)
+def _setup(jobs_pg_dsn):
+    return
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
-
-
-def test_structured_error_fields_and_metrics_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    ensure_jobs_tables_pg(pg_dsn)
+def test_structured_error_fields_and_metrics_postgres(monkeypatch, jobs_pg_dsn):
     # Patch metrics registry
     from tldw_Server_API.app.core.Jobs import metrics as jobs_metrics
     stub = StubRegistry()
     monkeypatch.setattr(jobs_metrics, "get_metrics_registry", lambda: stub, raising=False)
     monkeypatch.setattr(jobs_metrics, "JOBS_METRICS_REGISTERED", False, raising=False)
 
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="d", queue="default", job_type="t", payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain="d", queue="default", lease_seconds=5, worker_id="w")
     assert acq is not None

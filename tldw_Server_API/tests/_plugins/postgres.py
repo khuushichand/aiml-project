@@ -105,15 +105,26 @@ def _ensure_postgres_available(host: str, port: int, user: str, password: str, *
 
 
 def _connect_admin(host: str, port: int, user: str, password: str):
-    """Return a connection to the 'postgres' DB using whichever driver is available."""
-    if _PG_DRIVER == "psycopg":  # pragma: no cover - env dependent
-        conn = psycopg.connect(host=host, port=int(port), dbname="postgres", user=user, password=password or None, autocommit=True)  # type: ignore[name-defined]
-    elif _PG_DRIVER == "psycopg2":  # pragma: no cover - env dependent
-        conn = psycopg2.connect(host=host, port=int(port), database="postgres", user=user, password=password or None)  # type: ignore[name-defined]
-        conn.autocommit = True
-    else:
+    """Return a connection to the 'postgres' DB using whichever driver is available.
+
+    Retries briefly to tolerate startup races after Docker auto-start.
+    """
+    if _PG_DRIVER is None:
         raise RuntimeError("psycopg (or psycopg2) is required for Postgres‑backed tests")
-    return conn
+
+    last_err = None
+    for _ in range(10):
+        try:
+            if _PG_DRIVER == "psycopg":  # pragma: no cover - env dependent
+                conn = psycopg.connect(host=host, port=int(port), dbname="postgres", user=user, password=password or None, autocommit=True)  # type: ignore[name-defined]
+            else:  # psycopg2
+                conn = psycopg2.connect(host=host, port=int(port), database="postgres", user=user, password=password or None)  # type: ignore[name-defined]
+                conn.autocommit = True
+            return conn
+        except Exception as e:  # pragma: no cover - env/timing dependent
+            last_err = e
+            time.sleep(0.5)
+    raise last_err  # type: ignore[misc]
 
 
 def _create_database(host: str, port: int, user: str, password: str, db_name: str) -> None:
@@ -217,4 +228,3 @@ def pg_database_config(pg_temp_db):
         pg_user=str(pg_temp_db["user"]),
         pg_password=str(pg_temp_db.get("password") or ""),
     )
-

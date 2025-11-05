@@ -22,8 +22,7 @@ except Exception:
     m.app = _StubApp()
     sys.modules["tldw_Server_API.app.main"] = m
 
-# Register shared chat fixtures for this subtree
-pytest_plugins = ("tldw_Server_API.tests._plugins.chat_fixtures",)
+# Shared chat fixtures are registered at the repository root conftest.py
 
 
 @pytest.fixture

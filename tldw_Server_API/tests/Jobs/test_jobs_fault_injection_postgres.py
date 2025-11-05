@@ -5,24 +5,17 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 from psycopg import errors as pg_errors
 
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 pytestmark = [
     pytest.mark.pg_jobs,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"),
 ]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
-
-
-def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     jm.create_job(domain="ps", queue="default", job_type="t", payload={}, owner_user_id="u")
 
     # Monkeypatch psycopg.connect to raise SerializationFailure on first cursor.execute

@@ -8,26 +8,18 @@ pytestmark = pytest.mark.pg_jobs
 
 from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 
 
-pytestmark = pytest.mark.skipif(
-    not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"
-)
-
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
+@pytest.fixture(autouse=True)
+def _setup(jobs_pg_dsn):
+    return
 
 
-def test_jobs_stats_includes_scheduled_postgres(monkeypatch):
+def test_jobs_stats_includes_scheduled_postgres(monkeypatch, jobs_pg_dsn):
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-
-    ensure_jobs_tables_pg(pg_dsn)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 
     future = datetime.utcnow() + timedelta(hours=1)
     jm.create_job(

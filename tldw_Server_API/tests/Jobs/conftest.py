@@ -15,6 +15,28 @@ def _truthy(v: str | None) -> bool:
     return bool(v and v.strip().lower() in _TRUTHY)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _bootstrap_jobs_routes_env():
+    """Session-scoped baseline env so Jobs admin routes are mounted eagerly.
+
+    Ensures that when `tldw_Server_API.app.main` is first imported during test
+    discovery or module import, the 'jobs' router is included regardless of the
+    order in which fixtures or tests import modules.
+    """
+    # Core test toggles applied as early as possible
+    os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("MINIMAL_TEST_APP", "1")
+    os.environ.setdefault("ROUTES_STABLE_ONLY", "0")
+    # Make sure 'jobs' is present in ROUTES_ENABLE for non-minimal codepaths
+    prev = os.environ.get("ROUTES_ENABLE", "")
+    parts = [p for p in prev.split(",") if p]
+    if "jobs" not in parts:
+        parts.append("jobs")
+        os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    # Avoid privilege metadata validation aborts when config file is absent
+    os.environ.setdefault("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+
+
 def _ensure_local_pg(pg_host: str, pg_port: int, user: str, password: str, database: str) -> None:
     if pg_host not in {"127.0.0.1", "localhost", "::1"}:
         raise RuntimeError("Local docker bootstrap only supported for localhost hosts")
@@ -95,6 +117,67 @@ def jobs_pg(monkeypatch):
     return dsn_ct
 
 
+@pytest.fixture(autouse=True)
+def _jobs_minimal_env(monkeypatch):
+    """Ensure a minimal, stable app environment for Jobs tests.
+
+    - Enables TEST_MODE and MINIMAL_TEST_APP to avoid heavy startup dependencies
+    - Ensures Jobs routes are mounted via ROUTES_ENABLE
+    - Disables background Jobs services that can add flakiness
+    - Stabilizes acquisition priority for chatbooks domain
+    """
+    # Core test toggles
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("ROUTES_STABLE_ONLY", "0")
+    prev = os.getenv("ROUTES_ENABLE", "")
+    parts = [p for p in prev.split(",") if p]
+    if "jobs" not in parts:
+        parts.append("jobs")
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
+
+    # Quiet background features for deterministic tests
+    monkeypatch.setenv("JOBS_METRICS_GAUGES_ENABLED", "false")
+    monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "false")
+    # Disable counters and outbox by default for determinism; tests can opt-in
+    if os.getenv("JOBS_COUNTERS_ENABLED") is None:
+        monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "false")
+    if os.getenv("JOBS_EVENTS_OUTBOX") is None:
+        monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "false")
+    # Webhooks worker defaults to off; individual tests can opt-in as needed
+    if os.getenv("JOBS_WEBHOOKS_ENABLED") is None:
+        monkeypatch.setenv("JOBS_WEBHOOKS_ENABLED", "false")
+
+    # Disable core Chatbooks Jobs worker during tests to avoid races
+    monkeypatch.setenv("CHATBOOKS_CORE_WORKER_ENABLED", "false")
+
+    # Skip global privilege metadata validation for Jobs tests
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+
+    # Stabilize acquisition priority for chatbooks domain
+    prev_desc = os.getenv("JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS", "")
+    domains = {d.strip() for d in prev_desc.split(",") if d.strip()}
+    if "chatbooks" not in domains:
+        domains.add("chatbooks")
+        monkeypatch.setenv("JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS", ",".join(sorted(domains)))
+
+
+@pytest.fixture(autouse=True)
+def _reset_jobs_acquire_gate():
+    """Reset JobManager acquire gate before and after each test.
+
+    App shutdown flips the acquire gate on; carrying that across tests
+    blocks acquisitions. Ensure it's off for each test.
+    """
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+        _JM.set_acquire_gate(False)
+        yield
+        _JM.set_acquire_gate(False)
+    except Exception:
+        # Tests that don't touch JobManager shouldn't fail on import issues
+        yield
+
 @pytest.fixture
 def route_debugger():
     """Helper to print app routes when debugging 404s in tests.
@@ -117,3 +200,37 @@ def route_debugger():
             print(f"[route-debug] failed: {e}")
 
     return _debug
+
+
+@pytest.fixture(scope="function")
+def jobs_pg_dsn(request, monkeypatch):
+    """Function-scoped DSN for Jobs tests using a temp Postgres DB.
+
+    - Allocates a per-test database via the unified pg_temp_db fixture.
+    - Ensures Jobs schema exists on that DB.
+    - Sets JOBS_DB_URL for the duration of the test.
+    """
+    # Minimal app footprint hints and ensure Jobs routes are enabled
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("ROUTES_STABLE_ONLY", "0")
+    prev = os.getenv("ROUTES_ENABLE", "")
+    parts = [p for p in prev.split(",") if p]
+    if "jobs" not in parts:
+        parts.append("jobs")
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
+    # Resolve a fresh temp database
+    pg_temp = request.getfixturevalue("pg_temp_db")
+    dsn = str(pg_temp["dsn"])  # type: ignore[index]
+    # Initialize Jobs schema
+    from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
+    ensure_jobs_tables_pg(dsn)
+    # Ensure acquisitions are allowed for these tests
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+        JobManager.set_acquire_gate(False)
+    except Exception:
+        pass
+    # Bind to env for code under test
+    monkeypatch.setenv("JOBS_DB_URL", dsn)
+    return dsn

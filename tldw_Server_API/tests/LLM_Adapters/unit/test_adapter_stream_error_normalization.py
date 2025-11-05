@@ -63,19 +63,68 @@ class _FakeClient:
 @pytest.mark.parametrize(
     "provider_key, adapter_cls_path, status_code, expected_err",
     [
+        # Core providers across representative statuses
         ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 400, "ChatBadRequestError"),
-        ("anthropic", "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.AnthropicAdapter", 401, "ChatAuthenticationError"),
+        ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 404, "ChatBadRequestError"),
+        ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 422, "ChatBadRequestError"),
+        ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 401, "ChatAuthenticationError"),
+        ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 403, "ChatAuthenticationError"),
+        ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 429, "ChatRateLimitError"),
+        ("openai", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter", 500, "ChatProviderError"),
+
+        ("anthropic", "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.AnthropicAdapter", 400, "ChatBadRequestError"),
+        ("anthropic", "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.AnthropicAdapter", 403, "ChatAuthenticationError"),
+        ("anthropic", "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.AnthropicAdapter", 429, "ChatRateLimitError"),
+        ("anthropic", "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.AnthropicAdapter", 502, "ChatProviderError"),
+
+        ("groq", "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.GroqAdapter", 400, "ChatBadRequestError"),
+        ("groq", "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.GroqAdapter", 401, "ChatAuthenticationError"),
         ("groq", "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.GroqAdapter", 429, "ChatRateLimitError"),
+        ("groq", "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.GroqAdapter", 503, "ChatProviderError"),
+
+        ("openrouter", "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.OpenRouterAdapter", 404, "ChatBadRequestError"),
+        ("openrouter", "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.OpenRouterAdapter", 401, "ChatAuthenticationError"),
+        ("openrouter", "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.OpenRouterAdapter", 429, "ChatRateLimitError"),
         ("openrouter", "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.OpenRouterAdapter", 500, "ChatProviderError"),
+
         ("google", "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.GoogleAdapter", 400, "ChatBadRequestError"),
+        ("google", "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.GoogleAdapter", 401, "ChatAuthenticationError"),
+        ("google", "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.GoogleAdapter", 429, "ChatRateLimitError"),
+        ("google", "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.GoogleAdapter", 500, "ChatProviderError"),
+
         ("mistral", "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.MistralAdapter", 403, "ChatAuthenticationError"),
+        ("mistral", "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.MistralAdapter", 422, "ChatBadRequestError"),
+
+        # Stage 3 providers
+        ("qwen", "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.QwenAdapter", 400, "ChatBadRequestError"),
+        ("qwen", "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.QwenAdapter", 401, "ChatAuthenticationError"),
+        ("qwen", "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.QwenAdapter", 429, "ChatRateLimitError"),
+        ("qwen", "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.QwenAdapter", 500, "ChatProviderError"),
+
+        ("deepseek", "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.DeepSeekAdapter", 400, "ChatBadRequestError"),
+        ("deepseek", "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.DeepSeekAdapter", 403, "ChatAuthenticationError"),
+        ("deepseek", "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.DeepSeekAdapter", 429, "ChatRateLimitError"),
+        ("deepseek", "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.DeepSeekAdapter", 500, "ChatProviderError"),
+
+        ("huggingface", "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.HuggingFaceAdapter", 401, "ChatAuthenticationError"),
+        ("huggingface", "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.HuggingFaceAdapter", 422, "ChatBadRequestError"),
+        ("huggingface", "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.HuggingFaceAdapter", 500, "ChatProviderError"),
+
+        ("custom_openai", "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter", 400, "ChatBadRequestError"),
+        ("custom_openai", "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter", 401, "ChatAuthenticationError"),
+        ("custom_openai", "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter", 429, "ChatRateLimitError"),
+        ("custom_openai", "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter", 500, "ChatProviderError"),
     ],
 )
 def test_adapter_stream_normalizes_httpx_errors(monkeypatch, provider_key: str, adapter_cls_path: str, status_code: int, expected_err: str):
     # Force native HTTP path (under pytest adapters typically opt-in already)
     monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
-    monkeypatch.setenv(f"LLM_ADAPTERS_NATIVE_HTTP_{provider_key.upper()}", "1")
+    try:
+        monkeypatch.setenv(f"LLM_ADAPTERS_NATIVE_HTTP_{provider_key.upper()}", "1")
+    except Exception:
+        # Some providers use other flags; adapters prefer native path when adapters are enabled in tests
+        pass
 
     # Import adapter class dynamically
     parts = adapter_cls_path.split(".")

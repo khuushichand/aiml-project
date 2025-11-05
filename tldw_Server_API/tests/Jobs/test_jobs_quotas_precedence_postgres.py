@@ -2,13 +2,11 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
-from tldw_Server_API.tests.helpers.pg import pg_dsn
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 pytestmark = [
     pytest.mark.pg_jobs,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"),
 ]
 
 
@@ -20,9 +18,9 @@ def _assert_create_limit_pg(jm: JobManager, *, domain: str, user: str, limit: in
         jm.create_job(domain=domain, queue="default", job_type="overflow", payload={}, owner_user_id=user)
 
 
-def test_max_queued_precedence_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(backend="postgres", db_url=pg_dsn)
+def test_max_queued_precedence_postgres(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     monkeypatch.setenv("JOBS_QUOTA_MAX_QUEUED", "5")
     monkeypatch.setenv("JOBS_QUOTA_MAX_QUEUED_CHATBOOKS", "3")
@@ -35,9 +33,9 @@ def test_max_queued_precedence_postgres(monkeypatch):
     _assert_create_limit_pg(jm, domain="other", user="2", limit=5)
 
 
-def test_inflight_precedence_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(backend="postgres", db_url=pg_dsn)
+def test_inflight_precedence_postgres(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT", "5")
     monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT_CHATBOOKS", "2")
@@ -63,9 +61,9 @@ def test_inflight_precedence_postgres(monkeypatch):
     assert acquire_up_to("other", "2", 5) == 5
 
 
-def test_submits_per_minute_precedence_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(backend="postgres", db_url=pg_dsn)
+def test_submits_per_minute_precedence_postgres(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     monkeypatch.setenv("JOBS_QUOTA_SUBMITS_PER_MIN", "1")
     monkeypatch.setenv("JOBS_QUOTA_SUBMITS_PER_MIN_CHATBOOKS", "1")

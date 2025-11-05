@@ -8,26 +8,18 @@ psycopg = pytest.importorskip("psycopg")
 
 from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup as _pg_schema_and_cleanup
 
 
 pytestmark = [
     pytest.mark.pg_jobs,
     pytest.mark.pg_jobs_stress,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping PG stress tests"),
     pytest.mark.skipif(os.getenv("RUN_PG_JOBS_STRESS", "").lower() not in {"1", "true", "yes", "on"},
                        reason="Set RUN_PG_JOBS_STRESS=1 to enable PG stress tests")
 ]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    # Ensure schema and clean table once per module via shared fixture
-    yield
-
-
-def _worker_loop(tag: str, max_iters: int = 20, complete: bool = False):
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+def _worker_loop(dsn: str, tag: str, max_iters: int = 20, complete: bool = False):
+    jm = JobManager(None, backend="postgres", db_url=dsn)
     acquired = []
     for _ in range(max_iters):
         j = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=10, worker_id=tag)
@@ -41,10 +33,10 @@ def _worker_loop(tag: str, max_iters: int = 20, complete: bool = False):
     return acquired
 
 
-def test_pg_concurrency_skip_locked_stress():
+def test_pg_concurrency_skip_locked_stress(jobs_pg_dsn):
     # Seed jobs (a few multiples of workers)
-    ensure_jobs_tables_pg(pg_dsn)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    ensure_jobs_tables_pg(jobs_pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     seed_count = 12
     for i in range(seed_count):
         jm.create_job(
@@ -57,7 +49,7 @@ def test_pg_concurrency_skip_locked_stress():
 
     # Run 4 processes concurrently acquiring jobs
     with ProcessPoolExecutor(max_workers=4) as ex:
-        futures = [ex.submit(_worker_loop, f"P{i}") for i in range(4)]
+        futures = [ex.submit(_worker_loop, jobs_pg_dsn, f"P{i}") for i in range(4)]
         try:
             results = [f.result() for f in futures]
         except KeyboardInterrupt:
@@ -91,7 +83,7 @@ def test_pg_concurrency_skip_locked_stress():
             batch_ids.append(int(jj["id"]))
 
         with ProcessPoolExecutor(max_workers=4) as ex:
-            futures2 = [ex.submit(_worker_loop, f"S{i}", 50, True) for i in range(4)]
+            futures2 = [ex.submit(_worker_loop, jobs_pg_dsn, f"S{i}", 50, True) for i in range(4)]
             try:
                 results2 = [f.result() for f in futures2]
             except KeyboardInterrupt:

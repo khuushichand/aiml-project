@@ -4,29 +4,31 @@ import pytest
 from fastapi.testclient import TestClient
 
 psycopg = pytest.importorskip("psycopg")
-
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
-pytestmark = [
-    pytest.mark.pg_jobs,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"),
-]
+pytestmark = [pytest.mark.pg_jobs]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
+@pytest.fixture(autouse=True)
+def _setup(jobs_pg_dsn):
+    # jobs_pg_dsn ensures a fresh temp DB and schema per test and exports JOBS_DB_URL
+    return
 
 
 def _client_pg(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
+    # DSN already set via jobs_pg_dsn fixture
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
     try:
         app.dependency_overrides.clear()
+    except Exception:
+        pass
+    # Force-include jobs admin router for this test context
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
+        app.include_router(jobs_admin_router, prefix=f"/api/v1", tags=["jobs"])  # idempotent
     except Exception:
         pass
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
@@ -42,9 +44,9 @@ def test_queue_control_and_status_postgres(monkeypatch):
         assert r2.status_code == 200 and r2.json()["paused"] is True
 
 
-def test_attachments_and_sla_postgres(monkeypatch):
+def test_attachments_and_sla_postgres(monkeypatch, jobs_pg_dsn):
     app, headers = _client_pg(monkeypatch)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="ps", queue="default", job_type="exp", payload={}, owner_user_id="u")
     with TestClient(app, headers=headers) as client:
         r = client.post(f"/api/v1/jobs/{int(j['id'])}/attachments", json={"kind": "log", "content_text": "hello"})
@@ -57,9 +59,9 @@ def test_attachments_and_sla_postgres(monkeypatch):
         assert r4.status_code == 200
 
 
-def test_reschedule_and_retry_now_postgres(monkeypatch):
+def test_reschedule_and_retry_now_postgres(monkeypatch, jobs_pg_dsn):
     app, headers = _client_pg(monkeypatch)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Seed a scheduled queued job
     from datetime import datetime, timedelta
     future = datetime.utcnow() + timedelta(hours=1)
@@ -81,13 +83,13 @@ def test_reschedule_and_retry_now_postgres(monkeypatch):
         assert rr2.status_code == 200
 
 
-def test_crypto_rotate_postgres(monkeypatch):
+def test_crypto_rotate_postgres(monkeypatch, jobs_pg_dsn):
     app, headers = _client_pg(monkeypatch)
     # Configure encryption for domain and set ENV key (old)
     monkeypatch.setenv("JOBS_ENCRYPT", "true")
     old_key = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3ODkwMTIzNDU2Nzg5MDEy"[:44]
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", old_key)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Create a job so payload is stored encrypted with old key
     jm.create_job(domain="ps", queue="default", job_type="cipher", payload={"x": 1}, owner_user_id="u")
     new_key = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwQUJDREVGR0hJSktMTU5PUFFSU1RVVldY"[:44]

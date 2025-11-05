@@ -4,19 +4,6 @@ psycopg = pytest.importorskip("psycopg")
 pytestmark = [pytest.mark.pg_jobs]
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
-
-
-@pytest.fixture(scope="function")
-def jobs_pg_dsn(request):
-    # Resolve per-module temporary Postgres database using unified plugin
-    temp = request.getfixturevalue("pg_temp_db")
-    dsn = temp["dsn"]
-    try:
-        ensure_jobs_tables_pg(dsn)
-    except Exception:
-        pytest.skip("Failed to initialize Jobs schema on Postgres")
-    return dsn
 
 
 def test_acquire_ordering_priority_asc_postgres(monkeypatch, jobs_pg_dsn):

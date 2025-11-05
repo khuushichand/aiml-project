@@ -22,7 +22,11 @@ pytestmark = pytest.mark.pg_jobs
 
 
 @pytest.mark.integration
-def test_outbox_list_and_sse_postgres(jobs_pg, route_debugger):
+def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
+    # Ensure outbox is enabled and polling is snappy for the test
+    monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "true")
+    monkeypatch.setenv("JOBS_EVENTS_POLL_INTERVAL", "0.05")
+    os.environ["JOBS_DB_URL"] = jobs_pg_dsn
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -92,10 +96,11 @@ def test_outbox_list_and_sse_postgres(jobs_pg, route_debugger):
 
 
 @pytest.mark.integration
-def test_outbox_after_id_and_filters_postgres(jobs_pg, route_debugger):
-    # DSN prepared by jobs_pg fixture
-    pg_dsn_local = os.getenv("JOBS_DB_URL")
-    assert pg_dsn_local and pg_dsn_local.startswith("postgres"), "JOBS_DB_URL not set to a Postgres DSN"
+def test_outbox_after_id_and_filters_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
+    monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "true")
+    monkeypatch.setenv("JOBS_EVENTS_POLL_INTERVAL", "0.05")
+    os.environ["JOBS_DB_URL"] = jobs_pg_dsn
+    pg_dsn_local = jobs_pg_dsn
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg

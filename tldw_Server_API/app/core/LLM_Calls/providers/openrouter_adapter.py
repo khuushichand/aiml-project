@@ -39,6 +39,8 @@ class OpenRouterAdapter(ChatProvider):
         import os
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
+        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+            return True
         v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER")
         return bool(v and v.lower() in {"1", "true", "yes", "on"})
 
@@ -46,10 +48,30 @@ class OpenRouterAdapter(ChatProvider):
         import os
         return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: Optional[str], request: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        """Build headers including OpenRouter-specific metadata.
+
+        - Authorization: Bearer <key>
+        - HTTP-Referer: site URL (from config or env), defaults to http://localhost
+        - X-Title: site name (from config or env), defaults to TLDW-API
+        """
         h = {"Content-Type": "application/json"}
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
+
+        # Preserve provider-specific header quirks used by OpenRouter
+        site_url = os.getenv("OPENROUTER_SITE_URL")
+        site_name = os.getenv("OPENROUTER_SITE_NAME")
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            or_cfg = cfg.get("openrouter_api") or {}
+            site_url = or_cfg.get("site_url") or site_url
+            site_name = or_cfg.get("site_name") or site_name
+        except Exception:
+            # best-effort; fall back to env/defaults
+            pass
+        h["HTTP-Referer"] = site_url or "http://localhost"
+        h["X-Title"] = site_name or "TLDW-API"
         return h
 
     def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -88,7 +110,7 @@ class OpenRouterAdapter(ChatProvider):
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
-            headers = self._headers(api_key)
+            headers = self._headers(api_key, request)
             url = f"{self._base_url().rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
@@ -141,7 +163,7 @@ class OpenRouterAdapter(ChatProvider):
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
-            headers = self._headers(api_key)
+            headers = self._headers(api_key, request)
             url = f"{self._base_url().rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True

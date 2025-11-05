@@ -3,19 +3,17 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
-from tldw_Server_API.tests.helpers.pg import pg_dsn
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 pytestmark = [
     pytest.mark.pg_jobs,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"),
 ]
 
 
-def test_pg_max_queued_quota(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(backend="postgres", db_url=pg_dsn)
+def test_pg_max_queued_quota(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     # Global max queued per user/domain
     monkeypatch.setenv("JOBS_QUOTA_MAX_QUEUED", "1")
@@ -27,9 +25,9 @@ def test_pg_max_queued_quota(monkeypatch):
     jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="2")
 
 
-def test_pg_submits_per_minute_quota_precedence(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(backend="postgres", db_url=pg_dsn)
+def test_pg_submits_per_minute_quota_precedence(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     # Global limit 1/min; domain+user override to 2/min
     monkeypatch.setenv("JOBS_QUOTA_SUBMITS_PER_MIN", "1")
@@ -46,9 +44,9 @@ def test_pg_submits_per_minute_quota_precedence(monkeypatch):
         jm.create_job(domain="other", queue="default", job_type="y", payload={}, owner_user_id="1")
 
 
-def test_pg_max_inflight_quota(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(backend="postgres", db_url=pg_dsn)
+def test_pg_max_inflight_quota(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT", "1")
 

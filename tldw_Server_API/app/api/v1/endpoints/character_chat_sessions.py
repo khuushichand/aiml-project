@@ -82,32 +82,7 @@ from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
 
 
-def _extract_sse_data_lines(chunk: Any) -> List[str]:
-    """Normalize raw provider chunks into SSE `data:` lines."""
-    if chunk is None:
-        return []
-
-    if isinstance(chunk, bytes):
-        text = chunk.decode("utf-8", errors="ignore")
-    else:
-        text = str(chunk)
-
-    if not text:
-        return []
-
-    lines: List[str] = []
-    for raw_line in text.replace("\r\n", "\n").split("\n"):
-        line = raw_line.strip()
-        if not line:
-            continue
-        lowered = line.lower()
-        if lowered.startswith(":") or lowered.startswith("event:") or lowered.startswith("retry:"):
-            continue
-        if not lowered.startswith("data:"):
-            line = f"data: {line}"
-            lowered = line.lower()
-        lines.append(line)
-    return lines
+# Legacy local SSE helpers removed — unified streams handle normalization
 
 router = APIRouter()
 

@@ -56,8 +56,11 @@ class GoogleAdapter(ChatProvider):
         }
 
     def _use_native_http(self) -> bool:
-        # Force native path under pytest; otherwise require explicit env flag
+        # Prefer native path under pytest or when adapters are globally enabled;
+        # otherwise require explicit env flag for this provider.
         if os.getenv("PYTEST_CURRENT_TEST"):
+            return True
+        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
             return True
         v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_GOOGLE")
         return bool(v and v.lower() in {"1", "true", "yes", "on"})
@@ -171,6 +174,9 @@ class GoogleAdapter(ChatProvider):
             gc["topK"] = request.get("top_k")
         if request.get("max_tokens") is not None:
             gc["maxOutputTokens"] = request.get("max_tokens")
+        # Support multi-candidate responses when n is provided
+        if request.get("n") is not None:
+            payload["candidateCount"] = request.get("n")
         if request.get("stop") is not None:
             payload["stopSequences"] = request.get("stop")
         # Best-effort system instruction

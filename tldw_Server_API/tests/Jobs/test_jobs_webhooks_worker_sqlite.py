@@ -29,7 +29,8 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
     assert acq
-    jm.complete_job(int(acq["id"]))
+    # Complete with lease enforcement parameters to ensure outbox event emission
+    jm.complete_job(int(acq["id"]), worker_id=acq["worker_id"], lease_id=acq["lease_id"])  # type: ignore[index]
 
     # Assert exactly one job.completed outbox row for this job
     import sqlite3
@@ -67,8 +68,9 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
     import time as _time
     monkeypatch.setattr(_time, "time", lambda: 1700000000)
 
-    # Monkeypatch httpx.AsyncClient with our stub
+    # Monkeypatch async http client factory to return our stub client
     import tldw_Server_API.app.services.jobs_webhooks_service as svc
+    import tldw_Server_API.app.core.http_client as http_client_mod
     class _AsyncClientWrapper:
         def __init__(self, *a, **k):
             self._c = _StubClient()
@@ -76,7 +78,7 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
             return self._c
         async def __aexit__(self, exc_type, exc, tb):
             return False
-    monkeypatch.setattr(svc, "httpx", type("_M", (), {"AsyncClient": _AsyncClientWrapper}))
+    monkeypatch.setattr(http_client_mod, "create_async_client", lambda *a, **k: _AsyncClientWrapper())
 
     stop = asyncio.Event()
     # Run worker briefly
@@ -128,7 +130,8 @@ async def test_webhooks_cursor_persist_and_resume_sqlite(monkeypatch, tmp_path):
     # Seed an event
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
-    jm.complete_job(int(acq["id"]))
+    assert acq
+    jm.complete_job(int(acq["id"]), worker_id=acq["worker_id"], lease_id=acq["lease_id"])  # type: ignore[index]
 
     sent = {"ids": []}
 
@@ -150,6 +153,7 @@ async def test_webhooks_cursor_persist_and_resume_sqlite(monkeypatch, tmp_path):
             return _Resp()
 
     import tldw_Server_API.app.services.jobs_webhooks_service as svc
+    import tldw_Server_API.app.core.http_client as http_client_mod
     class _AsyncClientWrapper:
         def __init__(self, *a, **k):
             pass
@@ -157,7 +161,7 @@ async def test_webhooks_cursor_persist_and_resume_sqlite(monkeypatch, tmp_path):
             return _StubClient()
         async def __aexit__(self, exc_type, exc, tb):
             return False
-    monkeypatch.setattr(svc, "httpx", type("_M", (), {"AsyncClient": _AsyncClientWrapper}))
+    monkeypatch.setattr(http_client_mod, "create_async_client", lambda *a, **k: _AsyncClientWrapper())
 
     stop = asyncio.Event()
     task = asyncio.create_task(svc.run_jobs_webhooks_worker(stop))

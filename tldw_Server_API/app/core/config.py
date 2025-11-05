@@ -1713,7 +1713,11 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
     try:
         _test_mode = os.getenv('TEST_MODE', '').strip().lower() in {"1", "true", "yes", "on"}
         _pytest_active = bool(os.getenv('PYTEST_CURRENT_TEST'))
-        if (_test_mode or _pytest_active) and key in {"workflows", "sandbox", "mcp-unified", "mcp-catalogs"}:
+        # Force-enable a small set of routes that tests rely on, regardless of
+        # stable/experimental gating or import order. This avoids 404s when
+        # the app module is imported before fixtures set ROUTES_ENABLE.
+        _force_in_tests = {"workflows", "sandbox", "mcp-unified", "mcp-catalogs", "jobs"}
+        if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True
     except Exception:
         pass
