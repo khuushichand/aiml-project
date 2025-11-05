@@ -213,15 +213,43 @@ class SessionManager:
                 raise ValueError("SESSION_ENCRYPTION_KEY must decode to 32 bytes for Fernet compatibility")
             _append(raw)
         else:
-            persisted_key = self._load_persisted_session_key()
-            if persisted_key:
-                _append(persisted_key)
-            else:
+            # If the preferred persistence location exists but is invalid, generate and
+            # persist there first (even if a fallback key exists elsewhere). This repairs
+            # broken or placeholder files and respects symlink resolution/security checks.
+            preferred_path: Optional[Path] = None
+            try:
+                preferred_path = self._resolve_persisted_key_path()
+            except Exception:
+                preferred_path = None
+
+            def _exists_and_invalid(p: Optional[Path]) -> bool:
+                try:
+                    return bool(p) and Path(p).exists() and (not self._is_valid_key_file(Path(p)))
+                except Exception:
+                    return False
+
+            if _exists_and_invalid(preferred_path):
                 generated = Fernet.generate_key()
                 if self._persist_session_key(generated):
                     _append(generated)
                 else:
-                    logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
+                    # If persistence failed, fall back to any existing persisted key
+                    persisted_key = self._load_persisted_session_key()
+                    if persisted_key:
+                        _append(persisted_key)
+                    else:
+                        logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
+            else:
+                # Normal path: use persisted key if found; otherwise, generate and persist
+                persisted_key = self._load_persisted_session_key()
+                if persisted_key:
+                    _append(persisted_key)
+                else:
+                    generated = Fernet.generate_key()
+                    if self._persist_session_key(generated):
+                        _append(generated)
+                    else:
+                        logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
 
         # Always include derived secrets for backward compatibility / fallback (includes secondary secrets)
         for derived in self._derive_secret_key_candidates():
