@@ -1674,7 +1674,8 @@ async def handle_unified_websocket(
             except json.JSONDecodeError:
                 await stream.error("validation_error", "Invalid JSON message")
             except QuotaExceeded as qe:
-                # Standardized error frame with compatibility fields for legacy clients
+                # Send a single structured error frame, then close the socket once.
+                # Keep top-level 'quota' and 'error_type' for compatibility with tests/clients.
                 _quota = getattr(qe, "quota", "daily_minutes")
                 await stream.send_json({
                     "type": "error",
@@ -1685,9 +1686,9 @@ async def handle_unified_websocket(
                     "error_type": "quota_exceeded",
                     "quota": _quota,
                 })
-                # Close via stream abstraction to ensure proper framing/metrics
+                # Close directly to avoid emitting a second error frame
                 try:
-                    await stream.error("quota_exceeded", "Streaming transcription quota exceeded", data={"quota": _quota})
+                    await stream.ws.close(code=WebSocketStream._map_close_code("quota_exceeded"))
                 except Exception:
                     pass
                 return

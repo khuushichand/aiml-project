@@ -815,13 +815,18 @@ async def execute_streaming_call(
             error_type=type(he).__name__,
         )
         # For streaming endpoint semantics, emit SSE error + DONE instead of HTTP error
-        async def _err_gen():
+        # Bind error strings outside the generator to avoid Python 3.11+ exception scoping
+        _err_msg = str(getattr(he, "detail", he))
+        _err_type = type(he).__name__
+
+        async def _err_gen(msg: str = _err_msg, typ: str = _err_type):
             try:
                 import json as _json
-                payload = {"error": {"message": str(he.detail) if hasattr(he, "detail") else str(he), "type": type(he).__name__}}
+                payload = {"error": {"message": msg, "type": typ}}
                 yield f"data: {_json.dumps(payload)}\n\n"
             except Exception:
-                yield f"data: {{\"error\":{{\"message\":\"{str(he)}\",\"type\":\"{type(he).__name__}\"}}}}\n\n"
+                # Fallback string serialization
+                yield f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(
             _err_gen(),
