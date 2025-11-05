@@ -538,6 +538,8 @@ def auth_headers(auth_token):
 @pytest.fixture
 async def async_client():
     """Yield an AsyncClient bound to the FastAPI app for ASGI tests."""
+    # Lazily resolve the FastAPI app for this plugin
+    app = _get_app()
     transport = ASGITransport(app=app) if ASGITransport else None
     kwargs = {"base_url": "http://test"}
     if transport is not None:
