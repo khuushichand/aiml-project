@@ -10,6 +10,7 @@ import secrets
 import string
 import os
 import json
+import asyncio
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
@@ -173,6 +174,45 @@ router = APIRouter(
 
 # Backend detection now standardized via core AuthNZ database helper
 
+
+async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
+    """Best-effort: ensure AuthNZ SQLite schema/migrations before admin ops in tests.
+
+    In CI/pytest with SQLite, there can be timing where the pool is reinitialized
+    and migrations are still pending. This helper checks for a core table and, if
+    missing, runs migrations synchronously in a thread to avoid races.
+    """
+    try:
+        # Only act in obvious test contexts to avoid production overhead
+        is_test = (
+            os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+            or os.getenv("PYTEST_CURRENT_TEST") is not None
+        )
+        if not is_test:
+            return
+        from pathlib import Path as _Path
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
+        pool = await _get_db_pool()
+        # Skip if Postgres
+        if getattr(pool, "pool", None) is not None:
+            return
+        # Quick existence probe for 'organizations' table; if missing, run migrations
+        try:
+            async with pool.acquire() as conn:
+                cur = await conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='organizations'")
+                row = await cur.fetchone()
+                if row:
+                    return
+        except Exception:
+            # Proceed to ensure migrations
+            pass
+        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure
+        db_path = getattr(pool, "_sqlite_fs_path", None) or getattr(pool, "db_path", None)
+        if isinstance(db_path, str) and db_path:
+            await asyncio.to_thread(_ensure, _Path(db_path))
+    except Exception as _e:
+        # Best-effort only; do not interfere with request handling
+        logger.debug(f"AuthNZ test ensure skipped/failed: {_e}")
 
 #######################################################################################################################
 #
@@ -456,6 +496,8 @@ async def admin_update_user_api_key(
 @router.post("/orgs", response_model=OrganizationResponse)
 async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationResponse:
     try:
+        # CI/pytest (SQLite) guard: ensure migrations before org creation
+        await _ensure_sqlite_authnz_ready_if_test_mode()
         row = await create_organization(name=payload.name, owner_user_id=payload.owner_user_id, slug=payload.slug)
         return OrganizationResponse(**row)
     except DuplicateOrganizationError as dup:
@@ -513,6 +555,8 @@ async def admin_list_orgs(
 @router.post("/orgs/{org_id}/teams", response_model=TeamResponse)
 async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResponse:
     try:
+        # CI/pytest (SQLite) guard: ensure migrations before team creation
+        await _ensure_sqlite_authnz_ready_if_test_mode()
         row = await create_team(org_id=org_id, name=payload.name, slug=payload.slug, description=payload.description)
         return TeamResponse(**row)
     except DuplicateTeamError as dup:
