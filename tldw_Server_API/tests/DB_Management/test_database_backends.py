@@ -193,25 +193,19 @@ class TestDatabaseBackends:
         conn.close()
 
 
-@pytest.mark.skipif(
-    "POSTGRES_TEST_HOST" not in os.environ,
-    reason="PostgreSQL test environment not configured"
-)
 class TestPostgreSQLBackend:
     """Tests for PostgreSQL backend (requires PostgreSQL server)."""
 
     @pytest.fixture
-    def pg_config(self):
-        """Create PostgreSQL configuration from environment."""
-        return DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host=os.environ.get("POSTGRES_TEST_HOST", "localhost"),
-            pg_port=int(os.environ.get("POSTGRES_TEST_PORT", 5432)),
-            pg_database=os.environ.get("POSTGRES_TEST_DB", "test_tldw"),
-            pg_user=os.environ.get("POSTGRES_TEST_USER", "test_user"),
-            pg_password=os.environ.get("POSTGRES_TEST_PASSWORD", "test_pass"),
-            client_id="test_pg"
-        )
+    def pg_config(self, pg_database_config):
+        """Use unified Postgres fixture to provision a per-test database.
+
+        This avoids depending on a pre-existing database specified via env vars
+        and ensures the DB exists before tests run.
+        """
+        # Attach a client_id for parity with other backends/tests
+        pg_database_config.client_id = "test_pg"
+        return pg_database_config
 
     def test_postgresql_backend_creation(self, pg_config):
         """Test PostgreSQL backend creation."""
