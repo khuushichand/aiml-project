@@ -474,6 +474,7 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
     # Base methods we will wrap
     original_post = client.post
     original_get = client.get
+    original_stream = getattr(client, "stream", None)
 
     def _apply_auth_and_overrides(headers: dict) -> dict:
         # Include CSRF token if available on the client
@@ -490,7 +491,8 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
         # Re-apply the DB override defensively to ensure the API uses the same DB
         # instance the test created data in, even if other tests reset overrides.
         try:
-            app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
+            _app = _get_app()
+            _app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
         except Exception:
             pass
         return headers
@@ -505,8 +507,17 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
         headers = _apply_auth_and_overrides(headers)
         return original_get(url, headers=headers, **kwargs)
 
+    def authenticated_stream(method, url, **kwargs):
+        headers = kwargs.pop("headers", {}) or {}
+        headers = _apply_auth_and_overrides(headers)
+        if callable(original_stream):
+            return original_stream(method, url, headers=headers, **kwargs)
+        raise RuntimeError("Test client does not support streaming in this environment")
+
     client.post = authenticated_post
     client.get = authenticated_get
+    if callable(original_stream):
+        client.stream = authenticated_stream
     return client
 
 
