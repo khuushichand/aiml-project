@@ -27,7 +27,9 @@ def test_media_add_requires_media_create(isolated_test_environment):
     assert dsn and dsn.startswith("postgresql"), "AuthNZ Postgres test fixture not configured"
 
     async def _setup_user_and_key():
-        conn = await asyncpg.connect(dsn)
+        # Add connection timeout to avoid local hangs when Postgres is slow/half-open
+        connect_timeout = float(os.getenv("TLDW_TEST_PG_CONNECT_TIMEOUT", "10"))
+        conn = await asyncpg.connect(dsn, timeout=connect_timeout)
         try:
             # Create user without any roles
             user_uuid = str(uuid.uuid4())
@@ -120,7 +122,8 @@ def test_media_add_requires_media_create(isolated_test_environment):
             "urls": "https://example.com/test.mp4",
         }
         # Endpoint expects multipart/form-data, so submit via form fields
-        r = client.post("/api/v1/media/add", headers=headers, data=payload)
+        # Add request timeout to avoid local hangs during app startup/dependencies
+        r = client.post("/api/v1/media/add", headers=headers, data=payload, timeout=30.0)
         assert r.status_code == 403, r.text
     finally:
         if previous_mode is None:

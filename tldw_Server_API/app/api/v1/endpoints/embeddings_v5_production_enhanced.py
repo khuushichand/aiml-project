@@ -1865,15 +1865,20 @@ async def create_embedding_endpoint(
         original_model = model
 
         # Optional adapter-backed path (Stage 4 wiring): allow routing to
-        # Embeddings adapters when explicitly enabled via env flag.
+        # Embeddings adapters when explicitly enabled via env flag. Adapters take
+        # precedence over synthetic OpenAI vectors when enabled to honor explicit
+        # configuration in tests and production.
         try:
-            if (not use_synthetic_openai) and str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}:
-                # Currently wire OpenAI adapter; others can follow the same pattern
+            adapters_enabled = str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            adapters_enabled = False
+        if adapters_enabled:
+            try:
+                # Currently wire OpenAI/HF/Google adapters via registry
                 from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
                 registry = get_embeddings_registry()
                 adapter = registry.get_adapter(provider)
-                # Prepare adapter request
-                # Supply provider-specific API keys
+                # Prepare adapter request (provider-specific key if available)
                 _api_key: Optional[str] = None
                 if provider == "openai":
                     _api_key = settings.get("OPENAI_API_KEY")
@@ -1907,10 +1912,10 @@ async def create_embedding_endpoint(
                             processed.append(arr.tolist() if did_l2 else v)
                         embeddings = processed
                         embeddings_from_adapter = True
-                # If adapter failed to produce vectors, fall through to legacy path
-        except Exception as _e:
-            # Log and fall back silently; adapter path is optional
-            logger.debug(f"Embeddings adapter path failed; falling back to legacy: {_e}")
+                # If adapter failed to produce vectors, fall through to legacy/synthetic path
+            except Exception as _e:
+                # Log and fall back silently; adapter path is optional
+                logger.debug(f"Embeddings adapter path failed; falling back to legacy: {_e}")
 
         if use_synthetic_openai and not embeddings:
             dim = 1536

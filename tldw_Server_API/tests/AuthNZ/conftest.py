@@ -580,6 +580,8 @@ async def isolated_test_environment(monkeypatch):
     monkeypatch.setenv("REQUIRE_REGISTRATION_CODE", "false")
     monkeypatch.setenv("EMAIL_VERIFICATION_REQUIRED", "false")
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    # Defer heavy startup (embeddings, TTS, request queue, etc.) to prevent local hangs
+    monkeypatch.setenv("DEFER_HEAVY_STARTUP", "true")
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "1")
 
