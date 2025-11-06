@@ -91,17 +91,21 @@ class PostgreSQLConnectionPool(ConnectionPool):
         self._free: List[Any] = []
         self._max = max(1, int(config.pool_size or 10))
 
-        dsn = (
-            f"host={config.pg_host or 'localhost'} "
-            f"port={config.pg_port or 5432} "
-            f"dbname={config.pg_database or 'tldw'} "
-            f"user={config.pg_user or 'tldw_user'} "
-            f"password={config.pg_password or ''} "
-            f"sslmode={config.pg_sslmode or 'prefer'} "
-            f"connect_timeout={config.connect_timeout or 10}"
-        )
-
-        self._dsn = dsn
+        # Prefer an explicit connection string when provided (e.g. DATABASE_URL)
+        # Fall back to composing a DSN from individual pg_* fields
+        if getattr(config, "connection_string", None):
+            self._dsn = str(config.connection_string)
+        else:
+            dsn = (
+                f"host={config.pg_host or 'localhost'} "
+                f"port={config.pg_port or 5432} "
+                f"dbname={config.pg_database or 'tldw'} "
+                f"user={config.pg_user or 'tldw_user'} "
+                f"password={config.pg_password or ''} "
+                f"sslmode={config.pg_sslmode or 'prefer'} "
+                f"connect_timeout={config.connect_timeout or 10}"
+            )
+            self._dsn = dsn
         self._use_psycopg_pool = psycopg_pool is not None
         if self._use_psycopg_pool:
             # Create a psycopg_pool.ConnectionPool with sane production defaults

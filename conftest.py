@@ -8,10 +8,12 @@ See: https://docs.pytest.org/en/stable/deprecations.html#pytest-plugins-in-non-t
 """
 
 # Register shared fixtures/plugins for the entire test suite
-pytest_plugins = (
-    # Ensure pytest-benchmark's 'benchmark' fixture is available when plugin autoload is disabled
-    # or when running in constrained CI environments.
-    "pytest_benchmark.plugin",
+# Note: Avoid double-registering third-party plugins that are already
+# auto-discovered via entry points (e.g., pytest-benchmark). Only add them
+# explicitly when plugin autoloading is disabled.
+import os
+
+_plugins = [
     # Chat + auth fixtures used widely across tests
     "tldw_Server_API.tests._plugins.chat_fixtures",
     "tldw_Server_API.tests._plugins.authnz_fixtures",
@@ -21,4 +23,19 @@ pytest_plugins = (
     "tldw_Server_API.tests._plugins.postgres",
     # Optional pgvector fixtures (will be skipped if not available)
     "tldw_Server_API.tests.helpers.pgvector",
-)
+]
+
+# Include pytest-benchmark only when autoload is disabled, to avoid duplicate
+# registration errors when the plugin is already auto-loaded as 'benchmark'.
+if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "").strip().lower() in {"1", "true", "yes"}:
+    try:
+        import importlib
+
+        importlib.import_module("pytest_benchmark.plugin")
+    except Exception:
+        # Plugin not installed or failed to import; continue without it.
+        pass
+    else:
+        _plugins.insert(0, "pytest_benchmark.plugin")
+
+pytest_plugins = tuple(_plugins)
