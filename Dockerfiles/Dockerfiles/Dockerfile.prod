@@ -9,9 +9,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # System deps: ffmpeg (media), libmagic (python-magic), curl (health/debug)
+# Also install python3-pyaudio to avoid runtime failures when audio capture is enabled.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         libmagic1 \
+        python3-pyaudio \
         ca-certificates \
         curl \
     && rm -rf /var/lib/apt/lists/*

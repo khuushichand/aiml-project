@@ -262,6 +262,14 @@ pip install -e .
 # pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
 # pip install -e ".[dev]"           # tests, linters, tooling
 # pip install -e ".[otel]"          # OpenTelemetry metrics/tracing exporters
+
+# Install pyaudio - needed for audio processing
+# Linux
+sudo apt install python3-pyaudio
+
+#MacOS
+brew install portaudio
+pip install pyaudio
 ```
 2) Configure authentication and providers
 ```bash

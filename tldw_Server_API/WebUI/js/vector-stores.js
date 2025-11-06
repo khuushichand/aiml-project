@@ -497,11 +497,15 @@
     const rows = (res.data || []).map(r => {
       const safeError = r.error ? Utils.escapeHtml(String(r.error).slice(0, 120)) : '';
       const err = safeError ? `<span style='color:var(--color-danger-emphasis)'>${safeError}</span>` : '';
+      const safeId = Utils.escapeHtml(String(r.id ?? '').slice(0, 120));
+      const safeStoreId = Utils.escapeHtml(String(r.store_id ?? '').slice(0, 120));
+      const safeStatus = Utils.escapeHtml(String(r.status ?? '').slice(0, 120));
+      const safeUpserted = Utils.escapeHtml(String(r.upserted ?? '').slice(0, 120));
       return `<div class='list-row' style='display:flex; gap:8px; border-bottom:1px solid var(--color-border); padding:6px 0;'>
-      <code style='flex:0 0 220px;'>${r.id}</code>
-      <code style='flex:0 0 220px;'>${r.store_id}</code>
-      <span style='flex:0 0 80px;'>${r.status}</span>
-      <span style='flex:0 0 80px;'>${r.upserted}</span>
+      <code style='flex:0 0 220px;'>${safeId}</code>
+      <code style='flex:0 0 220px;'>${safeStoreId}</code>
+      <span style='flex:0 0 80px;'>${safeStatus}</span>
+      <span style='flex:0 0 80px;'>${safeUpserted}</span>
       <span style='flex:1 1 auto; color:var(--color-text-muted);'>${err}</span>
     </div>`;
     }).join('');

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import inspect
 import os
 
 from fastapi import APIRouter, Depends, Query, Path, Body
@@ -10,6 +11,31 @@ from loguru import logger
 from tldw_Server_API.app.main import app as _app
 
 router = APIRouter()
+
+
+def _get_or_init_governor() -> Optional[Any]:
+    """Return the resource governor from app state or lazily initialize it.
+
+    Tries to create a MemoryResourceGovernor using the configured policy loader
+    if no governor is currently present. Returns None if initialization fails
+    or no loader is available.
+    """
+    gov = getattr(_app.state, "rg_governor", None)
+    if gov is None:
+        try:
+            from tldw_Server_API.app.core.Resource_Governance import (
+                MemoryResourceGovernor,
+            )
+
+            loader = getattr(_app.state, "rg_policy_loader", None)
+            if loader is not None:
+                gov = MemoryResourceGovernor(policy_loader=loader)
+                _app.state.rg_governor = gov
+        except Exception as e:
+            # Keep behavior consistent with previous code path: best-effort only.
+            logger.debug(f"Resource governor lazy-init skipped: {e}")
+            gov = None
+    return gov
 
 
 @router.get("/resource-governor/policy")
@@ -77,8 +103,8 @@ async def get_resource_governor_policy(include: Optional[str] = Query(None, desc
             body["tenant"] = snap.tenant or {}
         return JSONResponse(body)
     except Exception as e:
-        logger.warning(f"get_resource_governor_policy failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("get_resource_governor_policy failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 # --- Admin endpoints (gated) ---
@@ -111,8 +137,8 @@ async def upsert_policy(
             logger.debug(f"Policy upsert refresh skipped: {_ref_e}")
         return JSONResponse({"status": "ok", "policy_id": policy_id})
     except Exception as e:
-        logger.warning(f"upsert_policy failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("upsert_policy failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 @router.delete("/resource-governor/policy/{policy_id}")
@@ -133,8 +159,8 @@ async def delete_policy(
             logger.debug(f"Policy delete refresh skipped: {_ref_e}")
         return JSONResponse({"status": "ok", "deleted": int(deleted)})
     except Exception as e:
-        logger.warning(f"delete_policy failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("delete_policy failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 @router.get("/resource-governor/policies")
@@ -144,8 +170,8 @@ async def list_policies(user=Depends(RoleChecker("admin"))):
         rows = await admin.list_policies()
         return JSONResponse({"status": "ok", "items": rows, "count": len(rows)})
     except Exception as e:
-        logger.warning(f"list_policies failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("list_policies failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 @router.get("/resource-governor/policy/{policy_id}")
@@ -157,8 +183,8 @@ async def get_policy(policy_id: str = Path(..., description="Policy identifier")
             return JSONResponse({"status": "not_found", "policy_id": policy_id}, status_code=404)
         return JSONResponse({"status": "ok", **rec})
     except Exception as e:
-        logger.warning(f"get_policy failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("get_policy failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 # --- Diagnostics (admin) ---
@@ -169,25 +195,17 @@ async def rg_diag_peek(
     user=Depends(RoleChecker("admin")),
 ):
     try:
-        gov = getattr(_app.state, "rg_governor", None)
-        if gov is None:
-            # Lazy-init a memory governor if policy loader is present
-            try:
-                from tldw_Server_API.app.core.Resource_Governance import MemoryResourceGovernor
-                loader = getattr(_app.state, "rg_policy_loader", None)
-                if loader is not None:
-                    gov = MemoryResourceGovernor(policy_loader=loader)
-                    _app.state.rg_governor = gov
-            except Exception:
-                pass
+        gov = _get_or_init_governor()
         if gov is None:
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         cats = [c.strip() for c in categories.split(",") if c.strip()]
         data = gov.peek(entity, cats)
+        if inspect.isawaitable(data):
+            data = await data
         return JSONResponse({"status": "ok", "entity": entity, "data": data})
     except Exception as e:
-        logger.warning(f"rg_diag_peek failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("rg_diag_peek failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 @router.get("/resource-governor/diag/query")
@@ -197,38 +215,33 @@ async def rg_diag_query(
     user=Depends(RoleChecker("admin")),
 ):
     try:
-        gov = getattr(_app.state, "rg_governor", None)
-        if gov is None:
-            try:
-                from tldw_Server_API.app.core.Resource_Governance import MemoryResourceGovernor
-                loader = getattr(_app.state, "rg_policy_loader", None)
-                if loader is not None:
-                    gov = MemoryResourceGovernor(policy_loader=loader)
-                    _app.state.rg_governor = gov
-            except Exception:
-                pass
+        gov = _get_or_init_governor()
         if gov is None:
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         data = gov.query(entity, category)
+        if inspect.isawaitable(data):
+            data = await data
         return JSONResponse({"status": "ok", "entity": entity, "category": category, "data": data})
     except Exception as e:
-        logger.warning(f"rg_diag_query failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("rg_diag_query failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
 @router.get("/resource-governor/diag/capabilities")
 async def rg_diag_capabilities(user=Depends(RoleChecker("admin"))):
     """Tiny capability probe to report whether Lua or fallback paths are in use."""
     try:
-        gov = getattr(_app.state, "rg_governor", None)
+        gov = _get_or_init_governor()
         if gov is None:
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         caps_fn = getattr(gov, "capabilities", None)
         if callable(caps_fn):
             caps = caps_fn()
+            if inspect.isawaitable(caps):
+                caps = await caps
         else:
             caps = {"backend": "unknown"}
         return JSONResponse({"status": "ok", "capabilities": caps})
     except Exception as e:
-        logger.warning(f"rg_diag_capabilities failed: {e}")
-        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+        logger.exception("rg_diag_capabilities failed")
+        return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
