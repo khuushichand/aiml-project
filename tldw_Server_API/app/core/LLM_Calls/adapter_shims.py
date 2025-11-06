@@ -353,7 +353,8 @@ async def openai_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    # Honor test monkeypatching of legacy chat_with_openai directly to avoid adapter import/network
+    # Honor explicit test monkeypatching of legacy chat_with_openai (only when actually patched to a test helper),
+    # otherwise prefer the adapter path. Avoid triggering just because we're under pytest.
     try:
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
@@ -361,8 +362,7 @@ async def openai_chat_handler_async(
             _modname = getattr(_patched, "__module__", "") or ""
             _fname = getattr(_patched, "__name__", "") or ""
             if (
-                os.getenv("PYTEST_CURRENT_TEST")
-                or _modname.startswith("tldw_Server_API.tests")
+                _modname.startswith("tldw_Server_API.tests")
                 or _modname.startswith("tests")
                 or ".tests." in _modname
                 or _fname.startswith("_fake")
@@ -490,17 +490,27 @@ async def openai_chat_handler_async(
     if streaming is not None:
         request["stream"] = bool(streaming)
     if streaming:
-        # Under pytest, prefer wrapping sync stream to honor monkeypatched legacy callables
+        # Prefer adapter.astream when it's been monkeypatched by tests
+        try:
+            _astream_attr = getattr(adapter, "astream", None)
+            if callable(_astream_attr):
+                _fn = getattr(_astream_attr, "__func__", _astream_attr)
+                _mod = getattr(_fn, "__module__", "") or ""
+                _name = getattr(_fn, "__name__", "") or ""
+                if ("tests" in _mod) or _name.startswith("_Fake") or _name.startswith("_fake"):
+                    return adapter.astream(request)
+        except Exception:
+            pass
+
+        # Under pytest, prefer astream to make monkeypatching predictable
         try:
             import os as _os
             if _os.getenv("PYTEST_CURRENT_TEST"):
-                _gen = adapter.stream(request)
-                async def _astream_wrapper():
-                    for _item in _gen:
-                        yield _item
-                return _astream_wrapper()
+                return adapter.astream(request)
         except Exception:
             pass
+
+        # Default behavior
         return adapter.astream(request)
     return await adapter.achat(request)
 

@@ -115,7 +115,14 @@ class OpenAIAdapter(ChatProvider):
 
     def _openai_base_url(self) -> str:
         import os
-        return os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        # Match legacy resolution precedence used by LLM_API_Calls._resolve_openai_api_base
+        env_api_base = (
+            os.getenv("OPENAI_API_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("MOCK_OPENAI_BASE_URL")
+        )
+        return env_api_base or "https://api.openai.com/v1"
 
     def _openai_headers(self, api_key: Optional[str]) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
