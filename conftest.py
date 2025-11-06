@@ -9,6 +9,9 @@ See: https://docs.pytest.org/en/stable/deprecations.html#pytest-plugins-in-non-t
 
 # Register shared fixtures/plugins for the entire test suite
 pytest_plugins = (
+    # Ensure pytest-benchmark's 'benchmark' fixture is available when plugin autoload is disabled
+    # or when running in constrained CI environments.
+    "pytest_benchmark.plugin",
     # Chat + auth fixtures used widely across tests
     "tldw_Server_API.tests._plugins.chat_fixtures",
     "tldw_Server_API.tests._plugins.authnz_fixtures",
@@ -19,4 +22,3 @@ pytest_plugins = (
     # Optional pgvector fixtures (will be skipped if not available)
     "tldw_Server_API.tests.helpers.pgvector",
 )
-
