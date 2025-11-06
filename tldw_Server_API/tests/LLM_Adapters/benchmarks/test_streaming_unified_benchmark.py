@@ -32,6 +32,17 @@ def _enable_unified(monkeypatch):
     yield
 
 
+# Ensure this benchmark exercises the adapter path (not the built-in mock).
+# The chat endpoint automatically switches to a mock provider in TEST_MODE for
+# certain providers; disable that behavior here to use our patched adapter.
+@pytest.fixture(autouse=True)
+def _disable_test_mode_and_mock(monkeypatch):
+    # Remove TEST_MODE (set globally in tests) and explicitly disable mock forcing
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setenv("CHAT_FORCE_MOCK", "0")
+    yield
+
+
 def _payload() -> dict:
     return {
         "api_provider": "openai",
