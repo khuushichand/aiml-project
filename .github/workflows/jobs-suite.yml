@@ -56,6 +56,14 @@ jobs:
           print('pytest_asyncio plugin OK')
           PY
 
+      - name: Verify pytest-benchmark import
+        run: |
+          python - <<'PY'
+          import importlib
+          m = importlib.import_module('pytest_benchmark.plugin')
+          print('pytest-benchmark plugin OK')
+          PY
+
       - name: Run Jobs tests (SQLite only)
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
@@ -136,11 +144,15 @@ jobs:
 
       - name: Ensure base DB exists
         env:
-          PGPASSWORD: tldw
+          # Use the same env vars tests read
+          PGPASSWORD: ${{ env.POSTGRES_TEST_PASSWORD }}
         run: |
           PORT="${{ job.services.postgres.ports[5432] }}"
-          psql -h 127.0.0.1 -p "$PORT" -U tldw -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='tldw_content'" | grep -q 1 || \
-            psql -h 127.0.0.1 -p "$PORT" -U tldw -d postgres -c "CREATE DATABASE tldw_content"
+          DB_NAME="${POSTGRES_TEST_DB:-tldw_content}"
+          DB_USER="${POSTGRES_TEST_USER:-tldw}"
+          echo "Ensuring database '$DB_NAME' exists on port $PORT as user $DB_USER"
+          psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+            psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE ${DB_NAME}"
 
       - name: Install pytest and psycopg
         run: |
@@ -153,6 +165,14 @@ jobs:
           import importlib
           m = importlib.import_module('pytest_asyncio.plugin')
           print('pytest_asyncio plugin OK')
+          PY
+
+      - name: Verify pytest-benchmark import
+        run: |
+          python - <<'PY'
+          import importlib
+          m = importlib.import_module('pytest_benchmark.plugin')
+          print('pytest-benchmark plugin OK')
           PY
 
       - name: Run Jobs tests (PostgreSQL only)

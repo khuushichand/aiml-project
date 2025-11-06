@@ -148,11 +148,15 @@ jobs:
       - name: Ensure base DB exists
         shell: bash
         env:
-          PGPASSWORD: TestPassword123!
+          # Use the same env vars tests read
+          PGPASSWORD: ${{ env.POSTGRES_TEST_PASSWORD }}
         run: |
           PORT="${{ job.services.postgres.ports[5432] }}"
-          psql -h 127.0.0.1 -p "$PORT" -U tldw_user -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='tldw_content'" | grep -q 1 || \
-            psql -h 127.0.0.1 -p "$PORT" -U tldw_user -d postgres -c "CREATE DATABASE tldw_content"
+          DB_NAME="${POSTGRES_TEST_DB:-tldw_content}"
+          DB_USER="${POSTGRES_TEST_USER:-tldw_user}"
+          echo "Ensuring database '$DB_NAME' exists on port $PORT as user $DB_USER"
+          psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+            psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE ${DB_NAME}"
 
       - name: Install additional deps for PG tests
         run: |
@@ -170,6 +174,19 @@ jobs:
               print('pytest_asyncio OK:', getattr(pytest_asyncio, '__version__', 'unknown'))
           except Exception as e:
               print('pytest_asyncio import failed:', e)
+              raise
+          PY
+
+      - name: Verify pytest-benchmark import (Linux matrix)
+        shell: bash
+        run: |
+          python - <<'PY'
+          try:
+              import importlib
+              m = importlib.import_module('pytest_benchmark.plugin')
+              print('pytest-benchmark OK')
+          except Exception as e:
+              print('pytest-benchmark import failed:', e)
               raise
           PY
 
@@ -316,6 +333,19 @@ jobs:
               print('pytest_asyncio OK:', getattr(pytest_asyncio, '__version__', 'unknown'))
           except Exception as e:
               print('pytest_asyncio import failed:', e)
+              raise
+          PY
+
+      - name: Verify pytest-benchmark import (OS matrix)
+        shell: bash
+        run: |
+          python - <<'PY'
+          try:
+              import importlib
+              m = importlib.import_module('pytest_benchmark.plugin')
+              print('pytest-benchmark OK')
+          except Exception as e:
+              print('pytest-benchmark import failed:', e)
               raise
           PY
 
