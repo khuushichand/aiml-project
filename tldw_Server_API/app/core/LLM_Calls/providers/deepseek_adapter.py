@@ -74,6 +74,22 @@ class DeepSeekAdapter(ChatProvider):
             api_base = ((cfg.get("deepseek_api") or {}).get("api_base_url"))
         return (os.getenv("DEEPSEEK_BASE_URL") or api_base or default_base).rstrip("/")
 
+    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+        try:
+            cfg = request.get("app_config") or {}
+            dcfg = cfg.get("deepseek_api") or {}
+            t = dcfg.get("api_timeout")
+            if t is not None:
+                try:
+                    return float(t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if fallback is not None:
+            return float(fallback)
+        return float(self.capabilities().get("default_timeout_seconds", 90))
+
     def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
         if api_key:
@@ -122,7 +138,8 @@ class DeepSeekAdapter(ChatProvider):
             payload = self._build_payload(request)
             payload["stream"] = False
             try:
-                with _hc_create_client(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with _hc_create_client(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
@@ -150,7 +167,8 @@ class DeepSeekAdapter(ChatProvider):
             payload = self._build_payload(request)
             payload["stream"] = True
             try:
-                with _hc_create_client(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with _hc_create_client(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():

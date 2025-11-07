@@ -87,6 +87,21 @@ class HuggingFaceAdapter(ChatProvider):
             headers["Authorization"] = f"Bearer {api_key}"
         return {"url": url, "headers": headers}
 
+    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+        try:
+            cfg = (request.get("app_config") or {}).get("huggingface_api", {})
+            t = cfg.get("api_timeout")
+            if t is not None:
+                try:
+                    return float(t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if fallback is not None:
+            return float(fallback)
+        return float(self.capabilities().get("default_timeout_seconds", 120))
+
     def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
         messages: List[Dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
@@ -196,7 +211,8 @@ class HuggingFaceAdapter(ChatProvider):
             payload = self._build_payload(request)
             payload["stream"] = True
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with _hc_create_client(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():
@@ -234,7 +250,8 @@ class HuggingFaceAdapter(ChatProvider):
             payload = self._build_payload(request)
             payload["stream"] = False
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with _hc_create_client(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
