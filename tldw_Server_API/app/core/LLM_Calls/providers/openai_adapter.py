@@ -132,6 +132,34 @@ class OpenAIAdapter(ChatProvider):
         )
         return env_api_base or "https://api.openai.com/v1"
 
+    def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        """Resolve API base URL: app_config.openai_api.api_base_url -> env -> default."""
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            oa = cfg.get("openai_api") or {}
+            base = oa.get("api_base_url")
+            if isinstance(base, str) and base.strip():
+                return base.strip()
+        except Exception:
+            pass
+        return self._openai_base_url()
+
+    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            oa = cfg.get("openai_api") or {}
+            t = oa.get("api_timeout")
+            if t is not None:
+                try:
+                    return float(t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if fallback is not None:
+            return float(fallback)
+        return float(self.capabilities().get("default_timeout_seconds", 60))
+
     def _openai_headers(self, api_key: Optional[str]) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -143,10 +171,11 @@ class OpenAIAdapter(ChatProvider):
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
             payload["stream"] = False
-            url = f"{self._openai_base_url().rstrip('/')}/chat/completions"
+            url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             headers = self._openai_headers(api_key)
             try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with http_client_factory(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
@@ -161,10 +190,11 @@ class OpenAIAdapter(ChatProvider):
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
             payload["stream"] = True
-            url = f"{self._openai_base_url().rstrip('/')}/chat/completions"
+            url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             headers = self._openai_headers(api_key)
             try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         seen_done = False

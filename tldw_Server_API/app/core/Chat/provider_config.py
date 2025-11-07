@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     qwen_chat_handler,
     deepseek_chat_handler,
     huggingface_chat_handler,
+    bedrock_chat_handler,
     custom_openai_chat_handler,
     custom_openai_2_chat_handler,
     openai_chat_handler_async,
@@ -34,6 +35,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     qwen_chat_handler_async,
     deepseek_chat_handler_async,
     huggingface_chat_handler_async,
+    bedrock_chat_handler_async,
     custom_openai_chat_handler_async,
     custom_openai_2_chat_handler_async,
     google_chat_handler_async,
@@ -54,7 +56,7 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
 # 1. Dispatch table for handler functions
 API_CALL_HANDLERS: Dict[str, Callable] = {
     'openai': openai_chat_handler,
-    'bedrock': chat_with_bedrock,
+    'bedrock': bedrock_chat_handler,
     'anthropic': anthropic_chat_handler,
     'cohere': chat_with_cohere,
     'groq': groq_chat_handler,
@@ -93,6 +95,7 @@ ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
     'qwen': qwen_chat_handler_async,
     'deepseek': deepseek_chat_handler_async,
     'huggingface': huggingface_chat_handler_async,
+    'bedrock': bedrock_chat_handler_async,
     'custom-openai-api': custom_openai_chat_handler_async,
     'custom-openai-api-2': custom_openai_2_chat_handler_async,
     'google': google_chat_handler_async,

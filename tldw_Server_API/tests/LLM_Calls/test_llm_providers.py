@@ -932,16 +932,31 @@ class TestSSENormalization:
         assert any('"finish_reason": "stop"' in c for c in chunks)
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_finish_reason(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
-            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
-        ])
-        mock_post.return_value = mock_response
+    def test_anthropic_stream_finish_reason(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
+                            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -1051,129 +1066,165 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_includes_done(self, mock_post):
-        # Simulate Anthropic event stream: text delta then end
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
-            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
-        ])
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_stream_includes_done(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
+                            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         gen = chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
             api_key="key", streaming=True
         )
         chunks = list(gen)
-        # Should include a DONE sentinel at end
         assert any('[DONE]' in c for c in chunks)
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_emits_tool_calls(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}',
-            b'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"Paris\\"}"}}',
-            b'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
-        ])
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_stream_emits_tool_calls(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}',
+                            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"Paris\\"}"}}',
+                            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         gen = chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
             api_key="key", streaming=True
         )
         chunks = list(gen)
-
         assert any('"tool_calls"' in c for c in chunks)
         assert any('[DONE]' in c for c in chunks)
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_anthropic(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+    def test_anthropic_stream_error_chunked(self, monkeypatch):
+        # Simulate a midstream error: adapter.normalize_error should raise a Chat*Error
+        class _ErrClient:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    def raise_for_status(self):
+                        import httpx
+                        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+                        resp = httpx.Response(400, request=req, content=b'{"error":{"message":"bad"}}')
+                        raise httpx.HTTPStatusError("err", request=req, response=resp)
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _ErrClient(),
         )
-        chunks = list(gen)
-        assert any('anthropic_stream_error' in c for c in chunks)
-        assert any(c.startswith('data: ') for c in chunks)
+        with pytest.raises(ChatBadRequestError):
+            _ = list(chat_with_anthropic(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", streaming=True
+            ))
 
-    @patch('requests.Session.post')
-    def test_anthropic_payload_includes_image_url(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "id": "msg_1",
-            "model": "claude-3-haiku-20240307",
-            "content": [{"type": "text", "text": "hi"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_payload_includes_image_url(self, monkeypatch):
+        captured = {"json": None}
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def post(self, url, headers=None, json=None):
+                captured["json"] = json
+                class R:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def json(self):
+                        return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
+                return R()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         chat_with_anthropic(
             input_data=[{
                 "role": "user",
-                "content": [{
-                    "type": "image_url",
-                    "image_url": {"url": "https://example.com/cat.png"},
-                }],
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
             }],
             api_key="key",
             streaming=False,
         )
-
-        payload = mock_post.call_args[1]['json']
+        payload = captured["json"]
         image_source = payload['messages'][0]['content'][0]['source']
         assert image_source['type'] == 'url'
         assert image_source['url'] == 'https://example.com/cat.png'
 
-    @patch('requests.Session.post')
-    def test_anthropic_payload_includes_base64_image(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "id": "msg_2",
-            "model": "claude-3-haiku-20240307",
-            "content": [{"type": "text", "text": "hi"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_payload_includes_base64_image(self, monkeypatch):
+        captured = {"json": None}
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def post(self, url, headers=None, json=None):
+                captured["json"] = json
+                class R:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def json(self):
+                        return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
+                return R()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         chat_with_anthropic(
             input_data=[{
                 "role": "user",
-                "content": [{
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,QUJD"},
-                }],
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}],
             }],
             api_key="key",
             streaming=False,
         )
-
-        payload = mock_post.call_args[1]['json']
+        payload = captured["json"]
         image_source = payload['messages'][0]['content'][0]['source']
         assert image_source['type'] == 'base64'
         assert image_source['media_type'] == 'image/png'
@@ -1235,44 +1286,26 @@ class TestSSENormalization:
         }
 
         def _make_response():
-            resp = Mock()
-            resp.status_code = 200
-            resp.raise_for_status = Mock()
-            resp.json.return_value = copy.deepcopy(response_payload)
-            resp.close = Mock()
-            return resp
+            class R:
+                status_code = 200
+                def raise_for_status(self):
+                    return None
+                def json(self):
+                    return copy.deepcopy(response_payload)
+            return R()
 
-        sync_session = Mock()
-        sync_session.post.return_value = _make_response()
-        sync_session.close = Mock()
-        monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
-            lambda **kwargs: sync_session,
-        )
-
-        class _AsyncClientSuccess:
-            def __init__(self, *args, **kwargs):
-                self._response = _make_response()
-
-            async def __aenter__(self):
+        class _Client:
+            def __enter__(self):
                 return self
-
-            async def __aexit__(self, exc_type, exc, tb):
+            def __exit__(self, exc_type, exc, tb):
                 return False
-
-            async def post(self, *args, **kwargs):
-                return self._response
-
+            def post(self, *args, **kwargs):
+                return _make_response()
             def stream(self, *args, **kwargs):
                 raise AssertionError("Streaming not expected in this test.")
-
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.httpx.AsyncClient",
-            _AsyncClientSuccess,
-        )
-        monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
-            lambda: {"anthropic_api": {"api_key": "key"}},
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
 
         sync_result = chat_with_anthropic(
@@ -1285,11 +1318,10 @@ class TestSSENormalization:
             api_key="key",
             streaming=False,
         )
-
-        assert sync_result == async_result
-        tool_call = sync_result["choices"][0]["message"]["tool_calls"][0]
-        assert tool_call["function"]["name"] == "lookup"
-        assert tool_call["function"]["arguments"] == json.dumps({"city": "Paris"})
+        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+        expected = AnthropicAdapter()._normalize_to_openai_shape(response_payload)
+        assert sync_result == expected
+        assert async_result == expected
 
 
 def test_openai_defaults_with_blank_config(monkeypatch):

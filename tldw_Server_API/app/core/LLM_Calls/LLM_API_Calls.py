@@ -1634,207 +1634,32 @@ async def chat_with_anthropic_async(
         tools: Optional[List[Dict[str, Any]]] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async Anthropic messages API with SSE normalization."""
-    cfg_source = app_config or load_and_log_configs()
-    cfg = cfg_source.get('anthropic_api', {})
-    final_api_key = api_key or cfg.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="anthropic", message="Anthropic API Key is required.")
-    current_model = model or cfg.get('model', 'claude-3-haiku-20240307')
-    current_temp = temp if temp is not None else _safe_cast(cfg.get('temperature'), float, 0.7)
-    stream_cfg = cfg.get('streaming', False)
-    current_streaming = streaming if streaming is not None else (
-        str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
-    default_max_tokens = int(cfg.get('max_tokens_to_sample', cfg.get('max_tokens', 4096)))
-    current_max_tokens = max_tokens if max_tokens is not None else default_max_tokens
-
-    anthropic_messages: List[Dict[str, Any]] = []
-    for msg in input_data:
-        role = msg.get("role")
-        content = msg.get("content")
-        if role not in ["user", "assistant"]:
-            continue
-        parts: List[Dict[str, Any]] = []
-        if isinstance(content, str):
-            parts.append({"type": "text", "text": content})
-        elif isinstance(content, list):
-            for part in content:
-                if part.get("type") == "text":
-                    parts.append({"type": "text", "text": part.get("text", "")})
-                elif part.get("type") == "image_url":
-                    image_source = _anthropic_image_source_from_part(part.get("image_url", {}))
-                    if image_source:
-                        parts.append({"type": "image", "source": image_source})
-        if parts:
-            anthropic_messages.append({"role": role, "content": parts})
-    if not any(m['role'] == 'user' for m in anthropic_messages):
-        raise ChatBadRequestError(provider="anthropic", message="No valid user messages found.")
-
-    headers = {
-        'x-api-key': final_api_key,
-        'anthropic-version': cfg.get('api_version', '2023-06-01'),
-        'Content-Type': 'application/json'
+    # Shimless adapter path
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("anthropic")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+        registry.register_adapter("anthropic", AnthropicAdapter)
+        adapter = registry.get_adapter("anthropic")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": topp,
+        "top_k": topk,
+        "max_tokens": max_tokens,
+        "stop": stop_sequences,
+        "tools": tools,
+        "app_config": app_config,
     }
-    payload: Dict[str, Any] = {
-        "model": current_model,
-        "max_tokens": current_max_tokens,
-        "messages": anthropic_messages,
-        "stream": current_streaming,
-    }
-    if system_prompt is not None:
-        payload["system"] = system_prompt
-    if current_temp is not None:
-        payload["temperature"] = current_temp
-    if topp is not None:
-        payload["top_p"] = topp
-    if topk is not None:
-        payload["top_k"] = topk
-    if stop_sequences is not None:
-        payload["stop_sequences"] = stop_sequences
-    if tools is not None:
-        payload["tools"] = tools
-
-    api_url = (cfg.get('api_base_url', 'https://api.anthropic.com/v1').rstrip('/') + '/messages')
-    timeout = _safe_cast(cfg.get('api_timeout'), float, 90.0)
-    retry_limit = max(0, _safe_cast(cfg.get('api_retries'), int, 3))
-    retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
-
-    def _raise_anthropic_http_error(exc: httpx.HTTPStatusError) -> None:
-        _raise_httpx_chat_error("anthropic", exc)
-
-    try:
-        if current_streaming:
-            async def _stream():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with create_async_client(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    sc = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(sc) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_anthropic_http_error(e)
-                                tool_states: Dict[int, Dict[str, Any]] = {}
-                                tool_counter = 0
-                                done_sent = False
-                                async for line in resp.aiter_lines():
-                                    if not line:
-                                        continue
-                                    if is_done_line(line):
-                                        if not done_sent:
-                                            done_sent = True
-                                            yield sse_done()
-                                        continue
-                                    ls = line.strip()
-                                    if not ls or not ls.startswith('data:'):
-                                        continue
-                                    event_data_str = ls[len('data:'):].strip()
-                                    if not event_data_str:
-                                        continue
-                                    try:
-                                        ev = json.loads(event_data_str)
-                                    except Exception:
-                                        continue
-                                    ev_type = ev.get('type')
-                                    if ev_type == 'content_block_start':
-                                        content_block = ev.get('content_block', {})
-                                        if content_block.get('type') == 'tool_use':
-                                            block_index = ev.get('index')
-                                            tool_id = content_block.get('id') or f"anthropic_tool_{tool_counter}"
-                                            tool_name = content_block.get('name')
-                                            initial_input = content_block.get('input')
-                                            buffer = ""
-                                            if initial_input:
-                                                try:
-                                                    buffer = json.dumps(initial_input)
-                                                except Exception:
-                                                    buffer = str(initial_input)
-                                            tool_states[block_index] = {
-                                                "id": tool_id,
-                                                "name": tool_name,
-                                                "buffer": buffer,
-                                                "position": tool_counter,
-                                            }
-                                            tool_counter += 1
-                                            yield _anthropic_tool_delta_chunk(
-                                                tool_states[block_index]["position"],
-                                                tool_id,
-                                                tool_name,
-                                                buffer,
-                                            )
-                                    elif ev_type == 'content_block_delta':
-                                        delta = ev.get('delta', {})
-                                        block_index = ev.get('index')
-                                        delta_type = delta.get('type')
-                                        if delta_type == 'text_delta' and 'text' in delta:
-                                            yield openai_delta_chunk(delta.get('text', ''))
-                                        elif delta_type == 'input_json_delta' and block_index in tool_states:
-                                            partial = delta.get('partial_json', '')
-                                            if partial:
-                                                state = tool_states[block_index]
-                                                state['buffer'] += partial
-                                                yield _anthropic_tool_delta_chunk(
-                                                    state['position'], state['id'], state['name'], state['buffer']
-                                                )
-                                        elif delta_type == 'tool_use_delta' and block_index in tool_states:
-                                            state = tool_states[block_index]
-                                            if 'name' in delta and delta['name']:
-                                                state['name'] = delta['name']
-                                            if 'input' in delta and delta['input'] is not None:
-                                                try:
-                                                    state['buffer'] = json.dumps(delta['input'])
-                                                except Exception:
-                                                    state['buffer'] = str(delta['input'])
-                                            yield _anthropic_tool_delta_chunk(
-                                                state['position'], state['id'], state['name'], state['buffer']
-                                            )
-                                    elif ev_type == 'message_delta':
-                                        stop_reason = (ev.get('delta') or {}).get('stop_reason')
-                                        if stop_reason:
-                                            finish_reason_map = {
-                                                "end_turn": "stop",
-                                                "max_tokens": "length",
-                                                "stop_sequence": "stop",
-                                                "tool_use": "tool_calls",
-                                            }
-                                            finish_reason = finish_reason_map.get(stop_reason, stop_reason)
-                                            yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
-                                if not done_sent:
-                                    yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="anthropic", message="Exceeded retry attempts for Anthropic stream", status_code=504)
-
-            return _stream()
-        else:
-            policy = RetryPolicy(attempts=retry_limit + 1, backoff_base_ms=int(retry_delay * 1000))
-            try:
-                data = await afetch_json(
-                    method="POST",
-                    url=api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=timeout,
-                    retry=policy,
-                )
-                return _normalize_anthropic_response(data, current_model)
-            except httpx.HTTPStatusError as e:
-                _raise_httpx_chat_error("anthropic", e)
-            except httpx.RequestError as e:
-                raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
-    except ChatAPIError:
-        raise
-    except Exception as e:
-        raise ChatProviderError(provider="anthropic", message=f"Unexpected error: {e}")
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.astream(req)
+    return await adapter.achat(req)
 
 
 async def chat_with_openrouter_async(
@@ -2095,23 +1920,46 @@ def chat_with_bedrock(
 
 
 def chat_with_anthropic(
-        input_data: List[Dict[str, Any]], # Mapped from 'messages_payload'
+        input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
-        system_prompt: Optional[str] = None, # Mapped from 'system_message'
+        system_prompt: Optional[str] = None,
         temp: Optional[float] = None,
-        topp: Optional[float] = None,       # Mapped from 'topp' (becomes top_p)
+        topp: Optional[float] = None,
         topk: Optional[int] = None,
         streaming: Optional[bool] = False,
-        max_tokens: Optional[int] = None,   # New: Anthropic uses 'max_tokens'
-        stop_sequences: Optional[List[str]] = None, # New: Mapped from 'stop'
-        tools: Optional[List[Dict[str, Any]]] = None, # New: Anthropic tool format
-        # Anthropic doesn't typically use seed, response_format (for JSON object mode directly), n, user identifier, logit_bias,
-        # presence_penalty, frequency_penalty, logprobs, top_logprobs in the same way as OpenAI.
-        # tool_choice is usually implicit with tools or controlled differently.
-        custom_prompt_arg: Optional[str] = None, # Legacy
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("anthropic")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+        registry.register_adapter("anthropic", AnthropicAdapter)
+        adapter = registry.get_adapter("anthropic")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": topp,
+        "top_k": topk,
+        "max_tokens": max_tokens,
+        "stop": stop_sequences,
+        "tools": tools,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
     # Assuming load_and_log_configs is defined elsewhere
     loaded_config_data = app_config or load_and_log_configs()
     anthropic_config = loaded_config_data.get('anthropic_api', {})

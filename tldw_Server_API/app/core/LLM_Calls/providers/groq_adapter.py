@@ -47,6 +47,33 @@ class GroqAdapter(ChatProvider):
         # Groq exposes OpenAI-compatible API under /openai/v1
         return os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
+    def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            g = cfg.get("groq_api") or {}
+            base = g.get("api_base_url")
+            if isinstance(base, str) and base.strip():
+                return base.strip()
+        except Exception:
+            pass
+        return self._base_url()
+
+    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            g = cfg.get("groq_api") or {}
+            t = g.get("api_timeout")
+            if t is not None:
+                try:
+                    return float(t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if fallback is not None:
+            return float(fallback)
+        return float(self.capabilities().get("default_timeout_seconds", 60))
+
     def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
         h = {"Content-Type": "application/json"}
         if api_key:
@@ -93,11 +120,12 @@ class GroqAdapter(ChatProvider):
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
-            url = f"{self._base_url().rstrip('/')}/chat/completions"
+            url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
             try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with http_client_factory(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
@@ -111,11 +139,12 @@ class GroqAdapter(ChatProvider):
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
-            url = f"{self._base_url().rstrip('/')}/chat/completions"
+            url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True
             try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():

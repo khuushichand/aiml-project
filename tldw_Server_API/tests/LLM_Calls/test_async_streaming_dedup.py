@@ -396,17 +396,17 @@ async def test_chat_with_openai_async_non_streaming_exhausts_retries(monkeypatch
 
 @pytest.mark.asyncio
 async def test_chat_with_anthropic_async_stream_tool_calls(monkeypatch):
-    _patch_async_client(
-        monkeypatch,
-        [
+    # Patch Anthropic adapter client to emit tool_use events
+    fake_client = _FakeClient(
+        stream_lines=[
             'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}',
             'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"Paris\\"}"}}',
             'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
-        ],
+        ]
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
-        lambda: {"anthropic_api": {"api_key": "key", "api_timeout": 15}},
+        "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+        lambda *args, **kwargs: fake_client,
     )
 
     stream = await chat_with_anthropic_async(

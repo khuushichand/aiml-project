@@ -327,6 +327,200 @@ def openai_chat_handler(
     return adapter.chat(request)
 
 
+def bedrock_chat_handler(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    maxp: Optional[float] = None,  # top_p
+    max_tokens: Optional[int] = None,
+    n: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    seed: Optional[int] = None,
+    response_format: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    user: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,  # ignored in adapter path
+    extra_body: Optional[Dict[str, Any]] = None,     # ignored in adapter path
+    app_config: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+):
+    """Bedrock handler that routes via the Bedrock adapter by default.
+
+    Falls back to legacy implementation only if the adapter is unavailable.
+    """
+    registry = get_registry()
+    adapter = registry.get_adapter("bedrock")
+    if adapter is None:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter import BedrockAdapter
+            registry.register_adapter("bedrock", BedrockAdapter)
+            adapter = registry.get_adapter("bedrock")
+        except Exception:
+            adapter = None
+
+    if adapter is None:
+        # Fallback to legacy function if adapter cannot be initialized
+        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_bedrock as _legacy_bedrock
+        return _legacy_bedrock(
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_message=system_message,
+            temp=temp,
+            streaming=streaming,
+            maxp=maxp,
+            max_tokens=max_tokens,
+            n=n,
+            stop=stop,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logit_bias=logit_bias,
+            seed=seed,
+            response_format=response_format,
+            tools=tools,
+            tool_choice=tool_choice,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            user=user,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            app_config=app_config,
+        )
+
+    # Build OpenAI-like request for adapter
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "max_tokens": max_tokens,
+        "n": n,
+        "stop": stop,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logit_bias": logit_bias,
+        "seed": seed,
+        "response_format": response_format,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "user": user,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
+
+
+async def bedrock_chat_handler_async(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    maxp: Optional[float] = None,  # top_p
+    max_tokens: Optional[int] = None,
+    n: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    seed: Optional[int] = None,
+    response_format: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    user: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+):
+    registry = get_registry()
+    adapter = registry.get_adapter("bedrock")
+    if adapter is None:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter import BedrockAdapter
+            registry.register_adapter("bedrock", BedrockAdapter)
+            adapter = registry.get_adapter("bedrock")
+        except Exception:
+            adapter = None
+
+    if adapter is None:
+        # Fallback to sync legacy call if adapter path unavailable
+        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_bedrock as _legacy_bedrock
+        return _legacy_bedrock(
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_message=system_message,
+            temp=temp,
+            streaming=streaming,
+            maxp=maxp,
+            max_tokens=max_tokens,
+            n=n,
+            stop=stop,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logit_bias=logit_bias,
+            seed=seed,
+            response_format=response_format,
+            tools=tools,
+            tool_choice=tool_choice,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            user=user,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            app_config=app_config,
+        )
+
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "max_tokens": max_tokens,
+        "n": n,
+        "stop": stop,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logit_bias": logit_bias,
+        "seed": seed,
+        "response_format": response_format,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "user": user,
+        "app_config": app_config,
+    }
+    if streaming:
+        async def _agen():
+            for item in adapter.stream(req):
+                yield item
+        return _agen()
+    return adapter.chat(req)
+
+
 def anthropic_chat_handler(
     input_data: List[Dict[str, Any]],
     model: Optional[str] = None,

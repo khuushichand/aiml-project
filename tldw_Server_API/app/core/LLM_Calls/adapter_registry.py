@@ -33,6 +33,7 @@ class ChatProviderRegistry:
         "qwen": "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.QwenAdapter",
         "deepseek": "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.DeepSeekAdapter",
         "huggingface": "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.HuggingFaceAdapter",
+        "bedrock": "tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter.BedrockAdapter",
         "custom-openai-api": "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter",
         "custom-openai-api-2": "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter2",
     }

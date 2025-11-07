@@ -4,7 +4,7 @@
 
 - Purpose: Unified client interface for commercial and local LLM providers used by the Chat API and internal services. Normalizes requests/responses to OpenAI-compatible shapes and standardizes streaming (SSE) and error handling.
 - Capabilities:
-  - Providers (commercial): OpenAI, Anthropic, Cohere, DeepSeek, Google (Gemini), Qwen, Groq, HuggingFace (OpenAI-compatible), Mistral, OpenRouter, Moonshot, Z.AI, Bedrock (via compatible endpoint).
+  - Providers (commercial): OpenAI, Anthropic, Cohere, DeepSeek, Google (Gemini), Qwen, Groq, HuggingFace (OpenAI-compatible), Mistral, OpenRouter, Moonshot, Z.AI, Bedrock (OpenAI-compatible).
   - Providers (local): local-llm, llama.cpp, Kobold, Oobabooga, TabbyAPI, vLLM, Aphrodite, Ollama, custom OpenAI-compatible gateways.
   - OpenAI-compatible chat semantics, tools/tool_choice passthrough where supported.
   - Streaming normalization to SSE frames; non-stream returns OpenAI-like dicts.
@@ -32,6 +32,7 @@
   - Retries: `http_helpers.create_session_with_retries` — tldw_Server_API/app/core/LLM_Calls/http_helpers.py:1
 - Key Functions (entry points):
   - `chat_with_openai`, `chat_with_anthropic`, `chat_with_cohere`, `chat_with_groq`, `chat_with_openrouter`, `chat_with_deepseek`, `chat_with_mistral`, `chat_with_google`, `chat_with_qwen`, `chat_with_bedrock`, `chat_with_moonshot`, `chat_with_zai` — LLM_API_Calls.py
+  - Adapter classes: OpenAI, Groq, Anthropic, Google, Qwen, Mistral, OpenRouter, HuggingFace, Bedrock — under `providers/` and auto-registered via the adapter registry.
   - `chat_with_local_llm`, `chat_with_llama`, `chat_with_kobold`, `chat_with_oobabooga`, `chat_with_tabbyapi`, `chat_with_vllm`, `chat_with_aphrodite`, `chat_with_ollama`, `chat_with_custom_openai(_2)` — LLM_API_Calls_Local.py
   - Async variants available for select providers (OpenAI, Groq, Anthropic, OpenRouter).
 - Dependencies:

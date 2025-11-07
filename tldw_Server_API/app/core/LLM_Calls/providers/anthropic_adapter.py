@@ -4,6 +4,14 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import os
 
 from .base import ChatProvider
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    openai_delta_chunk,
+    sse_data,
+    sse_done,
+    normalize_provider_line,
+    is_done_line,
+    finalize_stream,
+)
 
 
 def _prefer_httpx_in_tests() -> bool:
@@ -48,6 +56,40 @@ class AnthropicAdapter(ChatProvider):
         import os
         return os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
 
+    def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+        """Resolve API base URL with precedence: app_config -> env -> default."""
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            anth_cfg = cfg.get("anthropic_api") or {}
+            base = anth_cfg.get("api_base_url")
+            if isinstance(base, str) and base.strip():
+                return base.strip()
+        except Exception:
+            pass
+        return self._anthropic_base_url()
+
+    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+        """Resolve request timeout seconds from request/app_config, else fallback/capability default."""
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            anth_cfg = cfg.get("anthropic_api") or {}
+            t = anth_cfg.get("api_timeout")
+            if t is not None:
+                # Accept int/float/str that can be cast to float
+                try:
+                    return float(t)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if fallback is not None:
+            return float(fallback)
+        # Use adapter capability default
+        try:
+            return float(self.capabilities().get("default_timeout_seconds", 60))
+        except Exception:
+            return 60.0
+
     def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
@@ -63,14 +105,68 @@ class AnthropicAdapter(ChatProvider):
             out["system"] = system
         return out
 
+    def _parse_data_url_for_multimodal(self, url: str) -> Optional[tuple[str, str]]:
+        try:
+            if not isinstance(url, str) or not url.startswith("data:"):
+                return None
+            # Format: data:<mime>;base64,<data>
+            head, b64 = url.split(",", 1)
+            mime = head[5:]  # strip 'data:'
+            if ";base64" in mime:
+                mime = mime.replace(";base64", "").strip()
+            return mime, b64
+        except Exception:
+            return None
+
+    def _anthropic_image_source_from_part(self, image_url: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        url_str = (image_url or {}).get("url")
+        if not url_str:
+            return None
+        parsed = self._parse_data_url_for_multimodal(url_str)
+        if parsed:
+            mime_type, b64 = parsed
+            return {"type": "base64", "media_type": mime_type, "data": b64}
+        if isinstance(url_str, str) and url_str.startswith(("http://", "https://")):
+            return {"type": "url", "url": url_str}
+        return None
+
     def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages = request.get("messages") or []
+        raw_messages = request.get("messages") or []
         system_message = request.get("system_message")
+
+        # Convert OpenAI-style messages to Anthropic messages format
+        messages: List[Dict[str, Any]] = []
+        for msg in raw_messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content = msg.get("content")
+            parts: List[Dict[str, Any]] = []
+            if isinstance(content, str):
+                parts.append({"type": "text", "text": content})
+            elif isinstance(content, list):
+                for p in content:
+                    if not isinstance(p, dict):
+                        continue
+                    pt = p.get("type")
+                    if pt == "text":
+                        parts.append({"type": "text", "text": p.get("text", "")})
+                    elif pt == "image_url":
+                        src = self._anthropic_image_source_from_part(p.get("image_url", {}))
+                        if src:
+                            parts.append({"type": "image", "source": src})
+            if parts:
+                messages.append({"role": role, "content": parts})
+
         payload = {
             "model": request.get("model"),
-            **self._to_anthropic_messages(messages, system_message),
+            "messages": messages,
             "max_tokens": request.get("max_tokens") or 1024,
         }
+        if system_message:
+            payload["system"] = system_message
         if request.get("temperature") is not None:
             payload["temperature"] = request.get("temperature")
         if request.get("top_p") is not None:
@@ -116,125 +212,183 @@ class AnthropicAdapter(ChatProvider):
 
     @staticmethod
     def _normalize_to_openai_shape(data: Dict[str, Any]) -> Dict[str, Any]:
-        # Best-effort shaping of Anthropic message into OpenAI-like response
-        if data and isinstance(data, dict) and data.get("type") == "message":
-            content = data.get("content")
-            text = None
-            if isinstance(content, list) and content:
-                first = content[0] or {}
-                text = first.get("text") if isinstance(first, dict) else None
-            shaped = {
-                "id": data.get("id"),
-                "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": text},
-                        "finish_reason": data.get("stop_reason") or "stop",
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": data.get("usage", {}).get("input_tokens"),
-                    "completion_tokens": data.get("usage", {}).get("output_tokens"),
-                    "total_tokens": None,
-                },
+        # Best-effort shaping of Anthropic "message" into OpenAI-like chat completion
+        if not (isinstance(data, dict) and data.get("type") == "message"):
+            return data
+        parts = data.get("content") or []
+        text_parts: List[str] = []
+        tool_calls: List[Dict[str, Any]] = []
+        if isinstance(parts, list):
+            for p in parts:
+                if not isinstance(p, dict):
+                    continue
+                if p.get("type") == "text":
+                    text_parts.append(p.get("text", ""))
+                elif p.get("type") == "tool_use":
+                    tool_id = p.get("id") or f"anthropic_tool_{len(tool_calls)}"
+                    name = p.get("name") or ""
+                    try:
+                        args = __import__("json").dumps(p.get("input", {}))
+                    except Exception:
+                        args = str(p.get("input"))
+                    tool_calls.append({
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": args},
+                    })
+        message_payload: Dict[str, Any] = {"role": "assistant", "content": None}
+        content_text = "\n".join([t for t in text_parts if t]).strip()
+        if content_text:
+            message_payload["content"] = content_text
+        if tool_calls:
+            message_payload["tool_calls"] = tool_calls
+        finish_reason_map = {"end_turn": "stop", "max_tokens": "length", "stop_sequence": "stop", "tool_use": "tool_calls"}
+        shaped = {
+            "id": data.get("id"),
+            "object": "chat.completion",
+            "model": data.get("model"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message_payload,
+                    "finish_reason": finish_reason_map.get(data.get("stop_reason"), data.get("stop_reason")),
+                }
+            ],
+        }
+        usage = data.get("usage") or {}
+        if isinstance(usage, dict):
+            shaped["usage"] = {
+                "prompt_tokens": usage.get("input_tokens"),
+                "completion_tokens": usage.get("output_tokens"),
+                "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0),
             }
-            try:
-                shaped["usage"]["total_tokens"] = (shaped["usage"].get("prompt_tokens") or 0) + (shaped["usage"].get("completion_tokens") or 0)
-            except Exception:
-                pass
-            return shaped
-        return data
+        return shaped
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
-            url = f"{self._anthropic_base_url().rstrip('/')}/messages"
+            url = f"{self._resolve_base_url(request).rstrip('/')}/messages"
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             payload["stream"] = False
             try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with http_client_factory(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     data = resp.json()
                     return self._normalize_to_openai_shape(data)
             except Exception as e:
                 raise self.normalize_error(e)
+        # If native HTTP is explicitly disabled, raise a clear error rather than
+        # delegating to legacy paths to avoid recursion and mixed behaviors.
+        raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
 
-        # Delegate to legacy for parity when native HTTP is disabled
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        streaming_raw = request.get("stream") if "stream" in request else request.get("streaming")
-        kwargs = {
-            "input_data": request.get("messages") or [],
-            "model": request.get("model"),
-            "api_key": request.get("api_key"),
-            "system_prompt": request.get("system_message"),
-            "temp": request.get("temperature"),
-            "topp": request.get("top_p"),
-            "topk": request.get("top_k"),
-            "streaming": streaming_raw if streaming_raw is not None else False,
-            "max_tokens": request.get("max_tokens"),
-            "stop_sequences": request.get("stop"),
-            "tools": request.get("tools"),
-            "custom_prompt_arg": request.get("custom_prompt_arg"),
-            "app_config": request.get("app_config"),
-        }
-        # Avoid wrapper recursion; prefer legacy_* unless explicitly monkeypatched
-        fn = getattr(_legacy, "chat_with_anthropic", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_anthropic(**kwargs)
+    def _tool_delta_chunk(self, tool_index: int, tool_id: str, tool_name: Optional[str], arguments: str) -> str:
+        return sse_data({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": tool_index,
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {"name": tool_name or "", "arguments": arguments},
+                    }]
+                },
+            }]
+        })
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
-            url = f"{self._anthropic_base_url().rstrip('/')}/messages"
+            url = f"{self._resolve_base_url(request).rstrip('/')}/messages"
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             payload["stream"] = True
             try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
+                resolved_timeout = self._resolve_timeout(request, timeout)
+                with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            if not line:
+                        tool_states: Dict[int, Dict[str, Any]] = {}
+                        tool_counter = 0
+                        done_sent = False
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
-                            yield line
+                            if is_done_line(raw):
+                                if not done_sent:
+                                    done_sent = True
+                                    yield sse_done()
+                                continue
+                            ls = raw.strip()
+                            if not ls or not ls.startswith("data:"):
+                                # Drop provider control lines/comments by default
+                                normalized = normalize_provider_line(ls)
+                                if normalized is not None:
+                                    yield normalized
+                                continue
+                            event_data = ls[len("data:"):].strip()
+                            if not event_data:
+                                continue
+                            try:
+                                ev = __import__("json").loads(event_data)
+                            except Exception:
+                                continue
+                            ev_type = ev.get("type")
+                            if ev_type == "content_block_start":
+                                cb = ev.get("content_block", {})
+                                if cb.get("type") == "tool_use":
+                                    idx = int(ev.get("index", 0))
+                                    tool_id = cb.get("id") or f"anthropic_tool_{tool_counter}"
+                                    tool_name = cb.get("name")
+                                    initial_input = cb.get("input")
+                                    buf = ""
+                                    if initial_input is not None:
+                                        try:
+                                            buf = __import__("json").dumps(initial_input)
+                                        except Exception:
+                                            buf = str(initial_input)
+                                    tool_states[idx] = {"id": tool_id, "name": tool_name, "buffer": buf, "position": tool_counter}
+                                    tool_counter += 1
+                                    yield self._tool_delta_chunk(tool_states[idx]["position"], tool_id, tool_name, buf)
+                            elif ev_type == "content_block_delta":
+                                delta = ev.get("delta", {})
+                                idx = int(ev.get("index", 0))
+                                dt = delta.get("type")
+                                if dt == "text_delta" and "text" in delta:
+                                    yield openai_delta_chunk(delta.get("text", ""))
+                                elif dt == "input_json_delta" and idx in tool_states:
+                                    partial = delta.get("partial_json", "")
+                                    if partial:
+                                        st = tool_states[idx]
+                                        st["buffer"] += partial
+                                        yield self._tool_delta_chunk(st["position"], st["id"], st["name"], st["buffer"])
+                                elif dt == "tool_use_delta" and idx in tool_states:
+                                    st = tool_states[idx]
+                                    if "name" in delta and delta["name"]:
+                                        st["name"] = delta["name"]
+                                    if "input" in delta and delta["input"] is not None:
+                                        try:
+                                            st["buffer"] = __import__("json").dumps(delta["input"])
+                                        except Exception:
+                                            st["buffer"] = str(delta["input"])
+                                    yield self._tool_delta_chunk(st["position"], st["id"], st["name"], st["buffer"])
+                            elif ev_type == "message_delta":
+                                stop_reason = (ev.get("delta") or {}).get("stop_reason")
+                                if stop_reason:
+                                    fr_map = {"end_turn": "stop", "max_tokens": "length", "stop_sequence": "stop", "tool_use": "tool_calls"}
+                                    finish_reason = fr_map.get(stop_reason, stop_reason)
+                                    yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
+                        for tail in finalize_stream(response=resp, done_already=done_sent):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)
-
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        kwargs = {
-            **{
-                "input_data": request.get("messages") or [],
-                "model": request.get("model"),
-                "api_key": request.get("api_key"),
-                "system_prompt": request.get("system_message"),
-                "temp": request.get("temperature"),
-                "topp": request.get("top_p"),
-                "topk": request.get("top_k"),
-                "max_tokens": request.get("max_tokens"),
-                "stop_sequences": request.get("stop"),
-                "tools": request.get("tools"),
-                "custom_prompt_arg": request.get("custom_prompt_arg"),
-                "app_config": request.get("app_config"),
-            }
-        }
-        kwargs["streaming"] = True
-        fn = getattr(_legacy, "chat_with_anthropic", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_anthropic(**kwargs)
+        # If native HTTP is explicitly disabled, raise a clear error rather than
+        # delegating to legacy paths to avoid recursion and mixed behaviors.
+        raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)
