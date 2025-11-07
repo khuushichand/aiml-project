@@ -99,7 +99,8 @@ async def get_resource_governor_policy(
                         snap_type,
                         repr(meta_exc),
                     )
-            except Exception:
+            except Exception as _init_exc:
+                logger.exception("Resource governor policy loader init failed: {}", repr(_init_exc))
                 return JSONResponse({"status": "unavailable", "reason": "policy_loader_not_initialized"}, status_code=503)
         snap = loader.get_snapshot()
         body: Dict[str, Any] = {

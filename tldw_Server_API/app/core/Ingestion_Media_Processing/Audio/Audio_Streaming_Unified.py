@@ -1583,6 +1583,8 @@ async def handle_unified_websocket(
                                 logger.error(f"Live insights failed to ingest segment: {insight_err}", exc_info=True)
 
                 elif data.get("type") == "commit":
+                    # Measure latency from commit receipt to final transcript emission
+                    _commit_received_at = time.time()
                     # Get final transcript
                     full_transcript = transcriber.get_full_transcript()
                     await stream.send_json({
@@ -1590,6 +1592,20 @@ async def handle_unified_websocket(
                         "text": full_transcript,
                         "timestamp": time.time()
                     })
+                    # Record STT finalization latency metric (commit → final emit)
+                    try:
+                        from tldw_Server_API.app.core.Metrics import get_metrics_registry
+                        reg = get_metrics_registry()
+                        # Determine model/variant labels when available
+                        _model = getattr(config, "model", None) or "parakeet"
+                        _variant = getattr(config, "model_variant", None) or "standard"
+                        reg.observe(
+                            "stt_final_latency_seconds",
+                            max(0.0, time.time() - _commit_received_at),
+                            labels={"model": str(_model), "variant": str(_variant), "endpoint": "audio_unified_ws"},
+                        )
+                    except Exception:
+                        pass
                     if insights_engine:
                         try:
                             await insights_engine.on_commit(full_transcript)

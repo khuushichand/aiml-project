@@ -251,6 +251,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSQuotaExceededError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
+from uuid import uuid4
 
 async def get_tts_service() -> TTSServiceV2:
     """Get the V2 TTS service instance."""
@@ -316,7 +317,14 @@ async def create_speech(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    logger.info(f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}")
+    # Correlate via request id (header or generated)
+    try:
+        request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id") or str(uuid4())
+    except Exception:
+        request_id = str(uuid4())
+    logger.info(
+        f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
+    )
     try:
         usage_log.log_event(
             "audio.tts",
@@ -432,6 +440,7 @@ async def create_speech(
                 "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
                 "X-Accel-Buffering": "no", # Useful for Nginx
                 "Cache-Control": "no-cache",
+                "X-Request-Id": request_id,
             },
         )
     # Non-streaming mode: accumulate chunks and return a single response
@@ -464,6 +473,7 @@ async def create_speech(
         headers={
             "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
             "Cache-Control": "no-cache",
+            "X-Request-Id": request_id,
         },
     )
 
@@ -1242,6 +1252,17 @@ async def websocket_transcribe(
         await _outer_stream.start()
     except Exception:
         _outer_stream = None
+
+    # Correlate via request id (header or generated)
+    try:
+        _hdrs = websocket.headers or {}
+        request_id = _hdrs.get("x-request-id") or _hdrs.get("X-Request-Id") or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None) or str(uuid4())
+    except Exception:
+        request_id = str(uuid4())
+    try:
+        logger.info(f"Audio WS connected: request_id={request_id}")
+    except Exception:
+        pass
 
     # Ops toggle for standardized close code on quota/rate limits (4003 → 1008)
     import os as _os

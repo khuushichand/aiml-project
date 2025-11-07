@@ -224,6 +224,57 @@ class MetricsRegistry:
                 labels=["provider", "model", "user_id"],
             )
         )
+
+        # Realtime voice latency metrics (STT/TTS/voice-to-voice)
+        buckets_s = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+        self.register_metric(
+            MetricDefinition(
+                name="stt_final_latency_seconds",
+                type=MetricType.HISTOGRAM,
+                description="End-of-speech to final transcript latency (seconds)",
+                unit="s",
+                labels=["model", "variant", "endpoint"],
+                buckets=buckets_s,
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="tts_ttfb_seconds",
+                type=MetricType.HISTOGRAM,
+                description="TTS time-to-first-byte (seconds)",
+                unit="s",
+                labels=["provider", "voice", "format"],
+                buckets=buckets_s,
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="voice_to_voice_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Voice end-of-speech to first audio byte (seconds)",
+                unit="s",
+                labels=["provider", "route"],
+                buckets=buckets_s,
+            )
+        )
+
+        # Audio streaming health counters
+        self.register_metric(
+            MetricDefinition(
+                name="audio_stream_underruns_total",
+                type=MetricType.COUNTER,
+                description="Total audio stream underruns",
+                labels=["provider"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="audio_stream_errors_total",
+                type=MetricType.COUNTER,
+                description="Total audio streaming errors",
+                labels=["component", "provider"],
+            )
+        )
         self.register_metric(
             MetricDefinition(
                 name="llm_cost_dollars_by_operation",

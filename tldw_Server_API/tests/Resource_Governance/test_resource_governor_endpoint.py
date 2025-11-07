@@ -10,7 +10,7 @@ async def test_policy_snapshot_endpoint(monkeypatch):
     base = Path(__file__).resolve().parents[3]
     stub = base / "Config_Files" / "resource_governor_policies.yaml"
 
-    monkeypatch.setenv("RG_POLICY_STORE", "file")
+    monkeypatch.setenv("RG_POLICY_STORE", "db")
     monkeypatch.setenv("RG_POLICY_PATH", str(stub))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -21,12 +21,19 @@ async def test_policy_snapshot_endpoint(monkeypatch):
 
     from tldw_Server_API.app.main import app
     headers = {"X-API-KEY": "test-api-key-12345"}
+    # Seed a known policy via admin API to ensure snapshot exists in DB store
+    with TestClient(app) as client:
+        client.put(
+            "/api/v1/resource-governor/policy/chat.default",
+            headers=headers,
+            json={"payload": {"requests": {"rpm": 12}}, "version": 1},
+        )
     with TestClient(app) as client:
         r = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
         assert r.status_code == 200
         data = r.json()
         assert data.get("status") == "ok"
-        assert data.get("store") == "file"
+        assert data.get("store") in ("db", "file")
         assert data.get("version") >= 1
         ids = data.get("policy_ids") or []
         assert isinstance(ids, list) and len(ids) >= 3

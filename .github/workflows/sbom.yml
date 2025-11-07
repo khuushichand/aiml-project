@@ -29,35 +29,68 @@ jobs:
       - name: Generate Python SBOM (CycloneDX)
         run: |
           set -euo pipefail
-          # Install the correct CycloneDX Python CLI. The package providing
-          # the `cyclonedx-py` CLI is `cyclonedx-bom` (not `cyclonedx-python`).
+          # Install CycloneDX Python tooling. Newer releases expose the `cyclonedx-py` CLI,
+          # older ones expose `cyclonedx-bom`. We support both.
           python -m pip install -q cyclonedx-bom
-          GEN_CMD="python -m cyclonedx_py"
-          if [ -n "${pythonLocation:-}" ] && [ -x "${pythonLocation}/bin/cyclonedx-py" ]; then \
-            GEN_CMD="${pythonLocation}/bin/cyclonedx-py"; \
-          elif command -v cyclonedx-py >/dev/null 2>&1; then \
-            GEN_CMD="cyclonedx-py"; \
-          fi
-          gen_from_requirements() { \
-            local req="$1"; \
-            echo "Generating Python SBOM from ${req} using ${GEN_CMD}"; \
-            ${GEN_CMD} -r "${req}" --output-file sbom-python.cdx.json || { \
-              echo "Primary generator failed; attempting cyclonedx-bom fallback"; \
-              python -m pip install -q cyclonedx-bom || true; \
-              if command -v cyclonedx-bom >/dev/null 2>&1; then \
-                cyclonedx-bom -r "${req}" -o sbom-python.cdx.json; \
-              else \
-                python -m cyclonedx_bom -r "${req}" -o sbom-python.cdx.json; \
-              fi; \
-            }; \
+
+          gen_from_requirements() {
+            local req="$1"
+            echo "Generating Python SBOM from ${req}"
+
+            # Try modern CLI first: cyclonedx-py requirements -i <file>
+            if command -v cyclonedx-py >/dev/null 2>&1; then
+              echo "Using cyclonedx-py"
+              if cyclonedx-py requirements -i "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+              echo "cyclonedx-py failed; will try fallbacks"
+            fi
+
+            # Module invocation for modern CLI
+            if python - <<'PY'
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)
+PY
+            then
+              echo "Using python -m cyclonedx_py"
+              if python -m cyclonedx_py requirements -i "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+              echo "python -m cyclonedx_py failed; trying legacy CLI"
+            fi
+
+            # Legacy CLI: cyclonedx-bom -r <file>
+            if command -v cyclonedx-bom >/dev/null 2>&1; then
+              echo "Using cyclonedx-bom (legacy)"
+              if cyclonedx-bom -r "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+              echo "cyclonedx-bom failed; trying legacy module"
+            fi
+
+            # Legacy module invocation
+            if python - <<'PY'
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec('cyclonedx_bom') else 1)
+PY
+            then
+              echo "Using python -m cyclonedx_bom (legacy)"
+              if python -m cyclonedx_bom -r "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+            fi
+
+            echo "All Python SBOM generation strategies failed" >&2
+            return 1
           }
-          if [ -f tldw_Server_API/requirements.txt ]; then \
-            gen_from_requirements tldw_Server_API/requirements.txt; \
-          elif [ -f requirements.txt ]; then \
-            gen_from_requirements requirements.txt; \
-          else \
-            echo "No requirements file found; cannot generate SBOM"; \
-            exit 1; \
+
+          if [ -f tldw_Server_API/requirements.txt ]; then
+            gen_from_requirements tldw_Server_API/requirements.txt
+          elif [ -f requirements.txt ]; then
+            gen_from_requirements requirements.txt
+          else
+            echo "No requirements file found; cannot generate SBOM" >&2
+            exit 1
           fi
 
       - name: Setup Node
