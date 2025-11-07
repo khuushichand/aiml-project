@@ -59,17 +59,12 @@ class WorkerSDK:
             self._max_iters = 0
 
     async def _sleep_chunked(self, total_seconds: float) -> None:
-        """Sleep in small chunks to react quickly to stop() in tests.
+        """Compatibility helper retained for potential future use.
 
-        Uses shorter steps in test mode to avoid long blocking sleeps that can
-        cause hangs when the event loop is under heavy load.
+        Tests patch `self._sleep` to a stub that yields immediately, so using
+        direct sleeps in code paths under test is safe and deterministic.
         """
-        remaining = max(0.0, float(total_seconds))
-        # Step size: short in tests, modest otherwise
-        step = 0.05 if self._test_mode else 0.2
-        while remaining > 0 and not self._stop.is_set():
-            await self._sleep(min(step, remaining))
-            remaining -= step
+        await self._sleep(max(0.0, float(total_seconds)))
 
     def stop(self) -> None:
         self._stop.set()
@@ -84,7 +79,7 @@ class WorkerSDK:
         while not self._stop.is_set():
             # Sleep for lease - threshold, plus small jitter
             sleep_for = max(1, lease - threshold) + (random.randint(0, jitter) if jitter else 0)
-            await self._sleep_chunked(float(sleep_for))
+            await self._sleep(float(sleep_for))
             if self._stop.is_set():
                 return
             kwargs = {"job_id": job_id, "seconds": lease, "worker_id": self.cfg.worker_id, "lease_id": lease_id}
@@ -138,8 +133,8 @@ class WorkerSDK:
                 logger.debug(f"Acquire error: {e}")
                 job = None
             if not job:
-                # Sleep with backoff in chunks for responsive stop()
-                await self._sleep_chunked(float(min(backoff, backoff_max)))
+                # Sleep with backoff
+                await self._sleep(float(min(backoff, backoff_max)))
                 backoff = min(backoff * 2, backoff_max)
                 continue
             backoff = max(1, int(self.cfg.backoff_base_seconds))
@@ -154,7 +149,12 @@ class WorkerSDK:
                 if cancel_check is not None:
                     try:
                         if await cancel_check(job):
+                            # Respect cancellation request; finalize and yield once to avoid tight spin
                             self.jm.cancel_job(job_id, reason="requested")
+                            try:
+                                await self._sleep(0)
+                            except Exception:
+                                pass
                             continue
                     except Exception:
                         pass
