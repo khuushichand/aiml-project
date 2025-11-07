@@ -10,7 +10,7 @@ export async function listMyApiKeys() {
   } catch (e) {
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to list API keys');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list API keys');
   }
 }
 
@@ -24,12 +24,12 @@ export async function createMyApiKey() {
     const res = await window.apiClient.post('/api/v1/users/api-keys', payload);
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(res || {}, null, 2);
-    Toast.success('API key created. Copy it now; it is shown only once.');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('API key created. Copy it now; it is shown only once.');
     await listMyApiKeys();
   } catch (e) {
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to create API key');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to create API key');
   }
 }
 
@@ -38,12 +38,12 @@ export async function rotateMyApiKey(id) {
     const res = await window.apiClient.post(`/api/v1/users/api-keys/${id}/rotate`, { expires_in_days: 365 });
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(res || {}, null, 2);
-    Toast.success('API key rotated. Copy the new key now.');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('API key rotated. Copy the new key now.');
     await listMyApiKeys();
   } catch (e) {
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to rotate API key');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to rotate API key');
   }
 }
 
@@ -52,12 +52,12 @@ export async function revokeMyApiKey(id) {
     const res = await window.apiClient.delete(`/api/v1/users/api-keys/${id}`);
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(res || {}, null, 2);
-    Toast.success('API key revoked');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('API key revoked');
     await listMyApiKeys();
   } catch (e) {
     const pre = document.getElementById('authApiKeys_response');
     if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to revoke API key');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to revoke API key');
   }
 }
 

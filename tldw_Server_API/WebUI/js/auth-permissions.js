@@ -121,7 +121,7 @@ async function loadSelfPermissions() {
     AUTH_PERM_CACHE.self = data || { items: [] };
     AUTH_PERM_CACHE.lastLoadedAt = new Date().toISOString();
     _ap_renderAll();
-    Toast?.success && Toast.success('Loaded permissions');
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Loaded permissions');
   } catch (e) {
     const container = document.getElementById('authPermList');
     if (container) container.innerHTML = `<pre>${_ap_escape(JSON.stringify(e.response || e, null, 2))}</pre>`;
@@ -129,7 +129,7 @@ async function loadSelfPermissions() {
     if (matrix) matrix.innerHTML = '';
     const summary = document.getElementById('authPermSummary');
     if (summary) summary.textContent = 'Failed to load permissions';
-    Toast?.error && Toast.error('Failed to load permissions');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to load permissions');
   }
 }
 

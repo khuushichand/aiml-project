@@ -53,9 +53,8 @@ async def test_policy_admin_list_count_and_metadata_postgres(monkeypatch, isolat
         assert it.get("updated_at") is not None
 
     # Snapshot endpoint should include the seeded IDs (ids only)
-    snap = client.get("/api/v1/resource-governor/policy?include=ids")
+    snap = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
     assert snap.status_code == 200, snap.text
     sids = set(snap.json().get("policy_ids") or [])
     for pid in seeds.keys():
         assert pid in sids
-

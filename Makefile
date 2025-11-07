@@ -41,7 +41,7 @@ monitoring-logs:
 # Defaults (override on command line)
 HOST ?= 127.0.0.1
 PORT ?= 8000
-API_KEY ?= dev-key-123
+API_KEY ?= REPLACE-THIS-WITH-A-SECURE-API-KEY-123
 
 server-up-dev:
 	@echo "[server] Starting uvicorn in mock mode on $(HOST):$(PORT)"
@@ -122,3 +122,5 @@ bench-full:
 	@echo "[full] Grafana: http://localhost:3000/d/tldw-llm-gateway (admin/admin)"
 	@echo "[full] Prometheus: http://localhost:9090"
 	@echo "[full] Tip: enable STREAMS_UNIFIED=1 on the server to populate SSE panels"
+	@echo "[full] Stopping monitoring stack"
+	$(MAKE) monitoring-down

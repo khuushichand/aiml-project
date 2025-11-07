@@ -199,7 +199,7 @@ class ChatUI {
 
             messageDiv.remove();
             this.autoSaveMessages(prefix);
-            Toast.success('Message removed');
+            if (typeof Toast !== 'undefined' && Toast) Toast.success('Message removed');
         }
     }
 
@@ -331,9 +331,9 @@ class ChatUI {
         try {
             const json = JSON.parse(textarea.value);
             textarea.value = JSON.stringify(json, null, 2);
-            Toast.success('JSON formatted');
+            if (typeof Toast !== 'undefined' && Toast) Toast.success('JSON formatted');
         } catch (e) {
-            Toast.error('Invalid JSON');
+            if (typeof Toast !== 'undefined' && Toast) Toast.error('Invalid JSON');
         }
     }
 
@@ -554,16 +554,16 @@ class ChatUI {
                     const convIdEl = document.getElementById(`${prefix}_conversation_id`);
                     if (convIdEl) {
                         convIdEl.value = response.tldw_conversation_id;
-                        Toast.info(`Conversation ID: ${response.tldw_conversation_id}`);
+                        if (typeof Toast !== 'undefined' && Toast) Toast.info(`Conversation ID: ${response.tldw_conversation_id}`);
                     }
                 }
             }
 
-            Toast.success('Request completed successfully');
+            if (typeof Toast !== 'undefined' && Toast) Toast.success('Request completed successfully');
         } catch (error) {
             console.error('Chat request error:', error);
             responseArea.textContent = `Error: ${error.message}`;
-            Toast.error(`Request failed: ${error.message}`);
+            if (typeof Toast !== 'undefined' && Toast) Toast.error(`Request failed: ${error.message}`);
         } finally {
             Loading.hide(responseArea.parentElement);
         }
@@ -637,7 +637,7 @@ class ChatUI {
             if (maxTokensEl) maxTokensEl.value = preset.max_tokens;
         }
 
-        Toast.success(`Loaded preset: ${presetName}`);
+        if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded preset: ${presetName}`);
     }
 
     saveCurrentAsPreset(name) {
@@ -661,9 +661,9 @@ class ChatUI {
             }
 
             this.savePresets();
-            Toast.success(`Saved preset: ${name}`);
+            if (typeof Toast !== 'undefined' && Toast) Toast.success(`Saved preset: ${name}`);
         } catch (error) {
-            Toast.error(`Failed to save preset: ${error.message}`);
+            if (typeof Toast !== 'undefined' && Toast) Toast.error(`Failed to save preset: ${error.message}`);
         }
     }
 }

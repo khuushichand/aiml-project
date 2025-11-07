@@ -187,16 +187,33 @@ class AnthropicAdapter(ChatProvider):
                 try:
                     if isinstance(t, dict) and (t.get("type") == "function") and isinstance(t.get("function"), dict):
                         fn = t["function"]
-                        name = str(fn.get("name", ""))
-                        desc = str(fn.get("description", "")) if fn.get("description") is not None else ""
+                        # Require a non-empty string function name; otherwise skip as malformed.
+                        name_raw = fn.get("name")
+                        if not isinstance(name_raw, str):
+                            continue
+                        name = name_raw.strip()
+                        if not name:
+                            continue
+                        desc_val = fn.get("description")
+                        desc = str(desc_val) if isinstance(desc_val, (str, int, float)) else (desc_val or "")
                         schema = fn.get("parameters") or {}
+                        if not isinstance(schema, dict):
+                            schema = {}
                         converted.append({
                             "name": name,
                             "description": desc,
-                            "input_schema": schema if isinstance(schema, dict) else {},
+                            "input_schema": schema,
                         })
                 except Exception:
                     continue
+            # Only include tools if at least one valid entry exists.
+            # Valid means function name is a non-empty string; malformed entries are skipped.
+            # This ensures tests like malformed-tools expect 'tools' to be omitted entirely.
+            # Filter again defensively in case prior logic added any invalid entries.
+            converted = [
+                t for t in converted
+                if isinstance(t.get("name"), str) and t.get("name", "").strip()
+            ]
             if converted:
                 payload["tools"] = converted
         # tool_choice mapping (force a specific tool when requested)

@@ -797,6 +797,20 @@ async def stream_job_events(
                     await prod_task
                 except Exception:
                     pass
+        finally:
+            # Ensure producer task never leaks on unexpected exceptions
+            if not prod_task.done():
+                try:
+                    prod_task.cancel()
+                except Exception:
+                    pass
+                try:
+                    await prod_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    # Swallow any cleanup-time errors to avoid propagating
+                    pass
 
     # Advise proxies/servers not to buffer SSE
     sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}

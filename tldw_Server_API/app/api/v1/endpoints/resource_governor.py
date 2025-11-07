@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from tldw_Server_API.app.main import app as _app
+from tldw_Server_API.app.core.AuthNZ.permissions import RoleChecker
 
 router = APIRouter()
 
@@ -39,7 +40,10 @@ def _get_or_init_governor() -> Optional[Any]:
 
 
 @router.get("/resource-governor/policy")
-async def get_resource_governor_policy(include: Optional[str] = Query(None, description="Include extra data: 'ids' or 'full'")) -> JSONResponse:
+async def get_resource_governor_policy(
+    include: Optional[str] = Query(None, description="Include extra data: 'ids' or 'full'"),
+    user=Depends(RoleChecker("admin")),
+) -> JSONResponse:
     """
     Return current Resource Governor policy snapshot metadata.
 
@@ -118,7 +122,6 @@ async def get_resource_governor_policy(include: Optional[str] = Query(None, desc
 
 # --- Admin endpoints (gated) ---
 from pydantic import BaseModel, Field
-from tldw_Server_API.app.core.AuthNZ.permissions import RoleChecker
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
 
 

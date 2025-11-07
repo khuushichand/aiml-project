@@ -1078,12 +1078,12 @@ class WebUI {
                         await this.preloadAllEndpointsForSearch();
                         this.searchPreloaded = true;
                         if (typeof Toast !== 'undefined' && Toast) {
-                            Toast.success('All endpoints loaded for search');
+                            if (typeof Toast !== 'undefined' && Toast) Toast.success('All endpoints loaded for search');
                         }
                     }
                 } catch (e) {
                     if (typeof Toast !== 'undefined' && Toast) {
-                        Toast.error('Failed to load endpoints');
+                        if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load endpoints');
                     }
                 }
             });
@@ -1140,7 +1140,7 @@ class WebUI {
 
         if (history.length === 0) {
             if (typeof Toast !== 'undefined' && Toast) {
-                Toast.info('No request history available');
+                if (typeof Toast !== 'undefined' && Toast) Toast.info('No request history available');
             } else {
                 alert('No request history available');
             }
@@ -1196,7 +1196,7 @@ class WebUI {
     clearHistory() {
         apiClient.clearHistory();
         if (typeof Toast !== 'undefined' && Toast) {
-            Toast.success('Request history cleared');
+            if (typeof Toast !== 'undefined' && Toast) Toast.success('Request history cleared');
         }
         // Close any open modals
         document.querySelectorAll('.modal').forEach(modal => {

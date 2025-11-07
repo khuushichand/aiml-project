@@ -14,11 +14,15 @@ async def test_policy_snapshot_endpoint(monkeypatch):
     monkeypatch.setenv("RG_POLICY_PATH", str(stub))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv("AUTH_MODE", "single_user")
+    # Ensure deterministic single-user API key in tests and use it for auth
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{base / 'Databases' / 'users_test_rg_endpoint.db'}")
 
     from tldw_Server_API.app.main import app
+    headers = {"X-API-KEY": "test-api-key-12345"}
     with TestClient(app) as client:
-        r = client.get("/api/v1/resource-governor/policy?include=ids")
+        r = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
         assert r.status_code == 200
         data = r.json()
         assert data.get("status") == "ok"
@@ -30,7 +34,7 @@ async def test_policy_snapshot_endpoint(monkeypatch):
 
         # Basic get (admin-gated; single_user treated as admin)
         # Ensure endpoint is reachable; result may be 404 in file store
-        g = client.get(f"/api/v1/resource-governor/policy/{ids[0]}")
+        g = client.get(f"/api/v1/resource-governor/policy/{ids[0]}", headers=headers)
         assert g.status_code in (200, 404)
 
 
@@ -41,14 +45,18 @@ async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch):
     monkeypatch.setenv("RG_POLICY_STORE", "db")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{base / 'Databases' / 'users_test_rg_admin.db'}")
 
     from tldw_Server_API.app.main import app
+    headers = {"X-API-KEY": "test-api-key-12345"}
     with TestClient(app) as client:
         # Upsert a policy
         new_policy_id = "test.policy"
         up = client.put(
             f"/api/v1/resource-governor/policy/{new_policy_id}",
+            headers=headers,
             json={
                 "payload": {"requests": {"rpm": 42, "burst": 1.0}},
                 "version": 1,
@@ -56,18 +64,18 @@ async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch):
         )
         assert up.status_code == 200
         # Verify it's included in snapshot ids
-        r = client.get("/api/v1/resource-governor/policy?include=ids")
+        r = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
         assert r.status_code == 200
         ids = r.json().get("policy_ids") or []
         assert new_policy_id in ids
         # Delete it
-        de = client.delete(f"/api/v1/resource-governor/policy/{new_policy_id}")
+        de = client.delete(f"/api/v1/resource-governor/policy/{new_policy_id}", headers=headers)
         assert de.status_code == 200
-        r2 = client.get("/api/v1/resource-governor/policy?include=ids")
+        r2 = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
         assert new_policy_id not in (r2.json().get("policy_ids") or [])
 
         # List policies (admin)
-        lst = client.get("/api/v1/resource-governor/policies")
+        lst = client.get("/api/v1/resource-governor/policies", headers=headers)
         assert lst.status_code == 200
         items = lst.json().get("items")
         assert isinstance(items, list)

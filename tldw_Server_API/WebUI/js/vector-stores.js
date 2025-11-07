@@ -91,8 +91,8 @@
       // Keyboard shortcuts on focused row
       li.addEventListener('keydown', async (e) => {
         if (e.key === 'Enter') { e.preventDefault(); vsSelect(s.id, s.name || ''); }
-        if (e.key.toLowerCase() === 'c') { e.preventDefault(); const ok = await Utils.copyToClipboard(String(s.id || '')); if (ok && Toast) Toast.success('Copied store id'); }
-        if (e.key.toLowerCase() === 'n') { e.preventDefault(); const ok = await Utils.copyToClipboard(String(s.name || '')); if (ok && Toast) Toast.success('Copied store name'); }
+        if (e.key.toLowerCase() === 'c') { e.preventDefault(); const ok = await Utils.copyToClipboard(String(s.id || '')); if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied store id'); }
+        if (e.key.toLowerCase() === 'n') { e.preventDefault(); const ok = await Utils.copyToClipboard(String(s.name || '')); if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied store name'); }
       });
       // Context menu for copy actions
       li.addEventListener('contextmenu', (e) => {
@@ -134,9 +134,9 @@
     const menu = ensureVsContextMenu();
     menu.innerHTML = '';
     const add = (label, fn) => menu.appendChild((() => { const it = document.createElement('div'); it.textContent = label; it.setAttribute('role','menuitem'); it.tabIndex = 0; it.style.cssText = 'padding:8px 12px; cursor:pointer;'; it.addEventListener('mouseenter', () => it.style.background = 'var(--color-surface-alt)'); it.addEventListener('mouseleave', () => it.style.background = 'transparent'); it.addEventListener('click', async (e) => { e.stopPropagation(); hideVsContextMenu(); await fn(); }); it.addEventListener('keydown', async (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); hideVsContextMenu(); await fn(); } }); return it; })());
-    add('Copy Store ID', async () => { const ok = await Utils.copyToClipboard(String(store.id || '')); if (ok && Toast) Toast.success('Copied store id'); });
-    add('Copy Name', async () => { const ok = await Utils.copyToClipboard(String(store.name || '')); if (ok && Toast) Toast.success('Copied store name'); });
-    add('Copy JSON', async () => { const ok = await Utils.copyToClipboard(JSON.stringify(store, null, 2)); if (ok && Toast) Toast.success('Copied store JSON'); });
+    add('Copy Store ID', async () => { const ok = await Utils.copyToClipboard(String(store.id || '')); if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied store id'); });
+    add('Copy Name', async () => { const ok = await Utils.copyToClipboard(String(store.name || '')); if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied store name'); });
+    add('Copy JSON', async () => { const ok = await Utils.copyToClipboard(JSON.stringify(store, null, 2)); if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied store JSON'); });
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.style.display = 'block';

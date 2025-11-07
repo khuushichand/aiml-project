@@ -163,11 +163,11 @@ async function loadRbacMatrixList() {
     renderRbacMatrixList();
     _updateRbacRolesInfo(Array.isArray(data.roles) ? data.roles.length : 0);
     _saveRbacFilterState();
-    Toast?.success && Toast.success('Loaded RBAC role→permissions list');
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Loaded RBAC role→permissions list');
   } catch (e) {
     const el = document.getElementById('rbacMatrixList');
     if (el) el.innerHTML = `<pre>${_escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
-    Toast?.error && Toast.error('Failed to load matrix');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to load matrix');
   }
 }
 
@@ -198,11 +198,11 @@ async function loadRbacMatrixBoolean() {
     renderRbacMatrixBoolean();
     _updateRbacRolesInfo(Array.isArray(data.roles) ? data.roles.length : 0);
     _saveRbacFilterState();
-    Toast?.success && Toast.success('Loaded RBAC boolean grid');
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Loaded RBAC boolean grid');
   } catch (e) {
     const el = document.getElementById('rbacMatrixBoolean');
     if (el) el.innerHTML = `<pre>${_escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
-    Toast?.error && Toast.error('Failed to load boolean grid');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to load boolean grid');
   }
 }
 
@@ -310,8 +310,8 @@ async function exportRbacMatrixCsv() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    Toast?.success && Toast.success('Matrix CSV downloaded');
-  } catch (e) { console.error(e); Toast?.error && Toast.error('Failed to export CSV'); }
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Matrix CSV downloaded');
+  } catch (e) { console.error(e); if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to export CSV'); }
 }
 
 async function exportRbacListCsv() {
@@ -324,7 +324,7 @@ async function exportRbacListCsv() {
     const roles = Array.isArray(data.roles) ? data.roles : [];
     const perms = Array.isArray(data.permissions) ? data.permissions : [];
     const grants = new Set((data.grants || []).map(g => `${g.role_id}:${g.permission_id}`));
-    if (!roles.length) { Toast?.error && Toast.error('No roles to export'); return; }
+    if (!roles.length) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('No roles to export'); return; }
     const permIdToName = {}; for (const p of perms) permIdToName[p.id] = p.name;
     const csvEscape = (v) => '"' + String(v).replace(/"/g, '""') + '"';
     let csv = '';
@@ -343,8 +343,8 @@ async function exportRbacListCsv() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    Toast?.success && Toast.success('List CSV downloaded');
-  } catch (e) { console.error(e); Toast?.error && Toast.error('Failed to export list CSV'); }
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('List CSV downloaded');
+  } catch (e) { console.error(e); if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to export list CSV'); }
 }
 
 async function copyRbacSummary() {
@@ -365,8 +365,8 @@ async function copyRbacSummary() {
       text += `${role.name}: ${names.join(', ')}` + '\n';
     }
     await navigator.clipboard.writeText(text);
-    Toast?.success && Toast.success('Summary copied to clipboard');
-  } catch (e) { console.error(e); Toast?.error && Toast.error('Failed to copy summary'); }
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Summary copied to clipboard');
+  } catch (e) { console.error(e); if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to copy summary'); }
 }
 
 // Rendering
@@ -451,18 +451,18 @@ function _rbacUserId() {
 
 async function rbacGetRoleEffective() {
   const roleIdRaw = (document.getElementById('rbacEffRoleId')?.value || '').trim();
-  if (!roleIdRaw) return Toast?.error && Toast.error('Role ID is required');
+  if (!roleIdRaw) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Role ID is required'); return; }
   const roleId = parseInt(roleIdRaw, 10);
-  if (isNaN(roleId) || roleId <= 0) return Toast?.error && Toast.error('Enter a valid Role ID');
+  if (isNaN(roleId) || roleId <= 0) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Enter a valid Role ID'); return; }
   try {
     const data = await window.apiClient.get(`/api/v1/admin/roles/${roleId}/permissions/effective`);
     const out = document.getElementById('rbacRoleEffOut');
     if (out) out.textContent = JSON.stringify(data, null, 2);
-    Toast?.success && Toast.success('Loaded role effective permissions');
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Loaded role effective permissions');
   } catch (e) {
     const out = document.getElementById('rbacRoleEffOut');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast?.error && Toast.error('Failed to load role effective permissions');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to load role effective permissions');
   }
 }
 
@@ -485,9 +485,9 @@ async function rbacListRoles() {
 async function rbacCreateRole() {
   const name = (document.getElementById('rbacRoleName')?.value || '').trim();
   const description = (document.getElementById('rbacRoleDesc')?.value || '').trim() || null;
-  if (!name) return Toast?.error && Toast.error('Role name required');
+  if (!name) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Role name required'); return; }
   const res = await window.apiClient.post('/api/v1/admin/roles', { name, description });
-  Toast?.success && Toast.success('Role created');
+  if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Role created');
   const el = document.getElementById('rbacRolesOut');
   if (el) el.textContent = JSON.stringify(res, null, 2);
 }
@@ -501,9 +501,9 @@ async function rbacListPermissions() {
 async function rbacCreatePermission() {
   const name = (document.getElementById('rbacPermName')?.value || '').trim();
   const category = (document.getElementById('rbacPermCat')?.value || '').trim() || null;
-  if (!name) return Toast?.error && Toast.error('Permission name required');
+  if (!name) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Permission name required'); return; }
   const res = await window.apiClient.post('/api/v1/admin/permissions', { name, category });
-  Toast?.success && Toast.success('Permission created');
+  if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Permission created');
   const el = document.getElementById('rbacPermsOut');
   if (el) el.textContent = JSON.stringify(res, null, 2);
 }
@@ -518,9 +518,9 @@ async function rbacGetUserRoles() {
 async function rbacAssignRole() {
   const uid = _rbacUserId();
   const rid = parseInt(document.getElementById('rbacAssignRoleId')?.value || 'NaN', 10);
-  if (!rid) return Toast?.error && Toast.error('Role ID required');
+  if (!rid) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Role ID required'); return; }
   const res = await window.apiClient.post(`/api/v1/admin/users/${uid}/roles/${rid}`, {});
-  Toast?.success && Toast.success('Role assigned');
+  if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Role assigned');
   const el = document.getElementById('rbacUserRolesOut');
   if (el) el.textContent = JSON.stringify(res, null, 2);
 }
@@ -528,9 +528,9 @@ async function rbacAssignRole() {
 async function rbacRemoveRole() {
   const uid = _rbacUserId();
   const rid = parseInt(document.getElementById('rbacAssignRoleId')?.value || 'NaN', 10);
-  if (!rid) return Toast?.error && Toast.error('Role ID required');
+  if (!rid) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Role ID required'); return; }
   const res = await window.apiClient.delete(`/api/v1/admin/users/${uid}/roles/${rid}`);
-  Toast?.success && Toast.success('Role removed');
+  if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Role removed');
   const el = document.getElementById('rbacUserRolesOut');
   if (el) el.textContent = JSON.stringify(res, null, 2);
 }
@@ -546,12 +546,12 @@ async function rbacUpsertOverride() {
   const uid = _rbacUserId();
   const permField = (document.getElementById('rbacOverridePerm')?.value || '').trim();
   const effect = document.getElementById('rbacOverrideEffect')?.value;
-  if (!permField) return Toast?.error && Toast.error('Permission required');
+  if (!permField) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Permission required'); return; }
   let body = { effect };
   if (/^\d+$/.test(permField)) body.permission_id = parseInt(permField, 10);
   else body.permission_name = permField;
   const res = await window.apiClient.post(`/api/v1/admin/users/${uid}/overrides`, body);
-  Toast?.success && Toast.success('Override saved');
+  if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Override saved');
   const el = document.getElementById('rbacOverridesOut');
   if (el) el.textContent = JSON.stringify(res, null, 2);
 }

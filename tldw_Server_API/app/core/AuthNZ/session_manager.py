@@ -661,7 +661,11 @@ class SessionManager:
             self._persisted_key_path = dest_api
             logger.info(f"Migrated session_encryption.key to API path: {dest_api}")
         except Exception as exc:
+            # Preserve visibility but allow critical validation failures to propagate
             logger.warning(f"Failed to migrate session_encryption.key to API path: {exc}")
+            if isinstance(exc, RuntimeError):
+                # Re-raise to allow callers to handle invalid-migration errors explicitly
+                raise
 
     def _token_hash_candidates(self, token: str) -> List[str]:
         """Return ordered hash candidates for a token across active/legacy secrets."""

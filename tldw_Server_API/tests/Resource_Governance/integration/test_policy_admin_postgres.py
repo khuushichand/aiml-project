@@ -23,7 +23,7 @@ async def test_policy_admin_upsert_delete_postgres(monkeypatch, isolated_test_en
     assert up.status_code == 200, up.text
 
     # Snapshot should include the new policy ID
-    snap = client.get("/api/v1/resource-governor/policy?include=ids")
+    snap = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
     assert snap.status_code == 200, snap.text
     ids = snap.json().get("policy_ids") or []
     assert policy_id in ids
@@ -38,6 +38,5 @@ async def test_policy_admin_upsert_delete_postgres(monkeypatch, isolated_test_en
     # Delete and verify removal from snapshot
     de = client.delete(f"/api/v1/resource-governor/policy/{policy_id}", headers=headers)
     assert de.status_code == 200, de.text
-    snap2 = client.get("/api/v1/resource-governor/policy?include=ids")
+    snap2 = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
     assert policy_id not in (snap2.json().get("policy_ids") or [])
-
