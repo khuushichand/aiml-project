@@ -765,16 +765,32 @@ class TestSSENormalization:
         assert all(c.endswith('\n\n') for c in chunks[:-1])
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_groq_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" Groq"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_groq_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+                            'data: {"choices":[{"delta":{"content":" Groq"}}]}\n\n',
+                            'data: [DONE]\n\n',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.http_client_factory",
+            lambda *args, **kwargs: _Client(),
+        )
 
         gen = chat_with_groq(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -783,8 +799,7 @@ class TestSSENormalization:
         chunks = list(gen)
         assert len(chunks) == 3
         assert chunks[0].startswith('data: ')
-        assert chunks[0].endswith('\n\n')
-        assert '[DONE]' in chunks[-1]
+        assert chunks[-1].strip() == 'data: [DONE]'
 
     @patch('requests.Session.post')
     def test_google_gemini_stream_normalized(self, mock_post):
@@ -957,16 +972,32 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_openrouter_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" OpenRouter"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_openrouter_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+                            'data: {"choices":[{"delta":{"content":" OpenRouter"}}]}\n\n',
+                            'data: [DONE]\n\n',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
+            lambda *args, **kwargs: _Client(),
+        )
 
         gen = chat_with_openrouter(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -975,8 +1006,7 @@ class TestSSENormalization:
         chunks = list(gen)
         assert len(chunks) == 3
         assert chunks[0].startswith('data: ')
-        assert chunks[0].endswith('\n\n')
-        assert '[DONE]' in chunks[-1]
+        assert chunks[-1].strip() == 'data: [DONE]'
 
     @patch('requests.Session.post')
     def test_deepseek_stream_normalized(self, mock_post):

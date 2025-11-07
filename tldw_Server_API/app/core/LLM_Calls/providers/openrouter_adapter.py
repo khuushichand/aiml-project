@@ -36,13 +36,11 @@ class OpenRouterAdapter(ChatProvider):
         }
 
     def _use_native_http(self) -> bool:
-        import os
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
-            return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        # Always native unless explicitly disabled
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER") or "").lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        return True
 
     def _base_url(self) -> str:
         import os
@@ -122,43 +120,8 @@ class OpenRouterAdapter(ChatProvider):
             except Exception as e:
                 raise self.normalize_error(e)
 
-        # Legacy delegate
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        streaming_raw = request.get("stream") if "stream" in request else request.get("streaming")
-        kwargs = {
-            "input_data": request.get("messages") or [],
-            "model": request.get("model"),
-            "api_key": request.get("api_key"),
-            "system_message": request.get("system_message"),
-            "temp": request.get("temperature"),
-            "streaming": streaming_raw if streaming_raw is not None else False,
-            "top_p": request.get("top_p"),
-            "top_k": request.get("top_k"),
-            "min_p": request.get("min_p"),
-            "max_tokens": request.get("max_tokens"),
-            "seed": request.get("seed"),
-            "stop": request.get("stop"),
-            "response_format": request.get("response_format"),
-            "n": request.get("n"),
-            "user": request.get("user"),
-            "tools": request.get("tools"),
-            "tool_choice": request.get("tool_choice"),
-            "logit_bias": request.get("logit_bias"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logprobs": request.get("logprobs"),
-            "top_logprobs": request.get("top_logprobs"),
-            "custom_prompt_arg": request.get("custom_prompt_arg"),
-            "app_config": request.get("app_config"),
-        }
-        fn = getattr(_legacy, "chat_with_openrouter", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_openrouter(**kwargs)
+        # Native disabled -> error to avoid legacy recursion
+        raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
@@ -179,41 +142,8 @@ class OpenRouterAdapter(ChatProvider):
             except Exception as e:
                 raise self.normalize_error(e)
 
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        kwargs = {
-            "input_data": request.get("messages") or [],
-            "model": request.get("model"),
-            "api_key": request.get("api_key"),
-            "system_message": request.get("system_message"),
-            "temp": request.get("temperature"),
-            "top_p": request.get("top_p"),
-            "top_k": request.get("top_k"),
-            "min_p": request.get("min_p"),
-            "max_tokens": request.get("max_tokens"),
-            "seed": request.get("seed"),
-            "stop": request.get("stop"),
-            "response_format": request.get("response_format"),
-            "n": request.get("n"),
-            "user": request.get("user"),
-            "tools": request.get("tools"),
-            "tool_choice": request.get("tool_choice"),
-            "logit_bias": request.get("logit_bias"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logprobs": request.get("logprobs"),
-            "top_logprobs": request.get("top_logprobs"),
-            "custom_prompt_arg": request.get("custom_prompt_arg"),
-            "app_config": request.get("app_config"),
-            "streaming": True,
-        }
-        fn = getattr(_legacy, "chat_with_openrouter", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_openrouter(**kwargs)
+        # Native disabled -> error to avoid legacy recursion
+        raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)

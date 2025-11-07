@@ -14,40 +14,37 @@ def _dummy_response(payload):
     return R()
 
 
-class _DummySession:
-    def __init__(self, captured):
-        self.captured = captured
-    def post(self, url, headers=None, json=None, timeout=None, stream=False):
-        # Capture the outgoing JSON payload for assertions
-        self.captured["url"] = url
-        self.captured["headers"] = headers
-        self.captured["json"] = json
-        self.captured["timeout"] = timeout
-        self.captured["stream"] = stream
-        return _dummy_response(json)
-    def close(self):
-        return None
-
-
 def _patch_openai(monkeypatch, captured):
+    class _Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return _dummy_response(json)
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
-        lambda **kwargs: _DummySession(captured),
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
-        lambda: {"openai_api": {"api_key": "key", "api_base_url": "https://api.openai.local/v1"}},
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        lambda *args, **kwargs: _Client(),
     )
 
 
 def _patch_groq(monkeypatch, captured):
+    class _Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return _dummy_response(json)
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
-        lambda **kwargs: _DummySession(captured),
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
-        lambda: {"groq_api": {"api_key": "key", "api_base_url": "https://api.groq.local/openai/v1"}},
+        "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.http_client_factory",
+        lambda *args, **kwargs: _Client(),
     )
 
 

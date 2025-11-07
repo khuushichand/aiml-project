@@ -1,13 +1,8 @@
 import asyncio
-import types
 import pytest
 
 
 pytestmark = pytest.mark.asyncio
-
-
-def _mk_event(data: str):
-    return types.SimpleNamespace(event="message", data=data, id=None, retry=None)
 
 
 async def _collect(ait, limit=100):
@@ -19,16 +14,78 @@ async def _collect(ait, limit=100):
     return out
 
 
+class _FakeResp:
+    def __init__(self, lines):
+        self._lines = list(lines)
+        self.status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        for l in self._lines:
+            yield l
+
+
+class _FakeStreamCtx:
+    def __init__(self, resp):
+        self._r = resp
+
+    def __enter__(self):
+        return self._r
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeClient:
+    def __init__(self, *, lines, calls=None, raise_after_first: Exception | None = None):
+        self._lines = list(lines)
+        self._calls = calls
+        self._raise_after_first = raise_after_first
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def post(self, *args, **kwargs):  # pragma: no cover - not used in these tests
+        return _FakeResp([])
+
+    def stream(self, *args, **kwargs):
+        if self._calls is not None:
+            self._calls["n"] = self._calls.get("n", 0) + 1
+
+        if self._raise_after_first is None:
+            return _FakeStreamCtx(_FakeResp(self._lines))
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(_self):
+                it = iter(self._lines)
+                first = next(it, None)
+                if first is not None:
+                    yield first
+                raise self._raise_after_first
+
+        return _FakeStreamCtx(_Resp())
+
+
 @pytest.mark.unit
 async def test_openai_stream_smoke(monkeypatch):
-    # Patch provider stream to a simple sequence of SSE events
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
-
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}")
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    # Patch OpenAI adapter http client to emit fake SSE lines
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+    lines = [
+        'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
+        'data: [DONE]\n\n',
+    ]
+    monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
 
@@ -45,20 +102,20 @@ async def test_openai_stream_smoke(monkeypatch):
 
 @pytest.mark.unit
 async def test_openai_stream_no_retry_after_first_byte(monkeypatch):
-    # Verify adapter does not re-invoke stream after first byte
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
+    # Verify adapter does not re-invoke client.stream after first byte
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
 
     calls = {"n": 0}
 
     class SentinelError(RuntimeError):
         pass
 
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        calls["n"] += 1
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}")
-        raise SentinelError("boom")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    lines = ['data: {"choices":[{"delta":{"content":"one"}}]}\n\n']
+    monkeypatch.setattr(
+        openai_mod,
+        "http_client_factory",
+        lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
+    )
 
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
 
@@ -69,11 +126,12 @@ async def test_openai_stream_no_retry_after_first_byte(monkeypatch):
         app_config={"openai_api": {"api_base_url": "https://api.openai.com/v1"}},
     )
 
+    from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
     got = []
-    with pytest.raises(SentinelError):
+    with pytest.raises(ChatProviderError):
         async for ch in it:
             got.append(ch)
-    # only one invocation of astream_sse should have occurred
+    # only one invocation of client.stream should have occurred
     assert calls["n"] == 1
     # we received the first chunk
     assert any("one" in c for c in got)
@@ -81,13 +139,13 @@ async def test_openai_stream_no_retry_after_first_byte(monkeypatch):
 
 @pytest.mark.unit
 async def test_groq_stream_smoke(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
-
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}")
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    import tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter as groq_mod
+    lines = [
+        'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
+        'data: [DONE]\n\n',
+    ]
+    monkeypatch.setattr(groq_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_groq_async
 
@@ -104,19 +162,19 @@ async def test_groq_stream_smoke(monkeypatch):
 
 @pytest.mark.unit
 async def test_groq_stream_no_retry_after_first_byte(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
+    import tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter as groq_mod
 
     calls = {"n": 0}
 
     class SentinelError(RuntimeError):
         pass
 
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        calls["n"] += 1
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}")
-        raise SentinelError("boom")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    lines = ['data: {"choices":[{"delta":{"content":"one"}}]}\n\n']
+    monkeypatch.setattr(
+        groq_mod,
+        "http_client_factory",
+        lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
+    )
 
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_groq_async
 
@@ -127,8 +185,9 @@ async def test_groq_stream_no_retry_after_first_byte(monkeypatch):
         app_config={"groq_api": {"api_base_url": "https://api.groq.com/openai/v1"}},
     )
 
+    from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
     got = []
-    with pytest.raises(SentinelError):
+    with pytest.raises(ChatProviderError):
         async for ch in it:
             got.append(ch)
     assert calls["n"] == 1
@@ -137,13 +196,13 @@ async def test_groq_stream_no_retry_after_first_byte(monkeypatch):
 
 @pytest.mark.unit
 async def test_openrouter_stream_smoke(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
-
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}")
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    import tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter as or_mod
+    lines = [
+        'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
+        'data: [DONE]\n\n',
+    ]
+    monkeypatch.setattr(or_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openrouter_async
 
@@ -160,19 +219,19 @@ async def test_openrouter_stream_smoke(monkeypatch):
 
 @pytest.mark.unit
 async def test_openrouter_stream_no_retry_after_first_byte(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
+    import tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter as or_mod
 
     calls = {"n": 0}
 
     class SentinelError(RuntimeError):
         pass
 
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        calls["n"] += 1
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}")
-        raise SentinelError("boom")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    lines = ['data: {"choices":[{"delta":{"content":"one"}}]}\n\n']
+    monkeypatch.setattr(
+        or_mod,
+        "http_client_factory",
+        lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
+    )
 
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openrouter_async
 
@@ -183,8 +242,9 @@ async def test_openrouter_stream_no_retry_after_first_byte(monkeypatch):
         app_config={"openrouter_api": {"api_base_url": "https://openrouter.ai/api/v1"}},
     )
 
+    from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
     got = []
-    with pytest.raises(SentinelError):
+    with pytest.raises(ChatProviderError):
         async for ch in it:
             got.append(ch)
     assert calls["n"] == 1
@@ -300,33 +360,30 @@ async def test_anthropic_stream_no_retry_after_first_byte(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "provider,fn_name,config_key,base_url",
+    "provider,fn_name,mod_path,config_key,base_url",
     [
-        ("openai", "chat_with_openai_async", "openai_api", "https://api.openai.com/v1"),
-        ("groq", "chat_with_groq_async", "groq_api", "https://api.groq.com/openai/v1"),
-        ("openrouter", "chat_with_openrouter_async", "openrouter_api", "https://openrouter.ai/api/v1"),
+        ("openai", "chat_with_openai_async", "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter", "openai_api", "https://api.openai.com/v1"),
+        ("groq", "chat_with_groq_async", "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter", "groq_api", "https://api.groq.com/openai/v1"),
+        ("openrouter", "chat_with_openrouter_async", "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter", "openrouter_api", "https://openrouter.ai/api/v1"),
     ],
 )
-async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn_name, config_key, base_url):
-    """Combined smoke for SSE-based providers: DONE ordering and cancellation propagation.
+async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn_name, mod_path, config_key, base_url):
+    """Combined smoke for SSE-based providers (shimless adapters).
 
-    - Confirms we end with [DONE]
-    - Confirms cancelling the consumer after first chunk does not re-invoke the stream (no retry after first byte)
+    Confirms DONE ordering and no retry after first byte by counting client.stream invocations.
     """
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
+    from importlib import import_module
     from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as llm_api
 
     calls = {"n": 0}
 
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        calls["n"] += 1
-        # One normal event
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}")
-        # Simulate small delay before next
-        await asyncio.sleep(0.01)
-        yield _mk_event("data: {\"choices\":[{\"delta\":{\"content\":\"B\"}}]}")
-
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    lines = [
+        'data: {"choices":[{"delta":{"content":"A"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"B"}}]}\n\n',
+        'data: [DONE]\n\n',
+    ]
+    mod = import_module(mod_path)
+    monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines, calls=calls))
 
     chat_fn = getattr(llm_api, fn_name)
     it = await chat_fn(
@@ -341,6 +398,12 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
 
     # Cancellation path: cancel after first chunk and ensure no second invocation
     calls["n"] = 0
+
+    # Patch to raise after first chunk to simulate cancellation behavior
+    class SentinelError(RuntimeError):
+        pass
+
+    monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines[:1], calls=calls, raise_after_first=SentinelError("boom")))
 
     it2 = await chat_fn(
         input_data=[{"role": "user", "content": "hi"}],
@@ -433,19 +496,20 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
 
 @pytest.mark.unit
 async def test_multi_chunk_done_ordering_under_load(monkeypatch):
-    """Stress: many small chunks; ensure a single final [DONE] and proper ordering."""
-    from tldw_Server_API.app.core.LLM_Calls import streaming as streaming_mod
+    """Stress: many small chunks; ensure a single final [DONE] and proper ordering (shimless OpenAI)."""
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
     from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as llm_api
 
-    async def fake_astream_sse(url: str, method: str = "GET", **kwargs):  # noqa: ARG001
-        # Emit many small chunks with tiny delays
-        for i in range(25):
-            await asyncio.sleep(0.001)
-            yield _mk_event(
-                f"data: {{\"choices\":[{{\"delta\":{{\"content\":\"C{i}\"}}}}]}}"
-            )
+    # Build many small chunks
+    lines = []
+    for i in range(25):
+        await asyncio.sleep(0)  # yield control
+        lines.append(
+            f'data: {{"choices":[{{"delta":{{"content":"C{i}"}}}}]}}\n\n'
+        )
+    lines.append('data: [DONE]\n\n')
 
-    monkeypatch.setattr(streaming_mod, "astream_sse", fake_astream_sse)
+    monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
     it = await llm_api.chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],

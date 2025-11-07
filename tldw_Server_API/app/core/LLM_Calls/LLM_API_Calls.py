@@ -224,31 +224,42 @@ def chat_with_openai(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
-    return openai_chat_handler(
-        input_data=input_data,
-        model=model,
-        api_key=api_key,
-        system_message=system_message,
-        temp=temp,
-        maxp=maxp,
-        streaming=streaming,
-        frequency_penalty=frequency_penalty,
-        logit_bias=logit_bias,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        max_tokens=max_tokens,
-        n=n,
-        presence_penalty=presence_penalty,
-        response_format=response_format,
-        seed=seed,
-        stop=stop,
-        tools=tools,
-        tool_choice=tool_choice,
-        user=user,
-        custom_prompt_arg=custom_prompt_arg,
-        app_config=app_config,
-    )
+    # Direct adapter path (shimless)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+        registry.register_adapter("openai", OpenAIAdapter)
+        adapter = registry.get_adapter("openai")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "frequency_penalty": frequency_penalty,
+        "logit_bias": logit_bias,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "max_tokens": max_tokens,
+        "n": n,
+        "presence_penalty": presence_penalty,
+        "response_format": response_format,
+        "seed": seed,
+        "stop": stop,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "user": user,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
 
 
 def legacy_chat_with_anthropic(
@@ -308,31 +319,42 @@ def chat_with_groq(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import groq_chat_handler
-    return groq_chat_handler(
-        input_data=input_data,
-        model=model,
-        api_key=api_key,
-        system_message=system_message,
-        temp=temp,
-        maxp=maxp,
-        streaming=streaming,
-        max_tokens=max_tokens,
-        seed=seed,
-        stop=stop,
-        response_format=response_format,
-        n=n,
-        user=user,
-        tools=tools,
-        tool_choice=tool_choice,
-        logit_bias=logit_bias,
-        presence_penalty=presence_penalty,
-        frequency_penalty=frequency_penalty,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        custom_prompt_arg=custom_prompt_arg,
-        app_config=app_config,
-    )
+    # Direct adapter path (shimless)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("groq")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+        registry.register_adapter("groq", GroqAdapter)
+        adapter = registry.get_adapter("groq")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
 
 
 def chat_with_openrouter(
@@ -361,33 +383,43 @@ def chat_with_openrouter(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler
-    return openrouter_chat_handler(
-        input_data=input_data,
-        model=model,
-        api_key=api_key,
-        system_message=system_message,
-        temp=temp,
-        streaming=streaming,
-        top_p=top_p,
-        top_k=top_k,
-        min_p=min_p,
-        max_tokens=max_tokens,
-        seed=seed,
-        stop=stop,
-        response_format=response_format,
-        n=n,
-        user=user,
-        tools=tools,
-        tool_choice=tool_choice,
-        logit_bias=logit_bias,
-        presence_penalty=presence_penalty,
-        frequency_penalty=frequency_penalty,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        custom_prompt_arg=custom_prompt_arg,
-        app_config=app_config,
-    )
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openrouter")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
+        registry.register_adapter("openrouter", OpenRouterAdapter)
+        adapter = registry.get_adapter("openrouter")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
 
 
 def chat_with_google(
@@ -1493,36 +1525,42 @@ async def chat_with_openai_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async variant of chat_with_openai using httpx.AsyncClient.
-
-    Returns JSON dict for non-streaming, and an async iterator of SSE lines for streaming.
-    """
-    # Adapter era: delegate to adapter-backed async shim; keep legacy body unreachable
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler_async
-    return await openai_chat_handler_async(
-        input_data=input_data,
-        model=model,
-        api_key=api_key,
-        system_message=system_message,
-        temp=temp,
-        maxp=maxp,
-        streaming=streaming,
-        frequency_penalty=frequency_penalty,
-        logit_bias=logit_bias,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        max_tokens=max_tokens,
-        n=n,
-        presence_penalty=presence_penalty,
-        response_format=response_format,
-        seed=seed,
-        stop=stop,
-        tools=tools,
-        tool_choice=tool_choice,
-        user=user,
-        custom_prompt_arg=custom_prompt_arg,
-        app_config=app_config,
-    )
+    """Async variant using adapter; streaming returns async iterator of SSE lines."""
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+        registry.register_adapter("openai", OpenAIAdapter)
+        adapter = registry.get_adapter("openai")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "frequency_penalty": frequency_penalty,
+        "logit_bias": logit_bias,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "max_tokens": max_tokens,
+        "n": n,
+        "presence_penalty": presence_penalty,
+        "response_format": response_format,
+        "seed": seed,
+        "stop": stop,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "user": user,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.astream(req)
+    return await adapter.achat(req)
 
 async def chat_with_groq_async(
         input_data: List[Dict[str, Any]],
@@ -1547,24 +1585,40 @@ async def chat_with_groq_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async Groq provider using httpx.AsyncClient with SSE normalization."""
-    # Adapter era: delegate to adapter-backed async shim; keep legacy body unreachable
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler_async
-    return await anthropic_chat_handler_async(
-        input_data=input_data,
-        model=model,
-        api_key=api_key,
-        system_prompt=system_prompt,
-        temp=temp,
-        topp=topp,
-        topk=topk,
-        streaming=streaming,
-        max_tokens=max_tokens,
-        stop_sequences=stop_sequences,
-        tools=tools,
-        custom_prompt_arg=None,
-        app_config=app_config,
-    )
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("groq")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+        registry.register_adapter("groq", GroqAdapter)
+        adapter = registry.get_adapter("groq")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.astream(req)
+    return await adapter.achat(req)
 
 async def chat_with_anthropic_async(
         input_data: List[Dict[str, Any]],
@@ -1808,33 +1862,42 @@ async def chat_with_openrouter_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Adapter era: delegate to adapter-backed async shim; keep legacy body unreachable
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler_async
-    return await openrouter_chat_handler_async(
-        input_data=input_data,
-        model=model,
-        api_key=api_key,
-        system_message=system_message,
-        temp=temp,
-        streaming=streaming,
-        top_p=top_p,
-        top_k=top_k,
-        min_p=min_p,
-        max_tokens=max_tokens,
-        seed=seed,
-        stop=stop,
-        response_format=response_format,
-        n=n,
-        user=user,
-        tools=tools,
-        tool_choice=tool_choice,
-        logit_bias=logit_bias,
-        presence_penalty=presence_penalty,
-        frequency_penalty=frequency_penalty,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        app_config=app_config,
-    )
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openrouter")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
+        registry.register_adapter("openrouter", OpenRouterAdapter)
+        adapter = registry.get_adapter("openrouter")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.astream(req)
+    return await adapter.achat(req)
 def chat_with_bedrock(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,

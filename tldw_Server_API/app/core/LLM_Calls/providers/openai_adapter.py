@@ -6,6 +6,12 @@ import os
 from loguru import logger
 
 from .base import ChatProvider
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    normalize_provider_line,
+    is_done_line,
+    sse_done,
+    finalize_stream,
+)
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -72,14 +78,11 @@ class OpenAIAdapter(ChatProvider):
         return args
 
     def _use_native_http(self) -> bool:
-        import os
-        # Prefer native HTTP when running tests or when adapters are enabled globally
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
-            return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        # Always use native HTTP for OpenAI adapter unless explicitly disabled
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI") or "").lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        return True
 
     def _build_openai_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
         messages = request.get("messages") or []
@@ -101,10 +104,15 @@ class OpenAIAdapter(ChatProvider):
             "logit_bias": request.get("logit_bias"),
             "user": request.get("user"),
         }
-        if request.get("tools") is not None:
-            payload["tools"] = request.get("tools")
-        if request.get("tool_choice") is not None:
-            payload["tool_choice"] = request.get("tool_choice")
+        # Tools and tool_choice gating to mirror legacy behavior
+        tools = request.get("tools")
+        if tools is not None:
+            payload["tools"] = tools
+        tool_choice = request.get("tool_choice")
+        if tool_choice == "none":
+            payload["tool_choice"] = "none"
+        elif tool_choice is not None and tools:
+            payload["tool_choice"] = tool_choice
         if request.get("response_format") is not None:
             payload["response_format"] = request.get("response_format")
         if request.get("seed") is not None:
@@ -131,26 +139,6 @@ class OpenAIAdapter(ChatProvider):
         return headers
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        # If tests monkeypatched legacy chat callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-            fn = getattr(_legacy, "chat_with_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if ("tests" in mod) or name.startswith("_Fake") or name.startswith("_fake"):
-                    kwargs = self._to_handler_args(request)
-                    if "stream" in request or "streaming" in request:
-                        streaming_raw = request.get("stream")
-                        if streaming_raw is None:
-                            streaming_raw = request.get("streaming")
-                        kwargs["streaming"] = streaming_raw
-                    else:
-                        kwargs["streaming"] = None
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
@@ -165,44 +153,10 @@ class OpenAIAdapter(ChatProvider):
             except Exception as e:
                 raise self.normalize_error(e)
 
-        # Legacy delegate path (default)
-        kwargs = self._to_handler_args(request)
-        if "stream" in request or "streaming" in request:
-            streaming_raw = request.get("stream")
-            if streaming_raw is None:
-                streaming_raw = request.get("streaming")
-            kwargs["streaming"] = streaming_raw
-        else:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        # Prefer patched chat_with_openai if tests monkeypatched it (module path starts with tests)
-        try:
-            fn = getattr(_legacy, "chat_with_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod):
-                    logger.debug(f"OpenAIAdapter: using monkeypatched chat_with_openai from {mod}")
-                    return fn(**kwargs)
-        except Exception:
-            pass
-        # Avoid re-entering wrapper in tests unless explicitly monkeypatched
-        return _legacy.legacy_chat_with_openai(**kwargs)
+        # If disabled explicitly, raise clear error rather than falling back
+        raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
-        # If tests monkeypatched legacy chat callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-            fn = getattr(_legacy, "chat_with_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if ("tests" in mod) or name.startswith("_Fake") or name.startswith("_fake"):
-                    kwargs = self._to_handler_args(request)
-                    kwargs["streaming"] = True
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
@@ -213,27 +167,28 @@ class OpenAIAdapter(ChatProvider):
                 with http_client_factory(timeout=timeout or 60.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            if not line:
+                        seen_done = False
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
-                            yield line
+                            # Canonicalize provider lines to OpenAI-style SSE
+                            if is_done_line(raw):
+                                if not seen_done:
+                                    seen_done = True
+                                    yield sse_done()
+                                continue
+                            normalized = normalize_provider_line(raw)
+                            if normalized is not None:
+                                yield normalized
+                        # Ensure a single terminal DONE marker
+                        for tail in finalize_stream(response=resp, done_already=seen_done):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)
 
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        try:
-            fn = getattr(_legacy, "chat_with_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod):
-                    logger.debug(f"OpenAIAdapter(stream): using monkeypatched chat_with_openai from {mod}")
-                    return fn(**kwargs)
-        except Exception:
-            pass
-        return _legacy.legacy_chat_with_openai(**kwargs)
+        # If disabled explicitly, raise clear error rather than falling back
+        raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         # Fallback to sync path for now to preserve behavior; future: call native async if available

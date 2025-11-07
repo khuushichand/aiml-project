@@ -36,13 +36,11 @@ class GroqAdapter(ChatProvider):
         }
 
     def _use_native_http(self) -> bool:
-        import os
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
-            return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_GROQ")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        # Always native unless explicitly disabled
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_GROQ") or "").lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        return True
 
     def _base_url(self) -> str:
         import os
@@ -74,10 +72,15 @@ class GroqAdapter(ChatProvider):
             "logit_bias": request.get("logit_bias"),
             "user": request.get("user"),
         }
-        if request.get("tools") is not None:
-            payload["tools"] = request.get("tools")
-        if request.get("tool_choice") is not None:
-            payload["tool_choice"] = request.get("tool_choice")
+        # Tools and tool_choice gating (consistent with OpenAI-compatible behavior)
+        tools = request.get("tools")
+        if tools is not None:
+            payload["tools"] = tools
+        tc = request.get("tool_choice")
+        if tc == "none":
+            payload["tool_choice"] = "none"
+        elif tc is not None and tools:
+            payload["tool_choice"] = tc
         if request.get("response_format") is not None:
             payload["response_format"] = request.get("response_format")
         if request.get("seed") is not None:
@@ -101,43 +104,8 @@ class GroqAdapter(ChatProvider):
             except Exception as e:
                 raise self.normalize_error(e)
 
-        # Fall through to legacy when native disabled
-
-        # Legacy delegate
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        streaming_raw = request.get("stream") if "stream" in request else request.get("streaming")
-        kwargs = {
-            "input_data": request.get("messages") or [],
-            "model": request.get("model"),
-            "api_key": request.get("api_key"),
-            "system_message": request.get("system_message"),
-            "temp": request.get("temperature"),
-            "maxp": request.get("top_p"),
-            "streaming": streaming_raw if streaming_raw is not None else False,
-            "max_tokens": request.get("max_tokens"),
-            "seed": request.get("seed"),
-            "stop": request.get("stop"),
-            "response_format": request.get("response_format"),
-            "n": request.get("n"),
-            "user": request.get("user"),
-            "tools": request.get("tools"),
-            "tool_choice": request.get("tool_choice"),
-            "logit_bias": request.get("logit_bias"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logprobs": request.get("logprobs"),
-            "top_logprobs": request.get("top_logprobs"),
-            "custom_prompt_arg": request.get("custom_prompt_arg"),
-            "app_config": request.get("app_config"),
-        }
-        fn = getattr(_legacy, "chat_with_groq", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_groq(**kwargs)
+        # Native disabled -> error to avoid legacy recursion
+        raise RuntimeError("GroqAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
@@ -158,41 +126,8 @@ class GroqAdapter(ChatProvider):
             except Exception as e:
                 raise self.normalize_error(e)
 
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
-        kwargs = self._build_payload(request)
-        # map to legacy kwargs
-        kwargs = {
-            "input_data": request.get("messages") or [],
-            "model": request.get("model"),
-            "api_key": request.get("api_key"),
-            "system_message": request.get("system_message"),
-            "temp": request.get("temperature"),
-            "maxp": request.get("top_p"),
-            "max_tokens": request.get("max_tokens"),
-            "seed": request.get("seed"),
-            "stop": request.get("stop"),
-            "response_format": request.get("response_format"),
-            "n": request.get("n"),
-            "user": request.get("user"),
-            "tools": request.get("tools"),
-            "tool_choice": request.get("tool_choice"),
-            "logit_bias": request.get("logit_bias"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logprobs": request.get("logprobs"),
-            "top_logprobs": request.get("top_logprobs"),
-            "custom_prompt_arg": request.get("custom_prompt_arg"),
-            "app_config": request.get("app_config"),
-            "streaming": True,
-        }
-        fn = getattr(_legacy, "chat_with_groq", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_groq(**kwargs)
+        # Native disabled -> error to avoid legacy recursion
+        raise RuntimeError("GroqAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)
