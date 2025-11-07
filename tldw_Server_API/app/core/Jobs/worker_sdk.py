@@ -147,8 +147,8 @@ class WorkerSDK:
             job_id = int(job.get('id'))
             lease_id = job.get('lease_id')
             lease_id_str = str(lease_id) if lease_id is not None else None
-            # Start auto-renew task
-            renew_task = asyncio.create_task(self._auto_renew(job, progress_cb=progress_cb))
+            # Only start auto-renew after we know we will actually handle the job
+            renew_task = None
             try:
                 # Cancellation check (optional)
                 if cancel_check is not None:
@@ -158,6 +158,8 @@ class WorkerSDK:
                             continue
                     except Exception:
                         pass
+                # Start auto-renew task only if not cancelled
+                renew_task = asyncio.create_task(self._auto_renew(job, progress_cb=progress_cb))
                 # Handle job
                 result = await handler(job)
                 if result is None:
@@ -193,6 +195,7 @@ class WorkerSDK:
                     logger.debug(f"Fail finalize error for job {job_id}")
             finally:
                 try:
-                    renew_task.cancel()
+                    if renew_task is not None:
+                        renew_task.cancel()
                 except Exception:
                     pass
