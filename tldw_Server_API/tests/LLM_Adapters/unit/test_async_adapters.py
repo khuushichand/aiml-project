@@ -6,22 +6,23 @@ from unittest.mock import patch
 async def test_openai_adapter_async_wrappers_call_sync():
     from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
 
-    captured: Dict[str, Any] = {}
-
-    def _fake_openai(**kwargs):
-        captured.update(kwargs)
-        return {"ok": True}
-
-    with patch("tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_openai", _fake_openai):
+    # Patch the adapter's sync methods directly so no network is attempted.
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter.chat",
+        return_value={"ok": True},
+    ) as mock_chat, patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter.stream",
+        return_value=iter([]),
+    ) as mock_stream:
         adapter = OpenAIAdapter()
         req = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-x", "api_key": "k"}
-        # achat()
+        # achat() should call the sync chat() under the hood
         resp = await adapter.achat(req)
         assert resp == {"ok": True}
-        # astream()
+
+        # astream() should wrap the sync stream() generator
         chunks = []
         async for ch in adapter.astream({**req, "stream": True}):
             chunks.append(ch)
-        # Since our fake returns a dict for chat path, astream will iterate over nothing (no chunks); that's fine.
+        # Our patched stream yields nothing; just ensure iteration worked
         assert isinstance(chunks, list)
-
