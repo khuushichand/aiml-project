@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tldw_prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux host gateway mapping
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - '9090:9090'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tldw_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - '3000:3000'
+    depends_on:
+      - prometheus
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../Docs/Monitoring/Grafana_Dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    name: tldw_monitoring
