@@ -21,13 +21,19 @@ async def test_policy_snapshot_endpoint(monkeypatch):
 
     from tldw_Server_API.app.main import app
     headers = {"X-API-KEY": "test-api-key-12345"}
-    # Seed a known policy via admin API to ensure snapshot exists in DB store
+    # Seed a few known policies via admin API to ensure snapshot exists in DB store
     with TestClient(app) as client:
-        client.put(
-            "/api/v1/resource-governor/policy/chat.default",
-            headers=headers,
-            json={"payload": {"requests": {"rpm": 12}}, "version": 1},
-        )
+        seeds = {
+            "chat.default": {"requests": {"rpm": 12}},
+            "embeddings.default": {"tokens": {"per_min": 1000}},
+            "audio.default": {"streams": {"max_concurrent": 2}},
+        }
+        for pid, payload in seeds.items():
+            client.put(
+                f"/api/v1/resource-governor/policy/{pid}",
+                headers=headers,
+                json={"payload": payload, "version": 1},
+            )
     with TestClient(app) as client:
         r = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
         assert r.status_code == 200
