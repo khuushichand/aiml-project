@@ -28,8 +28,13 @@ def test_points_backend_sglang_mock(monkeypatch):
             import json as _json
             return _json.loads(self.text)
 
-    import requests as _requests
-    monkeypatch.setattr(_requests, "post", lambda *a, **k: DummyResp())
+    # Patch the correct call site used by points backend (http_client.fetch_json)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.http_client.fetch_json",
+        lambda **kwargs: {
+            "choices": [{"message": {"content": "MOCK_TEXT"}}]
+        },
+    )
 
     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import (
         get_backend,
