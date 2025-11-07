@@ -671,9 +671,20 @@ async def stream_job_events(
     except Exception:
         _reg = get_metrics_registry()
 
+    # In test mode, bound the stream duration to avoid teardown hangs in CI/sandbox
+    try:
+        _test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        _test_mode = False
+    try:
+        _max_s = float(os.getenv("JOBS_SSE_TEST_MAX_SECONDS", "1.0")) if _test_mode else None
+    except Exception:
+        _max_s = 1.0 if _test_mode else None
+
     stream = SSEStream(
         heartbeat_interval_s=poll_interval,
         heartbeat_mode="data",
+        max_duration_s=_max_s,
         labels={"component": "jobs", "endpoint": "jobs_events_sse"},
     )
 
@@ -685,6 +696,12 @@ async def stream_job_events(
         except Exception:
             pass
         while True:
+            # Terminate promptly if the stream has been closed (e.g., max_duration or client done)
+            try:
+                if getattr(stream, "_closed", False):
+                    break
+            except Exception:
+                pass
             conn = jm._connect()
             try:
                 if jm.backend == "postgres":

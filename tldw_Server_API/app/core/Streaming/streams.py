@@ -185,6 +185,11 @@ class SSEStream:
 
         while not self._closed:
             now = time.monotonic()
+            # Enforce max duration proactively even when data continues flowing
+            if self.max_duration_s and self.max_duration_s > 0:
+                if now >= start_ts + self.max_duration_s:
+                    await self.error("max_duration_exceeded", "stream exceeded maximum duration")
+                    break
             # Compute deadlines
             next_heartbeat_delta = None
             if self.heartbeat_interval_s and self.heartbeat_interval_s > 0:
@@ -230,10 +235,7 @@ class SSEStream:
                         await self.error("idle_timeout", "idle timeout")
                         # error() enqueues DONE when close_on_error
                         break
-                if self.max_duration_s and self.max_duration_s > 0:
-                    if now >= start_ts + self.max_duration_s:
-                        await self.error("max_duration_exceeded", "stream exceeded maximum duration")
-                        break
+                # Max duration is also enforced above to cover active-stream cases
 
                 # Heartbeat (suppressed once DONE is enqueued)
                 if self.heartbeat_interval_s and self.heartbeat_interval_s > 0 and not self._done_enqueued:

@@ -161,6 +161,9 @@ import ipaddress
 # Provide an alias to the public function for backward compatibility in tests.
 _is_postgres_backend = is_postgres_backend
 
+# Best-effort coordination for test-time SQLite migrations
+_authnz_migration_lock = asyncio.Lock()
+
 #######################################################################################################################
 #
 # Router Configuration
@@ -178,9 +181,10 @@ router = APIRouter(
 async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
     """Best-effort: ensure AuthNZ SQLite schema/migrations before admin ops in tests.
 
-    In CI/pytest with SQLite, there can be timing where the pool is reinitialized
-    and migrations are still pending. This helper checks for a core table and, if
-    missing, runs migrations synchronously in a thread to avoid races.
+    In CI/pytest with SQLite, the pool can reinitialize while migrations are
+    pending. This helper checks for a core table and, if missing, runs
+    migrations. A module-level asyncio.Lock coordinates concurrent requests to
+    avoid parallel migration attempts.
     """
     try:
         # Only act in obvious test contexts to avoid production overhead
@@ -190,26 +194,41 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
         )
         if not is_test:
             return
+
         from pathlib import Path as _Path
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
         pool = await _get_db_pool()
+
         # Skip if Postgres
         if getattr(pool, "pool", None) is not None:
             return
-        # Quick existence probe for 'organizations' table; if missing, run migrations
-        try:
-            async with pool.acquire() as conn:
-                cur = await conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='organizations'")
-                row = await cur.fetchone()
-                if row:
-                    return
-        except Exception:
-            # Proceed to ensure migrations
-            pass
-        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure
-        db_path = getattr(pool, "_sqlite_fs_path", None) or getattr(pool, "db_path", None)
-        if isinstance(db_path, str) and db_path:
-            await asyncio.to_thread(_ensure, _Path(db_path))
+
+        # Acquire coordination lock to avoid concurrent migration attempts
+        async with _authnz_migration_lock:
+            # Re-check existence of a core table after acquiring the lock in case
+            # another coroutine completed migrations while we waited
+            try:
+                async with pool.acquire() as conn:
+                    cur = await conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='organizations'"
+                    )
+                    row = await cur.fetchone()
+                    if row:
+                        return
+            except Exception:
+                # Proceed to ensure migrations
+                pass
+
+            from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure
+            db_path = getattr(pool, "_sqlite_fs_path", None) or getattr(pool, "db_path", None)
+            if isinstance(db_path, str) and db_path:
+                path_obj = _Path(db_path)
+                # Best-effort: ensure parent directories exist to avoid path issues in CI
+                try:
+                    path_obj.parent.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                await asyncio.to_thread(_ensure, path_obj)
     except Exception as _e:
         # Best-effort only; do not interfere with request handling
         logger.debug(f"AuthNZ test ensure skipped/failed: {_e}")

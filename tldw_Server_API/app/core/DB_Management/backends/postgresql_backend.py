@@ -626,15 +626,19 @@ class PostgreSQLBackend(DatabaseBackend):
             # Keep message for compatibility with existing tests
             raise DatabaseError("psycopg2 is not installed")
 
-        dsn = (
-            f"host={self.config.pg_host or 'localhost'} "
-            f"port={self.config.pg_port or 5432} "
-            f"dbname={self.config.pg_database or 'tldw'} "
-            f"user={self.config.pg_user or 'tldw_user'} "
-            f"password={self.config.pg_password or ''} "
-            f"sslmode={self.config.pg_sslmode or 'prefer'} "
-            f"connect_timeout={self.config.connect_timeout or 10}"
-        )
+        # Match pool initialization precedence: prefer explicit connection_string when present.
+        if getattr(self.config, "connection_string", None):
+            dsn = str(self.config.connection_string)
+        else:
+            dsn = (
+                f"host={self.config.pg_host or 'localhost'} "
+                f"port={self.config.pg_port or 5432} "
+                f"dbname={self.config.pg_database or 'tldw'} "
+                f"user={self.config.pg_user or 'tldw_user'} "
+                f"password={self.config.pg_password or ''} "
+                f"sslmode={self.config.pg_sslmode or 'prefer'} "
+                f"connect_timeout={self.config.connect_timeout or 10}"
+            )
         conn = psycopg.connect(dsn)
         conn.row_factory = dict_row
         try:

@@ -547,7 +547,13 @@ class SessionManager:
                     continue
                 # Use the first valid candidate found
                 self._persisted_key_path = path
-                if primary_path and path != primary_path:
+                # Warn only on true fallbacks. If storage preference is API path and
+                # the key was loaded from that API path, do not warn.
+                if (
+                    primary_path
+                    and path != primary_path
+                    and not (prefer_api_path and api_path and path == api_path)
+                ):
                     logger.warning(f"Using persisted session_encryption.key at alternate location: {path}")
                 return content.encode("utf-8")
             except Exception as exc:

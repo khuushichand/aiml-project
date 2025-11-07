@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
@@ -32,7 +32,7 @@ def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming():
 
     captured_payload = {}
 
-    def fake_post(url, headers=None, json=None, timeout=None):
+    def fake_fetch(*, method, url, headers=None, json=None, **kwargs):  # noqa: ANN001
         captured_payload.clear()
         if json:
             captured_payload.update(json)
@@ -42,12 +42,9 @@ def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming():
         "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.httpx.Client"
-    ) as mock_client_cls:
-        mock_client = MagicMock()
-        mock_client.post.side_effect = fake_post
-        mock_client.close.return_value = None
-        mock_client_cls.return_value = mock_client
+        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local._hc_fetch",
+        side_effect=fake_fetch,
+    ):
 
         chat_api_call(
             api_endpoint="aphrodite",

@@ -84,8 +84,17 @@ async def get_resource_governor_policy(include: Optional[str] = Query(None, desc
                     snap_meta = loader.get_snapshot()
                     _app.state.rg_policy_version = int(getattr(snap_meta, "version", 0) or 0)
                     _app.state.rg_policy_count = len(getattr(snap_meta, "policies", {}) or {})
-                except Exception:
-                    pass
+                except Exception as meta_exc:
+                    # Log with context and stack trace but do not interrupt flow
+                    loader_name = type(loader).__name__ if loader is not None else "None"
+                    snap_type = type(snap_meta).__name__ if "snap_meta" in locals() and snap_meta is not None else "None"
+                    logger.exception(
+                        "Failed updating app.state RG metadata (keys=['rg_policy_version','rg_policy_count']). "
+                        "loader={}, snapshot_type={}. Error: {}",
+                        loader_name,
+                        snap_type,
+                        repr(meta_exc),
+                    )
             except Exception:
                 return JSONResponse({"status": "unavailable", "reason": "policy_loader_not_initialized"}, status_code=503)
         snap = loader.get_snapshot()

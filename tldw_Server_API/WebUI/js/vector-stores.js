@@ -231,8 +231,8 @@
       code.textContent = it.id;
       const content = document.createElement('span');
       content.style.cssText = 'flex:1 1 auto; color: var(--color-text-muted);';
-      const safeContent = (it.content || '').slice(0, 100).replace(/</g, '&lt;');
-      content.innerHTML = safeContent;
+      // Avoid XSS by assigning plain text instead of HTML
+      content.textContent = (it.content || '').slice(0, 100);
       const md = document.createElement('span');
       md.style.cssText = 'flex:0 0 200px; color: var(--color-text-muted);';
       md.textContent = (it.metadata && Object.keys(it.metadata).length) ? JSON.stringify(it.metadata) : '';

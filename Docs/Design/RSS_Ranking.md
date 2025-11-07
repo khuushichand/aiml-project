@@ -20,7 +20,7 @@ https://www.memeorandum.com/m/
 https://github.com/CrociDB/bulletty
 https://feed-me-up-scotty.vincenttunru.com/
 https://gitlab.com/vincenttunru/feed-me-up-scotty/
-
+https://news.ycombinator.com/item?id=45825733
 
 https://github.com/FreshRSS/FreshRSS
 https://github.com/prof18/feed-flow
