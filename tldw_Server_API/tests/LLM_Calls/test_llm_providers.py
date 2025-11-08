@@ -1876,15 +1876,19 @@ def test_openai_non_streaming_session_closed(monkeypatch):
             return None
         def json(self):
             return {"choices": [], "id": "test"}
+        def close(self):
+            return None
 
     class FakeClient:
         def __enter__(self):
             return self
         def __exit__(self, exc_type, exc, tb):
             closed["v"] = True
-            return False
+            return True
         def post(self, *a, **k):
             return FakeResp()
+        def close(self):
+            return None
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",

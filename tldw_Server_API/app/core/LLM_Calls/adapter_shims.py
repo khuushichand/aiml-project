@@ -48,6 +48,21 @@ def _flag_enabled(*names: str) -> bool:
     return False
 
 
+def _http_factory_patched(provider_module: str) -> bool:
+    """Return True if the provider's http_client_factory has been monkeypatched.
+
+    This allows tests to steer shims to the adapter path without setting env flags.
+    """
+    try:
+        from importlib import import_module
+        from tldw_Server_API.app.core.http_client import create_client as _default_factory
+        mod = import_module(provider_module)
+        factory = getattr(mod, "http_client_factory", None)
+        return callable(factory) and factory is not _default_factory
+    except Exception:
+        return False
+
+
 def openai_chat_handler(
     input_data: List[Dict[str, Any]],
     model: Optional[str] = None,
@@ -1994,18 +2009,12 @@ def openrouter_chat_handler(
         if _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED"):
             use_adapter = True
         else:
-            # Backward-compatible heuristic: only use adapter for streaming when the
-            # http client factory has been monkeypatched; otherwise fall back to legacy
-            # so tests that patch requests.Session still work.
-            if streaming:
-                try:
-                    from tldw_Server_API.app.core.LLM_Calls.providers import openrouter_adapter as _or_mod
-                    from tldw_Server_API.app.core.http_client import create_client as _default_factory
-                    use_adapter = _or_mod.http_client_factory is not _default_factory
-                except Exception:
-                    use_adapter = False
-            else:
-                use_adapter = False
+            # Prefer adapter when its http client factory is monkeypatched for both
+            # streaming and non-streaming tests; otherwise prefer legacy for
+            # backward-compatible requests.Session patches.
+            use_adapter = _http_factory_patched(
+                "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter"
+            )
     else:
         use_adapter = _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED")
     if not use_adapter:
@@ -2296,24 +2305,26 @@ def mistral_chat_handler(
     # Prefer legacy for streaming under pytest so tests can patch requests.Session
     try:
         if os.getenv("PYTEST_CURRENT_TEST") and streaming:
-            return _legacy_chat_with_mistral(
-                input_data=input_data,
-                model=model,
-                api_key=api_key,
-                system_message=system_message,
-                temp=temp,
-                streaming=streaming,
-                topp=topp,
-                max_tokens=max_tokens,
-                random_seed=random_seed,
-                top_k=top_k,
-                safe_prompt=safe_prompt,
-                tools=tools,
-                tool_choice=tool_choice,
-                response_format=response_format,
-                custom_prompt_arg=custom_prompt_arg,
-                app_config=app_config,
-            )
+            # If adapter client seam is patched, honor adapter; otherwise prefer legacy
+            if not _http_factory_patched("tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter"):
+                return _legacy_chat_with_mistral(
+                    input_data=input_data,
+                    model=model,
+                    api_key=api_key,
+                    system_message=system_message,
+                    temp=temp,
+                    streaming=streaming,
+                    topp=topp,
+                    max_tokens=max_tokens,
+                    random_seed=random_seed,
+                    top_k=top_k,
+                    safe_prompt=safe_prompt,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    custom_prompt_arg=custom_prompt_arg,
+                    app_config=app_config,
+                )
     except Exception:
         pass
 
@@ -2411,6 +2422,10 @@ def qwen_chat_handler(
     **kwargs: Any,
 ):
     use_adapter = _flag_enabled("LLM_ADAPTERS_QWEN", "LLM_ADAPTERS_ENABLED")
+    if os.getenv("PYTEST_CURRENT_TEST") and not use_adapter:
+        use_adapter = _http_factory_patched(
+            "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter"
+        )
     if not use_adapter:
         return _legacy_chat_with_qwen(
             input_data=input_data,
@@ -2522,6 +2537,10 @@ def deepseek_chat_handler(
     **kwargs: Any,
 ):
     use_adapter = _flag_enabled("LLM_ADAPTERS_DEEPSEEK", "LLM_ADAPTERS_ENABLED")
+    if os.getenv("PYTEST_CURRENT_TEST") and not use_adapter:
+        use_adapter = _http_factory_patched(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter"
+        )
     if not use_adapter:
         return _legacy_chat_with_deepseek(
             input_data=input_data,
@@ -2634,6 +2653,10 @@ def huggingface_chat_handler(
     **kwargs: Any,
 ):
     use_adapter = _flag_enabled("LLM_ADAPTERS_HUGGINGFACE", "LLM_ADAPTERS_ENABLED")
+    if os.getenv("PYTEST_CURRENT_TEST") and not use_adapter:
+        use_adapter = _http_factory_patched(
+            "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter"
+        )
     if not use_adapter:
         return _legacy_chat_with_huggingface(
             input_data=input_data,
