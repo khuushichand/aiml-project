@@ -6,7 +6,7 @@
 ####
 import json
 import os
-from typing import Any, Generator, Union, Dict, Optional, List
+from typing import Any, Generator, Union, Dict, Optional, List, Callable
 
 import httpx
 from tldw_Server_API.app.core.http_client import (
@@ -122,6 +122,10 @@ def _chat_with_openai_compatible_local_server(
         api_retries: int = 1,
         api_retry_delay: int = 1,
         filter_unknown_params: bool = False,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[
+            Callable[..., Any]
+        ] = None,  # Mirrors signature of _hc_fetch(method=..., url=..., ...)
 ):
     logging.debug(f"{provider_name}: Chat request starting. API Base: {api_base_url}, Model: {model_name}")
 
@@ -221,7 +225,11 @@ def _chat_with_openai_compatible_local_server(
 
     is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
     # Use centralized client (egress/TLS enforcement) in production; keep raw httpx in tests
-    session = (httpx.Client(timeout=timeout) if is_test else _hc_create_client(timeout=timeout))
+    session = None
+    if http_client_factory:
+        session = http_client_factory(timeout)
+    else:
+        session = httpx.Client(timeout=timeout) if is_test else _hc_create_client(timeout=timeout)
     try:
         if streaming:
             logging.debug(f"{provider_name}: Opening streaming connection to {full_api_url}")
@@ -293,7 +301,8 @@ def _chat_with_openai_compatible_local_server(
                 attempts = max(1, int(api_retries)) + 1
                 base_ms = max(50, int(api_retry_delay * 1000))
                 policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
-                response = _hc_fetch(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
+                fetch_impl = http_fetcher or _hc_fetch
+                response = fetch_impl(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
                 try:
                     response.raise_for_status()
                     data = response.json()
@@ -352,6 +361,8 @@ def chat_with_local_llm(
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -430,6 +441,8 @@ def chat_with_local_llm(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -460,6 +473,8 @@ def chat_with_llama(
         # or loaded from config if not passed. Let's assume it's primarily from config for now.
         api_url: Optional[str] = None, # This is specific to this function's call from API_CALL_HANDLERS if special handling exists
         app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -531,6 +546,8 @@ def chat_with_llama(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -699,6 +716,8 @@ def chat_with_oobabooga(
     frequency_penalty: Optional[float] = None, # from map
     api_url: Optional[str] = None, # Specific, not from generic map unless handled
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -771,6 +790,8 @@ def chat_with_oobabooga(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -803,6 +824,8 @@ def chat_with_tabbyapi(
     top_logprobs: Optional[int] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -891,6 +914,8 @@ def chat_with_tabbyapi(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
         # Add other OpenAI params here if TabbyAPI supports them
     )
 
@@ -926,6 +951,8 @@ def chat_with_vllm(
     top_logprobs: Optional[int] = None,
     vllm_api_url: Optional[str] = None, # Specific config, not from generic map typically
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
                                        # Could be loaded from cfg or passed if chat_api_call handles it
 ):
     if temp is not None:
@@ -1010,6 +1037,8 @@ def chat_with_vllm(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
         # tools, tool_choice for vLLM? If supported, add to map and pass.
     )
 
@@ -1043,6 +1072,8 @@ def chat_with_aphrodite(
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     top_logprobs: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     # top_logprobs, tools, tool_choice not in Aphrodite's map currently
 ):
     if temp is not None:
@@ -1126,6 +1157,8 @@ def chat_with_aphrodite(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -1159,6 +1192,8 @@ def chat_with_ollama(
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     # Missing from Ollama PROVIDER_PARAM_MAP that _openai_compatible_server handles:
     # logit_bias, n (num_choices), user_identifier, logprobs, top_logprobs, tools, tool_choice, min_p
     # Add to signature and pass if Ollama supports them.
@@ -1254,6 +1289,8 @@ def chat_with_ollama(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -1341,6 +1378,8 @@ def chat_with_custom_openai(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = app_config or load_settings()
@@ -1421,7 +1460,9 @@ def chat_with_custom_openai(
         provider_name=cfg_section.capitalize(),
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -1498,6 +1539,8 @@ def chat_with_custom_openai_2(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     # This custom API 2 map is missing top_k, min_p, max_p (top_p) compared to custom 1.
     # Assuming it doesn't support them or they are set server-side.
 ):
@@ -1582,7 +1625,9 @@ def chat_with_custom_openai_2(
         provider_name=cfg_section.capitalize(),
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher
     )
 
 

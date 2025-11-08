@@ -217,6 +217,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'top_logprobs': 'top_logprobs',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'qwen': {
         'app_config': 'app_config',
@@ -392,6 +394,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'n': 'n',
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'kobold': {
         'app_config': 'app_config',
@@ -430,6 +434,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'logit_bias': 'logit_bias',
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'tabbyapi': {
         'app_config': 'app_config',
@@ -446,6 +452,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'max_tokens': 'max_tokens',
         'seed': 'seed',
         'stop': 'stop',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'vllm': { # vllm_api_url consideration
                 'app_config': 'app_config',
@@ -465,6 +473,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'tools': 'tools',
         'tool_choice': 'tool_choice',
         'user_identifier': 'user',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     # Note: Local OpenAI-compatible providers support a strict filtering mode enabled via
     # `strict_openai_compat` in their config sections. When enabled, the request payload is
@@ -495,6 +505,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'top_logprobs': 'top_logprobs',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'ollama': { # api_url consideration
         'app_config': 'app_config',
@@ -513,6 +525,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'response_format': 'format', # 'json' string
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'aphrodite': {
         'app_config': 'app_config',
@@ -536,6 +550,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'user_identifier': 'user',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'custom-openai-api': {
         'app_config': 'app_config',
@@ -560,6 +576,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'top_logprobs': 'top_logprobs',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'custom-openai-api-2': {
         'app_config': 'app_config',
