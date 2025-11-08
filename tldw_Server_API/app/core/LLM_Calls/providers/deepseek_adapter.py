@@ -8,6 +8,9 @@ from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
 
+# Patchable client factory for tests
+http_client_factory = _hc_create_client
+
 
 class DeepSeekAdapter(ChatProvider):
     name = "deepseek"
@@ -139,7 +142,7 @@ class DeepSeekAdapter(ChatProvider):
             payload["stream"] = False
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
-                with _hc_create_client(timeout=resolved_timeout) as client:
+                with http_client_factory(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
@@ -168,7 +171,7 @@ class DeepSeekAdapter(ChatProvider):
             payload["stream"] = True
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
-                with _hc_create_client(timeout=resolved_timeout) as client:
+                with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():

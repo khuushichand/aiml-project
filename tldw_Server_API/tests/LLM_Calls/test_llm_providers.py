@@ -438,7 +438,6 @@ def test_provider_http_error_mapping(func, kwargs, status_code, expected_excepti
             mock_client = MagicMock()
             mock_client.__enter__.return_value = mock_client
             mock_client.__exit__.return_value = None
-
             request = httpx.Request(
                 "POST",
                 f"https://generativelanguage.googleapis.com/v1beta/models/{kwargs['model']}:generateContent",
@@ -448,10 +447,68 @@ def test_provider_http_error_mapping(func, kwargs, status_code, expected_excepti
                 request=request,
                 content=b'{"error": {"message": "boom"}}',
             )
-
             mock_client.post.return_value = http_response
             mock_client_factory.return_value = mock_client
-
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    elif func is chat_with_openrouter:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://openrouter.ai/api/v1/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    elif func is chat_with_mistral:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://api.mistral.ai/v1/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    elif func is chat_with_deepseek:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://api.deepseek.com/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
             with pytest.raises(expected_exception):
                 func(**kwargs)
     else:
@@ -1307,45 +1364,55 @@ class TestSSENormalization:
         assert image_source['media_type'] == 'image/png'
         assert image_source['data'] == 'QUJD'
 
-    @patch('requests.Session.post')
-    def test_mistral_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_mistral(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+    def test_mistral_stream_error_chunked(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        raise RuntimeError('boom')
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
-        chunks = list(gen)
-        assert any('mistral_stream_error' in c for c in chunks)
-        assert any(c.startswith('data: ') for c in chunks)
+        # Ensure adapter path is taken in tests
+        monkeypatch.delenv('PYTEST_CURRENT_TEST', raising=False)
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        with pytest.raises(ChatProviderError):
+            list(chat_with_mistral(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", streaming=True
+            ))
 
-    @patch('requests.Session.post')
-    def test_openrouter_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_openrouter(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+    def test_openrouter_stream_error_chunked(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        raise RuntimeError('boom')
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
-        chunks = list(gen)
-        assert any('openrouter_stream_error' in c for c in chunks)
-        assert any(c.startswith('data: ') for c in chunks)
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        with pytest.raises(ChatProviderError):
+            list(chat_with_openrouter(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", streaming=True
+            ))
 
     @pytest.mark.asyncio
     async def test_anthropic_async_matches_sync_normalization(self, monkeypatch):
