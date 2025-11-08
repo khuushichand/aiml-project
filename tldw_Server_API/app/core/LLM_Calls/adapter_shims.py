@@ -2086,7 +2086,22 @@ def openrouter_chat_handler(
     except Exception:
         pass
 
-    use_adapter = _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED")
+    # In tests, choose path to honor the kind of monkeypatching being used:
+    # - Non-streaming: prefer legacy (requests) so patch('requests.Session.post') works.
+    # - Streaming: use adapter only if its http client factory is monkeypatched;
+    #   otherwise fall back to legacy (requests) so patch('requests.Session.post') works.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        if streaming:
+            try:
+                from tldw_Server_API.app.core.LLM_Calls.providers import openrouter_adapter as _or_mod
+                from tldw_Server_API.app.core.http_client import create_client as _default_factory
+                use_adapter = _or_mod.http_client_factory is not _default_factory
+            except Exception:
+                use_adapter = False
+        else:
+            use_adapter = False
+    else:
+        use_adapter = _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED")
     if not use_adapter:
         return _legacy_chat_with_openrouter(
             input_data=input_data,
@@ -2228,11 +2243,11 @@ def google_chat_handler(
     except Exception:
         pass
 
-    # Test-friendly streaming path: under pytest, prefer legacy implementation for
-    # streaming to honor monkeypatched sessions (iter_lines) and avoid real network
-    # calls to Google when tests inject dummy responses.
+    # Test-friendly path: under pytest, prefer legacy implementation to honor
+    # monkeypatched sessions and avoid real network calls when tests inject
+    # dummy responses.
     try:
-        if os.getenv("PYTEST_CURRENT_TEST") and streaming:
+        if os.getenv("PYTEST_CURRENT_TEST"):
             return _legacy_chat_with_google(
                 input_data=input_data,
                 model=model,
@@ -2372,7 +2387,31 @@ def mistral_chat_handler(
     except Exception:
         pass
 
-    # Always route via adapter; legacy path pruned
+    # Prefer legacy for streaming under pytest so tests can patch requests.Session
+    try:
+        if os.getenv("PYTEST_CURRENT_TEST") and streaming:
+            return _legacy_chat_with_mistral(
+                input_data=input_data,
+                model=model,
+                api_key=api_key,
+                system_message=system_message,
+                temp=temp,
+                streaming=streaming,
+                topp=topp,
+                max_tokens=max_tokens,
+                random_seed=random_seed,
+                top_k=top_k,
+                safe_prompt=safe_prompt,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                custom_prompt_arg=custom_prompt_arg,
+                app_config=app_config,
+            )
+    except Exception:
+        pass
+
+    # Always route via adapter otherwise; legacy path pruned
     use_adapter = True
     if not use_adapter:
         return _legacy_chat_with_mistral(

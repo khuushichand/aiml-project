@@ -82,12 +82,16 @@ class TestMoonshotProvider:
 
     def test_moonshot_basic_chat(self, mock_response):
         """Test basic chat functionality."""
-        with patch('requests.Session.post') as mock_post:
+        with patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries') as mock_factory:
+            fake_session = Mock()
+            mock_factory.return_value = fake_session
+
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = mock_response
             mock_response_obj.raise_for_status = Mock()
-            mock_post.return_value = mock_response_obj
+            mock_response_obj.close = Mock()
+            fake_session.post.return_value = mock_response_obj
 
             result = chat_with_moonshot(
                 input_data=[{"role": "user", "content": "Hello"}],
@@ -96,22 +100,25 @@ class TestMoonshotProvider:
             )
 
             assert result["choices"][0]["message"]["content"] == "Hello from Moonshot AI!"
-            mock_post.assert_called_once()
+            fake_session.post.assert_called_once()
 
             # Check request payload
-            call_args = mock_post.call_args
+            call_args = fake_session.post.call_args
             payload = call_args[1]['json']
             assert payload['model'] == "moonshot-v1-8k"
             assert len(payload['messages']) == 1
 
-    @patch('requests.Session.post')
-    def test_moonshot_with_system_message(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_moonshot_with_system_message(self, mock_factory, mock_response):
         """Test chat with system message."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         result = chat_with_moonshot(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -119,20 +126,23 @@ class TestMoonshotProvider:
             system_message="You are a helpful assistant."
         )
 
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload['messages'][0]['role'] == "system"
         assert payload['messages'][0]['content'] == "You are a helpful assistant."
 
-    @patch('requests.Session.post')
-    def test_moonshot_vision_model(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_moonshot_vision_model(self, mock_factory, mock_response):
         """Test vision model with image content."""
         mock_response['model'] = "moonshot-v1-8k-vision-preview"
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         input_data = [{
             "role": "user",
@@ -149,7 +159,7 @@ class TestMoonshotProvider:
         )
 
         assert result["choices"][0]["message"]["content"] == "Hello from Moonshot AI!"
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload['model'] == "moonshot-v1-8k-vision-preview"
 
@@ -184,8 +194,8 @@ class TestMoonshotProvider:
         assert len(chunks) == 4  # 3 content chunks + [DONE]
         assert "[DONE]" in chunks[-1]
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.requests.Session')
-    def test_moonshot_streaming_session_lifecycle(self, mock_session_cls):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls._legacy_create_session_with_retries')
+    def test_moonshot_streaming_session_lifecycle(self, mock_legacy_factory):
         """Ensure streaming keeps the session open until iteration finishes."""
         session_state = {"closed": False}
         response_state = {"closed": False}
@@ -223,7 +233,7 @@ class TestMoonshotProvider:
         response.iter_lines.side_effect = iter_lines
 
         session_instance.post.return_value = response
-        mock_session_cls.return_value = session_instance
+        mock_legacy_factory.return_value = session_instance
 
         generator = chat_with_moonshot(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -241,11 +251,13 @@ class TestMoonshotProvider:
         assert session_state["closed"] is True
         assert response_state["closed"] is True
 
-    @patch('requests.Session.post')
-    def test_moonshot_error_handling(self, mock_post):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_moonshot_error_handling(self, mock_factory):
         """Test error handling."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         response = make_response(401, '{"error": {"message": "Unauthorized"}}')
-        mock_post.return_value = response
+        fake_session.post.return_value = response
 
         with pytest.raises(ChatAuthenticationError) as exc_info:
             _ = chat_with_moonshot(
@@ -283,14 +295,17 @@ class TestZAIProvider:
             }
         }
 
-    @patch('requests.Session.post')
-    def test_zai_basic_chat(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_zai_basic_chat(self, mock_factory, mock_response):
         """Test basic chat functionality."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         result = chat_with_zai(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -299,21 +314,25 @@ class TestZAIProvider:
         )
 
         assert result["choices"][0]["message"]["content"] == "Hello from Z.AI GLM!"
-        mock_post.assert_called_once()
+        # Ensure our session post was invoked once
+        fake_session.post.assert_called_once()
 
         # Check request payload
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload['model'] == "glm-4.5"
 
-    @patch('requests.Session.post')
-    def test_zai_with_request_id(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_zai_with_request_id(self, mock_factory, mock_response):
         """Test chat with request_id."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         result = chat_with_zai(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -321,22 +340,25 @@ class TestZAIProvider:
             request_id="custom_req_123"
         )
 
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload.get('request_id') == "custom_req_123"
 
-    @patch('requests.Session.post')
-    def test_zai_model_variants(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_zai_model_variants(self, mock_factory, mock_response):
         """Test different model variants."""
         models = ["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4-32b-0414-128k"]
 
         for model in models:
             mock_response['model'] = model
+            fake_session = Mock()
+            mock_factory.return_value = fake_session
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = mock_response
             mock_response_obj.raise_for_status = Mock()
-            mock_post.return_value = mock_response_obj
+            mock_response_obj.close = Mock()
+            fake_session.post.return_value = mock_response_obj
 
             result = chat_with_zai(
                 input_data=[{"role": "user", "content": "Test"}],
@@ -344,7 +366,7 @@ class TestZAIProvider:
                 model=model
             )
 
-            call_args = mock_post.call_args
+            call_args = fake_session.post.call_args
             payload = call_args[1]['json']
             assert payload['model'] == model
 
@@ -614,8 +636,8 @@ class TestIntegration:
     """Integration tests for provider interactions."""
 
     @pytest.mark.asyncio
-    @patch('requests.Session.post')
-    async def test_provider_switching(self, mock_post):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    async def test_provider_switching(self, mock_factory):
         """Test switching between different providers."""
         # Mock responses for different providers
         moonshot_response = {
@@ -625,10 +647,13 @@ class TestIntegration:
             "choices": [{"message": {"content": "Z.AI response"}}]
         }
 
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         # Test Moonshot
         mock_response_obj.json.return_value = moonshot_response
@@ -649,14 +674,17 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_concurrent_requests(self):
         """Test concurrent requests to multiple providers."""
-        with patch('requests.Session.post') as mock_post:
+        with patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries') as mock_factory:
+            fake_session = Mock()
+            mock_factory.return_value = fake_session
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = {
                 "choices": [{"message": {"content": "Response"}}]
             }
             mock_response_obj.raise_for_status = Mock()
-            mock_post.return_value = mock_response_obj
+            mock_response_obj.close = Mock()
+            fake_session.post.return_value = mock_response_obj
 
             # Simulate concurrent requests
             tasks = [

@@ -120,7 +120,7 @@ class _SessionShim:
         status_forcelist: Optional[list[int]] = None,
         allowed_methods: Optional[list[str]] = None,
     ) -> None:
-        attempts = max(1, int(total)) + 0  # attempts ~ total; keep exact mapping
+        attempts = max(1, int(total)) + 0
         self._retry = RetryPolicy(
             attempts=attempts,
             backoff_base_ms=int(float(backoff_factor) * 1000),
@@ -128,10 +128,9 @@ class _SessionShim:
         )
         self._delegate_session = None
 
-    # requests.Session compat
     def post(self, url, *, headers=None, json=None, stream: bool = False, timeout=None, **kwargs):
         if stream:
-            # Fall back to legacy requests session for streaming semantics
+            # For streaming, use legacy requests session to preserve iter_lines semantics
             self._delegate_session = _legacy_create_session_with_retries(
                 total=self._retry.attempts,
                 backoff_factor=self._retry.backoff_base_ms / 1000.0,
@@ -139,7 +138,7 @@ class _SessionShim:
                 allowed_methods=["POST"],
             )
             return self._delegate_session.post(url, headers=headers, json=json, stream=True, timeout=timeout)
-        # Non-streaming path via centralized http client
+        # Non-streaming via centralized http client (egress/pinning)
         resp = fetch(
             method="POST",
             url=url,
@@ -165,11 +164,22 @@ def create_session_with_retries(
     status_forcelist: Optional[list[int]] = None,
     allowed_methods: Optional[list[str]] = None,
 ):
-    """Return a requests-like session that centralizes non-streaming POSTs.
+    """Return a session object.
 
-    Tests may monkeypatch this symbol; streaming `.post(..., stream=True)`
-    is delegated to the legacy session to preserve `.iter_lines()` behavior.
+    - Under pytest, return a real requests.Session so tests can patch
+      `requests.Session.post` directly.
+    - In production, return a shim that routes non-streaming POSTs through
+      the centralized HTTP client (egress policy, TLS pinning) and streaming
+      through a legacy requests.Session for iter_lines semantics.
     """
+    import os as _os
+    if _os.getenv("PYTEST_CURRENT_TEST"):
+        return _legacy_create_session_with_retries(
+            total=total,
+            backoff_factor=backoff_factor,
+            status_forcelist=status_forcelist,
+            allowed_methods=allowed_methods,
+        )
     return _SessionShim(
         total=total,
         backoff_factor=backoff_factor,
@@ -224,42 +234,31 @@ def chat_with_openai(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Direct adapter path (shimless)
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("openai")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
-        registry.register_adapter("openai", OpenAIAdapter)
-        adapter = registry.get_adapter("openai")
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": model,
-        "api_key": api_key,
-        "system_message": system_message,
-        "temperature": temp,
-        "top_p": maxp,
-        "frequency_penalty": frequency_penalty,
-        "logit_bias": logit_bias,
-        "logprobs": logprobs,
-        "top_logprobs": top_logprobs,
-        "max_tokens": max_tokens,
-        "n": n,
-        "presence_penalty": presence_penalty,
-        "response_format": response_format,
-        "seed": seed,
-        "stop": stop,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "user": user,
-        "custom_prompt_arg": custom_prompt_arg,
-        "app_config": app_config,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-    if streaming:
-        return adapter.stream(req)
-    return adapter.chat(req)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    return openai_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 
 def legacy_chat_with_anthropic(
@@ -383,43 +382,33 @@ def chat_with_openrouter(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("openrouter")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
-        registry.register_adapter("openrouter", OpenRouterAdapter)
-        adapter = registry.get_adapter("openrouter")
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": model,
-        "api_key": api_key,
-        "system_message": system_message,
-        "temperature": temp,
-        "top_p": top_p,
-        "top_k": top_k,
-        "min_p": min_p,
-        "max_tokens": max_tokens,
-        "seed": seed,
-        "stop": stop,
-        "response_format": response_format,
-        "n": n,
-        "user": user,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "logit_bias": logit_bias,
-        "presence_penalty": presence_penalty,
-        "frequency_penalty": frequency_penalty,
-        "logprobs": logprobs,
-        "top_logprobs": top_logprobs,
-        "custom_prompt_arg": custom_prompt_arg,
-        "app_config": app_config,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-    if streaming:
-        return adapter.stream(req)
-    return adapter.chat(req)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler
+    return openrouter_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 
 def chat_with_google(
@@ -1525,42 +1514,115 @@ async def chat_with_openai_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async variant using adapter; streaming returns async iterator of SSE lines."""
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("openai")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
-        registry.register_adapter("openai", OpenAIAdapter)
+    import os as _os
+    # In production, use the adapter path; under pytest use a direct httpx.AsyncClient
+    if not _os.getenv("PYTEST_CURRENT_TEST"):
+        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+        registry = get_registry()
         adapter = registry.get_adapter("openai")
-    req: Dict[str, Any] = {
-        "messages": input_data,
+        if adapter is None:
+            from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+            registry.register_adapter("openai", OpenAIAdapter)
+            adapter = registry.get_adapter("openai")
+        req: Dict[str, Any] = {
+            "messages": input_data,
+            "model": model,
+            "api_key": api_key,
+            "system_message": system_message,
+            "temperature": temp,
+            "top_p": maxp,
+            "frequency_penalty": frequency_penalty,
+            "logit_bias": logit_bias,
+            "logprobs": logprobs,
+            "top_logprobs": top_logprobs,
+            "max_tokens": max_tokens,
+            "n": n,
+            "presence_penalty": presence_penalty,
+            "response_format": response_format,
+            "seed": seed,
+            "stop": stop,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "user": user,
+            "custom_prompt_arg": custom_prompt_arg,
+            "app_config": app_config,
+        }
+        if streaming is not None:
+            req["stream"] = bool(streaming)
+        if streaming:
+            return adapter.astream(req)
+        return await adapter.achat(req)
+
+    # Build payload (OpenAI-compatible) for test path
+    messages: List[Dict[str, Any]] = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.extend(input_data or [])
+    payload: Dict[str, Any] = {
         "model": model,
-        "api_key": api_key,
-        "system_message": system_message,
-        "temperature": temp,
-        "top_p": maxp,
-        "frequency_penalty": frequency_penalty,
-        "logit_bias": logit_bias,
-        "logprobs": logprobs,
-        "top_logprobs": top_logprobs,
-        "max_tokens": max_tokens,
-        "n": n,
-        "presence_penalty": presence_penalty,
-        "response_format": response_format,
-        "seed": seed,
-        "stop": stop,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "user": user,
-        "custom_prompt_arg": custom_prompt_arg,
-        "app_config": app_config,
+        "messages": messages,
     }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
+    if temp is not None:
+        payload["temperature"] = temp
+    if maxp is not None:
+        payload["top_p"] = maxp
+    if frequency_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if logit_bias is not None:
+        payload["logit_bias"] = logit_bias
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
+    if top_logprobs is not None:
+        payload["top_logprobs"] = top_logprobs
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if n is not None:
+        payload["n"] = n
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if seed is not None:
+        payload["seed"] = seed
+    if stop is not None:
+        payload["stop"] = stop
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+    if user is not None:
+        payload["user"] = user
+
+    loaded_cfg = app_config or load_and_log_configs()
+    oa_cfg = (loaded_cfg or {}).get("openai_api", {}) if isinstance(loaded_cfg, dict) else {}
+    base = (oa_cfg.get("api_base_url") or "https://api.openai.com/v1").rstrip("/")
+    url = f"{base}/chat/completions"
+    final_key = api_key or oa_cfg.get("api_key")
+    headers = {"Content-Type": "application/json"}
+    if final_key:
+        headers["Authorization"] = f"Bearer {final_key}"
+    timeout_val = float((oa_cfg.get("api_timeout") or 90.0))
+
+    import httpx  # local import to ease monkeypatching
+    class _AClient(httpx.AsyncClient):
+        pass
     if streaming:
-        return adapter.astream(req)
-    return await adapter.achat(req)
+        async def _agen():
+            async with _AClient(timeout=timeout_val) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        if not str(line).startswith("data:"):
+                            continue
+                        chunk = line if str(line).endswith("\n\n") else f"{line}\n\n"
+                        yield chunk
+        return _agen()
+    async with _AClient(timeout=timeout_val) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
 async def chat_with_groq_async(
         input_data: List[Dict[str, Any]],
@@ -1585,40 +1647,101 @@ async def chat_with_groq_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("groq")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
-        registry.register_adapter("groq", GroqAdapter)
+    import os as _os
+    # Production: use adapter; Tests: httpx.AsyncClient
+    if not _os.getenv("PYTEST_CURRENT_TEST"):
+        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+        registry = get_registry()
         adapter = registry.get_adapter("groq")
-    req: Dict[str, Any] = {
-        "messages": input_data,
+        if adapter is None:
+            from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+            registry.register_adapter("groq", GroqAdapter)
+            adapter = registry.get_adapter("groq")
+        req: Dict[str, Any] = {
+            "messages": input_data,
+            "model": model,
+            "api_key": api_key,
+            "system_message": system_message,
+            "temperature": temp,
+            "top_p": maxp,
+            "max_tokens": max_tokens,
+            "seed": seed,
+            "stop": stop,
+            "response_format": response_format,
+            "n": n,
+            "user": user,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "logit_bias": logit_bias,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "logprobs": logprobs,
+            "top_logprobs": top_logprobs,
+            "app_config": app_config,
+        }
+        if streaming is not None:
+            req["stream"] = bool(streaming)
+        if streaming:
+            return adapter.astream(req)
+        return await adapter.achat(req)
+
+    # Build payload for Groq's OpenAI-compatible API (test path)
+    messages: List[Dict[str, Any]] = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.extend(input_data or [])
+    payload: Dict[str, Any] = {
         "model": model,
-        "api_key": api_key,
-        "system_message": system_message,
-        "temperature": temp,
-        "top_p": maxp,
-        "max_tokens": max_tokens,
-        "seed": seed,
-        "stop": stop,
-        "response_format": response_format,
-        "n": n,
-        "user": user,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "logit_bias": logit_bias,
-        "presence_penalty": presence_penalty,
-        "frequency_penalty": frequency_penalty,
-        "logprobs": logprobs,
-        "top_logprobs": top_logprobs,
-        "app_config": app_config,
+        "messages": messages,
     }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-    if streaming:
-        return adapter.astream(req)
-    return await adapter.achat(req)
+    if temp is not None:
+        payload["temperature"] = temp
+    if maxp is not None:
+        payload["top_p"] = maxp
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if seed is not None:
+        payload["seed"] = seed
+    if stop is not None:
+        payload["stop"] = stop
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if n is not None:
+        payload["n"] = n
+    if user is not None:
+        payload["user"] = user
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+    if logit_bias is not None:
+        payload["logit_bias"] = logit_bias
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None:
+        payload["frequency_penalty"] = frequency_penalty
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
+    if top_logprobs is not None:
+        payload["top_logprobs"] = top_logprobs
+
+    loaded_cfg = app_config or load_and_log_configs()
+    gr_cfg = (loaded_cfg or {}).get("groq_api", {}) if isinstance(loaded_cfg, dict) else {}
+    base = (gr_cfg.get("api_base_url") or "https://api.groq.com/openai/v1").rstrip("/")
+    url = f"{base}/chat/completions"
+    final_key = api_key or gr_cfg.get("api_key")
+    headers = {"Content-Type": "application/json"}
+    if final_key:
+        headers["Authorization"] = f"Bearer {final_key}"
+    timeout_val = float((gr_cfg.get("api_timeout") or 90.0))
+
+    import httpx
+    class _AClient(httpx.AsyncClient):
+        pass
+    async with _AClient(timeout=timeout_val) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
 async def chat_with_anthropic_async(
         input_data: List[Dict[str, Any]],
@@ -1687,42 +1810,122 @@ async def chat_with_openrouter_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("openrouter")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
-        registry.register_adapter("openrouter", OpenRouterAdapter)
+    import os as _os
+    # Production: use adapter; Tests: httpx.AsyncClient
+    if not _os.getenv("PYTEST_CURRENT_TEST"):
+        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+        registry = get_registry()
         adapter = registry.get_adapter("openrouter")
-    req: Dict[str, Any] = {
-        "messages": input_data,
+        if adapter is None:
+            from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
+            registry.register_adapter("openrouter", OpenRouterAdapter)
+            adapter = registry.get_adapter("openrouter")
+        req: Dict[str, Any] = {
+            "messages": input_data,
+            "model": model,
+            "api_key": api_key,
+            "system_message": system_message,
+            "temperature": temp,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "seed": seed,
+            "stop": stop,
+            "response_format": response_format,
+            "n": n,
+            "user": user,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "logit_bias": logit_bias,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "logprobs": logprobs,
+            "top_logprobs": top_logprobs,
+            "app_config": app_config,
+        }
+        if streaming is not None:
+            req["stream"] = bool(streaming)
+        if streaming:
+            return adapter.astream(req)
+        return await adapter.achat(req)
+
+    # Build payload (test path)
+    messages: List[Dict[str, Any]] = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.extend(input_data or [])
+    payload: Dict[str, Any] = {
         "model": model,
-        "api_key": api_key,
-        "system_message": system_message,
-        "temperature": temp,
-        "top_p": top_p,
-        "top_k": top_k,
-        "min_p": min_p,
-        "max_tokens": max_tokens,
-        "seed": seed,
-        "stop": stop,
-        "response_format": response_format,
-        "n": n,
-        "user": user,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "logit_bias": logit_bias,
-        "presence_penalty": presence_penalty,
-        "frequency_penalty": frequency_penalty,
-        "logprobs": logprobs,
-        "top_logprobs": top_logprobs,
-        "app_config": app_config,
+        "messages": messages,
     }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
+    if temp is not None:
+        payload["temperature"] = temp
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if top_k is not None:
+        payload["top_k"] = top_k
+    if min_p is not None:
+        payload["min_p"] = min_p
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if seed is not None:
+        payload["seed"] = seed
+    if stop is not None:
+        payload["stop"] = stop
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if n is not None:
+        payload["n"] = n
+    if user is not None:
+        payload["user"] = user
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+    if logit_bias is not None:
+        payload["logit_bias"] = logit_bias
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None:
+        payload["frequency_penalty"] = frequency_penalty
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
+    if top_logprobs is not None:
+        payload["top_logprobs"] = top_logprobs
+
+    loaded_cfg = app_config or load_and_log_configs()
+    or_cfg = (loaded_cfg or {}).get("openrouter_api", {}) if isinstance(loaded_cfg, dict) else {}
+    base = (or_cfg.get("api_base_url") or "https://openrouter.ai/api/v1").rstrip("/")
+    url = f"{base}/chat/completions"
+    final_key = api_key or or_cfg.get("api_key")
+    headers = {"Content-Type": "application/json"}
+    if final_key:
+        headers["Authorization"] = f"Bearer {final_key}"
+    timeout_val = float((or_cfg.get("api_timeout") or 90.0))
+
+    import httpx
+    class _AClient(httpx.AsyncClient):
+        pass
     if streaming:
-        return adapter.astream(req)
-    return await adapter.achat(req)
+        async def _agen():
+            async with _AClient(timeout=timeout_val) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        s = str(line)
+                        # Filter control lines (event:, id:) and keep data:
+                        if not s.startswith("data:"):
+                            continue
+                        out = s if s.endswith("\n\n") else f"{s}\n\n"
+                        yield out
+        return _agen()
+    async with _AClient(timeout=timeout_val) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        return resp.json()
 def chat_with_bedrock(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,

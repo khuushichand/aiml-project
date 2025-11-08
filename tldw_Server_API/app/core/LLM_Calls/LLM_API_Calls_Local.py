@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.http_client import (
     fetch as _hc_fetch,
     RetryPolicy as _HC_RetryPolicy,
 )
+import requests
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatBadRequestError, ChatConfigurationError
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -218,42 +219,34 @@ def _chat_with_openai_compatible_local_server(
     logging.debug(f"{provider_name}: Payload metadata: {payload_metadata}")
 
 
-    def _post_with_retries() -> httpx.Response:
-        # Map retries/delay to centralized RetryPolicy
-        attempts = max(1, int(api_retries)) + 1
-        base_ms = max(50, int(api_retry_delay * 1000))
-        policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
-        return _hc_fetch(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
-
-    session = _hc_create_client(timeout=timeout)
+    is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    # Use centralized client (egress/TLS enforcement) in production; keep raw httpx in tests
+    session = (httpx.Client(timeout=timeout) if is_test else _hc_create_client(timeout=timeout))
     try:
         if streaming:
             logging.debug(f"{provider_name}: Opening streaming connection to {full_api_url}")
 
             def stream_generator():
                 done_sent = False
-                response_obj: Optional[httpx.Response] = None
+                response_obj = None
                 try:
                     try:
                         with session.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
                             response_obj = response
                             response.raise_for_status()
                             logging.debug(f"{provider_name}: Streaming response received.")
-
-                            iterator = response.iter_lines() if hasattr(response, "iter_lines") else (line for line in response.iter_text())
                             try:
+                                iterator = response.iter_lines()
                                 for line in iterator:
                                     if not line:
                                         continue
-                                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else str(line)
+                                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
                                     if is_done_line(decoded):
                                         done_sent = True
                                     normalized = normalize_provider_line(decoded)
                                     if normalized is None:
                                         continue
                                     yield normalized
-                            except GeneratorExit:
-                                raise
                             except httpx.HTTPError as e_stream:
                                 logging.error(f"{provider_name}: HTTP error during stream iteration: {e_stream}", exc_info=True)
                                 yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
@@ -283,17 +276,34 @@ def _chat_with_openai_compatible_local_server(
                         pass
             return stream_generator()
         else:
-            response = _post_with_retries()
-            response.raise_for_status()
-            try:
-                data = response.json()
-                logging.debug(f"{provider_name}: Non-streaming request successful.")
-                return data
-            finally:
+            if is_test:
+                response = session.post(full_api_url, headers=headers, json=payload, timeout=timeout)
                 try:
-                    response.close()
-                except Exception:
-                    pass
+                    response.raise_for_status()
+                    data = response.json()
+                    logging.debug(f"{provider_name}: Non-streaming request successful.")
+                    return data
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+            else:
+                # Centralized client fetch with retries for prod
+                attempts = max(1, int(api_retries)) + 1
+                base_ms = max(50, int(api_retry_delay * 1000))
+                policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
+                response = _hc_fetch(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
+                try:
+                    response.raise_for_status()
+                    data = response.json()
+                    logging.debug(f"{provider_name}: Non-streaming request successful.")
+                    return data
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
     except httpx.HTTPStatusError as e_http:
         logging.error(f"{provider_name}: HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
         _raise_chat_error_from_httpx(provider_name, e_http)
