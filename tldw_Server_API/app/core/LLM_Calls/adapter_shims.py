@@ -369,7 +369,7 @@ def bedrock_chat_handler(
 
     if adapter is None:
         # Fallback to legacy function if adapter cannot be initialized
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_bedrock as _legacy_bedrock
+        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_bedrock as _legacy_bedrock
         return _legacy_bedrock(
             input_data=input_data,
             model=model,
@@ -464,7 +464,7 @@ async def bedrock_chat_handler_async(
 
     if adapter is None:
         # Fallback to sync legacy call if adapter path unavailable
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_bedrock as _legacy_bedrock
+        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_bedrock as _legacy_bedrock
         return _legacy_bedrock(
             input_data=input_data,
             model=model,

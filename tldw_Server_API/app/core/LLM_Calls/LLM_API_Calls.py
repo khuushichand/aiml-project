@@ -1926,7 +1926,7 @@ async def chat_with_openrouter_async(
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         return resp.json()
-def chat_with_bedrock(
+def legacy_chat_with_bedrock(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -1952,7 +1952,7 @@ def chat_with_bedrock(
         app_config: Optional[Dict[str, Any]] = None,
 ):
     """
-    AWS Bedrock via OpenAI-compatible Chat Completions endpoint.
+    AWS Bedrock via OpenAI-compatible Chat Completions endpoint (legacy path).
 
     Uses Bedrock Runtime OpenAI compatibility layer:
     https://bedrock-runtime.<region>.amazonaws.com/openai/v1/chat/completions
@@ -2034,7 +2034,7 @@ def chat_with_bedrock(
     retry_delay = _safe_cast(br_cfg.get('api_retry_delay'), float, 1.0)
     timeout = _safe_cast(br_cfg.get('api_timeout'), float, 90.0)
 
-    logging.debug(f"Bedrock: POST {api_url} (stream={current_streaming})")
+    logging.debug(f"Bedrock(legacy): POST {api_url} (stream={current_streaming})")
 
     session = create_session_with_retries(
         total=retry_count,
@@ -2071,10 +2071,10 @@ def chat_with_bedrock(
                         done_sent = True
                         yield sse_done()
                 except requests.exceptions.ChunkedEncodingError as e_chunk:
-                    logging.error(f"Bedrock stream chunked encoding error: {e_chunk}")
+                    logging.error(f"Bedrock(legacy) stream chunked encoding error: {e_chunk}")
                     yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "bedrock_stream_error"}})
                 except Exception as e_stream:
-                    logging.error(f"Bedrock stream iteration error: {e_stream}", exc_info=True)
+                    logging.error(f"Bedrock(legacy) stream iteration error: {e_stream}", exc_info=True)
                     yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "bedrock_stream_error"}})
                 finally:
                     for tail in finalize_stream(response_handle, done_already=done_sent):
@@ -2088,7 +2088,7 @@ def chat_with_bedrock(
             return stream_generator()
         else:
             response = session.post(api_url, headers=headers, json=payload, timeout=timeout)
-            logging.debug(f"Bedrock: status={response.status_code}")
+            logging.debug(f"Bedrock(legacy): status={response.status_code}")
             response.raise_for_status()
             try:
                 return response.json()
@@ -2100,7 +2100,7 @@ def chat_with_bedrock(
     except requests.exceptions.HTTPError as e:
         status_code = getattr(e.response, 'status_code', None)
         error_text = getattr(e.response, 'text', str(e))
-        logging.error(f"Bedrock HTTPError {status_code}: {repr(error_text[:500])}")
+        logging.error(f"Bedrock(legacy) HTTPError {status_code}: {repr(error_text[:500])}")
         if status_code in (400, 404, 422):
             raise ChatBadRequestError(provider="bedrock", message=error_text)
         elif status_code in (401, 403):
@@ -2112,14 +2112,126 @@ def chat_with_bedrock(
         else:
             raise ChatAPIError(provider="bedrock", message=error_text, status_code=(status_code or 500))
     except requests.exceptions.RequestException as e:
-        logging.error(f"Bedrock RequestException: {e}", exc_info=True)
+        logging.error(f"Bedrock(legacy) RequestException: {e}", exc_info=True)
         raise ChatProviderError(provider="bedrock", message=f"Network error: {e}", status_code=504)
     except Exception as e:
-        logging.error(f"Bedrock unexpected error: {e}", exc_info=True)
+        logging.error(f"Bedrock(legacy) unexpected error: {e}", exc_info=True)
         raise ChatProviderError(provider="bedrock", message=f"Unexpected error: {e}")
     finally:
         if session is not None:
             session.close()
+
+
+def chat_with_bedrock(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,  # top_p
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        seed: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        user: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    """Uniform adapter-backed Bedrock entry point (prod) with test-friendly fallbacks.
+
+    Delegates to adapter_shims.bedrock_chat_handler which uses the Bedrock adapter
+    by default and falls back to the legacy implementation only if the adapter is
+    unavailable (e.g., missing dependency).
+    """
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import bedrock_chat_handler
+    return bedrock_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        maxp=maxp,
+        max_tokens=max_tokens,
+        n=n,
+        stop=stop,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        seed=seed,
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        user=user,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        app_config=app_config,
+    )
+
+
+async def chat_with_bedrock_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,  # top_p
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        seed: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        user: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import bedrock_chat_handler_async
+    return await bedrock_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        maxp=maxp,
+        max_tokens=max_tokens,
+        n=n,
+        stop=stop,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        seed=seed,
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        user=user,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        app_config=app_config,
+    )
 
 
 def chat_with_anthropic(
