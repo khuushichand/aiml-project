@@ -324,10 +324,11 @@ async def process_code_endpoint(
     Reads uploaded or downloaded code files as text, optionally chunks by lines,
     and returns artifacts without DB writes.
     """
-    _validate_inputs("code", form_data.urls, files)
+    urls = form_data.urls or []
+    _validate_inputs("code", urls, files)
     # SSRF mitigation: check that all URLs in form_data.urls are safe
     # Optionally specify allowed domains here, eg allowed_domains = {"github.com", "gitlab.com"}
-    for u in form_data.urls:
+    for u in urls:
         if not is_url_safe(u ):
             raise HTTPException(status_code=400, detail=f"URL not allowed for SSRF protection: {u}")
     batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
@@ -446,17 +447,17 @@ async def process_code_endpoint(
                     })
                     batch["errors_count"] += 1
         # Handle URLs
-        if form_data.urls:
+        if urls:
             # All URLs checked in SSRF protection above; do not proceed unless all are safe
             async with _m_create_async_client() as client:
                 tasks = [
                     _download_url_async(
                         client=client, url=u, target_dir=temp_dir,
                         allowed_extensions=CODE_ALLOWED_EXTENSIONS, check_extension=True
-                    ) for u in form_data.urls
+                    ) for u in urls
                 ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                for url, res in zip(form_data.urls, results):
+                for url, res in zip(urls, results):
                     if isinstance(res, Exception):
                         batch["results"].append({
                             "status": "Error", "input_ref": url, "processing_source": None,
