@@ -69,21 +69,45 @@ def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]]
 
 
 def _raise_chat_error_from_httpx(provider_name: str, error: httpx.HTTPStatusError) -> None:
-    """Raise the appropriate Chat*Error derived from an httpx HTTPStatusError."""
+    """Map httpx HTTPStatusError to Chat*Error without assuming body shape.
+
+    - Extract a human-friendly message from JSON bodies like {"error": {"message": "..."}}
+      or {"error": "..."} or {"message": "..."}. Fallback to raw text.
+    - 4xx → ChatBadRequestError; 5xx/other → ChatProviderError.
+    - Never raise during parsing; always fall back safely.
+    """
     response = getattr(error, "response", None)
     status_code = getattr(response, "status_code", None)
 
     detail: str = ""
     if response is not None:
+        # Try JSON first for structured error messages
         try:
-            detail = response.text or str(error)
+            body = response.json()
+            # Common patterns: {"error": {"message": "..."}} or {"error": "..."} or {"message": "..."}
+            if isinstance(body, dict):
+                err_obj = body.get("error")
+                if isinstance(err_obj, dict) and isinstance(err_obj.get("message"), str):
+                    detail = err_obj.get("message") or ""
+                elif isinstance(err_obj, str):
+                    detail = err_obj
+                elif isinstance(body.get("message"), str):
+                    detail = body.get("message")  # type: ignore[assignment]
         except Exception:
-            detail = str(error)
+            # Ignore JSON parsing errors and fall back to text
+            pass
+        # Fallback to plain text if no structured message extracted
+        if not detail:
+            try:
+                detail = response.text or str(error)
+            except Exception:
+                detail = str(error)
     else:
         detail = str(error)
 
     if status_code is not None and 400 <= status_code < 500:
-        raise ChatBadRequestError(provider=provider_name, message=detail, status_code=status_code)
+        # Do not pass status_code kwarg; ChatBadRequestError fixes status to 400 internally
+        raise ChatBadRequestError(provider=provider_name, message=detail)
 
     raise ChatProviderError(
         provider=provider_name,
@@ -265,7 +289,13 @@ def _chat_with_openai_compatible_local_server(
                                 for tail in finalize_stream(response, done_already=done_sent):
                                     yield tail
                     except httpx.HTTPStatusError as e_http:
-                        logging.error(f"{provider_name}: HTTP Error during stream setup: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+                        logging.error(
+                            "{}: HTTP Error during stream setup: {} - {}",
+                            provider_name,
+                            getattr(e_http.response, 'status_code', 'N/A'),
+                            getattr(e_http.response, 'text', str(e_http))[:500],
+                            exc_info=False,
+                        )
                         _raise_chat_error_from_httpx(provider_name, e_http)
                     except httpx.RequestError as e_req:
                         logging.error(f"{provider_name}: Request error during stream setup: {e_req}", exc_info=True)
@@ -314,7 +344,13 @@ def _chat_with_openai_compatible_local_server(
                     except Exception:
                         pass
     except httpx.HTTPStatusError as e_http:
-        logging.error(f"{provider_name}: HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+        logging.error(
+            "{}: HTTP Error: {} - {}",
+            provider_name,
+            getattr(e_http.response, 'status_code', 'N/A'),
+            getattr(e_http.response, 'text', str(e_http))[:500],
+            exc_info=False,
+        )
         _raise_chat_error_from_httpx(provider_name, e_http)
     except httpx.RequestError as e_req:
         # Network/connectivity, DNS, timeouts prior to receiving a response
@@ -676,11 +712,19 @@ def chat_with_kobold(
             # This assumes non-streaming. Streaming would need a generator yielding SSE-like events.
             return {"choices": [{"message": {"role": "assistant", "content": generated_text}, "finish_reason": "stop"}]} # Assuming "stop"
         else:
-            logging.error(f"KoboldAI (Native): Unexpected response structure: {response_data}")
+            logging.error(
+                "KoboldAI (Native): Unexpected response structure: {}",
+                response_data,
+            )
             raise ChatProviderError(provider="kobold", message=f"Unexpected response structure from KoboldAI (Native): {str(response_data)[:200]}")
 
     except httpx.HTTPStatusError as e_http:
-        logging.error(f"KoboldAI (Native): HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+        logging.error(
+            "KoboldAI (Native): HTTP Error: {} - {}",
+            getattr(e_http.response, 'status_code', 'N/A'),
+            getattr(e_http.response, 'text', str(e_http))[:500],
+            exc_info=False,
+        )
         raise
     except httpx.RequestError as e_req:
         logging.error(f"KoboldAI (Native): Request Exception: {e_req}", exc_info=True)

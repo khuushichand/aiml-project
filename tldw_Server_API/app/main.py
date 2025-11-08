@@ -1979,14 +1979,19 @@ async def lifespan(app: FastAPI):
         logger.error(f"App Shutdown: Error stopping request queue: {e}")
 
     # Shutdown Evaluations connection manager (stops maintenance thread for tests)
+    # Guard against import side-effects: only access if module already imported
     try:
-        from tldw_Server_API.app.core.Evaluations.connection_pool import connection_manager
-
-        if connection_manager is not None:
-            connection_manager.shutdown()
-            logger.info("App Shutdown: Evaluations connection manager shutdown")
+        import sys as _sys
+        _mod = _sys.modules.get("tldw_Server_API.app.core.Evaluations.connection_pool")
+        _cm = getattr(_mod, "connection_manager", None) if _mod is not None else None
+        if _cm is not None:
+            try:
+                _cm.shutdown()
+                logger.info("App Shutdown: Evaluations connection manager shutdown")
+            except Exception as _cm_err:  # noqa: BLE001
+                logger.error(f"App Shutdown: Error shutting down evaluations connection manager: {_cm_err}")
     except Exception as e:
-        logger.error(f"App Shutdown: Error shutting down evaluations connection manager: {e}")
+        logger.error(f"App Shutdown: Error accessing evaluations connection manager: {e}")
 
     # Shutdown Unified Audit Services (via DI cache)
     try:
