@@ -852,16 +852,29 @@ class TestSSENormalization:
         assert first_chunk.startswith("data: ")
         assert remaining[-1].strip().lower() == "data: [done]"
 
-    @patch('requests.Session.post')
-    def test_qwen_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            'data: {"choices":[{"delta":{"content":"!"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_qwen_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                            'data: {"choices":[{"delta":{"content":"!"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setenv('LLM_ADAPTERS_ENABLED', '1')
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_qwen(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -1157,16 +1170,27 @@ class TestSSENormalization:
         assert chunks[0].startswith('data: ')
         assert chunks[-1].strip() == 'data: [DONE]'
 
-    @patch('requests.Session.post')
-    def test_deepseek_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_deepseek_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+                            'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setenv('LLM_ADAPTERS_ENABLED', '1')
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_deepseek(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -1178,17 +1202,27 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_huggingface_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        # HF path uses requests.post directly (not a Session)
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            b'data: {"choices":[{"delta":{"content":" HF"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_huggingface_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                            b'data: {"choices":[{"delta":{"content":" HF"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setenv('LLM_ADAPTERS_ENABLED', '1')
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_huggingface(
             input_data=[{"role": "user", "content": "Hi"}],
