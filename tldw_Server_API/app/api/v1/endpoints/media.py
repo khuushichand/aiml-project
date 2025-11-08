@@ -8570,7 +8570,7 @@ from tldw_Server_API.app.core.http_client import (
 )
 
 async def _download_url_async(
-        client: httpx.AsyncClient,
+        client: Optional[httpx.AsyncClient],
         url: str,
         target_dir: Path,
         allowed_extensions: Optional[Set[str]] = None,  # Use a Set for faster lookups
@@ -8593,8 +8593,106 @@ async def _download_url_async(
         except Exception:  # Broad catch for URL parsing issues
             seed_segment = f"downloaded_{hash(url)}.tmp"
 
-        # Use centralized HTTP client: HEAD for metadata + adownload for atomic file write
-        # HEAD (best-effort) to derive naming and validate content-type when necessary
+        # If a client is provided, use a single GET stream to both infer
+        # filename/extension (from headers + final URL) and to download bytes.
+        # Otherwise, fall back to HEAD + centralized adownload helper.
+        if client is not None:
+            async with client.stream("GET", url, follow_redirects=True, timeout=60.0) as get_resp:
+                get_resp.raise_for_status()
+
+                # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
+                candidate_name = None
+                content_disposition = get_resp.headers.get('content-disposition')
+                if content_disposition:
+                    # Try RFC 5987 filename* then fallback to filename
+                    match_star = re.search(r"filename\*=(?:[^']*'[^']*')?([^;]+)", content_disposition, flags=re.IGNORECASE)
+                    if match_star:
+                        from urllib.parse import unquote
+                        candidate_name = unquote(match_star.group(1).strip().strip('"\''))
+                    if not candidate_name:
+                        match_q = re.search(r'filename\s*=\s*"([^"]+)"', content_disposition, flags=re.IGNORECASE)
+                        if match_q:
+                            candidate_name = match_q.group(1)
+                        else:
+                            match_u = re.search(r'filename\s*=\s*([^;\s]+)', content_disposition, flags=re.IGNORECASE)
+                            candidate_name = (match_u.group(1) if match_u else None)
+
+                if not candidate_name:
+                    try:
+                        final_path_seg = getattr(get_resp, 'url', httpx.URL(url)).path.split('/')[-1]
+                        candidate_name = final_path_seg or seed_segment
+                    except Exception:
+                        candidate_name = seed_segment
+
+                # Basic sanitization
+                candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
+
+                # Determine effective suffix with fallbacks based on GET response
+                effective_suffix = FilePath(candidate_name).suffix.lower()
+                if check_extension and allowed_extensions:
+                    if not effective_suffix or effective_suffix not in allowed_extensions:
+                        # Attempt to derive from final response URL path
+                        try:
+                            alt_seg = getattr(get_resp, 'url', httpx.URL(url)).path.split('/')[-1]
+                            alt_suffix = FilePath(alt_seg).suffix.lower()
+                        except Exception:
+                            alt_suffix = ''
+                        if alt_suffix and alt_suffix in allowed_extensions:
+                            effective_suffix = alt_suffix
+                            base = FilePath(candidate_name).stem
+                            candidate_name = f"{base}{effective_suffix}"
+                        else:
+                            # Use Content-Type header for known mappings
+                            content_type = (get_resp.headers.get('content-type') or '').split(';')[0].strip().lower()
+                            if disallow_content_types and content_type in disallow_content_types:
+                                allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
+                                raise ValueError(
+                                    f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+                            content_type_map = {
+                                'application/epub+zip': '.epub',
+                                'application/pdf': '.pdf',
+                                'text/plain': '.txt',
+                                'text/markdown': '.md',
+                                'text/x-markdown': '.md',
+                                'text/html': '.html',
+                                'application/xhtml+xml': '.html',
+                                'application/xml': '.xml',
+                                'text/xml': '.xml',
+                                'application/rtf': '.rtf',
+                                'text/rtf': '.rtf',
+                                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                                'application/json': '.json',
+                            }
+                            mapped_ext = content_type_map.get(content_type)
+                            if mapped_ext and (mapped_ext in allowed_extensions):
+                                effective_suffix = mapped_ext
+                                base = FilePath(candidate_name).stem
+                                candidate_name = f"{base}{effective_suffix}"
+                            else:
+                                allowed_list = ', '.join(sorted(allowed_extensions))
+                                raise ValueError(
+                                    f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
+
+                # Finalize target path and ensure uniqueness
+                target_path = target_dir / (candidate_name or seed_segment)
+                counter = 1
+                base_name = target_path.stem
+                suffix = target_path.suffix
+                while target_path.exists():
+                    target_path = target_dir / f"{base_name}_{counter}{suffix}"
+                    counter += 1
+
+                # Stream body to file
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with target_path.open('wb') as f:
+                    async for chunk in get_resp.aiter_bytes():
+                        if chunk:
+                            f.write(chunk)
+
+                logger.info(f"Successfully downloaded {url} to {target_path}")
+                return target_path
+
+        # Fallback: no client provided. Use HEAD + centralized download helper.
         try:
             head_resp = await _m_afetch(method="HEAD", url=url, timeout=60.0)
             # Build a lightweight object to reuse existing logic for naming
@@ -8616,12 +8714,20 @@ async def _download_url_async(
         content_disposition = response.headers.get('content-disposition')
         if content_disposition:
             # Try RFC 5987 filename* then fallback to filename
-            match_star = re.search(r"filename\*=(?:UTF-8''|)([^;]+)", content_disposition)
+            # e.g., filename*=UTF-8''file.json OR filename*=UTF-8'en'US'file.json
+            match_star = re.search(r"filename\*=(?:[^']*'[^']*')?([^;]+)", content_disposition, flags=re.IGNORECASE)
             if match_star:
-                candidate_name = match_star.group(1).strip('"\' ')
+                from urllib.parse import unquote
+                candidate_name = unquote(match_star.group(1).strip().strip('"\''))
             if not candidate_name:
-                match = re.search(r'filename=["\'](.*?)["\']', content_disposition)
-                candidate_name = (match.group(1) if match else None)
+                # Quoted filename= "file.json"
+                match_q = re.search(r'filename\s*=\s*"([^"]+)"', content_disposition, flags=re.IGNORECASE)
+                if match_q:
+                    candidate_name = match_q.group(1)
+                else:
+                    # Unquoted filename=file.json
+                    match_u = re.search(r'filename\s*=\s*([^;\s]+)', content_disposition, flags=re.IGNORECASE)
+                    candidate_name = (match_u.group(1) if match_u else None)
 
         if not candidate_name:
             try:
@@ -8700,7 +8806,7 @@ async def _download_url_async(
             target_path = target_dir / f"{base_name}_{counter}{suffix}"
             counter += 1
 
-        # Perform the actual download (atomic via .part rename)
+        # Perform the actual download using centralized helper for atomic rename behavior
         await _m_adownload(url=url, dest=target_path, timeout=60.0, retry=_MRetryPolicy())
 
         logger.info(f"Successfully downloaded {url} to {target_path}")

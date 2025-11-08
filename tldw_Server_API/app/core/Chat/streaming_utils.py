@@ -333,7 +333,14 @@ class StreamingResponseHandler:
                         choices = data.get("choices")
                         if isinstance(choices, list) and choices:
                             for choice in choices:
-                                delta = choice.get("delta") or {}
+                                delta = choice.get("delta")
+                                # Be tolerant: providers/tests may send a plain string delta
+                                if isinstance(delta, str):
+                                    delta = {"content": delta}
+                                # Guard against unexpected delta types
+                                if not isinstance(delta, dict):
+                                    delta = {}
+
                                 tool_calls_delta = delta.get("tool_calls")
                                 if tool_calls_delta:
                                     self._accumulate_tool_calls(tool_calls_delta)

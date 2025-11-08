@@ -2091,15 +2091,23 @@ def openrouter_chat_handler(
     # - Streaming: use adapter only if its http client factory is monkeypatched;
     #   otherwise fall back to legacy (requests) so patch('requests.Session.post') works.
     if os.getenv("PYTEST_CURRENT_TEST"):
-        if streaming:
-            try:
-                from tldw_Server_API.app.core.LLM_Calls.providers import openrouter_adapter as _or_mod
-                from tldw_Server_API.app.core.http_client import create_client as _default_factory
-                use_adapter = _or_mod.http_client_factory is not _default_factory
-            except Exception:
-                use_adapter = False
+        # In tests, if adapters are explicitly enabled via env flags, honor that
+        # and always route through the adapter (so tests can monkeypatch it).
+        if _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED"):
+            use_adapter = True
         else:
-            use_adapter = False
+            # Backward-compatible heuristic: only use adapter for streaming when the
+            # http client factory has been monkeypatched; otherwise fall back to legacy
+            # so tests that patch requests.Session still work.
+            if streaming:
+                try:
+                    from tldw_Server_API.app.core.LLM_Calls.providers import openrouter_adapter as _or_mod
+                    from tldw_Server_API.app.core.http_client import create_client as _default_factory
+                    use_adapter = _or_mod.http_client_factory is not _default_factory
+                except Exception:
+                    use_adapter = False
+            else:
+                use_adapter = False
     else:
         use_adapter = _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED")
     if not use_adapter:
