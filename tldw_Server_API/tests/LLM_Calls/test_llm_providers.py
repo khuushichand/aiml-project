@@ -1418,11 +1418,15 @@ def test_openai_defaults_with_blank_config(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_async_streaming_normalized(monkeypatch):
-    class MockResp:
+    captured: Dict[str, Any] = {}
+
+    class FakeResp:
         status_code = 200
+
         def raise_for_status(self):
-            return
-        async def aiter_lines(self):
+            return None
+
+        def iter_lines(self):
             yield 'event: completion.delta'
             yield 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
             yield 'id: chunk-1'
@@ -1430,27 +1434,37 @@ async def test_openai_async_streaming_normalized(monkeypatch):
             yield 'retry: 1000'
             yield 'data: [DONE]'
 
-    class MockStreamCtx:
-        async def __aenter__(self):
-            return MockResp()
-        async def __aexit__(self, exc_type, exc, tb):
+    class FakeStreamCtx:
+        def __enter__(self):
+            return FakeResp()
+
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-    class MockAsyncClient:
-        def __init__(self, timeout=None):
-            pass
-        async def __aenter__(self):
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            self.timeout = kwargs.get("timeout")
+
+        def __enter__(self):
             return self
-        async def __aexit__(self, exc_type, exc, tb):
+
+        def __exit__(self, exc_type, exc, tb):
             return False
-        def stream(self, *args, **kwargs):
-            return MockStreamCtx()
 
-    async def _mock_client_ctor(*args, **kwargs):
-        return MockAsyncClient()
+        def stream(self, method, url, *, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = json
+            return FakeStreamCtx()
 
-    # Monkeypatch httpx.AsyncClient to our mock client
-    monkeypatch.setattr('httpx.AsyncClient', MockAsyncClient)
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient(**kwargs)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        fake_factory,
+    )
 
     gen = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
@@ -1477,7 +1491,7 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
     def fake_config():
         return {"openai_api": {"api_key": "cfg-key"}}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
@@ -1486,27 +1500,34 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
         def json(self):
             return expected_response
 
-    class DummyAsyncClient:
-        def __init__(self, *args, timeout=None, **kwargs):
-            captured["timeout"] = timeout
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            self.timeout = kwargs.get("timeout")
 
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
-            return DummyResponse()
+            return FakeResp()
+
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        fake_factory,
+    )
 
     result = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi async"}],
@@ -1518,6 +1539,7 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
     assert captured["url"].endswith("/chat/completions")
     assert captured["payload"]["messages"][-1]["content"] == "hi async"
     assert captured["timeout"] == 90.0
+    assert captured["payload"]["stream"] is False
 
 
 @pytest.mark.asyncio
@@ -1535,7 +1557,7 @@ async def test_openai_async_gpt5_payload(monkeypatch):
             }
         }
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
@@ -1544,27 +1566,31 @@ async def test_openai_async_gpt5_payload(monkeypatch):
         def json(self):
             return {"choices": []}
 
-    class DummyAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
+    class FakeClient:
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
-            return DummyResponse()
+            return FakeResp()
+
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient()
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        fake_factory,
+    )
 
     result = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi there"}],
@@ -1591,7 +1617,7 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
     def fake_config():
         return {"groq_api": {"api_key": "groq-key"}}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
@@ -1600,27 +1626,34 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
         def json(self):
             return expected_response
 
-    class DummyAsyncClient:
-        def __init__(self, *args, timeout=None, **kwargs):
-            captured["timeout"] = timeout
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            self.timeout = kwargs.get("timeout")
 
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
-            return DummyResponse()
+            return FakeResp()
+
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.http_client_factory",
+        fake_factory,
+    )
 
     result = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "groq async"}],
@@ -1639,43 +1672,49 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
     def fake_config():
         return {"openrouter_api": {"api_key": "router-key"}}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
             return None
 
-        async def aiter_lines(self):
+        def iter_lines(self):
             yield "event: ping"
             yield 'data: {"choices":[{"delta":{"content":"chunk"}}]}'
             yield "id: 123"
             yield "data: [DONE]"
 
-    class DummyStreamCtx:
-        async def __aenter__(self):
-            return DummyResponse()
+    class FakeStreamCtx:
+        def __enter__(self):
+            return FakeResp()
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-    class DummyAsyncClient:
-        def __init__(self, *args, timeout=None, **kwargs):
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
             pass
 
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, *args, **kwargs):
-            return DummyStreamCtx()
+        def stream(self, method, url, *, headers=None, json=None):
+            return FakeStreamCtx()
+
+    def fake_factory(*args, **kwargs):
+        return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
+        fake_factory,
+    )
 
     gen = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "hello"}],
