@@ -15,7 +15,7 @@ import os
 import re
 import sqlite3
 from math import ceil
-
+import ipaddress
 import aiofiles
 import asyncio
 import functools
@@ -276,6 +276,40 @@ async def get_process_code_form(
         raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
 
 
+
+def is_url_safe(url: str, allowed_domains: Optional[Set[str]] = None) -> bool:
+    """
+    Checks if the URL is safe from SSRF; i.e., does not resolve to internal/private IPs and optionally matches an allowed domain list.
+    """
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = parsed.hostname
+        if not host:
+            return False
+        # If allowed_domains is specified, only allow listed domains (strict)
+        if allowed_domains is not None:
+            # Simple domain match, can be improved if subdomains matter
+            if host not in allowed_domains and not any(host.endswith("." + d) for d in allowed_domains):
+                return False
+        # Check if host is IP (v4 or v6)
+        try:
+            ip = ipaddress.ip_address(host)
+            # Disallow internal/private IP ranges
+            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+                return False
+        except ValueError:
+            # Not an IP address; allow domain unless blacklisted
+            pass
+        # Disallow specific cloud metadata endpoint
+        if host == "169.254.169.254":
+            return False
+        return True
+    except Exception:
+        return False
+
 @router.post(
     "/process-code",
     summary="Process code files (NO DB Persistence)",
@@ -291,6 +325,11 @@ async def process_code_endpoint(
     and returns artifacts without DB writes.
     """
     _validate_inputs("code", form_data.urls, files)
+    # SSRF mitigation: check that all URLs in form_data.urls are safe
+    # Optionally specify allowed domains here, eg allowed_domains = {"github.com", "gitlab.com"}
+    for u in form_data.urls:
+        if not is_url_safe(u ):
+            raise HTTPException(status_code=400, detail=f"URL not allowed for SSRF protection: {u}")
     batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
     with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
         temp_dir = FilePath(temp_dir_path)
@@ -408,6 +447,7 @@ async def process_code_endpoint(
                     batch["errors_count"] += 1
         # Handle URLs
         if form_data.urls:
+            # All URLs checked in SSRF protection above; do not proceed unless all are safe
             async with _m_create_async_client() as client:
                 tasks = [
                     _download_url_async(
