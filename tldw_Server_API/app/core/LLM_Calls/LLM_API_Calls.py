@@ -1514,115 +1514,86 @@ async def chat_with_openai_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    import os as _os
-    # In production, use the adapter path; under pytest use a direct httpx.AsyncClient
-    if not _os.getenv("PYTEST_CURRENT_TEST"):
-        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-        registry = get_registry()
+    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
+    if not isinstance(cfg_source, dict):
+        cfg_source = {}
+    oa_cfg = cfg_source.get("openai_api") or {}
+
+    def _cfg_value(user_value, cfg_key):
+        cfg_val = oa_cfg.get(cfg_key)
+        return user_value if user_value is not None else cfg_val
+
+    final_model = model or oa_cfg.get("model")
+    final_api_key = api_key or oa_cfg.get("api_key")
+    final_system_message = system_message if system_message is not None else oa_cfg.get("system_message")
+    final_temp = _cfg_value(temp, "temperature")
+    final_top_p = _cfg_value(maxp, "top_p")
+    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
+    final_n = _cfg_value(n, "n")
+    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
+    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
+    final_response_format = response_format if response_format is not None else oa_cfg.get("response_format")
+    final_seed = _cfg_value(seed, "seed")
+    final_stop = stop if stop is not None else oa_cfg.get("stop")
+    final_tools = tools if tools is not None else oa_cfg.get("tools")
+    final_tool_choice = tool_choice if tool_choice is not None else oa_cfg.get("tool_choice")
+    final_user = user if user is not None else oa_cfg.get("user")
+    final_logit_bias = logit_bias if logit_bias is not None else oa_cfg.get("logit_bias")
+    final_logprobs = logprobs if logprobs is not None else oa_cfg.get("logprobs")
+    final_top_logprobs = top_logprobs if top_logprobs is not None else oa_cfg.get("top_logprobs")
+
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+        registry.register_adapter("openai", OpenAIAdapter)
         adapter = registry.get_adapter("openai")
-        if adapter is None:
-            from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
-            registry.register_adapter("openai", OpenAIAdapter)
-            adapter = registry.get_adapter("openai")
-        req: Dict[str, Any] = {
-            "messages": input_data,
-            "model": model,
-            "api_key": api_key,
-            "system_message": system_message,
-            "temperature": temp,
-            "top_p": maxp,
-            "frequency_penalty": frequency_penalty,
-            "logit_bias": logit_bias,
-            "logprobs": logprobs,
-            "top_logprobs": top_logprobs,
-            "max_tokens": max_tokens,
-            "n": n,
-            "presence_penalty": presence_penalty,
-            "response_format": response_format,
-            "seed": seed,
-            "stop": stop,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "user": user,
-            "custom_prompt_arg": custom_prompt_arg,
-            "app_config": app_config,
-        }
-        if streaming is not None:
-            req["stream"] = bool(streaming)
-        if streaming:
-            return adapter.astream(req)
-        return await adapter.achat(req)
 
-    # Build payload (OpenAI-compatible) for test path
-    messages: List[Dict[str, Any]] = []
-    if system_message:
-        messages.append({"role": "system", "content": system_message})
-    messages.extend(input_data or [])
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": final_model,
+        "api_key": final_api_key,
+        "system_message": final_system_message,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+        "frequency_penalty": final_frequency_penalty,
+        "logit_bias": final_logit_bias,
+        "logprobs": final_logprobs,
+        "top_logprobs": final_top_logprobs,
+        "max_tokens": final_max_tokens,
+        "n": final_n,
+        "presence_penalty": final_presence_penalty,
+        "response_format": final_response_format,
+        "seed": final_seed,
+        "stop": final_stop,
+        "tools": final_tools,
+        "tool_choice": final_tool_choice,
+        "user": final_user,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": cfg_source,
     }
-    if temp is not None:
-        payload["temperature"] = temp
-    if maxp is not None:
-        payload["top_p"] = maxp
-    if frequency_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None:
-        payload["top_logprobs"] = top_logprobs
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-    if n is not None:
-        payload["n"] = n
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if tools is not None:
-        payload["tools"] = tools
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
-    if user is not None:
-        payload["user"] = user
 
-    loaded_cfg = app_config or load_and_log_configs()
-    oa_cfg = (loaded_cfg or {}).get("openai_api", {}) if isinstance(loaded_cfg, dict) else {}
-    base = (oa_cfg.get("api_base_url") or "https://api.openai.com/v1").rstrip("/")
-    url = f"{base}/chat/completions"
-    final_key = api_key or oa_cfg.get("api_key")
-    headers = {"Content-Type": "application/json"}
-    if final_key:
-        headers["Authorization"] = f"Bearer {final_key}"
-    timeout_val = float((oa_cfg.get("api_timeout") or 90.0))
+    model_lower = (final_model or "").lower()
+    if model_lower.startswith("gpt-5"):
+        if req.get("max_tokens") is not None:
+            req["max_completion_tokens"] = req.pop("max_tokens")
+        else:
+            req.pop("max_tokens", None)
+        req.pop("top_p", None)
 
-    import httpx  # local import to ease monkeypatching
-    class _AClient(httpx.AsyncClient):
-        pass
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+
+    timeout_val = oa_cfg.get("api_timeout")
+    try:
+        timeout_val = float(timeout_val)
+    except (TypeError, ValueError):
+        timeout_val = 90.0
+
     if streaming:
-        async def _agen():
-            async with _AClient(timeout=timeout_val) as client:
-                async with client.stream("POST", url, headers=headers, json=payload) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        if not str(line).startswith("data:"):
-                            continue
-                        chunk = line if str(line).endswith("\n\n") else f"{line}\n\n"
-                        yield chunk
-        return _agen()
-    async with _AClient(timeout=timeout_val) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        return resp.json()
+        return adapter.astream(req, timeout=timeout_val)
+    return await adapter.achat(req, timeout=timeout_val)
 
 async def chat_with_groq_async(
         input_data: List[Dict[str, Any]],
@@ -1647,101 +1618,76 @@ async def chat_with_groq_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    import os as _os
-    # Production: use adapter; Tests: httpx.AsyncClient
-    if not _os.getenv("PYTEST_CURRENT_TEST"):
-        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-        registry = get_registry()
+    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
+    if not isinstance(cfg_source, dict):
+        cfg_source = {}
+    gr_cfg = cfg_source.get("groq_api") or {}
+
+    def _cfg_value(user_value, cfg_key):
+        cfg_val = gr_cfg.get(cfg_key)
+        return user_value if user_value is not None else cfg_val
+
+    final_model = model or gr_cfg.get("model")
+    final_api_key = api_key or gr_cfg.get("api_key")
+    final_system_message = system_message if system_message is not None else gr_cfg.get("system_message")
+    final_temp = _cfg_value(temp, "temperature")
+    final_top_p = _cfg_value(maxp, "top_p")
+    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
+    final_seed = _cfg_value(seed, "seed")
+    final_stop = stop if stop is not None else gr_cfg.get("stop")
+    final_response_format = response_format if response_format is not None else gr_cfg.get("response_format")
+    final_n = _cfg_value(n, "n")
+    final_user = user if user is not None else gr_cfg.get("user")
+    final_tools = tools if tools is not None else gr_cfg.get("tools")
+    final_tool_choice = tool_choice if tool_choice is not None else gr_cfg.get("tool_choice")
+    final_logit_bias = logit_bias if logit_bias is not None else gr_cfg.get("logit_bias")
+    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
+    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
+    final_logprobs = logprobs if logprobs is not None else gr_cfg.get("logprobs")
+    final_top_logprobs = top_logprobs if top_logprobs is not None else gr_cfg.get("top_logprobs")
+
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("groq")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+        registry.register_adapter("groq", GroqAdapter)
         adapter = registry.get_adapter("groq")
-        if adapter is None:
-            from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
-            registry.register_adapter("groq", GroqAdapter)
-            adapter = registry.get_adapter("groq")
-        req: Dict[str, Any] = {
-            "messages": input_data,
-            "model": model,
-            "api_key": api_key,
-            "system_message": system_message,
-            "temperature": temp,
-            "top_p": maxp,
-            "max_tokens": max_tokens,
-            "seed": seed,
-            "stop": stop,
-            "response_format": response_format,
-            "n": n,
-            "user": user,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "logit_bias": logit_bias,
-            "presence_penalty": presence_penalty,
-            "frequency_penalty": frequency_penalty,
-            "logprobs": logprobs,
-            "top_logprobs": top_logprobs,
-            "app_config": app_config,
-        }
-        if streaming is not None:
-            req["stream"] = bool(streaming)
-        if streaming:
-            return adapter.astream(req)
-        return await adapter.achat(req)
 
-    # Build payload for Groq's OpenAI-compatible API (test path)
-    messages: List[Dict[str, Any]] = []
-    if system_message:
-        messages.append({"role": "system", "content": system_message})
-    messages.extend(input_data or [])
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": final_model,
+        "api_key": final_api_key,
+        "system_message": final_system_message,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+        "max_tokens": final_max_tokens,
+        "seed": final_seed,
+        "stop": final_stop,
+        "response_format": final_response_format,
+        "n": final_n,
+        "user": final_user,
+        "tools": final_tools,
+        "tool_choice": final_tool_choice,
+        "logit_bias": final_logit_bias,
+        "presence_penalty": final_presence_penalty,
+        "frequency_penalty": final_frequency_penalty,
+        "logprobs": final_logprobs,
+        "top_logprobs": final_top_logprobs,
+        "app_config": cfg_source,
     }
-    if temp is not None:
-        payload["temperature"] = temp
-    if maxp is not None:
-        payload["top_p"] = maxp
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if n is not None:
-        payload["n"] = n
-    if user is not None:
-        payload["user"] = user
-    if tools is not None:
-        payload["tools"] = tools
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None:
-        payload["frequency_penalty"] = frequency_penalty
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None:
-        payload["top_logprobs"] = top_logprobs
+    if streaming is not None:
+        req["stream"] = bool(streaming)
 
-    loaded_cfg = app_config or load_and_log_configs()
-    gr_cfg = (loaded_cfg or {}).get("groq_api", {}) if isinstance(loaded_cfg, dict) else {}
-    base = (gr_cfg.get("api_base_url") or "https://api.groq.com/openai/v1").rstrip("/")
-    url = f"{base}/chat/completions"
-    final_key = api_key or gr_cfg.get("api_key")
-    headers = {"Content-Type": "application/json"}
-    if final_key:
-        headers["Authorization"] = f"Bearer {final_key}"
-    timeout_val = float((gr_cfg.get("api_timeout") or 90.0))
+    timeout_val = gr_cfg.get("api_timeout")
+    try:
+        timeout_val = float(timeout_val)
+    except (TypeError, ValueError):
+        timeout_val = 90.0
 
-    import httpx
-    class _AClient(httpx.AsyncClient):
-        pass
-    async with _AClient(timeout=timeout_val) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        return resp.json()
+    if streaming:
+        return adapter.astream(req, timeout=timeout_val)
+    return await adapter.achat(req, timeout=timeout_val)
 
 async def chat_with_anthropic_async(
         input_data: List[Dict[str, Any]],
@@ -1810,122 +1756,80 @@ async def chat_with_openrouter_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    import os as _os
-    # Production: use adapter; Tests: httpx.AsyncClient
-    if not _os.getenv("PYTEST_CURRENT_TEST"):
-        from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-        registry = get_registry()
+    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
+    if not isinstance(cfg_source, dict):
+        cfg_source = {}
+    or_cfg = cfg_source.get("openrouter_api") or {}
+
+    def _cfg_value(user_value, cfg_key):
+        cfg_val = or_cfg.get(cfg_key)
+        return user_value if user_value is not None else cfg_val
+
+    final_model = model or or_cfg.get("model")
+    final_api_key = api_key or or_cfg.get("api_key")
+    final_system_message = system_message if system_message is not None else or_cfg.get("system_message")
+    final_temp = _cfg_value(temp, "temperature")
+    final_top_p = _cfg_value(top_p, "top_p")
+    final_top_k = _cfg_value(top_k, "top_k")
+    final_min_p = _cfg_value(min_p, "min_p")
+    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
+    final_seed = _cfg_value(seed, "seed")
+    final_stop = stop if stop is not None else or_cfg.get("stop")
+    final_response_format = response_format if response_format is not None else or_cfg.get("response_format")
+    final_n = _cfg_value(n, "n")
+    final_user = user if user is not None else or_cfg.get("user")
+    final_tools = tools if tools is not None else or_cfg.get("tools")
+    final_tool_choice = tool_choice if tool_choice is not None else or_cfg.get("tool_choice")
+    final_logit_bias = logit_bias if logit_bias is not None else or_cfg.get("logit_bias")
+    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
+    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
+    final_logprobs = logprobs if logprobs is not None else or_cfg.get("logprobs")
+    final_top_logprobs = top_logprobs if top_logprobs is not None else or_cfg.get("top_logprobs")
+
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openrouter")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
+        registry.register_adapter("openrouter", OpenRouterAdapter)
         adapter = registry.get_adapter("openrouter")
-        if adapter is None:
-            from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
-            registry.register_adapter("openrouter", OpenRouterAdapter)
-            adapter = registry.get_adapter("openrouter")
-        req: Dict[str, Any] = {
-            "messages": input_data,
-            "model": model,
-            "api_key": api_key,
-            "system_message": system_message,
-            "temperature": temp,
-            "top_p": top_p,
-            "top_k": top_k,
-            "min_p": min_p,
-            "max_tokens": max_tokens,
-            "seed": seed,
-            "stop": stop,
-            "response_format": response_format,
-            "n": n,
-            "user": user,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "logit_bias": logit_bias,
-            "presence_penalty": presence_penalty,
-            "frequency_penalty": frequency_penalty,
-            "logprobs": logprobs,
-            "top_logprobs": top_logprobs,
-            "app_config": app_config,
-        }
-        if streaming is not None:
-            req["stream"] = bool(streaming)
-        if streaming:
-            return adapter.astream(req)
-        return await adapter.achat(req)
 
-    # Build payload (test path)
-    messages: List[Dict[str, Any]] = []
-    if system_message:
-        messages.append({"role": "system", "content": system_message})
-    messages.extend(input_data or [])
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": final_model,
+        "api_key": final_api_key,
+        "system_message": final_system_message,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+        "top_k": final_top_k,
+        "min_p": final_min_p,
+        "max_tokens": final_max_tokens,
+        "seed": final_seed,
+        "stop": final_stop,
+        "response_format": final_response_format,
+        "n": final_n,
+        "user": final_user,
+        "tools": final_tools,
+        "tool_choice": final_tool_choice,
+        "logit_bias": final_logit_bias,
+        "presence_penalty": final_presence_penalty,
+        "frequency_penalty": final_frequency_penalty,
+        "logprobs": final_logprobs,
+        "top_logprobs": final_top_logprobs,
+        "app_config": cfg_source,
     }
-    if temp is not None:
-        payload["temperature"] = temp
-    if top_p is not None:
-        payload["top_p"] = top_p
-    if top_k is not None:
-        payload["top_k"] = top_k
-    if min_p is not None:
-        payload["min_p"] = min_p
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if n is not None:
-        payload["n"] = n
-    if user is not None:
-        payload["user"] = user
-    if tools is not None:
-        payload["tools"] = tools
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None:
-        payload["frequency_penalty"] = frequency_penalty
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None:
-        payload["top_logprobs"] = top_logprobs
+    if streaming is not None:
+        req["stream"] = bool(streaming)
 
-    loaded_cfg = app_config or load_and_log_configs()
-    or_cfg = (loaded_cfg or {}).get("openrouter_api", {}) if isinstance(loaded_cfg, dict) else {}
-    base = (or_cfg.get("api_base_url") or "https://openrouter.ai/api/v1").rstrip("/")
-    url = f"{base}/chat/completions"
-    final_key = api_key or or_cfg.get("api_key")
-    headers = {"Content-Type": "application/json"}
-    if final_key:
-        headers["Authorization"] = f"Bearer {final_key}"
-    timeout_val = float((or_cfg.get("api_timeout") or 90.0))
+    timeout_val = or_cfg.get("api_timeout")
+    try:
+        timeout_val = float(timeout_val)
+    except (TypeError, ValueError):
+        timeout_val = 90.0
 
-    import httpx
-    class _AClient(httpx.AsyncClient):
-        pass
     if streaming:
-        async def _agen():
-            async with _AClient(timeout=timeout_val) as client:
-                async with client.stream("POST", url, headers=headers, json=payload) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        s = str(line)
-                        # Filter control lines (event:, id:) and keep data:
-                        if not s.startswith("data:"):
-                            continue
-                        out = s if s.endswith("\n\n") else f"{s}\n\n"
-                        yield out
-        return _agen()
-    async with _AClient(timeout=timeout_val) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        return resp.json()
+        return adapter.astream(req, timeout=timeout_val)
+    return await adapter.achat(req, timeout=timeout_val)
 def legacy_chat_with_bedrock(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
