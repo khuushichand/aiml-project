@@ -2796,6 +2796,28 @@ if WEBUI_DIR.exists():
 
         return JSONResponse(content=config)
 
+    # Explicit handlers for /webui and /webui/ before static mount to avoid shadowing
+    async def _serve_webui_index():
+        idx = WEBUI_DIR / "index.html"
+        try:
+            if idx.exists():
+                return FileResponse(idx, media_type="text/html")
+        except Exception:
+            pass
+        try:
+            from fastapi.responses import JSONResponse  # local import to avoid top-level churn
+            return JSONResponse({"detail": "WebUI index not found"}, status_code=404)
+        except Exception:
+            raise HTTPException(status_code=404, detail="WebUI index not found")
+
+    try:
+        # Redirect bare /webui to /webui/
+        app.add_api_route("/webui", lambda: RedirectResponse(url="/webui/", status_code=307), include_in_schema=False)
+        # Explicitly serve the main index at /webui/
+        app.add_api_route("/webui/", _serve_webui_index, include_in_schema=False)
+    except Exception as _webui_idx_err:
+        logger.debug(f"Could not register explicit /webui handlers: {_webui_idx_err}")
+
     # Gate WebUI static mount and config endpoint
     try:
         if route_enabled("webui"):

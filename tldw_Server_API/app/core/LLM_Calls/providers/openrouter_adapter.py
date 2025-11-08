@@ -4,6 +4,12 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import os
 
 from .base import ChatProvider
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    normalize_provider_line,
+    is_done_line,
+    sse_done,
+    finalize_stream,
+)
 
 
 def _prefer_httpx_in_tests() -> bool:
@@ -163,10 +169,20 @@ class OpenRouterAdapter(ChatProvider):
                 with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
+                        seen_done = False
                         for line in resp.iter_lines():
                             if not line:
                                 continue
-                            yield line
+                            if is_done_line(line):
+                                if not seen_done:
+                                    seen_done = True
+                                    yield sse_done()
+                                continue
+                            normalized = normalize_provider_line(line)
+                            if normalized is not None:
+                                yield normalized
+                        for tail in finalize_stream(response=resp, done_already=seen_done):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)

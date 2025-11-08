@@ -18,7 +18,7 @@ import json
 import sqlite3
 import time
 import uuid
-from functools import partial
+from functools import partial, lru_cache
 from collections import defaultdict, deque
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 from unittest.mock import Mock
@@ -170,7 +170,7 @@ API_KEYS = SCHEMAS_API_KEYS
 router = APIRouter()
 
 # Load configuration values from config
-from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import load_comprehensive_config, load_and_log_configs
 
 _config = load_comprehensive_config()
 # ConfigParser uses sections, check if Chat-Module section exists
@@ -269,14 +269,32 @@ async def _decrement_active_request(user_id: str) -> None:
 
 # --- Helper Functions ---
 
-def _get_default_provider() -> str:
-    """Resolve default provider at call time to honor env overrides set by tests.
+@lru_cache(maxsize=1)
+def _config_default_llm_provider() -> Optional[str]:
+    """Read default provider from config.txt (llm_api_settings/API sections)."""
+    cfg = load_and_log_configs()
+    if not isinstance(cfg, dict):
+        return None
 
-    Precedence:
-    - Env var `DEFAULT_LLM_PROVIDER` if set
-    - If TEST_MODE true and no env override, use 'local-llm'
-    - Fallback to imported DEFAULT_LLM_PROVIDER constant
-    """
+    def _extract(section: str) -> Optional[str]:
+        data = cfg.get(section)
+        if isinstance(data, dict):
+            default_api = data.get("default_api")
+            if isinstance(default_api, str):
+                value = default_api.strip()
+                if value:
+                    return value
+        return None
+
+    return _extract("llm_api_settings") or _extract("API")
+
+
+def _get_default_provider() -> str:
+    """Resolve default provider preferring config.txt, then env/test fallbacks."""
+    cfg_default = _config_default_llm_provider()
+    if cfg_default:
+        return cfg_default
+
     env_val = os.getenv("DEFAULT_LLM_PROVIDER")
     if env_val:
         return env_val
