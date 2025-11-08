@@ -4,6 +4,8 @@
 
   let jobsStreamHandle = null;
   let jobsStatsTimer = null;
+  let __boundEnhancements = false;
+  let simpleChatStreamHandle = null;
 
   function setSimpleDefaults() {
     try {
@@ -103,7 +105,7 @@
 
     const mediaType = document.getElementById('simpleIngest_media_type')?.value || 'document';
     const url = (document.getElementById('simpleIngest_url')?.value || '').trim();
-    const file = document.getElementById('simpleIngest_file')?.files?.[0] || null;
+    const fileList = document.getElementById('simpleIngest_file')?.files || null;
     const model = document.getElementById('simpleIngest_model')?.value || '';
     const performAnalysis = !!document.getElementById('simpleIngest_perform_analysis')?.checked;
     const doChunk = !!document.getElementById('simpleIngest_chunking')?.checked;
@@ -115,7 +117,7 @@
     const seedPrompt = (document.getElementById('simpleIngest_seed')?.value || '').trim();
     const systemPrompt = (document.getElementById('simpleIngest_system')?.value || '').trim();
 
-    if (!isWeb && !url && !file) {
+    if (!isWeb && !url && !(fileList && fileList.length)) {
       Toast && Toast.warning ? Toast.warning('Provide a URL or choose a file') : alert('Provide a URL or choose a file');
       return;
     }
@@ -130,7 +132,7 @@
       const fd = new FormData();
       fd.append('media_type', mediaType);
       if (url) fd.append('urls', url);
-      if (file) fd.append('files', file);
+      if (fileList && fileList.length) { Array.from(fileList).forEach(f => fd.append('files', f)); }
       if (model) fd.append('api_name', model);
       fd.append('perform_analysis', String(performAnalysis));
       fd.append('perform_chunking', String(doChunk));
@@ -175,14 +177,21 @@
     try {
       Loading.show(container, 'Ingesting...');
       startInlineJobsFeedback(container);
+      // Reflect queue submit
+      try {
+        const files = Array.from(document.getElementById('simpleIngest_file')?.files || []);
+        renderIngestQueue(files);
+      } catch (_) {}
       const data = await apiClient.post(requestPath, requestOptions.body, { timeout: requestOptions.timeout });
       if (typeof Utils !== 'undefined' && typeof Utils.syntaxHighlightJSON === 'function') {
         resp.innerHTML = Utils.syntaxHighlightJSON(data);
       } else {
         resp.textContent = JSON.stringify(data, null, 2);
       }
+      try { endpointHelper.updateCorrelationSnippet(resp); } catch(_){}
+      try { renderIngestJobsLink(data, isWeb ? 'webscrape' : 'media'); } catch(_){}
     } catch (e) {
-      resp.textContent = (e && e.message) ? String(e.message) : 'Failed';
+      try { endpointHelper.displayError(resp, e); } catch(_) { resp.textContent = (e && e.message) ? String(e.message) : 'Failed'; }
     } finally {
       Loading.hide(container);
       stopInlineJobsFeedback();
@@ -205,24 +214,111 @@
     const msg = (input.value || '').trim();
     if (!msg) return;
     input.value = '';
-    const payload = {
-      messages: [{ role: 'user', content: msg }]
-    };
+    const payload = { messages: [{ role: 'user', content: msg }] };
     const model = modelSel ? (modelSel.value || '') : '';
     if (model) payload.model = model;
     if (saveEl && saveEl.checked) payload.save_to_db = true;
+
+    const wantStream = !!document.getElementById('simpleChat_stream_toggle')?.checked;
+    if (wantStream) {
+      // Streaming path (optional fallback to non-stream on failure)
+      try {
+        await simpleChatStartStream(payload);
+        try { Utils.saveToStorage('chat-ui-selection', { model }); } catch(_){}
+      } catch (streamErr) {
+        try { endpointHelper.displayError(out, streamErr); } catch(_) { out.textContent = (streamErr && streamErr.message) ? String(streamErr.message) : 'Failed'; }
+        try { endpointHelper.updateCorrelationSnippet(out); } catch(_){}
+      }
+    } else {
+      // Non-streaming
+      try {
+        Loading.show(out.parentElement, 'Sending...');
+        const res = await apiClient.post('/api/v1/chat/completions', payload);
+        out.textContent = JSON.stringify(res, null, 2);
+        try { endpointHelper.updateCorrelationSnippet(out); } catch(_){}
+      } catch (e) {
+        try { endpointHelper.displayError(out, e); } catch(_) { out.textContent = (e && e.message) ? String(e.message) : 'Failed'; }
+        try { endpointHelper.updateCorrelationSnippet(out); } catch(_){}
+      } finally {
+        Loading.hide(out.parentElement);
+      }
+    }
+  }
+
+  async function simpleChatStartStream(requestPayload) {
+    const streamBox = document.getElementById('simpleChat_stream');
+    const answerEl = document.getElementById('simpleChat_answer');
+    const usageEl = document.getElementById('simpleChat_usage');
+    const copyBtn = document.getElementById('simpleChat_copy');
+    const stopBtn = document.getElementById('simpleChat_stop');
+    const out = document.getElementById('simpleChat_response');
+    if (!streamBox || !answerEl || !usageEl || !copyBtn || !stopBtn) return;
+    // Reset
+    answerEl.textContent = '';
+    usageEl.textContent = 'tokens: –';
+    streamBox.style.display = '';
+    stopBtn.style.display = '';
+    copyBtn.disabled = true;
+    let assembled = '';
+    let usage = null;
+
+    // Bind copy
+    if (!copyBtn._bound) {
+      copyBtn.addEventListener('click', async () => {
+        try { await Utils.copyToClipboard(assembled); if (Toast && Toast.success) Toast.success('Copied answer'); } catch (_) {}
+      });
+      copyBtn._bound = true;
+    }
+    // Bind stop
+    if (!stopBtn._bound) {
+      stopBtn.addEventListener('click', () => { try { if (simpleChatStreamHandle && simpleChatStreamHandle.abort) simpleChatStreamHandle.abort(); } catch (_) {} });
+      stopBtn._bound = true;
+    }
+
+    // Start SSE
+    simpleChatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+      method: 'POST',
+      body: requestPayload,
+      onEvent: (evt) => {
+        try {
+          const delta = evt?.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string' && delta.length > 0) {
+            assembled += delta;
+            try {
+              if (typeof renderMarkdownToElement === 'function') { renderMarkdownToElement(assembled, answerEl); }
+              else { answerEl.textContent = assembled; }
+            } catch (_) { answerEl.textContent = assembled; }
+          }
+          // Detect token usage if provided by server
+          const maybeUsage = evt?.usage || evt?.tldw_usage || evt?.tldw_metadata?.usage;
+          if (maybeUsage) {
+            usage = maybeUsage;
+            const pt = usage.prompt_tokens ?? usage.input_tokens ?? usage.prompt ?? '-';
+            const ct = usage.completion_tokens ?? usage.output_tokens ?? usage.completion ?? '-';
+            const tt = usage.total_tokens ?? ((Number(pt)||0) + (Number(ct)||0));
+            usageEl.textContent = `tokens: prompt=${pt} completion=${ct} total=${tt}`;
+          }
+        } catch (_) { /* ignore */ }
+      },
+      timeout: 600000
+    });
+
     try {
-      Loading.show(out.parentElement, 'Sending...');
-      const res = await apiClient.post('/api/v1/chat/completions', payload);
-      out.textContent = JSON.stringify(res, null, 2);
-      // Persist last used model
-      try { Utils.saveToStorage('chat-ui-selection', { model }); } catch(_){}
-      try { endpointHelper.updateCorrelationSnippet(out); } catch(_){}
+      await simpleChatStreamHandle.done;
+      copyBtn.disabled = false;
+      stopBtn.style.display = 'none';
+      // Also render a final JSON object into the pre for debugging/repro
+      try {
+        const finalObj = { message: assembled, usage: usage || null, finished_at: new Date().toISOString() };
+        out.textContent = JSON.stringify(finalObj, null, 2);
+        endpointHelper.updateCorrelationSnippet(out);
+      } catch (_) {}
     } catch (e) {
-      out.textContent = (e && e.message) ? String(e.message) : 'Failed';
-      try { endpointHelper.updateCorrelationSnippet(out); } catch(_){}
-    } finally {
-      Loading.hide(out.parentElement);
+      stopBtn.style.display = 'none';
+      copyBtn.disabled = assembled.length === 0;
+      try { endpointHelper.displayError(out, e); } catch(_) { out.textContent = (e && e.message) ? String(e.message) : 'Failed'; }
+      endpointHelper.updateCorrelationSnippet(out);
+      throw e;
     }
   }
 
@@ -254,47 +350,104 @@
       if (!Array.isArray(items) || items.length === 0) {
         box.innerHTML = '<span class="text-muted">No results</span>';
       } else {
-        const ul = document.createElement('ul');
-        ul.style.listStyle = 'none';
-        ul.style.padding = '0';
+        const frag = document.createDocumentFragment();
+        const qLower = q.toLowerCase();
         items.forEach((r) => {
-          const li = document.createElement('li');
-          li.style.padding = '6px 0';
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.style.margin = '6px 0';
+          card.style.padding = '8px';
+          card.style.border = '1px solid var(--color-border)';
+          card.style.borderRadius = '6px';
           const title = (r.title || r.metadata?.title || '(untitled)');
           const id = r.id || r.media_id || '';
-          const open = document.createElement('a');
-          open.href = '#';
-          open.textContent = title;
-          open.title = 'Open in Media → Management';
-          open.addEventListener('click', (e) => {
-            e.preventDefault();
-            try {
-              const btn = document.querySelector('.top-tab-button[data-toptab="media"]');
-              if (btn && window.webUI) {
-                window.webUI.activateTopTab(btn).then(() => {
-                  setTimeout(() => {
-                    try { const mid = document.getElementById('getMediaItem_media_id'); if (mid) mid.value = String(id || ''); } catch(_){}
-                    try { if (typeof window.makeRequest === 'function') window.makeRequest('getMediaItem', 'GET', '/api/v1/media/{media_id}', 'none'); } catch(_){}
-                  }, 200);
-                });
-              }
-            } catch (_) {}
-          });
-          li.appendChild(open);
-          ul.appendChild(li);
+          const mediaType = r.media_type || r.type || r.metadata?.media_type || '';
+          // Build snippet from possible fields
+          let snippet = r.snippet || r.content_snippet || r.content || r.text || '';
+          if (!snippet && r.highlights && typeof r.highlights === 'string') snippet = r.highlights;
+          snippet = String(snippet).slice(0, 400);
+          card.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <div style="font-weight:600;">${escapeHtml(title)}</div>
+              <div class="text-small text-muted">${escapeHtml(mediaType || '')}</div>
+            </div>
+            <div class="text-small" style="margin-top:6px;">${highlightPlain(snippet, q)}</div>
+            <div class="btn-group" style="margin-top:6px;">
+              <button class="btn btn-secondary btn-sm" data-open-media="${String(id)}">Open in Media Management</button>
+            </div>
+          `;
+          frag.appendChild(card);
         });
-        box.appendChild(ul);
+        box.appendChild(frag);
+        // Bind open buttons
+        box.querySelectorAll('button[data-open-media]').forEach(btn => {
+          if (!btn._bound) {
+            btn.addEventListener('click', (e) => {
+              e.preventDefault();
+              const id = btn.getAttribute('data-open-media');
+              try {
+                const tb = document.querySelector('.top-tab-button[data-toptab="media"]');
+                if (tb && window.webUI) {
+                  window.webUI.activateTopTab(tb).then(() => {
+                    setTimeout(() => {
+                      try { const mid = document.getElementById('getMediaItem_media_id'); if (mid) mid.value = String(id || ''); } catch(_){}
+                      try { if (typeof window.makeRequest === 'function') window.makeRequest('getMediaItem', 'GET', '/api/v1/media/{media_id}', 'none'); } catch(_){}
+                    }, 200);
+                  });
+                }
+              } catch (_) {}
+            });
+            btn._bound = true;
+          }
+        });
       }
 
       // Update pagination controls
       if (infoEl) infoEl.textContent = totalPages > 0 ? `Page ${page} of ${totalPages} (${totalItems})` : '';
       if (prevBtn) prevBtn.disabled = (page <= 1);
       if (nextBtn) nextBtn.disabled = (totalPages && page >= totalPages);
+      // Persist search prefs
+      try { Utils.saveToStorage('simple-search-prefs', { page, rpp }); } catch(_){}
     } catch (e) {
-      box.textContent = (e && e.message) ? String(e.message) : 'Search failed';
+      try { endpointHelper.displayError(box, e); } catch(_) { box.textContent = (e && e.message) ? String(e.message) : 'Search failed'; }
     } finally {
       Loading.hide(box.parentElement);
     }
+  }
+
+  function renderIngestJobsLink(data, domain) {
+    const jobBox = document.getElementById('simpleIngest_job');
+    if (!jobBox) return;
+    try {
+      let ids = [];
+      if (Array.isArray(data?.job_ids)) ids = data.job_ids.filter(Boolean);
+      else if (data?.job_id) ids = [data.job_id];
+      else if (Array.isArray(data?.jobs)) ids = data.jobs.map(j => j?.job_id || j?.id).filter(Boolean);
+      const linkId = 'simpleIngest_view_jobs';
+      const idChips = ids.slice(0, 5).map(j => `<span class="chip">${String(j)}</span>`).join(' ');
+      const html = `<div style="margin-top:6px;">${idChips} <a href="#" id="${linkId}">View in Admin → Jobs</a></div>`;
+      const wrap = document.createElement('div');
+      wrap.innerHTML = html;
+      jobBox.appendChild(wrap);
+      const a = document.getElementById(linkId);
+      if (a && !a._bound) {
+        a.addEventListener('click', (e) => { e.preventDefault(); openJobsFiltered(domain || 'media', '', ''); });
+        a._bound = true;
+      }
+    } catch (_) {}
+  }
+
+  function escapeHtml(s) {
+    try { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); } catch(_) { return s; }
+  }
+  function highlightPlain(text, query) {
+    try {
+      const esc = escapeHtml(text || '');
+      const q = (query || '').trim();
+      if (!q) return esc;
+      const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig');
+      return esc.replace(re, '<mark>$1</mark>');
+    } catch (_) { return escapeHtml(text || ''); }
   }
 
   function bindSimpleHandlers() {
@@ -337,6 +490,13 @@
       });
       qEl._bound = true;
     }
+
+    // Enhanced UX bindings (only once)
+    if (!__boundEnhancements) {
+      __boundEnhancements = true;
+      try { bindEnhancedInputs(); } catch(_){}
+      try { bindCurlToggles(); } catch(_){}
+    }
   }
 
   // Public initializer used by main.js when the Simple tab is shown
@@ -369,6 +529,31 @@
 
     // Bind paging keyboard shortcuts
     bindSimpleSearchShortcuts();
+
+    // Apply saved preferences (media type, scrape method, search rpp/page)
+    try {
+      const savedMedia = Utils.getFromStorage('simple-media-type');
+      if (savedMedia) { const s = document.getElementById('simpleIngest_media_type'); if (s) { s.value = savedMedia; updateSimpleIngestUI(); } }
+    } catch (_) {}
+    try {
+      const savedScrape = Utils.getFromStorage('simple-scrape-method');
+      if (savedScrape) { const s = document.getElementById('simpleIngest_scrape_method'); if (s) { s.value = savedScrape; updateSimpleIngestUI(); } }
+    } catch (_) {}
+    try {
+      const prefs = Utils.getFromStorage('simple-search-prefs');
+      if (prefs) {
+        const rppEl = document.getElementById('simpleSearch_rpp'); if (rppEl && prefs.rpp) rppEl.value = String(prefs.rpp);
+        if (prefs.page) __simpleSearchState.page = parseInt(prefs.page, 10) || 1;
+      }
+      updateSimpleSearchButtonState();
+    } catch (_) {}
+
+    // Restore chat stream toggle preference
+    try {
+      const savedStream = Utils.getFromStorage('simple-chat-stream');
+      const st = document.getElementById('simpleChat_stream_toggle');
+      if (st && typeof savedStream === 'boolean') st.checked = savedStream;
+    } catch (_) {}
   };
 
   function updateSimpleIngestUI() {
@@ -390,6 +575,8 @@
       const method = methodSel ? methodSel.value : 'individual';
       if (urlLevelGroup) urlLevelGroup.style.display = (isWeb && method === 'url_level') ? 'block' : 'none';
       if (recGroup) recGroup.style.display = (isWeb && method === 'recursive_scraping') ? 'flex' : 'none';
+      // Update ingest button disabled state based on current inputs
+      updateSimpleIngestButtonState();
     } catch (_) {}
   }
 
@@ -424,6 +611,377 @@
         }
       } catch (_) {}
     });
+  }
+
+  // --------------------------
+  // UX Enhancements
+  // --------------------------
+  function updateSimpleIngestButtonState() {
+    try {
+      const mediaSel = document.getElementById('simpleIngest_media_type');
+      const isWeb = mediaSel && mediaSel.value === 'web';
+      const url = (document.getElementById('simpleIngest_url')?.value || '').trim();
+      const fileChosen = !!(document.getElementById('simpleIngest_file')?.files?.length);
+      const webUrl = (document.getElementById('simpleIngest_web_url')?.value || '').trim();
+      const btn = document.getElementById('simpleIngest_submit');
+      if (btn) btn.disabled = isWeb ? (!webUrl) : (!(url || fileChosen));
+    } catch (_) {}
+  }
+
+  function updateSimpleChatButtonState() {
+    try {
+      const msg = (document.getElementById('simpleChat_input')?.value || '').trim();
+      const btn = document.getElementById('simpleChat_send');
+      if (btn) btn.disabled = !msg;
+    } catch (_) {}
+  }
+
+  function updateSimpleSearchButtonState() {
+    try {
+      const q = (document.getElementById('simpleSearch_q')?.value || '').trim();
+      const btn = document.getElementById('simpleSearch_run');
+      if (btn) btn.disabled = !q;
+    } catch (_) {}
+  }
+
+  function bindEnhancedInputs() {
+    try {
+      // Ingest: enable/disable submit
+      const inputs = ['simpleIngest_media_type','simpleIngest_url','simpleIngest_file','simpleIngest_web_url'];
+      inputs.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el._uxBound) {
+          const evt = (el.tagName === 'SELECT' || el.type === 'file') ? 'change' : 'input';
+          el.addEventListener(evt, updateSimpleIngestButtonState);
+          // Persist preferences for media and scrape method
+          if (id === 'simpleIngest_media_type') el.addEventListener('change', () => { try { Utils.saveToStorage('simple-media-type', el.value); } catch(_){} });
+          if (id === 'simpleIngest_scrape_method') el.addEventListener('change', () => { try { Utils.saveToStorage('simple-scrape-method', el.value); } catch(_){} });
+          el._uxBound = true;
+        }
+      });
+      updateSimpleIngestButtonState();
+
+      // Auto-detect media type based on selected file(s) or URL extension
+      const fileInput = document.getElementById('simpleIngest_file');
+      if (fileInput && !fileInput._detectBound) {
+        fileInput.addEventListener('change', () => {
+          try {
+            const files = Array.from(fileInput.files || []);
+            renderIngestQueue(files);
+            if (files.length > 0) {
+              const mt = detectMediaTypeFromName(files[0].name || '');
+              if (mt) { const sel = document.getElementById('simpleIngest_media_type'); if (sel) sel.value = mt; }
+            }
+          } catch (_) {}
+        });
+        fileInput._detectBound = true;
+      }
+      const urlInput = document.getElementById('simpleIngest_url');
+      if (urlInput && !urlInput._detectBound) {
+        urlInput.addEventListener('change', () => {
+          try { const mt = detectMediaTypeFromName(urlInput.value || ''); if (mt) { const sel = document.getElementById('simpleIngest_media_type'); if (sel) sel.value = mt; } } catch(_){}
+        });
+        urlInput._detectBound = true;
+      }
+      const scrapeSel = document.getElementById('simpleIngest_scrape_method');
+      if (scrapeSel && !scrapeSel._uxBound) {
+        scrapeSel.addEventListener('change', () => {
+          updateSimpleIngestUI();
+          try { Utils.saveToStorage('simple-scrape-method', scrapeSel.value); } catch(_){}
+        });
+        scrapeSel._uxBound = true;
+      }
+
+      // Chat: enable/disable send, add Cmd/Ctrl+Enter shortcut
+      const chatInput = document.getElementById('simpleChat_input');
+      if (chatInput && !chatInput._uxBound) {
+        chatInput.addEventListener('input', updateSimpleChatButtonState);
+        chatInput.addEventListener('keydown', (e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            simpleChatSend();
+          }
+        });
+        chatInput._uxBound = true;
+      }
+      updateSimpleChatButtonState();
+
+      // Persist stream toggle preference
+      const streamToggle = document.getElementById('simpleChat_stream_toggle');
+      if (streamToggle && !streamToggle._uxBound) {
+        streamToggle.addEventListener('change', () => {
+          try { Utils.saveToStorage('simple-chat-stream', !!streamToggle.checked); } catch(_){}
+        });
+        streamToggle._uxBound = true;
+      }
+
+      // Search: enable/disable search, clear button
+      const searchQ = document.getElementById('simpleSearch_q');
+      if (searchQ && !searchQ._uxBound) {
+        searchQ.addEventListener('input', updateSimpleSearchButtonState);
+        searchQ._uxBound = true;
+      }
+      const clearBtn = document.getElementById('simpleSearch_clear');
+      if (clearBtn && !clearBtn._bound) {
+        clearBtn.addEventListener('click', () => {
+          const el = document.getElementById('simpleSearch_q');
+          if (el) el.value = '';
+          updateSimpleSearchButtonState();
+          const box = document.getElementById('simpleSearch_results');
+          if (box) box.innerHTML = '';
+          const info = document.getElementById('simpleSearch_pageinfo');
+          if (info) info.textContent = '';
+          const prevBtn = document.getElementById('simpleSearch_prev');
+          const nextBtn = document.getElementById('simpleSearch_next');
+          if (prevBtn) prevBtn.disabled = true;
+          if (nextBtn) nextBtn.disabled = true;
+        });
+        clearBtn._bound = true;
+      }
+      updateSimpleSearchButtonState();
+
+      // Persist RPP when changed
+      const rppEl = document.getElementById('simpleSearch_rpp');
+      if (rppEl && !rppEl._uxBound) {
+        rppEl.addEventListener('change', () => {
+          try { __simpleSearchState.rpp = Math.max(1, Math.min(100, parseInt(rppEl.value || '10', 10))); Utils.saveToStorage('simple-search-prefs', { page: __simpleSearchState.page, rpp: __simpleSearchState.rpp }); } catch(_){}
+        });
+        rppEl._uxBound = true;
+      }
+
+      // Paste-from-clipboard for ingest URLs
+      const pasteBtn = document.getElementById('simpleIngest_paste_url');
+      if (pasteBtn && !pasteBtn._bound) {
+        pasteBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          try {
+            const text = await navigator.clipboard.readText();
+            const el = document.getElementById('simpleIngest_url');
+            if (el) { el.value = text || ''; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }
+          } catch (_) {
+            Toast && Toast.warning ? Toast.warning('Clipboard not available') : 0;
+          }
+        });
+        pasteBtn._bound = true;
+      }
+      const pasteWebBtn = document.getElementById('simpleIngest_paste_web_url');
+      if (pasteWebBtn && !pasteWebBtn._bound) {
+        pasteWebBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          try {
+            const text = await navigator.clipboard.readText();
+            const el = document.getElementById('simpleIngest_web_url');
+            if (el) { el.value = text || ''; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }
+          } catch (_) {
+            Toast && Toast.warning ? Toast.warning('Clipboard not available') : 0;
+          }
+        });
+        pasteWebBtn._bound = true;
+      }
+    } catch (_) {}
+  }
+
+  function bindCurlToggles() {
+    try {
+      // Ingest cURL
+      const btn = document.getElementById('simpleIngest_show_curl');
+      if (btn && !btn._bound) {
+        btn.addEventListener('click', () => {
+          try {
+            const mediaType = document.getElementById('simpleIngest_media_type')?.value || 'document';
+            const url = (document.getElementById('simpleIngest_url')?.value || '').trim();
+            const fileList = document.getElementById('simpleIngest_file')?.files || null;
+            const model = document.getElementById('simpleIngest_model')?.value || '';
+            const performAnalysis = !!document.getElementById('simpleIngest_perform_analysis')?.checked;
+            const doChunk = !!document.getElementById('simpleIngest_chunking')?.checked;
+            const isWeb = (mediaType === 'web');
+            const webUrl = (document.getElementById('simpleIngest_web_url')?.value || '').trim();
+            const seedPrompt = (document.getElementById('simpleIngest_seed')?.value || '').trim();
+            const systemPrompt = (document.getElementById('simpleIngest_system')?.value || '').trim();
+            let method = 'POST';
+            let path = '/api/v1/media/add';
+            let options = {};
+            if (!isWeb) {
+              const fd = new FormData();
+              fd.append('media_type', mediaType);
+              if (url) fd.append('urls', url);
+              if (fileList && fileList.length) { Array.from(fileList).forEach(f => fd.append('files', f)); }
+              if (model) fd.append('api_name', model);
+              fd.append('perform_analysis', String(performAnalysis));
+              fd.append('perform_chunking', String(doChunk));
+              if (seedPrompt) fd.append('custom_prompt', seedPrompt);
+              if (systemPrompt) fd.append('system_prompt', systemPrompt);
+              fd.append('timestamp_option', 'true');
+              fd.append('chunk_size', '500');
+              fd.append('chunk_overlap', '200');
+              options = { body: fd };
+            } else {
+              path = '/api/v1/media/ingest-web-content';
+              const methodSel = document.getElementById('simpleIngest_scrape_method');
+              const methodVal = methodSel ? methodSel.value : 'individual';
+              const body = {
+                urls: webUrl ? [webUrl] : [],
+                scrape_method: methodVal,
+                perform_analysis: performAnalysis,
+                custom_prompt: seedPrompt || undefined,
+                system_prompt: systemPrompt || undefined,
+                api_name: model || undefined,
+                perform_chunking: doChunk
+              };
+              if (methodVal === 'url_level') {
+                const lvl = parseInt(document.getElementById('simpleIngest_url_level')?.value || '2', 10);
+                if (!isNaN(lvl) && lvl > 0) body.url_level = lvl;
+              } else if (methodVal === 'recursive_scraping') {
+                const maxPages = parseInt(document.getElementById('simpleIngest_max_pages')?.value || '10', 10);
+                const maxDepth = parseInt(document.getElementById('simpleIngest_max_depth')?.value || '3', 10);
+                if (!isNaN(maxPages) && maxPages > 0) body.max_pages = maxPages;
+                if (!isNaN(maxDepth) && maxDepth > 0) body.max_depth = maxDepth;
+              }
+              const includeExternal = !!document.getElementById('simpleIngest_include_external')?.checked;
+              const crawlStrategy = (document.getElementById('simpleIngest_crawl_strategy')?.value || '').trim();
+              if (includeExternal) body.include_external = true;
+              if (crawlStrategy) body.crawl_strategy = crawlStrategy;
+              options = { body };
+            }
+            const curl = (typeof apiClient.generateCurlV2 === 'function' ? apiClient.generateCurlV2(method, path, options) : apiClient.generateCurl(method, path, options));
+            const curlEl = document.getElementById('simpleIngest_curl');
+            if (curlEl) {
+              curlEl.textContent = curl;
+              curlEl.style.display = (curlEl.style.display === 'none') ? 'block' : 'none';
+              ensureCurlCopyAndNote(curlEl, 'simpleIngest');
+            }
+          } catch (e) {
+            const curlEl = document.getElementById('simpleIngest_curl');
+            if (curlEl) { curlEl.textContent = `Error generating cURL: ${e.message}`; curlEl.style.display = 'block'; }
+          }
+        });
+        btn._bound = true;
+      }
+
+      // Chat cURL
+      const chatBtn = document.getElementById('simpleChat_show_curl');
+      if (chatBtn && !chatBtn._bound) {
+        chatBtn.addEventListener('click', () => {
+          try {
+            const model = document.getElementById('simpleChat_model')?.value || '';
+            const msg = (document.getElementById('simpleChat_input')?.value || '').trim() || 'Hello';
+            const body = { messages: [{ role: 'user', content: msg }] };
+            if (model) body.model = model;
+            const curl = apiClient.generateCurlV2('POST', '/api/v1/chat/completions', { body });
+            const curlEl = document.getElementById('simpleChat_curl');
+            if (curlEl) {
+              curlEl.textContent = curl;
+              curlEl.style.display = (curlEl.style.display === 'none') ? 'block' : 'none';
+              ensureCurlCopyAndNote(curlEl, 'simpleChat');
+            }
+          } catch (e) {
+            const curlEl = document.getElementById('simpleChat_curl');
+            if (curlEl) { curlEl.textContent = `Error generating cURL: ${e.message}`; curlEl.style.display = 'block'; }
+          }
+        });
+        chatBtn._bound = true;
+      }
+
+      // Search cURL
+      const searchBtn = document.getElementById('simpleSearch_show_curl');
+      if (searchBtn && !searchBtn._bound) {
+        searchBtn.addEventListener('click', () => {
+          try {
+            const q = (document.getElementById('simpleSearch_q')?.value || '').trim() || 'test';
+            const rpp = Math.max(1, Math.min(100, parseInt((document.getElementById('simpleSearch_rpp')?.value || '10'), 10)));
+            const page = __simpleSearchState.page || 1;
+            const body = { query: q, fields: ['title','content'], sort_by: 'relevance' };
+            const curl = apiClient.generateCurlV2('POST', '/api/v1/media/search', { body, query: { page, results_per_page: rpp } });
+            const curlEl = document.getElementById('simpleSearch_curl');
+            if (curlEl) {
+              curlEl.textContent = curl;
+              curlEl.style.display = (curlEl.style.display === 'none') ? 'block' : 'none';
+              ensureCurlCopyAndNote(curlEl, 'simpleSearch');
+            }
+          } catch (e) {
+            const curlEl = document.getElementById('simpleSearch_curl');
+            if (curlEl) { curlEl.textContent = `Error generating cURL: ${e.message}`; curlEl.style.display = 'block'; }
+          }
+        });
+        searchBtn._bound = true;
+      }
+    } catch (_) {}
+  }
+
+  function ensureCurlCopyAndNote(curlEl, prefix) {
+    try {
+      // Masking note behavior mirrors endpointHelper
+      const noteId = `${prefix}_curl_note`;
+      let note = document.getElementById(noteId);
+      if (!note) {
+        note = document.createElement('div');
+        note.id = noteId;
+        note.className = 'text-muted';
+        note.style.fontSize = '0.85em';
+        note.style.margin = '6px 0 0 0';
+        curlEl.parentNode.insertBefore(note, curlEl.nextSibling);
+      }
+      if (apiClient && apiClient.token && !apiClient.includeTokenInCurl) {
+        note.textContent = "Note: Token masked in cURL. Use Global Settings toggle to include it, or replace [REDACTED] with your token.";
+        note.style.display = 'block';
+      } else {
+        note.textContent = '';
+        note.style.display = 'none';
+      }
+      // Copy button
+      if (!curlEl.nextElementSibling || !curlEl.nextElementSibling.classList.contains('copy-curl')) {
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn btn-sm btn-secondary copy-curl';
+        copyBtn.textContent = 'Copy cURL';
+        copyBtn.onclick = () => {
+          Utils.copyToClipboard(curlEl.textContent || '');
+          Toast && Toast.success ? Toast.success('cURL command copied to clipboard') : 0;
+        };
+        curlEl.parentNode.insertBefore(copyBtn, curlEl.nextSibling);
+      }
+    } catch (_) {}
+  }
+
+  // Helpers
+  function detectMediaTypeFromName(name) {
+    try {
+      const lower = String(name || '').toLowerCase();
+      if (/(\.pdf)(?:$|[?#])/.test(lower)) return 'pdf';
+      if (/(\.epub)(?:$|[?#])/.test(lower)) return 'ebook';
+      if (/(\.mp4|\.mov|\.mkv|\.webm)(?:$|[?#])/.test(lower)) return 'video';
+      if (/(\.mp3|\.wav|\.m4a|\.flac|\.ogg)(?:$|[?#])/.test(lower)) return 'audio';
+      if (/(\.html?|\.md|\.markdown|\.txt|\.docx?|\.rtf)(?:$|[?#])/.test(lower)) return 'document';
+      return '';
+    } catch (_) { return ''; }
+  }
+
+  function renderIngestQueue(files) {
+    try {
+      const box = document.getElementById('simpleIngest_queue');
+      if (!box) return;
+      const arr = Array.isArray(files) ? files : [];
+      if (!arr.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+      const items = arr.slice(0, 50).map(f => `<span class="chip" style="margin:2px;">${f.name}</span>`).join(' ');
+      box.innerHTML = `<div><strong>Files:</strong> ${items}${arr.length > 50 ? ' …' : ''}</div>`;
+      box.style.display = '';
+    } catch (_) {}
+  }
+
+  function openJobsFiltered(domain, queue, jobType) {
+    try {
+      const btn = document.querySelector('.top-tab-button[data-toptab="admin"]');
+      if (!btn || !window.webUI) return;
+      window.webUI.activateTopTab(btn).then(() => {
+        setTimeout(() => {
+          const sub = document.querySelector('#admin-subtabs .sub-tab-button[data-content-id="tabAdminJobs"]');
+          if (sub) {
+            window.webUI.activateSubTab(sub).then(() => {
+              setTimeout(() => { try { adminApplyJobsFilter(domain || '', queue || '', jobType || ''); } catch (_) {} }, 200);
+            });
+          }
+        }, 150);
+      });
+    } catch (_) {}
   }
 
 })();

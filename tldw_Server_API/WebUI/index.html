@@ -1037,11 +1037,15 @@
                             </div>
                             <div class="form-group" id="simpleIngest_url_group">
                                 <label for="simpleIngest_url">URL</label>
-                                <input type="url" id="simpleIngest_url" placeholder="https://example.com/article-or-media">
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="url" id="simpleIngest_url" placeholder="https://example.com/article-or-media" style="flex:1;">
+                                    <button class="btn btn-secondary btn-sm" id="simpleIngest_paste_url" title="Paste from clipboard">Paste</button>
+                                </div>
                             </div>
                             <div class="form-group" id="simpleIngest_file_group">
                                 <label for="simpleIngest_file">File</label>
-                                <input type="file" id="simpleIngest_file">
+                                <input type="file" id="simpleIngest_file" multiple aria-describedby="simpleIngest_file_help">
+                                <small id="simpleIngest_file_help">You can select multiple files. Media type auto-detected from extension.</small>
                             </div>
                             <div class="form-group">
                                 <label for="simpleIngest_model">Analysis Model (optional)</label>
@@ -1058,22 +1062,30 @@
                                 <textarea id="simpleIngest_system" rows="2" placeholder="System instructions to guide analysis"></textarea>
                             </div>
                             <div class="form-group">
-                                <label><input type="checkbox" id="simpleIngest_perform_analysis" checked> Perform Analysis</label>
-                                <label style="margin-left:12px;"><input type="checkbox" id="simpleIngest_chunking" checked> Chunk Content</label>
+                                <label title="Run LLM analysis after ingestion (generates notes/summaries)"><input type="checkbox" id="simpleIngest_perform_analysis" checked aria-describedby="simpleIngest_perform_help"> Perform Analysis</label>
+                                <label style="margin-left:12px;" title="Split long content into chunks for better retrieval"><input type="checkbox" id="simpleIngest_chunking" checked aria-describedby="simpleIngest_chunk_help"> Chunk Content</label>
+                                <div class="text-muted text-small" style="margin-top:4px;">
+                                    <span id="simpleIngest_perform_help">Optional: Enable to immediately analyze ingested content.</span>
+                                    <span id="simpleIngest_chunk_help" style="margin-left:12px;">Recommended for large documents and videos.</span>
+                                </div>
                             </div>
                             <!-- Web scraping options (visible when Media Type = Web) -->
                             <div id="simpleIngest_web_opts" style="display:none; border-top:1px dashed var(--color-border); padding-top:8px; margin-top:8px;">
                                 <div class="form-group">
                                     <label for="simpleIngest_scrape_method">Scrape Method</label>
-                                    <select id="simpleIngest_scrape_method">
+                                    <select id="simpleIngest_scrape_method" aria-describedby="simpleIngest_scrape_help" title="How links are traversed and processed">
                                         <option value="individual">Individual URLs</option>
                                         <option value="url_level">URL Level</option>
                                         <option value="recursive_scraping">Recursive Scraping</option>
                                     </select>
+                                    <small id="simpleIngest_scrape_help">Choose how to follow links. URL Level limits traversal by path depth; Recursive walks links up to Max Depth/Pages.</small>
                                 </div>
                                 <div class="form-group" id="simpleIngest_web_url_group">
                                     <label for="simpleIngest_web_url">Start URL</label>
-                                    <input type="url" id="simpleIngest_web_url" placeholder="https://example.com/">
+                                    <div style="display:flex; gap:8px; align-items:center;">
+                                        <input type="url" id="simpleIngest_web_url" placeholder="https://example.com/" style="flex:1;">
+                                        <button class="btn btn-secondary btn-sm" id="simpleIngest_paste_web_url" title="Paste from clipboard">Paste</button>
+                                    </div>
                                 </div>
                                 <div class="form-group" id="simpleIngest_url_level_group" style="display:none;">
                                     <label for="simpleIngest_url_level">URL Level</label>
@@ -1113,12 +1125,16 @@
                                 </div>
                             </div>
                             <div class="btn-group">
-                                <button class="api-button" id="simpleIngest_submit">Ingest</button>
+                                <button class="api-button" id="simpleIngest_submit" disabled>Ingest</button>
                                 <button class="btn btn-secondary" id="simpleIngest_clear">Clear</button>
+                                <button class="btn btn-secondary" id="simpleIngest_show_curl" title="Show cURL for this request">Show cURL</button>
                             </div>
                             <div id="simpleIngest_job" class="text-small" style="margin-top:8px; display:none;"></div>
+                            <div id="simpleIngest_queue" class="text-small" aria-live="polite" style="margin-top:6px; display:none;"></div>
                             <h4>Response</h4>
                             <pre id="simpleIngest_response">---</pre>
+                            <div id="simpleIngest_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
+                            <pre id="simpleIngest_curl" style="display:none;"></pre>
                         </div>
                     </div>
 
@@ -1134,16 +1150,28 @@
                             </div>
                             <div class="form-group">
                                 <label><input type="checkbox" id="simpleChat_save"> Save to DB</label>
+                                <label style="margin-left:12px;"><input type="checkbox" id="simpleChat_stream_toggle" checked> Stream</label>
                             </div>
                             <div class="form-group">
                                 <label for="simpleChat_input">Message</label>
-                                <textarea id="simpleChat_input" rows="3" placeholder="Ask anything..."></textarea>
+                                <textarea id="simpleChat_input" rows="3" placeholder="Ask anything... (Cmd/Ctrl+Enter to send)"></textarea>
                             </div>
                             <div class="btn-group">
-                                <button class="api-button" id="simpleChat_send">Send</button>
+                                <button class="api-button" id="simpleChat_send" disabled>Send</button>
+                                <button class="btn btn-secondary" id="simpleChat_show_curl" title="Show cURL for this request">Show cURL</button>
                             </div>
                             <h4>Answer</h4>
+                            <div id="simpleChat_stream" class="endpoint-section" style="padding:8px; margin:6px 0;">
+                                <div id="simpleChat_answer" style="white-space:pre-wrap; word-break:break-word; min-height:1.5em;"></div>
+                                <div class="text-small text-muted" id="simpleChat_usage" style="margin-top:6px;">tokens: –</div>
+                                <div class="btn-group" style="margin-top:6px;">
+                                    <button class="btn btn-secondary btn-sm" id="simpleChat_copy">Copy Answer</button>
+                                    <button class="btn btn-secondary btn-sm" id="simpleChat_stop" style="display:none;">Stop</button>
+                                </div>
+                            </div>
                             <pre id="simpleChat_response">---</pre>
+                            <div id="simpleChat_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
+                            <pre id="simpleChat_curl" style="display:none;"></pre>
                         </div>
                     </div>
 
@@ -1153,7 +1181,10 @@
                             <h3>Search Content</h3>
                             <div class="form-group">
                                 <label for="simpleSearch_q">Query</label>
-                                <input type="text" id="simpleSearch_q" placeholder="Keywords or phrase">
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="text" id="simpleSearch_q" placeholder="Keywords or phrase" style="flex:1;">
+                                    <button class="btn btn-secondary btn-sm" id="simpleSearch_clear" title="Clear">Clear</button>
+                                </div>
                             </div>
                             <div class="columns" style="align-items:flex-end; gap:12px;">
                                 <div class="column">
@@ -1175,9 +1206,11 @@
                                 </div>
                             </div>
                             <div class="btn-group">
-                                <button class="api-button" id="simpleSearch_run">Search</button>
+                                <button class="api-button" id="simpleSearch_run" disabled>Search</button>
+                                <button class="btn btn-secondary" id="simpleSearch_show_curl" title="Show cURL for this request">Show cURL</button>
                             </div>
                             <div id="simpleSearch_results" style="margin-top:8px;"></div>
+                            <pre id="simpleSearch_curl" style="display:none;"></pre>
                         </div>
                     </div>
                 </div>

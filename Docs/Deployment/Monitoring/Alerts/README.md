@@ -28,6 +28,12 @@ Recommended PromQL (examples)
 - RAG reranker budget exhaustions: `sum(rate(rag_reranker_llm_budget_exhausted_total[5m]))`
 - RAG reranker exceptions: `sum(rate(rag_reranker_llm_exceptions_total[5m]))`
 
+## Redis Failover Alerts
+
+- Unexpected Redis fallback (any): `sum(rate(infra_redis_fallback_total[5m])) > 0`
+  - Fire on any non-zero rate to catch silent failover to in-memory stub.
+  - Investigate connectivity, DNS, ACLs, or cluster health. In `RG_BACKEND=redis` with `RG_REDIS_FAIL_MODE=fail_closed`, the app now fails fast at boot if Redis is unreachable.
+
 ## AuthNZ Security Alerts
 
 The AuthNZ scheduler now emits structured security alerts (auth failure spikes, rate-limit storms). To deliver them:

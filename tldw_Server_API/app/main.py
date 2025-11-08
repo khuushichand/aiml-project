@@ -816,6 +816,37 @@ async def lifespan(app: FastAPI):
             try:
                 _backend = _rg_backend_sel()
                 if _backend == "redis":
+                    # Boot-time health guard: when Redis backend is selected and
+                    # fail mode is fail_closed, require a real Redis connection
+                    # and refuse to start if unreachable (no stub fallback).
+                    try:
+                        from tldw_Server_API.app.core.config import rg_redis_fail_mode as _rg_fail_mode
+                        if str(_rg_fail_mode() or "").strip().lower() == "fail_closed":
+                            from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+                                create_async_redis_client as _create_async_redis_client,
+                                ensure_async_client_closed as _ensure_async_client_closed,
+                            )
+                            _start = logger.bind(component="rg_boot_health")
+                            try:
+                                _start.info("RG boot health: verifying Redis connectivity (fail_closed mode)")
+                            except Exception:
+                                pass
+                            _rc = await _create_async_redis_client(fallback_to_fake=False, context="rg_boot_health")
+                            try:
+                                # Extra sanity ping; factory already pings
+                                res = getattr(_rc, "ping", None)
+                                if res:
+                                    pr = res()
+                                    if hasattr(pr, "__await__"):
+                                        await pr
+                            finally:
+                                try:
+                                    await _ensure_async_client_closed(_rc)
+                                except Exception:
+                                    pass
+                    except Exception as _rg_boot_err:
+                        logger.error(f"ResourceGovernor boot health failed (Redis unreachable, fail_closed): {_rg_boot_err}")
+                        raise RuntimeError("Redis backend selected with fail_closed, but Redis is unreachable; refusing to start") from _rg_boot_err
                     app.state.rg_governor = RedisResourceGovernor(policy_loader=rg_loader)
                     logger.info("ResourceGovernor initialized (redis backend)")
                 else:
