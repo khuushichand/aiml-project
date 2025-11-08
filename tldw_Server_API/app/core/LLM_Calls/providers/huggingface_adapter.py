@@ -62,6 +62,9 @@ class HuggingFaceAdapter(ChatProvider):
     def _use_native_http(self) -> bool:
         if os.getenv("PYTEST_CURRENT_TEST"):
             try:
+                from tldw_Server_API.app.core.http_client import create_client as _default_factory
+                if http_client_factory is not _default_factory:
+                    return True
                 from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
                 fn = getattr(_legacy, "chat_with_huggingface", None)
                 if callable(fn):

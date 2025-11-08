@@ -9,6 +9,12 @@ from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    normalize_provider_line,
+    is_done_line,
+    sse_done,
+    finalize_stream,
+)
 
 # Expose a patchable factory for tests to avoid real HTTP in adapters
 http_client_factory = _hc_create_client
@@ -351,10 +357,24 @@ class GoogleAdapter(ChatProvider):
                 with http_client_factory(timeout=timeout or 60.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            if not line:
+                        seen_done = False
+                        for raw in resp.iter_lines():
+                            if not raw:
                                 continue
-                            yield line
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except Exception:
+                                line = str(raw)
+                            if is_done_line(line):
+                                if not seen_done:
+                                    seen_done = True
+                                    yield sse_done()
+                                continue
+                            normalized = normalize_provider_line(line)
+                            if normalized is not None:
+                                yield normalized
+                        for tail in finalize_stream(response=resp, done_already=seen_done):
+                            yield tail
                 return
             except Exception as e:
                 raise self.normalize_error(e)

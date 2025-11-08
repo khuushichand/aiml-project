@@ -870,7 +870,6 @@ class TestSSENormalization:
                             'data: {"choices":[{"delta":{"content":"!"}}]}',
                         ])
                 return _Resp()
-        monkeypatch.setenv('LLM_ADAPTERS_ENABLED', '1')
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.http_client_factory",
             lambda *a, **k: _Client(),
@@ -1186,7 +1185,6 @@ class TestSSENormalization:
                             'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
                         ])
                 return _Resp()
-        monkeypatch.setenv('LLM_ADAPTERS_ENABLED', '1')
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory",
             lambda *a, **k: _Client(),
@@ -1218,7 +1216,6 @@ class TestSSENormalization:
                             b'data: {"choices":[{"delta":{"content":" HF"}}]}',
                         ])
                 return _Resp()
-        monkeypatch.setenv('LLM_ADAPTERS_ENABLED', '1')
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.http_client_factory",
             lambda *a, **k: _Client(),
