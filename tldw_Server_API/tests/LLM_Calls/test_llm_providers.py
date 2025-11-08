@@ -431,10 +431,34 @@ class TestZAIProvider:
     ],
 )
 def test_provider_http_error_mapping(func, kwargs, status_code, expected_exception):
-    response = make_response(status_code, '{"error": {"message": "boom"}}')
-    with patch('requests.Session.post', return_value=response):
-        with pytest.raises(expected_exception):
-            func(**kwargs)
+    if func is chat_with_google:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter._hc_create_client"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+
+            request = httpx.Request(
+                "POST",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{kwargs['model']}:generateContent",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    else:
+        response = make_response(status_code, '{"error": {"message": "boom"}}')
+        with patch('requests.Session.post', return_value=response):
+            with pytest.raises(expected_exception):
+                func(**kwargs)
 
 
 class TestHuggingFaceAPI:
