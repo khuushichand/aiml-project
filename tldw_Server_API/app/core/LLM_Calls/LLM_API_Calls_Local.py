@@ -307,6 +307,10 @@ def _chat_with_openai_compatible_local_server(
     except httpx.HTTPStatusError as e_http:
         logging.error(f"{provider_name}: HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
         _raise_chat_error_from_httpx(provider_name, e_http)
+    except httpx.RequestError as e_req:
+        # Network/connectivity, DNS, timeouts prior to receiving a response
+        logging.error(f"{provider_name}: Request error: {e_req}", exc_info=False)
+        raise ChatProviderError(provider=provider_name, message=str(e_req), status_code=504)
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
         raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")

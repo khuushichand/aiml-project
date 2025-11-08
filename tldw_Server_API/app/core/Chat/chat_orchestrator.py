@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Union
 #
 # 3rd-party Libraries
 import requests
+import httpx
 from loguru import logger
 #
 # Local Imports
@@ -276,6 +277,9 @@ def chat_api_call(
                                status_code=status_code)
     except requests.exceptions.RequestException as e:
         logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
+        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+    except httpx.RequestError as e:
+        logging.error(f"Network error (httpx) connecting to {endpoint_lower}: {e}", exc_info=False)
         raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
     except (ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError, ChatConfigurationError, ChatProviderError,
             ChatAPIError) as e_chat_direct:
