@@ -104,6 +104,9 @@ class OpenAIAdapter(ChatProvider):
             "logit_bias": request.get("logit_bias"),
             "user": request.get("user"),
         }
+        # Propagate explicit stream flag for testability and parity with legacy path
+        if request.get("stream") is not None:
+            payload["stream"] = bool(request.get("stream"))
         # Tools and tool_choice gating to mirror legacy behavior
         tools = request.get("tools")
         if tools is not None:

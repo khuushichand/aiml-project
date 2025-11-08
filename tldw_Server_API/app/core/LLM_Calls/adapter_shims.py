@@ -185,115 +185,13 @@ def openai_chat_handler(
             app_config=app_config,
         )
 
-    # Test-friendly non-streaming path: when under pytest and streaming is False,
-    # bypass adapter HTTP to honor LLM_API_Calls monkeypatches (session/logging).
-    try:
-        if os.getenv("PYTEST_CURRENT_TEST") and (streaming is False or streaming is None):
-            from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
-            from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
-                ChatAPIError,
-            )
-
-            loaded_cfg = _legacy_mod.load_and_log_configs()
-            openai_cfg = (loaded_cfg.get("openai_api") or {}) if isinstance(loaded_cfg, dict) else {}
-            final_api_key = api_key or openai_cfg.get("api_key")
-
-            payload: Dict[str, Any] = {
-                "model": model,
-                "messages": ([{"role": "system", "content": system_message}] if system_message else []) + (input_data or []),
-                "stream": False,
-            }
-            if temp is not None:
-                payload["temperature"] = temp
-            eff_top_p = maxp if maxp is not None else kwargs.get("topp")
-            if eff_top_p is not None:
-                payload["top_p"] = eff_top_p
-            if max_tokens is not None:
-                payload["max_tokens"] = max_tokens
-            if n is not None:
-                payload["n"] = n
-            if presence_penalty is not None:
-                payload["presence_penalty"] = presence_penalty
-            if frequency_penalty is not None:
-                payload["frequency_penalty"] = frequency_penalty
-            if logit_bias is not None:
-                payload["logit_bias"] = logit_bias
-            if logprobs is not None:
-                payload["logprobs"] = logprobs
-            if top_logprobs is not None:
-                payload["top_logprobs"] = top_logprobs
-            if seed is not None:
-                payload["seed"] = seed
-            if stop is not None:
-                payload["stop"] = stop
-            if tools is not None:
-                payload["tools"] = tools
-            if tool_choice is not None:
-                payload["tool_choice"] = tool_choice
-            if user is not None:
-                payload["user"] = user
-            if response_format is not None:
-                payload["response_format"] = response_format
-
-            # Log the legacy-style payload metadata so tests can capture it
-            try:
-                sanitizer = getattr(_legacy_mod, "_sanitize_payload_for_logging")
-                logger_obj = getattr(_legacy_mod, "logging")
-                if callable(sanitizer) and logger_obj is not None:
-                    metadata = sanitizer(payload)
-                    logger_obj.debug(f"OpenAI Request Payload (excluding messages): {metadata}")
-            except Exception:
-                pass
-
-            # Resolve API base like legacy helper
-            try:
-                _resolve_base = getattr(_legacy_mod, "_resolve_openai_api_base")
-                api_base = _resolve_base(openai_cfg) if callable(_resolve_base) else None
-            except Exception:
-                api_base = None
-            api_url = (api_base or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-
-            headers = {"Content-Type": "application/json"}
-            if final_api_key:
-                headers["Authorization"] = f"Bearer {final_api_key}"
-
-            session = _legacy_mod.create_session_with_retries(
-                total=int((openai_cfg.get("api_retries") or 1) or 1),
-                backoff_factor=float((openai_cfg.get("api_retry_delay") or 0.1) or 0.1),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                timeout = float(openai_cfg.get("api_timeout") or 60.0)
-                response = session.post(api_url, headers=headers, json=payload, timeout=timeout)
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                import requests as _requests  # type: ignore
-                if isinstance(e, _requests.exceptions.HTTPError):
-                    status = getattr(getattr(e, "response", None), "status_code", None)
-                    if status in (400, 404, 422):
-                        raise ChatBadRequestError(provider="openai", message=str(getattr(e, "response", None).text if getattr(e, "response", None) is not None else str(e)))
-                    if status in (401, 403):
-                        raise ChatAuthenticationError(provider="openai", message=str(e))
-                    if status == 429:
-                        raise ChatRateLimitError(provider="openai", message=str(e))
-                    if status and 500 <= status < 600:
-                        raise ChatProviderError(provider="openai", message=str(e), status_code=status)
-                    raise ChatAPIError(provider="openai", message=str(e), status_code=status or 500)
-                raise
-            finally:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-    except Exception:
-        # If anything goes wrong in the test-only branch, continue to adapter path
-        pass
+    # Note: Previously, non-streaming calls under pytest attempted to route
+    # through a legacy requests.Session to preserve certain logging behavior.
+    # That path can inadvertently make real network calls and cause timeouts
+    # in sandboxed CI. We now always prefer the adapter path unless the
+    # legacy function itself is explicitly monkeypatched by a test (handled
+    # above). This ensures tests that patch the adapter http client are honored
+    # and avoids unintended network access.
 
     # Build OpenAI-like request for adapter
     request: Dict[str, Any] = {

@@ -220,20 +220,22 @@ async def transcribe_with_external_provider_async(
                 if key not in data:
                     data[key] = str(value)
 
-            # Make the request with retries using centralized client
-            from tldw_Server_API.app.core.http_client import create_async_client, afetch, RetryPolicy
-            async with create_async_client(timeout=config.timeout) as client:
+            # Make the request with retries using httpx.AsyncClient directly
+            async with httpx.AsyncClient(timeout=config.timeout, verify=config.verify_ssl) as client:
                 for attempt in range(config.max_retries):
                     try:
-                        response = await afetch(
-                            method='POST',
-                            url=endpoint,
-                            client=client,
+                        # Ensure file pointer is at beginning for each retry
+                        try:
+                            audio_file.seek(0)
+                        except Exception:
+                            pass
+
+                        response = await client.post(
+                            endpoint,
                             headers=headers,
                             files=files,
                             data=data,
                             timeout=config.timeout,
-                            retry=RetryPolicy(attempts=1),
                         )
 
                         if response.status_code == 200:
