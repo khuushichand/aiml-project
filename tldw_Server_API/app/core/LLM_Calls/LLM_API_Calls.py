@@ -549,8 +549,8 @@ def legacy_chat_with_deepseek(
         frequency_penalty: Optional[float] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Delegate to the original implementation to avoid adapter/shim recursion
-    return chat_with_deepseek(
+    # Call the preserved legacy implementation directly
+    return _legacy_chat_with_deepseek_impl(
         input_data=input_data,
         model=model,
         api_key=api_key,
@@ -2748,7 +2748,7 @@ def chat_with_cohere(
             session.close()
 
 
-def chat_with_deepseek(
+def _legacy_chat_with_deepseek_impl(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -2895,6 +2895,57 @@ def chat_with_deepseek(
         _raise_chat_error_from_http("deepseek", e)
     except Exception as e:  # ... error handling ...
         raise ChatProviderError(provider="deepseek", message=f"Unexpected error: {e}")
+
+
+def chat_with_deepseek(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import deepseek_chat_handler
+    return deepseek_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 
 def legacy_chat_with_google(

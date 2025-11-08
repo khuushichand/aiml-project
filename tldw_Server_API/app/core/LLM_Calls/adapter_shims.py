@@ -2536,36 +2536,8 @@ def deepseek_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_DEEPSEEK", "LLM_ADAPTERS_ENABLED")
-    if os.getenv("PYTEST_CURRENT_TEST") and not use_adapter:
-        use_adapter = _http_factory_patched(
-            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter"
-        )
-    if not use_adapter:
-        return _legacy_chat_with_deepseek(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            topp=topp,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+    # Always prefer adapter path to avoid legacy recursion and ensure test determinism
+    use_adapter = True
 
     registry = get_registry()
     adapter = registry.get_adapter("deepseek")
@@ -2574,6 +2546,7 @@ def deepseek_chat_handler(
         registry.register_adapter("deepseek", DeepSeekAdapter)
         adapter = registry.get_adapter("deepseek")
     if adapter is None:
+        # Fallback to preserved legacy implementation if adapter unavailable
         return _legacy_chat_with_deepseek(
             input_data=input_data,
             model=model,

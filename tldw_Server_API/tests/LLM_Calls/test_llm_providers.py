@@ -492,10 +492,23 @@ def test_provider_http_error_mapping(func, kwargs, status_code, expected_excepti
             with pytest.raises(expected_exception):
                 func(**kwargs)
     elif func is chat_with_deepseek:
-        # deepseek path in LLM_API_Calls is legacy (requests-based);
-        # mock requests.Session.post to avoid real HTTP.
-        response = make_response(status_code, '{"error": {"message": "boom"}}')
-        with patch('requests.Session.post', return_value=response):
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://api.deepseek.com/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
             with pytest.raises(expected_exception):
                 func(**kwargs)
     else:
@@ -1156,16 +1169,26 @@ class TestSSENormalization:
         assert chunks[0].startswith('data: ')
         assert chunks[-1].strip() == 'data: [DONE]'
 
-    @patch('requests.Session.post')
-    def test_deepseek_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_deepseek_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+                            'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_deepseek(
             input_data=[{"role": "user", "content": "Hi"}],
