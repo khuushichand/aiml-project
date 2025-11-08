@@ -65,6 +65,14 @@ https://blikket.co/ux-vs-cro-how-harmonizing-design-and-strategy-can-skyrocket-y
 https://copycoder.ai/
 https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-951b1c98d4ec
 https://www.grug.design/know
+https://uxplanet.org/14-logic-driven-ui-design-tips-145ee08ea5a5?gi=31c1a5e9d721
+https://medium.com/ui-for-ai/welcome-to-ui-for-ai-eb22aef8d26c
+https://medium.com/ui-for-ai/ui-for-ai-initial-concepts-82b40dc2998c
+https://blog.vaexperience.com/ep12-design-for-ai-with-dan-saffer/
+https://medium.com/ui-for-ai/design-principles-for-ai-21b6fac23b04
+https://medium.com/ui-for-ai/diving-deep-into-ai-use-cases-77f36bfb7d47
+https://www.nngroup.com/articles/ai-work-study-guide/
+https://www.lukew.com/ff/entry.asp?2132?ref=sidebar
 https://uxdesign.cc/building-better-logins-a-ux-and-accessibility-guide-for-developers-9bb356f0a132
 
 https://ieeexplore.ieee.org/document/5387632

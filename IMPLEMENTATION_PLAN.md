@@ -100,3 +100,4 @@ References:
 
 Global Negative‑Path Tests:
 - Underruns (slow reader), client disconnects, silent input segments, high noise segments, invalid PCM chunk sizes, malformed WS config frames, exceeded quotas → standardized errors and metrics.
+

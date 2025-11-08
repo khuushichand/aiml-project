@@ -308,7 +308,7 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.o
 # Option C) Dev overlay — enable unified streaming (non-prod)
 # This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
 # Keep disabled in production until validated in your environment.
-docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml up -d --build
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
 
 # Check status
 docker compose -f Dockerfiles/docker-compose.yml ps
@@ -342,32 +342,32 @@ docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
 
 Prometheus + Grafana (embeddings compose, monitoring profile)
 ```bash
-docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
 ```
 
 All four together
 ```bash
 docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
-docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
 ```
 
 Manage and verify
 ```bash
 # Status
 docker compose -f Dockerfiles/docker-compose.yml ps
-docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml ps
+docker compose -f Dockerfiles/docker-compose.embeddings.yml ps
 
 # Logs
 docker compose -f Dockerfiles/docker-compose.yml logs -f postgres redis
-docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml logs -f prometheus grafana
+docker compose -f Dockerfiles/docker-compose.embeddings.yml logs -f prometheus grafana
 
 # Stop
 docker compose -f Dockerfiles/docker-compose.yml stop postgres redis
-docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml stop prometheus grafana
+docker compose -f Dockerfiles/docker-compose.embeddings.yml stop prometheus grafana
 
 # Remove
 docker compose -f Dockerfiles/docker-compose.yml down
-docker compose -f Dockerfiles/Dockerfiles/docker-compose.embeddings.yml down
+docker compose -f Dockerfiles/docker-compose.embeddings.yml down
 ```
 
 Ports

@@ -45,8 +45,7 @@ def main() -> None:
     with httpx.stream("POST", url, headers=headers, json=payload, timeout=60.0) as r:
         r.raise_for_status()
         print(f"Streaming PCM → {args.outfile} (rate={args.rate}, channels={args.channels})")
-        fout = open(args.outfile, "wb")
-        try:
+        with open(args.outfile, "wb") as fout:
             # Optional realtime playback
             try:
                 import sounddevice as sd
@@ -62,9 +61,8 @@ def main() -> None:
                 if use_playback:
                     arr = np.frombuffer(chunk, dtype=np.int16)
                     sd.play(arr, samplerate=args.rate, blocking=False)
-        finally:
-            fout.close()
-            if 'sd' in locals():
+
+            if "sd" in locals():
                 try:
                     sd.stop()
                 except Exception:
@@ -75,4 +73,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
