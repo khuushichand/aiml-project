@@ -10,6 +10,9 @@ from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
 
+# Expose a patchable factory for tests to avoid real HTTP in adapters
+http_client_factory = _hc_create_client
+
 
 def _prefer_httpx_in_tests() -> bool:
     try:
@@ -318,7 +321,7 @@ class GoogleAdapter(ChatProvider):
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             try:
-                with _hc_create_client(timeout=timeout or 60.0) as client:
+                with http_client_factory(timeout=timeout or 60.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     data = resp.json()
@@ -345,7 +348,7 @@ class GoogleAdapter(ChatProvider):
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             try:
-                with _hc_create_client(timeout=timeout or 60.0) as client:
+                with http_client_factory(timeout=timeout or 60.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():

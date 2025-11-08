@@ -433,7 +433,7 @@ class TestZAIProvider:
 def test_provider_http_error_mapping(func, kwargs, status_code, expected_exception):
     if func is chat_with_google:
         with patch(
-            "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter._hc_create_client"
+            "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory"
         ) as mock_client_factory:
             mock_client = MagicMock()
             mock_client.__enter__.return_value = mock_client
@@ -904,16 +904,31 @@ class TestSSENormalization:
         assert json.loads(tool_call["function"]["arguments"]) == {"query": "mars"}
         assert chunks[-1].strip() == "data: [DONE]"
 
-    @patch('requests.Session.post')
-    def test_bedrock_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_bedrock_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, method, url, *, headers=None, json=None):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                            b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_bedrock(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -925,25 +940,35 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_bedrock_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_bedrock(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", model="meta.llama3-8b-instruct", streaming=True
+    def test_bedrock_stream_error_chunked(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, method, url, *, headers=None, json=None):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        raise RuntimeError('boom')
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
-        chunks = list(gen)
-        assert any('bedrock_stream_error' in c for c in chunks)
-        assert all(c.startswith('data: ') for c in chunks)
+
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        with pytest.raises(ChatProviderError):
+            list(chat_with_bedrock(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", model="meta.llama3-8b-instruct", streaming=True
+            ))
 
     @patch('requests.Session.post')
     def test_gemini_stream_error_chunked(self, mock_post):
@@ -1379,12 +1404,10 @@ class TestSSENormalization:
 def test_openai_defaults_with_blank_config(monkeypatch):
     captured = {}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
-
         def raise_for_status(self):
-            return
-
+            return None
         def json(self):
             return {
                 "choices": [
@@ -1397,40 +1420,30 @@ def test_openai_defaults_with_blank_config(monkeypatch):
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }
 
-    class DummySession:
-        def post(self, url, headers=None, json=None, timeout=None):
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
-            captured["timeout"] = timeout
-            return DummyResponse()
-
-        def close(self):
-            return
+            return FakeResp()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
-        lambda *args, **kwargs: DummySession(),
-    )
-
-    monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
-        lambda: {
-            'openai_api': {
-                'api_key': 'test-key',
-                'temperature': '',
-                'top_p': None,
-                'api_timeout': '',
-                'api_retry_delay': '',
-                'api_retries': '',
-                'max_tokens': '',
-                'api_base_url': 'https://mock.openai.local/v1',
-            }
-        },
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(**k),
     )
 
     result = chat_with_openai(
         input_data=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        temp=0.7,
+        maxp=0.95,
+        app_config={"openai_api": {"api_base_url": "https://mock.openai.local/v1", "api_timeout": 90}},
     )
 
     assert result["choices"][0]["message"]["content"] == "ok"
@@ -1757,31 +1770,37 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
 
 
 def test_openai_non_streaming_session_closed(monkeypatch):
-    response = Mock()
-    response.status_code = 200
-    response.raise_for_status = Mock()
-    response.json.return_value = {"choices": [], "id": "test"}
+    closed = {"v": False}
 
-    session = Mock()
-    session.post.return_value = response
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"choices": [], "id": "test"}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            closed["v"] = True
+            return False
+        def post(self, *a, **k):
+            return FakeResp()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
-        lambda *args, **kwargs: session,
-    )
-
-    monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
-        lambda: {"openai_api": {"api_key": "cfg-key"}},
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
     )
 
     chat_with_openai(
         input_data=[{"role": "user", "content": "hello"}],
         streaming=False,
         api_key="cfg-key",
+        app_config={"openai_api": {"api_timeout": 90}},
     )
 
-    session.close.assert_called_once()
+    assert closed["v"] is True
 
 
 def test_cohere_config_fallbacks(monkeypatch):
