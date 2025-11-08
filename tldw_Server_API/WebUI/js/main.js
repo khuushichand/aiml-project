@@ -394,6 +394,9 @@ class WebUI {
         // Show the content
         this.showContent(contentId);
 
+        // Re-initialize form handlers for any newly injected content (e.g., file inputs)
+        try { this.initFormHandlers(); } catch (_) {}
+
         // Save active sub-tab to storage
         Utils.saveToStorage('active-sub-tab', contentId);
 
@@ -1100,6 +1103,8 @@ class WebUI {
                 this.loadedContentGroups.add(g);
             }
         }
+        // Ensure any newly inserted file inputs get wrapped/styled
+        try { this.initFormHandlers(); } catch (_) {}
     }
 
     filterEndpoints(query) {

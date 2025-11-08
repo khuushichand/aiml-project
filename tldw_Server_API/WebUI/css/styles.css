@@ -507,8 +507,10 @@ textarea.code-input {
     width: 100%;
 }
 
-input[type="file"] {
+.file-input-wrapper > input[type="file"] {
     position: absolute;
+    top: 0;
+    left: 0;
     opacity: 0;
     width: 100%;
     height: 100%;
