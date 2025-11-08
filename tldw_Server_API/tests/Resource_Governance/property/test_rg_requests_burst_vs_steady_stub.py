@@ -1,6 +1,6 @@
 import os
 import pytest
-from hypothesis import given, strategies as st, settings
+from hypothesis import given, strategies as st, settings, HealthCheck
 
 pytestmark = pytest.mark.rate_limit
 
@@ -19,7 +19,7 @@ class FakeTime:
 
 
 @pytest.mark.asyncio
-@settings(deadline=None, max_examples=12)
+@settings(deadline=None, max_examples=12, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     rpm=st.integers(min_value=1, max_value=10),
     steady_gap=st.integers(min_value=5, max_value=30),
@@ -69,4 +69,3 @@ async def test_requests_burst_vs_steady_monotonic_retry_after_under_stub(monkeyp
         ft2.advance(float(step))
     d_last, h_last = await rg2.reserve(RGRequest(entity=e, categories=pol, tags={"policy_id": "p"}))
     assert d_last.allowed and h_last
-

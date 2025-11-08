@@ -14,7 +14,7 @@ Centralized rate limiting and concurrency control with policy-based configuratio
 
 ## Backend Selection (env)
 - `RG_BACKEND`: `memory` (default) or `redis`
-- `RG_REDIS_FAIL_MODE`: `fail_closed` (default) | `fail_open` | `fallback_memory`
+- `RG_REDIS_FAIL_MODE`: `fallback_memory` (default) | `fail_closed` | `fail_open`
 - `REDIS_URL`: Redis connection URL (used when backend=redis). If unset, defaults to `redis://127.0.0.1:6379`.
 - Determinism (tests/dev): `RG_TEST_FORCE_STUB_RATE=1` prefers in‑process rails for requests/tokens when running Redis backend, stabilizing burst vs steady retry‑after behavior in CI.
 
@@ -139,4 +139,3 @@ Headers on success/deny:
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py`
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_tokens_headers.py`
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_enforcement_extended.py`
-

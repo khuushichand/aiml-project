@@ -192,8 +192,8 @@ class ResourceGovernor:
   - `RG_REDIS_URL`: Redis URL
   - `REDIS_URL`: Redis URL (alias; used across infrastructure helpers)
   - `RG_TEST_BYPASS`: `true|false` (defaults to honoring `TEST_MODE`)
-  - `RG_REDIS_FAIL_MODE`: `fail_closed` | `fail_open` | `fallback_memory` (defaults to `fail_closed`). Controls behavior on Redis outages.
-    - Default `fail_closed` is recommended for write paths and global-coordination categories; use `fallback_memory` only for non-critical categories where local over-admission is acceptable.
+  - `RG_REDIS_FAIL_MODE`: `fail_closed` | `fail_open` | `fallback_memory` (defaults to `fallback_memory`). Controls behavior on Redis outages.
+    - Default `fallback_memory` favors availability for non-critical categories; consider `fail_closed` for strict write paths or global-coordination categories.
   - `RG_CLIENT_IP_HEADER`: Header to trust for client IP when behind trusted proxies (e.g., `X-Forwarded-For`, `CF-Connecting-IP`).
   - `RG_TRUSTED_PROXIES`: Comma-separated CIDRs for trusted reverse proxies; when unset, IP scope uses the direct remote address only.
   - `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`). If true, include hashed entity label in metrics; otherwise exclude to avoid high cardinality.
@@ -611,7 +611,7 @@ Notes:
 - Concurrency lease management → provide explicit `renew` and `release`; use per-lease IDs and TTLs; GC expired leases.
 - IP scoping behind proxies → require `RG_TRUSTED_PROXIES` and `RG_CLIENT_IP_HEADER` to trust forwarded addresses; prefer auth scopes over IP when available.
 - Policy composition ambiguity → define strictest-wins semantics (min headroom across applicable scopes) per category; compute `retry_after` as max across denying scopes and categories.
-- Fallback-to-memory over-admission → make behavior configurable via `RG_REDIS_FAIL_MODE` (default `fail_closed`); emit metrics on failover; consider per-category overrides.
+- Fallback-to-memory over-admission → make behavior configurable via `RG_REDIS_FAIL_MODE` (default `fallback_memory`); emit metrics on failover; consider per-category overrides.
 - Idempotency on retries → require `op_id` for reserve/commit/refund; operations are idempotent per `op_id` and handle.
 - Minutes ledger edge cases → split usage across UTC day boundaries; define rounding rules; restrict retroactive commits or require `occurred_at`.
 - Env flag drift → standardize on `TLDW_TEST_MODE`; `RG_TEST_BYPASS` only overrides governor behavior with documented precedence.

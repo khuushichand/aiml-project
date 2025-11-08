@@ -337,10 +337,14 @@ class RGSimpleMiddleware:
                                 headers.append((b"x-ratelimit-reset", str(overall_reset).encode()))
                         except Exception:
                             pass
-                        # Tokens headers (if present)
+                        # Tokens headers (presence required; use fallback when peek lacks remaining)
                         tinfo = peek_result.get("tokens") or {}
-                        if tinfo.get("remaining") is not None:
-                            headers.append((b"x-ratelimit-tokens-remaining", str(int(tinfo.get("remaining") or 0)).encode()))
+                        tokens_remaining_val = None
+                        try:
+                            if tinfo.get("remaining") is not None:
+                                tokens_remaining_val = int(tinfo.get("remaining") or 0)
+                        except Exception:
+                            tokens_remaining_val = None
                         # If we later enforce tokens category, expose per-minute headers too when policy defines per_min
                         try:
                             loader = getattr(request.app.state, "rg_policy_loader", None)
@@ -354,9 +358,16 @@ class RGSimpleMiddleware:
                                         headers.append((b"x-ratelimit-perminute-remaining", str(int(tinfo.get("remaining") or 0)).encode()))
                                     else:
                                         headers.append((b"x-ratelimit-perminute-remaining", str(max(0, per_min - 1)).encode()))
+                                    # Ensure X-RateLimit-Tokens-Remaining is always present
+                                    if tokens_remaining_val is None:
+                                        tokens_remaining_val = max(0, per_min - 1)
                         except Exception:
                             # best-effort only
                             pass
+                        # Emit tokens-remaining header even when per_min is 0 (fallback to 0)
+                        if tokens_remaining_val is None:
+                            tokens_remaining_val = 0
+                        headers.append((b"x-ratelimit-tokens-remaining", str(int(tokens_remaining_val)).encode()))
                 except Exception:
                     pass
                 message = {**message, "headers": headers}

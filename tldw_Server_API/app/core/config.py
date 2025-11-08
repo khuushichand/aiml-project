@@ -1499,7 +1499,7 @@ def rg_backend(default: str = "memory") -> str:
     return s if s in ("memory", "redis") else default
 
 
-def rg_redis_fail_mode(default: str = "fail_closed") -> str:
+def rg_redis_fail_mode(default: str = "fallback_memory") -> str:
     v = os.getenv("RG_REDIS_FAIL_MODE")
     if v is None:
         try:

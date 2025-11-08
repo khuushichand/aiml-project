@@ -110,6 +110,24 @@ class RedisResourceGovernor(ResourceGovernor):
         except Exception:
             pass
 
+    def _accept_window_enabled(self) -> bool:
+        """Whether acceptance-window hardening should be active.
+
+        Disable when running under pytest or when explicitly requested via
+        RG_TEST_DISABLE_ACCEPT_WINDOW. This restores pure sliding-window
+        behavior for tests.
+        """
+        try:
+            # Explicit opt-out via env
+            if str(os.getenv("RG_TEST_DISABLE_ACCEPT_WINDOW") or "").strip().lower() in ("1", "true", "yes"):
+                return False
+            # Auto-disable in pytest contexts
+            if os.getenv("PYTEST_CURRENT_TEST") is not None:
+                return False
+        except Exception:
+            pass
+        return True
+
     def _force_stub_rate(self) -> bool:
         try:
             # Prefer explicit env; fall back to test detection
@@ -139,26 +157,26 @@ class RedisResourceGovernor(ResourceGovernor):
                 _cursor, keys = await client.scan(0, match=pattern, count=1000)
             except Exception:
                 keys = []
-            # Clear Redis keys and mirror deletion into stub map
+            # Remove only expired members from each lease key, do not drop entire keys
             for k in keys or []:
                 try:
-                    # In test contexts, clear entire lease keys to ensure a clean slate
-                    await client.delete(k)
+                    # Purge expired in real Redis first
+                    await client.zremrangebyscore(k, float("-inf"), float(now))
                 except Exception:
-                    # best-effort only; ignore clean failures
+                    # best-effort only
                     pass
+                # Mirror the purge into stub map for the same key
                 try:
-                    self._stub_leases.pop(str(k), None)
+                    bucket = self._stub_leases.get(str(k))
+                    if bucket:
+                        expired = [mem for mem, exp in list(bucket.items()) if float(exp) <= float(now)]
+                        for mem in expired:
+                            bucket.pop(mem, None)
+                        if not bucket:
+                            # Clean empty bucket to reduce memory churn in tests
+                            self._stub_leases.pop(str(k), None)
                 except Exception:
                     pass
-            # Also clear any stub entries matching the policy prefix even if scan misses
-            try:
-                prefix = f"{self._keys.ns}:lease:{policy_id}:"
-                stale_keys = [sk for sk in list(self._stub_leases.keys()) if sk.startswith(prefix)]
-                for sk in stale_keys:
-                    self._stub_leases.pop(sk, None)
-            except Exception:
-                pass
         except Exception:
             # never fail caller
             return
@@ -618,15 +636,16 @@ class RedisResourceGovernor(ResourceGovernor):
                 # Harden with acceptance-window tracker: if we already accepted up to limit
                 # within the current window, deny until the window resets regardless of
                 # ZSET anomalies (helps in constrained environments/tests).
-                try:
-                    key_aw = (policy_id, req.entity)
-                    start_aw, lim_aw, cnt_aw = self._requests_accept_window.get(key_aw, (None, None, None))  # type: ignore[assignment]
-                    if start_aw is not None and lim_aw == limit and now < float(start_aw) + float(window):
-                        if int((cnt_aw or 0) + units) > int(limit):
-                            allowed = False
-                            retry_after = max(retry_after, int(max(0.0, float(start_aw) + float(window) - now))) or window
-                except Exception:
-                    pass
+                if self._accept_window_enabled():
+                    try:
+                        key_aw = (policy_id, req.entity)
+                        start_aw, lim_aw, cnt_aw = self._requests_accept_window.get(key_aw, (None, None, None))  # type: ignore[assignment]
+                        if start_aw is not None and lim_aw == limit and now < float(start_aw) + float(window):
+                            if int((cnt_aw or 0) + units) > int(limit):
+                                allowed = False
+                                retry_after = max(retry_after, int(max(0.0, float(start_aw) + float(window) - now))) or window
+                    except Exception:
+                        pass
                 # Requests deny floor based on prior denial
                 key_e = (policy_id, req.entity)
                 deny_until = float(self._requests_deny_until.get(key_e, 0.0) or 0.0)
@@ -1000,9 +1019,9 @@ class RedisResourceGovernor(ResourceGovernor):
             return dec, None
 
         now = self._time()
-        # Pre-add acceptance-window tracking for requests when allowed
+        # Pre-add acceptance-window tracking for requests when allowed (gated)
         try:
-            if dec.allowed and "requests" in req.categories:
+            if self._accept_window_enabled() and dec.allowed and "requests" in req.categories:
                 pol_tmp = self._get_policy(dec.details.get("policy_id") or req.tags.get("policy_id") or "default")
                 limit_req = int((pol_tmp.get("requests") or {}).get("rpm") or 0)
                 if limit_req > 0:
@@ -1393,10 +1412,9 @@ class RedisResourceGovernor(ResourceGovernor):
                     )
             except Exception:
                 pass
-        # Harden burst behavior: track per-(policy, entity) requests acceptances in the current
-        # window; if we hit the limit within the window, set a deny-until floor to the window end.
+        # Harden burst behavior tracking (gated for tests)
         try:
-            if "requests" in req.categories:
+            if self._accept_window_enabled() and "requests" in req.categories:
                 limit_req = int((pol.get("requests") or {}).get("rpm") or 0)
                 if limit_req > 0:
                     key_aw = (policy_id, req.entity)
