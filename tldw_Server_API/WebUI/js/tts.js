@@ -1270,6 +1270,18 @@ const TTS = {
             }).join('');
         };
 
+        // Utility: escape HTML entities
+        function escapeHTML(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/\//g, '&#x2F;')
+                .replace(/`/g, '&#96;');
+        }
         const renderCatalog = () => {
             if (!this.catalogVoices.length) {
                 return '<p class="text-muted">No catalog voices available</p>';
@@ -1281,10 +1293,13 @@ const TTS = {
                 const description = v.description || 'Catalog voice';
                 const meta = [v.language, v.gender].filter(Boolean).join(' · ');
                 return `
-                <div class="voice-item" data-voice-id="${id}" data-provider="${provider}" data-voice-name="${name}">
-                    <h5>${name} <span class="badge">Catalog</span></h5>
-                    <p class="text-muted">${provider}${meta ? ` • ${meta}` : ''}</p>
-                    <small>${description}</small>
+                <div class="voice-item"
+                     data-voice-id="${escapeHTML(id)}"
+                     data-provider="${escapeHTML(provider)}"
+                     data-voice-name="${escapeHTML(name)}">
+                    <h5>${escapeHTML(name)} <span class="badge">Catalog</span></h5>
+                    <p class="text-muted">${escapeHTML(provider)}${meta ? ` • ${escapeHTML(meta)}` : ''}</p>
+                    <small>${escapeHTML(description)}</small>
                     <div class="voice-actions">
                         <button class="btn btn-sm btn-primary" data-action="use-catalog-voice">
                             <i class="fas fa-check"></i> Use Voice
