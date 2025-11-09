@@ -81,7 +81,7 @@ def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> 
                         ttfb = max(0.0, first - start)
                         ttfb_runs.append(ttfb)
                         # Continue consuming to validate stream is healthy
-        except Exception as e:
+        except (httpx.HTTPError, httpx.RequestError) as e:
             per_run.append({"run": i + 1, "ok": False, "error": str(e)})
             continue
         per_run.append({"run": i + 1, "ok": True, "ttfb_s": ttfb_runs[-1] if ttfb_runs else None, "bytes": total_bytes, "request_id": req_id})
