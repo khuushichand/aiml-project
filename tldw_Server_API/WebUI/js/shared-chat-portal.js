@@ -10,6 +10,7 @@
     loadingPromise: null,
     currentHost: null,
     notifiedFailure: false,
+    scriptsReadyPromise: null,
   };
 
   function waitForWebUI() {
@@ -33,6 +34,16 @@
       if (visible) el.style.removeProperty('display');
       else el.style.display = 'none';
     });
+  }
+
+  function ensureScriptsReady() {
+    if (state.scriptsReadyPromise) return state.scriptsReadyPromise;
+    if (typeof window !== 'undefined' && window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
+      state.scriptsReadyPromise = window.ModuleLoader.ensureGroupScriptsLoaded('chat');
+    } else {
+      state.scriptsReadyPromise = Promise.resolve();
+    }
+    return state.scriptsReadyPromise;
   }
 
   async function ensureSharedElement() {
@@ -160,13 +171,8 @@
         }
       }
 
-      if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
-        try {
-          await window.ModuleLoader.ensureGroupScriptsLoaded('chat');
-        } catch (err) {
-          console.debug('SharedChatPortal: unable to load chat module scripts', err);
-        }
-      }
+      // Ensure the chat group's scripts are loaded (reused promise)
+      await ensureScriptsReady();
 
       state.loadingPromise = null;
     })();
@@ -224,10 +230,11 @@
     }
 
     host.appendChild(shared);
-    // Bind inline handlers safely for the newly inserted subtree
-    try { if (window.webUI && typeof window.webUI.migrateInlineHandlers === 'function') { window.webUI.migrateInlineHandlers(host); } } catch (_) {}
-    // Ensure chat module scripts are present for any dynamic behavior
-    try { if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') { window.ModuleLoader.ensureGroupScriptsLoaded('chat'); } } catch (_) {}
+    // Ensure chat scripts are loaded before migrating inline handlers
+    await ensureScriptsReady();
+    if (window.webUI && typeof window.webUI.migrateInlineHandlers === 'function') {
+      window.webUI.migrateInlineHandlers(host);
+    }
     // Populate model dropdowns and ensure a default model is selected if none is chosen
     try {
       const pop = (window.apiClient && typeof window.apiClient.populateModelDropdowns === 'function')

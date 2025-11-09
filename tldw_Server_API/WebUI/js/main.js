@@ -4,7 +4,16 @@
  * to keep a single source of truth. Avoid duplicating sanitizer logic here.
  */
 
-// Ensure sanitizer.js is present (loaded before this file in index.html). Calls are guarded at runtime.
+// Ensure sanitizer.js is present (loaded before this file in index.html).
+// For tests/CommonJS, attempt a soft require so sanitizer becomes a hard dependency.
+let WebUISanitizerRef = (typeof window !== 'undefined' && window.WebUISanitizer) || null;
+try {
+    if (!WebUISanitizerRef && typeof require !== 'undefined') {
+        // Attempt to load in non-browser test environments
+        require('./sanitizer.js');
+        WebUISanitizerRef = (typeof window !== 'undefined' && window.WebUISanitizer) || (typeof globalThis !== 'undefined' ? globalThis.WebUISanitizer : null);
+    }
+} catch (_) { /* ignore; browser script tags handle this path */ }
 
 class WebUI {
     constructor() {
@@ -686,25 +695,18 @@ class WebUI {
 
     // Remove all <script> tags and migrate inline on* handlers using shared sanitizer
     sanitizeInlineHandlersAndScripts(html) {
-        try {
-            if (window.WebUISanitizer && typeof window.WebUISanitizer.sanitizeInlineHandlersAndScripts === 'function') {
-                return window.WebUISanitizer.sanitizeInlineHandlersAndScripts(html);
-            }
-            if (window.WebUISanitizer && typeof window.WebUISanitizer.sanitize === 'function') {
-                return window.WebUISanitizer.sanitize(html);
-            }
-        } catch (_) { /* ignore and fall back */ }
-        return String(html);
+        try { return (WebUISanitizerRef && typeof WebUISanitizerRef.sanitizeInlineHandlersAndScripts === 'function')
+            ? WebUISanitizerRef.sanitizeInlineHandlersAndScripts(html)
+            : String(html);
+        } catch (_) { return String(html); }
     }
 
     // Convert inline event attributes (onclick, onchange, etc.) to proper listeners
     migrateInlineHandlers(root) {
         // Delegate to the shared sanitizer as the single source of truth.
-        try {
-            if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
-                return window.WebUISanitizer.migrateInlineHandlers(root);
-            }
-        } catch (_) {}
+        try { if (WebUISanitizerRef && typeof WebUISanitizerRef.migrateInlineHandlers === 'function') {
+            return WebUISanitizerRef.migrateInlineHandlers(root);
+        } } catch (_) {}
         // No-op fallback if sanitizer unavailable (tests load sanitizer.js before this file).
     }
 
