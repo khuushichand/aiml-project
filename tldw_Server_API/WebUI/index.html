@@ -1019,6 +1019,22 @@
                     <h2>Quick Actions</h2>
                     <p class="text-muted">A streamlined panel for common tasks. Toggle "Show Advanced Panels" in the header to access full controls.</p>
                 </div>
+                <div class="endpoint-section" id="simpleChat">
+                    <div class="collapsible-header" data-collapsible="simpleChat">
+                        <div>
+                            <h3>Chat Assistant</h3>
+                            <p class="text-muted" style="margin:4px 0 0;">Full chat experience from the Chat tab, pinned here for quick access.</p>
+                        </div>
+                        <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleChat">Hide</button>
+                    </div>
+                    <div class="collapsible-body" id="simpleChat_body">
+                        <div id="simpleChatPortal" data-chat-host="simple">
+                            <div class="chat-host-placeholder text-muted" data-chat-placeholder>
+                                Loading chat interface…
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="columns">
                     <!-- Ingest File/URL -->
                     <div class="column">
@@ -1142,50 +1158,6 @@
                             </div>
                         </div>
                     </div>
-
-                    <!-- Chat quick box -->
-                    <div class="column">
-                        <div class="endpoint-section" id="simpleChat">
-                            <div class="collapsible-header" data-collapsible="simpleChat">
-                                <h3>Chat</h3>
-                                <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleChat">Hide</button>
-                            </div>
-                            <div class="collapsible-body" id="simpleChat_body">
-                            <div class="form-group">
-                                <label for="simpleChat_model">Model</label>
-                                <select id="simpleChat_model" class="llm-model-select">
-                                    <option value="">Use default</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label><input type="checkbox" id="simpleChat_save"> Save to DB</label>
-                                <label style="margin-left:12px;"><input type="checkbox" id="simpleChat_stream_toggle" checked> Stream</label>
-                            </div>
-                            <div class="form-group">
-                                <label for="simpleChat_input">Message</label>
-                                <textarea id="simpleChat_input" rows="3" placeholder="Ask anything... (Cmd/Ctrl+Enter to send)"></textarea>
-                            </div>
-                            <div class="btn-group">
-                                <button class="api-button" id="simpleChat_send" disabled>Send</button>
-                                <button class="btn btn-secondary" id="simpleChat_show_curl" title="Show cURL for this request">Show cURL</button>
-                                <button class="btn btn-secondary" id="simpleChat_reset" title="Reset ephemeral thread">Reset Thread</button>
-                            </div>
-                            <h4>Answer</h4>
-                            <div id="simpleChat_stream" class="endpoint-section" style="padding:8px; margin:6px 0;">
-                                <div id="simpleChat_answer" style="white-space:pre-wrap; word-break:break-word; min-height:1.5em;"></div>
-                                <div class="text-small text-muted" id="simpleChat_usage" style="margin-top:6px;">tokens: –</div>
-                                <div class="btn-group" style="margin-top:6px;">
-                                    <button class="btn btn-secondary btn-sm" id="simpleChat_copy">Copy Answer</button>
-                                    <button class="btn btn-secondary btn-sm" id="simpleChat_stop" style="display:none;">Stop</button>
-                                </div>
-                            </div>
-                            <pre id="simpleChat_response">---</pre>
-                            <div id="simpleChat_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
-                            <pre id="simpleChat_curl" style="display:none;"></pre>
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Search content -->
                     <div class="column">
                         <div class="endpoint-section" id="simpleSearch">
@@ -1249,6 +1221,7 @@
     <script src="js/tab-functions.js"></script> <!-- Keep legacy functions while migrating handlers -->
     <script src="js/legacy-helpers.js"></script>
     <script src="js/module-loader.js"></script>
+    <script src="js/shared-chat-portal.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>

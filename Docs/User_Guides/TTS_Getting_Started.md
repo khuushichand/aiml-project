@@ -2,6 +2,47 @@
 
 This guide helps new operators bring text-to-speech (TTS) online inside `tldw_server`. It walks through the supported providers (cloud + local), required dependencies, configuration files, and verification commands so you can decide which adapter to enable and confirm it works end to end.
 
+## YAML Quick Start
+
+Minimal configuration to get going. Save to `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (or use one of the supported locations).
+
+```yaml
+# Provider selection / fallback order
+provider_priority:
+  - openai
+  - kokoro
+
+providers:
+  # Hosted (requires env: OPENAI_API_KEY)
+  openai:
+    enabled: true
+    api_key: ${OPENAI_API_KEY}
+    model: tts-1
+
+  # Local ONNX example
+  kokoro:
+    enabled: true
+    use_onnx: true
+    model_path: models/kokoro/onnx/model.onnx
+    voices_json: models/kokoro/voices
+    device: cpu
+
+  # Local VibeVoice example (opt-in; downloads disabled by default)
+  vibevoice:
+    enabled: false           # set true to enable
+    auto_download: false     # set true to allow HF downloads
+    model_path: microsoft/VibeVoice-1.5B
+    device: auto             # cuda | mps | cpu | auto
+
+performance:
+  max_concurrent_generations: 4
+  stream_errors_as_audio: false
+```
+
+Notes:
+- Local providers will not download model assets unless you explicitly set `auto_download: true` (or export `TTS_AUTO_DOWNLOAD=1` / `VIBEVOICE_AUTO_DOWNLOAD=1`).
+- You can override API keys and some settings via `Config_Files/config.txt` or environment variables.
+
 ## Key Files & Paths
 - `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` — canonical provider settings + priority list.
 - `Config_Files/config.txt` — optional INI overrides (e.g., `[TTS-Settings]` block).
@@ -17,7 +58,7 @@ This guide helps new operators bring text-to-speech (TTS) online inside `tldw_se
 | Kokoro ONNX | Local ONNX | `pip install -e ".[TTS_kokoro_onnx]"` + `espeak-ng` | No | [Getting Started](../Getting-Started-STT_and_TTS.md#option-b--kokoro-tts-local-onnx) |
 | NeuTTS Air | Local hybrid | `pip install -e ".[TTS_neutts]"` + `espeak-ng` | **Required** (reference audio + text) | [NeuTTS Runbook](../STT-TTS/NEUTTS_TTS_SETUP.md) |
 | Chatterbox | Local PyTorch | `pip install -e ".[TTS_chatterbox]"` (+ `.[TTS_chatterbox_lang]` for multilingual) | Yes (5–20 s) | [Chatterbox Runbook](../Published/User_Guides/Chatterbox_TTS_Setup.md) |
-| VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/vibevoice-community/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](../STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
+| VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/microsoft/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](../STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
 | Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](../STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
 | Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](../STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
 | IndexTTS2 | Local PyTorch | Download checkpoints to `checkpoints/index_tts2/` | Yes (zero-shot, 12 GB+ VRAM) | [TTS README](../../tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) |
@@ -46,8 +87,9 @@ This guide helps new operators bring text-to-speech (TTS) online inside `tldw_se
 1. **Pick providers** you care about and install their extras.
 2. **Download models** proactively (use `huggingface-cli download ... --local-dir ...` for offline hosts).
 3. **Edit `tts_providers_config.yaml`**  
-   - Enable the provider, point to local paths, and adjust `device`, `sample_rate`, etc.  
+   - Enable providers, point to local paths, and adjust `device`, `sample_rate`, etc.  
    - Adjust `provider_priority` so preferred backends run first.
+   - Note: Local providers will not download models unless you explicitly set `auto_download: true` per provider (or export `TTS_AUTO_DOWNLOAD=1`).
 4. **Optional overrides** in `Config_Files/config.txt` (`[TTS-Settings]`) if you need environment-specific toggles.
 5. **Set secrets/env vars** (API keys, `TTS_AUTO_DOWNLOAD`, device hints).
 6. **Restart the server** and watch logs for `adapter initialized`.
@@ -99,15 +141,15 @@ Each section highlights installation, configuration, and a smoke test.
 
 ### Kokoro ONNX
 - **Install**: `pip install -e ".[TTS_kokoro_onnx]"` and `brew install espeak-ng` (or platform equivalent). Export `PHONEMIZER_ESPEAK_LIBRARY` if the library is in a non-standard path.
-- **Models**: place `kokoro-v0_19.onnx` and `voices.json` under `models/kokoro/`.
+- **Models** (v1.0): download from `onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` — use `onnx/model.onnx` and the `voices/` directory, placed under `models/kokoro/`.
 - **Config**:
   ```yaml
   providers:
     kokoro:
       enabled: true
       use_onnx: true
-      model_path: "models/kokoro/kokoro-v0_19.onnx"
-      voices_json: "models/kokoro/voices.json"
+      model_path: "models/kokoro/onnx/model.onnx"
+      voices_json: "models/kokoro/voices"
       device: "cpu"  # or "cuda"
   ```
 - **Verify**:
@@ -159,7 +201,8 @@ Each section highlights installation, configuration, and a smoke test.
   providers:
     vibevoice:
       enabled: true
-      model_path: "microsoft/VibeVoice-1.5B"
+      auto_download: true               # Explicitly enable downloads (default is false)
+      model_path: "microsoft/VibeVoice-1.5B"  # or vibevoice/VibeVoice-7B, FabioSarracino/VibeVoice-Large-Q8
       device: "cuda"
       use_quantization: true
       voices_dir: "./voices"
@@ -214,6 +257,37 @@ Each section highlights installation, configuration, and a smoke test.
 - **Hardware**: plan for 12 GB+ VRAM. Every request must include a `voice_reference` clip (zero-shot cloning).
 
 ---
+
+## YAML Configuration Reference
+
+Location precedence (first found is used):
+- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (in-repo default)
+- `./tts_providers_config.yaml` (current working directory)
+- `~/.config/tldw/tts_providers_config.yaml` (user config)
+
+Key sections:
+- `provider_priority`: ordered list used for fallback
+- `providers.<name>`: per-provider settings
+  - `enabled` (bool): must be true to initialize
+  - `auto_download` (bool): when true, allow HF downloads if local files are missing
+  - Model path fields (e.g., `model_path`, `model_dir`, `cache_dir`)
+  - Device and performance fields (e.g., `device`, `use_fp16`, `use_quantization`)
+- `performance`, `fallback`, `logging`: global behavior
+
+Example (VibeVoice 7B):
+```yaml
+providers:
+  vibevoice:
+    enabled: true
+    auto_download: true
+    variant: "7B"         # or "7B-Q8" for quantized community model
+    model_path: "vibevoice/VibeVoice-7B"
+    device: "cuda"
+```
+
+Environment overrides:
+- `TTS_AUTO_DOWNLOAD=1` (global), or `VIBEVOICE_AUTO_DOWNLOAD=1` (provider-specific)
+- `TTS_DEFAULT_PROVIDER`, `TTS_DEFAULT_VOICE`, `TTS_DEVICE`, etc.
 
 ## Voice Management & Reference Audio
 - Upload reusable samples:

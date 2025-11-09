@@ -1216,8 +1216,8 @@ const TTS = {
         const apiToken = this.getApiToken();
         const headers = {};
         if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
-        const url = provider ? `/api/v1/audio/voices/catalog?provider=${encodeURIComponent(provider)}`
-                             : '/api/v1/audio/voices/catalog';
+        const base = (window.apiClient && window.apiClient.endpoint('audio','voices_catalog')) || '/api/v1/audio/voices/catalog';
+        const url = provider ? `${base}?provider=${encodeURIComponent(provider)}` : base;
         const res = await fetch(url, { headers });
         if (!res.ok) throw new Error(`Failed to fetch voice catalog (${res.status})`);
         const body = await res.json();

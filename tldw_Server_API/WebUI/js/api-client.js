@@ -15,6 +15,7 @@ class APIClient {
         this.activeRequests = new Map(); // Track active fetch requests
         this.csrfToken = null; // Cached CSRF token (double-submit pattern)
         this.includeTokenInCurl = false; // UI preference for cURL token masking
+        this.apiEndpoints = null; // Server-provided endpoint catalog
         this.init();
     }
 
@@ -85,6 +86,10 @@ class APIClient {
 
                     // Store the loaded config for later use (includes LLM providers)
                     this.loadedConfig = config;
+                    // Capture server-provided endpoint map (if present)
+                    if (config && config.api_endpoints) {
+                        this.apiEndpoints = config.api_endpoints;
+                    }
 
                     // Use apiUrl if provided, otherwise keep same origin
                     if (config.apiUrl) {
@@ -153,6 +158,9 @@ class APIClient {
                         this.configLoaded = true;
                         console.log('Loaded API configuration from webui-config.json');
                     }
+                    if (config && config.api_endpoints) {
+                        this.apiEndpoints = config.api_endpoints;
+                    }
                 }
             } catch (error) {
                 // Config file not found or error reading it, that's okay
@@ -193,6 +201,40 @@ class APIClient {
                 this.includeTokenInCurl = !!prefs.includeTokenInCurl;
             }
         } catch (e) { /* ignore */ }
+    }
+
+    // Resolve endpoint path from server-provided catalog. Falls back to known defaults when absent.
+    endpoint(category, name, params = {}) {
+        try {
+            let path = null;
+            if (this.apiEndpoints && this.apiEndpoints[category] && this.apiEndpoints[category][name]) {
+                path = this.apiEndpoints[category][name];
+            } else {
+                // Fallback table for core endpoints
+                const defaults = {
+                    llm: {
+                        providers: '/api/v1/llm/providers',
+                        provider: '/api/v1/llm/providers/{provider}',
+                        models: '/api/v1/llm/models'
+                    },
+                    chat: { completions: '/api/v1/chat/completions' },
+                    audio: { voices_catalog: '/api/v1/audio/voices/catalog' },
+                    embeddings: {
+                        models: '/api/v1/embeddings/models',
+                        providers_config: '/api/v1/embeddings/providers-config'
+                    }
+                };
+                path = (((defaults[category] || {})[name]) || null);
+            }
+            if (!path) return null;
+            // Replace simple placeholders like {provider}
+            Object.entries(params || {}).forEach(([k, v]) => {
+                path = path.replace(new RegExp(`{${k}}`, 'g'), encodeURIComponent(String(v)));
+            });
+            return path;
+        } catch (e) {
+            return null;
+        }
     }
 
     setBaseUrl(url) {
@@ -910,14 +952,16 @@ class APIClient {
 
             // Prefer providers endpoint
             try {
-                const response = await this.get('/api/v1/llm/providers');
+                const ep = this.endpoint('llm', 'providers') || '/api/v1/llm/providers';
+                const response = await this.get(ep);
                 this.cachedProviders = response;
                 this.cacheTimestamp = Date.now();
                 return response;
             } catch (e) {
                 // Fallback to flat models endpoint and synthesize provider mapping
                 try {
-                    const models = await this.get('/api/v1/llm/models');
+                    const modelsEp = this.endpoint('llm', 'models') || '/api/v1/llm/models';
+                    const models = await this.get(modelsEp);
                     const byProvider = {};
                     (models || []).forEach((m) => {
                         const parts = String(m).split('/');
@@ -968,7 +1012,9 @@ class APIClient {
      */
     async getProviderDetails(providerName) {
         try {
-            const response = await this.get(`/api/v1/llm/providers/${providerName}`);
+            const ep = this.endpoint('llm', 'provider', { provider: providerName })
+                || `/api/v1/llm/providers/${providerName}`;
+            const response = await this.get(ep);
             return response;
         } catch (error) {
             console.error(`Failed to get provider details for ${providerName}:`, error);
@@ -982,7 +1028,8 @@ class APIClient {
      */
     async getAllAvailableModels() {
         try {
-            const response = await this.get('/api/v1/llm/models');
+            const ep = this.endpoint('llm', 'models') || '/api/v1/llm/models';
+            const response = await this.get(ep);
             return response;
         } catch (error) {
             console.error('Failed to get all models:', error);

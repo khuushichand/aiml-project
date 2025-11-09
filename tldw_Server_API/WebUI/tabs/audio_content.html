@@ -287,6 +287,14 @@
             <!-- Kokoro-specific options -->
             <div class="provider-options" id="kokoro_options" style="display: none;">
                 <h4>Kokoro Options</h4>
+                <div class="info-box" style="margin-bottom:8px;">
+                    <i class="icon-info"></i>
+                    <span>
+                        Kokoro requires eSpeak NG for phonemization. Install <code>espeak-ng</code> (brew/apt/installer). The server auto-detects it on most systems; set
+                        <code>PHONEMIZER_ESPEAK_LIBRARY</code> only if your OS needs an explicit path
+                        (macOS: <code>/opt/homebrew/lib/libespeak-ng.dylib</code>, Linux: <code>/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1</code>, Windows: the <code>libespeak-ng.dll</code> path).
+                    </span>
+                </div>
                 <div class="form-group">
                     <label for="kokoro_voice_mix">Custom Voice Pattern (Mixing):</label>
                     <input type="text" id="kokoro_voice_mix" placeholder="e.g., af_bella(2)+am_adam(1)">

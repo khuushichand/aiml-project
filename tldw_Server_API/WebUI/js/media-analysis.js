@@ -287,10 +287,8 @@ class MediaAnalysisManager {
 
     async loadAvailablePrompts() {
         try {
-            const data = await apiClient.get('/api/v1/prompts/list', {
-                page: 1,
-                per_page: 100
-            });
+            const listPath = (apiClient.endpoint('prompts','list') || '/api/v1/prompts');
+            const data = await apiClient.get(listPath, { page: 1, per_page: 100 });
             this.availablePrompts = data.prompts || [];
             this.updatePromptDropdown();
         } catch (error) {
@@ -463,13 +461,15 @@ async function byIdentifierSelectForAnalysis() {
             let analysisResult = '';
             if (stream) {
                 // For streaming, we need the raw response
-                const response = await apiClient.makeRequest('POST', '/api/v1/chat/completions', {
+                const ep = (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions');
+                const response = await apiClient.makeRequest('POST', ep, {
                     body: chatPayload,
                     streaming: true
                 });
                 analysisResult = await this.handleStreamingResponse(response, resultsDiv);
             } else {
-                const result = await apiClient.post('/api/v1/chat/completions', chatPayload);
+                const ep2 = (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions');
+                const result = await apiClient.post(ep2, chatPayload);
                 analysisResult = result.choices[0].message.content;
                 this.displayAnalysisResult({
                     analysis: analysisResult,

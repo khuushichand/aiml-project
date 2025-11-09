@@ -1111,6 +1111,16 @@ async def get_tts_health(
                     'model_path': getattr(adapter, 'model_path', None),
                     'voices_json': getattr(adapter, 'voices_json', None)
                 }
+                # Espeak library hint for phonemizer-backed flows
+                try:
+                    es_env = os.getenv('PHONEMIZER_ESPEAK_LIBRARY')
+                    kokoro_info['espeak_lib_env'] = es_env
+                    if es_env:
+                        kokoro_info['espeak_lib_exists'] = bool(os.path.exists(es_env))
+                    else:
+                        kokoro_info['espeak_lib_exists'] = False
+                except Exception:
+                    pass
                 health['providers']['kokoro'] = kokoro_info
         except Exception as e:
             logger.debug(f"Kokoro health enrichment failed: {e}")

@@ -301,6 +301,15 @@ print(response.json()["text"])
 
 ### Provider Configuration (tts_providers_config.yaml)
 
+Location resolution:
+- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`
+- `./tts_providers_config.yaml` (working directory)
+- `~/.config/tldw/tts_providers_config.yaml`
+
+Notes:
+- Local providers will not download models unless `auto_download: true` (or `TTS_AUTO_DOWNLOAD=1`).
+- VibeVoice 7B official repo: `vibevoice/VibeVoice-7B`; optional quantized 7B: `FabioSarracino/VibeVoice-Large-Q8`.
+
 ```yaml
 # Provider priority (fallback order)
 provider_priority:
@@ -334,7 +343,9 @@ providers:
 
   vibevoice:
     enabled: true
-    variant: 1.5B  # or 7B
+    auto_download: false        # Explicit opt-in to avoid unsolicited network fetches
+    variant: 1.5B               # or 7B, 7B-Q8
+    model_path: microsoft/VibeVoice-1.5B  # or vibevoice/VibeVoice-7B, FabioSarracino/VibeVoice-Large-Q8
     device: cuda
 
 # Fallback configuration

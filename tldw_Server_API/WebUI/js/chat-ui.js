@@ -528,8 +528,8 @@ class ChatUI {
 
             // Generate and display cURL command
             const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
-                ? apiClient.generateCurlV2('POST', '/api/v1/chat/completions', { body: payload })
-                : apiClient.generateCurl('POST', '/api/v1/chat/completions', { body: payload }));
+                ? apiClient.generateCurlV2('POST', (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), { body: payload })
+                : apiClient.generateCurl('POST', (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), { body: payload }));
             const curlEl = document.getElementById('chatCompletions_curl');
             if (curlEl) {
                 curlEl.textContent = curlCommand;
@@ -539,7 +539,7 @@ class ChatUI {
             if (payload.stream) {
                 await this.handleStreamingResponse(responseArea, payload);
             } else {
-                const response = await apiClient.post('/api/v1/chat/completions', payload);
+                const response = await apiClient.post((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), payload);
 
                 // Display response with JSON viewer
                 const viewer = new JSONViewer(responseArea, response, {
@@ -595,7 +595,7 @@ class ChatUI {
             responseArea.scrollTop = responseArea.scrollHeight;
         };
 
-        await apiClient.post('/api/v1/chat/completions', payload, {
+        await apiClient.post((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), payload, {
             streaming: true,
             onProgress
         });

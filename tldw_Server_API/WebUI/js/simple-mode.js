@@ -9,6 +9,8 @@
   // Ephemeral client-threaded chat history for Simple Chat
   let __simpleChatHistory = [];
   const __simpleChatMaxHistory = 40; // keep last N messages
+  // When Save to DB is enabled, reuse a single server conversation_id
+  let __simpleChatConversationId = null;
 
   function setSimpleDefaults() {
     try {
@@ -230,6 +232,10 @@
     const model = modelSel ? (modelSel.value || '') : '';
     if (model) payload.model = model;
     if (saveEl && saveEl.checked) payload.save_to_db = true;
+    // If persisting, attach existing conversation_id so we don't create new threads server-side
+    if (payload.save_to_db && __simpleChatConversationId) {
+      payload.conversation_id = __simpleChatConversationId;
+    }
 
     const wantStream = !!document.getElementById('simpleChat_stream_toggle')?.checked;
     if (wantStream) {
@@ -247,7 +253,8 @@
       // Non-streaming
       try {
         Loading.show(out.parentElement, 'Sending...');
-        const res = await apiClient.post('/api/v1/chat/completions', payload);
+        const chatEp = (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions');
+        const res = await apiClient.post(chatEp, payload);
         // Render plain answer content if present
         try {
           const answerEl = document.getElementById('simpleChat_answer');
@@ -265,6 +272,13 @@
                 }
               } catch (_) {}
             }
+            // Capture server conversation_id if persistence is enabled
+            try {
+              if (payload.save_to_db) {
+                const cid = res?.tldw_conversation_id || res?.tldw_metadata?.conversation_id || res?.conversation_id;
+                if (cid && typeof cid === 'string') __simpleChatConversationId = cid;
+              }
+            } catch (_) {}
           }
         } catch (_) { /* ignore */ }
         out.textContent = JSON.stringify(res, null, 2);
@@ -309,7 +323,8 @@
     }
 
     // Start SSE
-    simpleChatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+    let seenConvId = null;
+    simpleChatStreamHandle = apiClient.streamSSE((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), {
       method: 'POST',
       body: requestPayload,
       onEvent: (evt) => {
@@ -336,6 +351,12 @@
             const tt = usage.total_tokens ?? ((Number(pt)||0) + (Number(ct)||0));
             usageEl.textContent = `tokens: prompt=${pt} completion=${ct} total=${tt}`;
           }
+          // Capture conversation id from metadata during stream
+          try {
+            const meta = evt?.tldw_metadata || evt?.metadata || null;
+            const cid = meta?.conversation_id || evt?.tldw_conversation_id || evt?.conversation_id || null;
+            if (!seenConvId && cid && typeof cid === 'string') seenConvId = cid;
+          } catch (_) {}
         } catch (_) { /* ignore */ }
       },
       timeout: 600000
@@ -359,6 +380,12 @@
             }
           } catch (_) {}
         }
+        // Persist conversation id for next turn if saving to DB
+        try {
+          if (requestPayload && requestPayload.save_to_db) {
+            if (seenConvId && typeof seenConvId === 'string') __simpleChatConversationId = seenConvId;
+          }
+        } catch (_) {}
       } catch (_) {}
     } catch (e) {
       stopBtn.style.display = 'none';
@@ -602,6 +629,12 @@
       const st = document.getElementById('simpleChat_stream_toggle');
       if (st && typeof savedStream === 'boolean') st.checked = savedStream;
     } catch (_) {}
+
+    try {
+      if (window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') {
+        window.SharedChatPortal.mount('simple');
+      }
+    } catch (_) {}
   };
 
   // Collapsible controls for Simple Landing panels
@@ -828,6 +861,7 @@
         resetBtn.addEventListener('click', (e) => {
           e.preventDefault();
           try { __simpleChatHistory = []; } catch (_) {}
+          try { __simpleChatConversationId = null; } catch (_) {}
           try {
             const ans = document.getElementById('simpleChat_answer'); if (ans) ans.textContent = '';
             const out = document.getElementById('simpleChat_response'); if (out) out.textContent = '---';
@@ -989,7 +1023,12 @@
             const msg = (document.getElementById('simpleChat_input')?.value || '').trim() || 'Hello';
             const body = { messages: [{ role: 'user', content: msg }] };
             if (model) body.model = model;
-            const curl = apiClient.generateCurlV2('POST', '/api/v1/chat/completions', { body });
+            // Include conversation_id if we have one (prevents creating new server threads)
+            try { if (__simpleChatConversationId) body.conversation_id = __simpleChatConversationId; } catch (_) {}
+            // Mirror Save to DB toggle to reflect persistence intent
+            try { const saveEl = document.getElementById('simpleChat_save'); if (saveEl && saveEl.checked) body.save_to_db = true; } catch (_) {}
+      const chatEp = (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions');
+      const curl = apiClient.generateCurlV2('POST', chatEp, { body });
             const curlEl = document.getElementById('simpleChat_curl');
             if (curlEl) {
               curlEl.textContent = curl;
@@ -1083,7 +1122,10 @@
       if (!box) return;
       const arr = Array.isArray(files) ? files : [];
       if (!arr.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
-      const items = arr.slice(0, 50).map(f => `<span class="chip" style="margin:2px;">${f.name}</span>`).join(' ');
+      const items = arr.slice(0, 50).map((f) => {
+        const safeName = escapeHtml(f && typeof f.name === 'string' ? f.name : String(f?.name ?? ''));
+        return `<span class="chip" style="margin:2px;">${safeName}</span>`;
+      }).join(' ');
       box.innerHTML = `<div><strong>Files:</strong> ${items}${arr.length > 50 ? ' …' : ''}</div>`;
       box.style.display = '';
     } catch (_) {}

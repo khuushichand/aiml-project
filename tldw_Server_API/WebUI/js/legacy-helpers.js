@@ -434,7 +434,8 @@
             let allowedProviders = null;
             let allowedModels = null;
             try {
-                const lists = await apiClient.makeRequest('GET', '/api/v1/embeddings/models');
+                const ep = (window.apiClient && window.apiClient.endpoint('embeddings','models')) || '/api/v1/embeddings/models';
+                const lists = await apiClient.makeRequest('GET', ep);
                 allowedProviders = lists?.allowed_providers ?? null;
                 allowedModels = lists?.allowed_models ?? null;
             } catch (e) {
@@ -472,7 +473,8 @@
     async function notesExportDownload(params, filenameBase) {
         try {
             const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
-            const url = new URL(`${baseUrl}/api/v1/notes/export`);
+            const ep = (window.apiClient && window.apiClient.endpoint('notes','export')) || '/api/v1/notes/export';
+            const url = new URL(`${baseUrl}${ep}`);
             Object.entries(params || {}).forEach(([k, v]) => {
                 if (v !== undefined && v !== null && v !== '') url.searchParams.append(k, String(v));
             });
@@ -551,7 +553,8 @@ async function populateEmbeddingsCreateModelDropdown() {
 
         const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
         const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
-        const res = await fetch(`${baseUrl}/api/v1/embeddings/models`, {
+        const ep2 = (window.apiClient && window.apiClient.endpoint('embeddings','models')) || '/api/v1/embeddings/models';
+        const res = await fetch(`${baseUrl}${ep2}`, {
             headers: {
                 ...(token ? { 'X-API-KEY': token } : {}),
             }

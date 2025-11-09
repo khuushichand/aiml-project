@@ -3,7 +3,8 @@
 // ---- Global Presets (apply to Simple & Complex) ----
 async function refreshGlobalRagPresets() {
   try {
-    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+    const ep = (apiClient.endpoint('evaluations','rag_presets') || '/api/v1/evaluations/rag/pipeline/presets');
+    const resp = await apiClient.makeRequest('GET', ep);
     const sel = document.getElementById('ragGlobalPreset_select');
     if (!sel) return;
     sel.innerHTML = '';
@@ -24,7 +25,8 @@ async function applyGlobalRagPreset() {
     const sel = document.getElementById('ragGlobalPreset_select');
     const name = sel && sel.value ? sel.value : null;
     if (!name) { alert('Select a preset first'); return; }
-    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+    const ep = (apiClient.endpoint('evaluations','rag_preset', { name }) || `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+    const resp = await apiClient.makeRequest('GET', ep);
     if (!(resp && resp.config)) { alert('Preset not found'); return; }
     const cfg = resp.config;
     // Apply to Simple controls
@@ -111,7 +113,8 @@ async function ragSelLoadKeywords() {
   const cat = document.getElementById('ragSel_category')?.value || 'notes';
   if (cat !== 'notes') { ragSelToggleKeywordInput(); return; }
   try {
-    const resp = await apiClient.makeRequest('GET', `/api/v1/notes/keywords/?limit=500&offset=0`);
+    const ep = (apiClient.endpoint('notes','keywords') || '/api/v1/notes/keywords/');
+    const resp = await apiClient.get(ep, { limit: 500, offset: 0 });
     const sel = document.getElementById('ragSel_keywords');
     if (!sel) return;
     sel.innerHTML = '';
@@ -181,7 +184,8 @@ async function ragSelLoadItems2() {
     if (cat === 'notes') {
       const kid = document.getElementById('ragSel_keywords')?.value;
       if (!kid) { alert('Select a keyword'); return; }
-      const resp = await apiClient.makeRequest('GET', `/api/v1/notes/keywords/${kid}/notes/?limit=50&offset=0`);
+      const ep = (apiClient.endpoint('notes','keywords_notes', { keyword_id: kid }) || `/api/v1/notes/keywords/${kid}/notes/`);
+      const resp = await apiClient.get(ep, { limit: 50, offset: 0 });
       const items = (resp?.notes || []).map(n => ({ source: 'notes', id: n.id, title: n.title }));
       items.forEach(item => {
         const div = document.createElement('div');

@@ -164,10 +164,25 @@ class WebUI {
                 ],
             };
 
-            const hide = (selector) => { const el = document.querySelector(selector); if (el) el.style.display = 'none'; };
+            const applyHiddenState = (selector, hidden) => {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach((el) => {
+                    if (!el) return;
+                    if (hidden) {
+                        try { el.dataset.capabilityHidden = 'true'; } catch (_) { el.setAttribute('data-capability-hidden', 'true'); }
+                        el.style.display = 'none';
+                    } else {
+                        if (el.dataset) {
+                            delete el.dataset.capabilityHidden;
+                        }
+                        el.removeAttribute('data-capability-hidden');
+                        el.style.display = '';
+                    }
+                });
+            };
             Object.entries(capabilityToSelectors).forEach(([cap, selectors]) => {
                 const enabled = !!caps[cap];
-                if (!enabled) selectors.forEach(hide);
+                selectors.forEach((selector) => applyHiddenState(selector, !enabled));
             });
         } catch (e) {
             // Non-fatal
@@ -218,17 +233,25 @@ class WebUI {
                 const t = btn.dataset.toptab;
                 if (!t) return;
                 if (allowed.has(t)) { btn.style.display = ''; return; }
+                if (btn.getAttribute('data-capability-hidden') === 'true') {
+                    btn.style.display = 'none';
+                    return;
+                }
                 btn.style.display = visible ? '' : 'none';
             });
             // Hide corresponding subtab rows when advanced hidden
             const rows = document.querySelectorAll('.sub-tab-row');
+            const advancedTargets = new Set(['chat', 'media', 'rag', 'workflows', 'prompts', 'notes', 'watchlists', 'persona', 'personalization', 'evaluations', 'keywords', 'embeddings', 'research', 'chatbooks', 'audio', 'admin', 'mcp']);
             rows.forEach((row) => {
                 const id = row.id || '';
                 if (!id) return;
                 const t = id.endsWith('-subtabs') ? id.slice(0, -8) : id;
-                if (['chat', 'media', 'rag', 'workflows', 'prompts', 'notes', 'watchlists', 'persona', 'personalization', 'evaluations', 'keywords', 'embeddings', 'research', 'chatbooks', 'audio', 'admin', 'mcp'].includes(t)) {
-                    row.style.display = visible ? '' : 'none';
+                if (!advancedTargets.has(t)) return;
+                if (row.getAttribute('data-capability-hidden') === 'true') {
+                    row.style.display = 'none';
+                    return;
                 }
+                row.style.display = visible ? '' : 'none';
             });
         } catch (e) { /* ignore */ }
     }
@@ -302,8 +325,29 @@ class WebUI {
                     await this.activateSubTab(firstSubTab);
                 }
             } else {
-                // Handle tabs without sub-tabs (like Global Settings)
-                this.showContent(topTabName);
+                // Handle tabs without sub-tabs
+                // Map known top-level tabs to their content IDs
+                let contentId = topTabName;
+                if (topTabName === 'simple') {
+                    // The Simple page uses 'tabSimpleLanding' as its content container
+                    contentId = 'tabSimpleLanding';
+                    // Ensure Simple group scripts are loaded so its initializer is available
+                    try {
+                        if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
+                            await window.ModuleLoader.ensureGroupScriptsLoaded('simple');
+                        }
+                    } catch (e) {
+                        console.debug('ModuleLoader failed to load simple group scripts', e);
+                    }
+                }
+
+                this.showContent(contentId);
+
+                // When showing Simple landing directly, run its initializer and mount shared chat
+                if (contentId === 'tabSimpleLanding') {
+                    try { if (typeof window.initializeSimpleLanding === 'function') window.initializeSimpleLanding(); } catch (_) {}
+                    try { if (window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') window.SharedChatPortal.mount('simple'); } catch (_) {}
+                }
             }
 
             // Save active tab to storage
@@ -411,6 +455,12 @@ class WebUI {
         if (contentId === 'tabSimpleLanding' && typeof window.initializeSimpleLanding === 'function') {
             window.initializeSimpleLanding();
         }
+        if (contentId === 'tabChatCompletions' && window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') {
+            window.SharedChatPortal.mount('advanced');
+        }
+        if (contentId === 'tabSimpleLanding' && window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') {
+            window.SharedChatPortal.mount('simple');
+        }
         if (contentId === 'tabWebScrapingIngest' && typeof initializeWebScrapingIngestTab === 'function') {
             initializeWebScrapingIngestTab();
         }
@@ -473,7 +523,9 @@ class WebUI {
     }
 
     async loadContentGroup(groupName, targetContentId) {
-        const response = await fetch(`tabs/${groupName}_content.html`);
+        // Resolve relative to current page to avoid base-path issues
+        const url = new URL(`tabs/${groupName}_content.html`, window.location.href).toString();
+        const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status} for tabs/${groupName}_content.html`);
         }
@@ -488,41 +540,8 @@ class WebUI {
         mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
         // Convert inline event attributes into listeners to avoid CSP 'unsafe-inline'
         try { this.migrateInlineHandlers(mainContentArea); } catch (_) {}
-        // Execute external scripts, and for now, also execute inline tab scripts to ensure
-        // functions defined within tab content are available to migrated handlers.
-        // NOTE: Inline execution still respects CSP. In production, script-src typically
-        // forbids 'unsafe-inline' so these will be ignored by the browser; in tests/dev
-        // where CSP allows inline, this enables legacy tab scripts to function.
-        const MIGRATED_GROUPS = new Set();
-        for (const s of scripts) {
-            try {
-                if (s.src) {
-                    const newScript = document.createElement('script');
-                    if (s.type) newScript.type = s.type;
-                    newScript.src = s.src;
-                    document.body.appendChild(newScript);
-                    document.body.removeChild(newScript);
-                } else {
-                    // Recreate inline script node so the browser executes it subject to CSP
-                    const inlineScript = document.createElement('script');
-                    if (s.type) inlineScript.type = s.type;
-                    // If a CSP nonce is present on page scripts, attempt to reuse it
-                    try {
-                        const anyScript = document.querySelector('script[nonce]');
-                        if (anyScript && anyScript.nonce) inlineScript.nonce = anyScript.nonce;
-                    } catch (_) { /* ignore */ }
-                    inlineScript.text = s.text || s.innerHTML || '';
-                    document.body.appendChild(inlineScript);
-                    document.body.removeChild(inlineScript);
-                }
-            } catch (e) {
-                console.error('Failed to execute tab script for group', groupName, e);
-            }
-        }
-        try {
-            window.__groupScriptEval = window.__groupScriptEval || {};
-            window.__groupScriptEval[groupName] = (window.__groupScriptEval[groupName] || 0) + scripts.length;
-        } catch (e) { /* ignore */ }
+        // Do not execute inline <script> blocks to comply with CSP (no 'unsafe-inline').
+        // Group-specific scripts are loaded via ModuleLoader when the tab is activated.
 
         // Re-initialize form handlers for newly loaded content
         this.initFormHandlers();
@@ -1291,6 +1310,7 @@ class WebUI {
 let webUI;
 document.addEventListener('DOMContentLoaded', () => {
     webUI = new WebUI();
+    try { document.dispatchEvent(new Event('webui-ready')); } catch (_) {}
 });
 
 // Export for use in other modules

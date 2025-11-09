@@ -211,7 +211,12 @@
 
     <div class="endpoint-section">
         <h2>Interactive Chat Interface</h2>
-        <div class="chat-interface">
+        <p class="text-muted">This same interface is now pinned to the Simple tab for quick access.</p>
+        <div id="chatAdvancedHost" data-chat-host="advanced">
+            <div class="chat-host-placeholder text-muted" data-chat-placeholder style="display:none;">
+                Chat interface is currently shown on the Simple tab.
+            </div>
+            <div class="chat-interface" data-shared-chat-ui="true">
             <!-- System Prompt Configuration -->
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="chat-system-prompt">System Prompt:</label>
@@ -281,6 +286,7 @@
                         <option value="">Loading models...</option>
                     </select>
                 </div>
+            </div>
             </div>
         </div>
     </div>

@@ -1043,7 +1043,8 @@ async def deepseek_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    # Honor monkeypatched legacy callable in tests to avoid network
+    # Honor monkeypatched legacy callable only when the legacy function itself
+    # is patched (module/name indicates tests), not merely because tests run.
     try:
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_deepseek", None)
@@ -1051,8 +1052,7 @@ async def deepseek_chat_handler_async(
             _modname = getattr(_patched, "__module__", "") or ""
             _fname = getattr(_patched, "__name__", "") or ""
             if (
-                os.getenv("PYTEST_CURRENT_TEST")
-                or _modname.startswith("tldw_Server_API.tests")
+                _modname.startswith("tldw_Server_API.tests")
                 or _modname.startswith("tests")
                 or ".tests." in _modname
                 or _fname.startswith("_fake")

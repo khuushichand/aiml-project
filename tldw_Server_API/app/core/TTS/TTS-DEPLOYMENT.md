@@ -223,8 +223,8 @@ providers:
 
   vibevoice:
     enabled: true
-    variant: 1.5B  # or 7B
-    model_path: microsoft/VibeVoice-1.5B  # or WestZhang/VibeVoice-Large-pt for 7B
+    variant: 1.5B  # or 7B, 7B-Q8
+    model_path: microsoft/VibeVoice-1.5B  # or vibevoice/VibeVoice-7B (official), FabioSarracino/VibeVoice-Large-Q8 (7B-Q8)
     device: cuda
     use_fp16: true
     enable_music: true
@@ -619,8 +619,12 @@ huggingface-cli download microsoft/VibeVoice-1.5B \
     --local-dir models/vibevoice-1.5b
 
 # 7B model (larger, better quality)
-huggingface-cli download WestZhang/VibeVoice-Large-pt \
+huggingface-cli download vibevoice/VibeVoice-7B \
     --local-dir models/vibevoice-7b
+
+# Optional: Community 8-bit quantized 7B variant (reduced VRAM)
+huggingface-cli download FabioSarracino/VibeVoice-Large-Q8 \
+    --local-dir models/vibevoice-7b-q8
 ```
 
 ## Voice Cloning Setup

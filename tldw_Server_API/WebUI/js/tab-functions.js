@@ -1065,7 +1065,8 @@ async function flashGenFetchItems() {
     try {
         let html = '';
         if (source === 'notes') {
-            const data = await window.apiClient.get('/api/v1/notes/', { limit: 20, offset: 0 });
+            const notesList = (window.apiClient && window.apiClient.endpoint('notes','list')) || '/api/v1/notes/';
+            const data = await window.apiClient.get(notesList, { limit: 20, offset: 0 });
             const notes = (data && (data.notes || data.items)) || [];
             for (const n of notes) {
                 const id = n.id;
@@ -1076,7 +1077,8 @@ async function flashGenFetchItems() {
                 </label>`;
             }
         } else {
-            const data = await window.apiClient.get('/api/v1/media', { page: 1, results_per_page: 20 });
+            const mediaList = (window.apiClient && window.apiClient.endpoint('media','list')) || '/api/v1/media';
+            const data = await window.apiClient.get(mediaList, { page: 1, results_per_page: 20 });
             const items = (data && data.items) || [];
             for (const m of items) {
                 const id = m.id;
@@ -1118,11 +1120,13 @@ async function flashGenerateFromSelection() {
             const kind = c.getAttribute('data-kind');
             const id = c.value;
             if (kind === 'note') {
-                const n = await window.apiClient.get(`/api/v1/notes/${encodeURIComponent(id)}`);
-                if (n && n.title) combined += `\n\n# ${n.title}\n`;
-                if (n && n.content) combined += `${n.content}\n`;
+                const nPath = (window.apiClient && window.apiClient.endpoint('notes','get', { note_id: id })) || `/api/v1/notes/${encodeURIComponent(id)}`;
+                const n = await window.apiClient.get(nPath);
+            if (n && n.title) combined += `\n\n# ${n.title}\n`;
+            if (n && n.content) combined += `${n.content}\n`;
             } else {
-                const m = await window.apiClient.get(`/api/v1/media/${encodeURIComponent(id)}`, { include_content: 'true', include_versions: 'false' });
+                const mPath = (window.apiClient && window.apiClient.endpoint('media','by_id', { media_id: id })) || `/api/v1/media/${encodeURIComponent(id)}`;
+                const m = await window.apiClient.get(mPath, { include_content: 'true', include_versions: 'false' });
                 const text = m && m.content && (m.content.text || m.content.transcript || m.content.analysis) || '';
                 const title = m && m.source && m.source.title;
                 if (title) combined += `\n\n# ${title}\n`;
@@ -1137,7 +1141,7 @@ async function flashGenerateFromSelection() {
             { role: 'user', content: combined.slice(0, 200000) }
         ];
         const body = { model: model || undefined, messages, temperature: 0.3 };
-        const res = await window.apiClient.post('/api/v1/chat/completions', body);
+        const res = await window.apiClient.post((window.apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), body);
         const choice = res && res.choices && res.choices[0];
         const text = (choice && choice.message && choice.message.content) || '';
         // Try to parse JSON from response
@@ -1900,7 +1904,8 @@ async function loadProviderVoices() {
             voiceList.innerHTML = '<span class="loading-spinner"></span> Loading voices...';
         }
 
-        const res = await apiClient.get('/api/v1/audio/voices/catalog', { provider });
+        const voicesEp = apiClient.endpoint('audio','voices_catalog') || '/api/v1/audio/voices/catalog';
+        const res = await apiClient.get(voicesEp, { provider });
         const voices = (res && (res[provider] || res[provider?.toLowerCase?.()] || res[provider?.toUpperCase?.()])) || res || [];
 
         // Update dropdown
@@ -2447,7 +2452,8 @@ async function loadEmbeddingProviderConfig() {
     try {
         const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
         const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
-        const res = await fetch(`${baseUrl}/api/v1/embeddings/providers-config`, {
+        const ep = (window.apiClient && window.apiClient.endpoint('embeddings','providers_config')) || '/api/v1/embeddings/providers-config';
+        const res = await fetch(`${baseUrl}${ep}`, {
             headers: {
                 ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
             }
@@ -3709,7 +3715,8 @@ async function makeChatCompletionsRequest() {
         if (payload.stream) {
             // Handle streaming response
             responseEl.textContent += 'Streaming response:\n';
-            const response = await apiClient.post('/api/v1/chat/completions', payload, {
+                const chatEp = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+                const response = await apiClient.post(chatEp, payload, {
                 streaming: true,
                 onProgress: (chunk) => {
                     if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
@@ -3721,7 +3728,8 @@ async function makeChatCompletionsRequest() {
             try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
         } else {
             // Handle regular response
-            const response = await apiClient.post('/api/v1/chat/completions', payload);
+            const chatEp2 = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+            const response = await apiClient.post(chatEp2, payload);
             responseEl.textContent += '\nResponse:\n' + JSON.stringify(response, null, 2);
             try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
         }
@@ -4050,7 +4058,7 @@ async function sendChatMessage() {
                     } catch (_) {}
                 });
             };
-            chatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+            chatStreamHandle = apiClient.streamSSE((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), {
                 method: 'POST',
                 body: requestPayload,
                 onEvent: (evt) => {
@@ -4114,7 +4122,8 @@ async function sendChatMessage() {
             return;
         }
 
-        const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
+        const chatEp3 = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+        const response = await apiClient.post(chatEp3, requestPayload);
 
         if (response.choices && response.choices[0] && response.choices[0].message) {
             const assistantMessage = response.choices[0].message.content;
@@ -4453,7 +4462,7 @@ async function continueConversation() {
                 } catch (_) {}
             });
         };
-        chatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+        chatStreamHandle = apiClient.streamSSE((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), {
             method: 'POST',
             body: requestPayload,
             onEvent: (evt) => {
@@ -4506,7 +4515,8 @@ async function continueConversation() {
 
     // Non-stream
     try {
-        const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
+        const chatEp4 = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+        const response = await apiClient.post(chatEp4, requestPayload);
         const assistantMessage = response?.choices?.[0]?.message?.content || '';
         chatMessages.push({ role: 'assistant', content: assistantMessage });
         assistantDiv.innerHTML = '';
@@ -5204,14 +5214,15 @@ async function createPrompt() {
         responseEl.textContent = 'Creating prompt...';
 
         // Generate cURL command
+        const createPath = (window.apiClient && window.apiClient.endpoint('prompts','create')) || '/api/v1/prompts';
         const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
-            ? apiClient.generateCurlV2('POST', '/api/v1/prompts', { body: payload })
-            : apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload }));
+            ? apiClient.generateCurlV2('POST', createPath, { body: payload })
+            : apiClient.generateCurl('POST', createPath, { body: payload }));
         if (curlEl) {
             curlEl.textContent = curlCommand;
         }
 
-        const response = await apiClient.makeRequest('POST', '/api/v1/prompts', { body: payload });
+        const response = await apiClient.makeRequest('POST', createPath, { body: payload });
         responseEl.textContent = JSON.stringify(response, null, 2);
 
         // Show success message

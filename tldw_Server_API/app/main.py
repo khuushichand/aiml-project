@@ -2785,6 +2785,27 @@ if WEBUI_DIR.exists():
             logger.warning(f"Failed to get LLM providers for config: {e}")
             config["llm_providers"] = {"providers": [], "default_provider": "openai", "total_configured": 0}
 
+        # Add Embeddings providers information (lightweight; no secrets)
+        try:
+            from tldw_Server_API.app.core.Embeddings.simplified_config import get_config as _get_emb_cfg
+            _emb_cfg = _get_emb_cfg()
+            config["embeddings"] = {
+                "default_provider": getattr(_emb_cfg, "default_provider", None),
+                "default_model": getattr(_emb_cfg, "default_model", None),
+                "providers": [
+                    {
+                        "name": getattr(p, "name", None),
+                        "enabled": bool(getattr(p, "enabled", False)),
+                        # Expose API URL for local/self-hosted providers only; never include keys
+                        "api_url": getattr(p, "api_url", None),
+                        "models": list(getattr(p, "models", []) or []),
+                    }
+                    for p in (getattr(_emb_cfg, "providers", []) or [])
+                ],
+            }
+        except Exception as e:
+            logger.warning(f"Failed to include embeddings providers in WebUI config: {e}")
+
         # Add chat defaults (e.g., default save_to_db)
         try:
             cfg = load_comprehensive_config()
@@ -2814,6 +2835,101 @@ if WEBUI_DIR.exists():
             config["chat"] = {"default_save_to_db": default_save}
         except Exception as e:
             logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
+
+        # Add a compact catalog of commonly used API endpoints for the WebUI
+        try:
+            config["api_endpoints"] = {
+                "llm": {
+                    "health": "/api/v1/llm/health",
+                    "providers": "/api/v1/llm/providers",
+                    "provider": "/api/v1/llm/providers/{provider}",
+                    "models": "/api/v1/llm/models",
+                    "models_metadata": "/api/v1/llm/models/metadata",
+                },
+                "embeddings": {
+                    "models": "/api/v1/embeddings/models",
+                    "providers_config": "/api/v1/embeddings/providers-config",
+                    "warmup": "/api/v1/embeddings/models/warmup",
+                    "download": "/api/v1/embeddings/models/download",
+                },
+                "audio": {
+                    "providers": "/api/v1/audio/providers",
+                    "voices_catalog": "/api/v1/audio/voices/catalog",
+                    "speech": "/api/v1/audio/speech",
+                    "transcriptions": "/api/v1/audio/transcriptions",
+                    "stream_transcribe": "/api/v1/audio/stream/transcribe",
+                    "stream_status": "/api/v1/audio/stream/status",
+                },
+                "ocr": {
+                    "backends": "/api/v1/ocr/backends",
+                    "points_preload": "/api/v1/ocr/points/preload",
+                },
+                "media": {
+                    "add": "/api/v1/media/add",
+                    "search": "/api/v1/media/search",
+                    "ingest_web": "/api/v1/media/ingest-web-content",
+                    "metadata_search": "/api/v1/media/metadata-search",
+                    "list": "/api/v1/media",
+                    "by_id": "/api/v1/media/{media_id}",
+                    "versions": "/api/v1/media/{media_id}/versions",
+                },
+                "rag": {
+                    "search": "/api/v1/rag/search",
+                },
+                "chat": {
+                    "completions": "/api/v1/chat/completions",
+                },
+                "research": {
+                    "websearch": "/api/v1/research/websearch",
+                    "arxiv": "/api/v1/paper-search/arxiv",
+                    "semantic_scholar": "/api/v1/paper-search/semantic-scholar",
+                },
+                "prompts": {
+                    "health": "/api/v1/prompts/health",
+                    "list": "/api/v1/prompts",
+                    "create": "/api/v1/prompts",
+                    "search": "/api/v1/prompts/search",
+                    "get": "/api/v1/prompts/{prompt_identifier}",
+                    "export": "/api/v1/prompts/export",
+                    "update": "/api/v1/prompts/{prompt_identifier}",
+                    "delete": "/api/v1/prompts/{prompt_identifier}",
+                    "keywords": "/api/v1/prompts/keywords/",
+                    "keyword_delete": "/api/v1/prompts/keywords/{keyword}",
+                },
+                "notes": {
+                    "health": "/api/v1/notes/health",
+                    "list": "/api/v1/notes/",
+                    "get": "/api/v1/notes/{note_id}",
+                    "search": "/api/v1/notes/search",
+                    "export": "/api/v1/notes/export",
+                    "create": "/api/v1/notes/",
+                    "keywords": "/api/v1/notes/keywords/",
+                    "keywords_notes": "/api/v1/notes/keywords/{keyword_id}/notes/",
+                },
+                "mcp": {
+                    "health": "/api/v1/mcp/health",
+                    "prompts": "/api/v1/mcp/prompts",
+                    "resources": "/api/v1/mcp/resources",
+                    "auth_token": "/api/v1/mcp/auth/token",
+                },
+                "workflows": {
+                    "config": "/api/v1/workflows/config",
+                    "run": "/api/v1/workflows/run",
+                    "auth_check": "/api/v1/workflows/auth/check",
+                },
+                "health": {
+                    "aggregate": "/api/v1/health",
+                    "live": "/api/v1/health/live",
+                    "ready": "/api/v1/health/ready",
+                },
+                "evaluations": {
+                    "rag_presets": "/api/v1/evaluations/rag/pipeline/presets",
+                    "rag_preset": "/api/v1/evaluations/rag/pipeline/presets/{name}",
+                },
+            }
+        except Exception:
+            # Best-effort: omit if anything goes wrong
+            pass
 
         return JSONResponse(content=config)
 

@@ -64,22 +64,54 @@ Troubleshooting
 ---
 
 ## Option B — Kokoro TTS (Local, ONNX)
-Offline TTS using Kokoro ONNX. Good quality and speed on CPU; better with GPU.
+Offline TTS using Kokoro ONNX. Good quality and fast on CPU; optional GPU via ONNX Runtime.
 
 1) Install dependencies
 ```bash
-pip install kokoro-onnx
+# Python packages (CPU)
+pip install onnxruntime kokoro-onnx phonemizer espeak-phonemizer huggingface-hub
+
+# Optional: GPU acceleration (replace onnxruntime above)
+pip install onnxruntime-gpu
+
+# System package for phonemizer (required):
 # macOS (Homebrew):
 brew install espeak-ng
-# Set the phonemizer library (adjust path per OS):
+# Ubuntu/Debian:
+sudo apt-get update && sudo apt-get install -y espeak-ng
+# Windows (PowerShell, example):
+#  - Install eSpeak NG (from https://github.com/espeak-ng/espeak-ng/releases)
+#  - Set PHONEMIZER_ESPEAK_LIBRARY to libespeak-ng.dll path
+
+# eSpeak NG is auto-detected on most systems. Point the phonemizer to the library only if needed
+# macOS (adjust if your Homebrew prefix differs)
 export PHONEMIZER_ESPEAK_LIBRARY=/opt/homebrew/lib/libespeak-ng.dylib
+# Linux example
+export PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+# Windows example (only if auto-detect fails)
+# set PHONEMIZER_ESPEAK_LIBRARY=C:\\Program Files\\eSpeak NG\\libespeak-ng.dll
 ```
-- Linux example: `/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1`
 
 2) Download model files
-- Place files under a `models/` folder at repo root (example):
-  - `models/kokoro-v0_19.onnx`
-  - `models/voices.json`
+- Place files under a `models/` folder at the repo root (example paths below).
+- Recommended sources:
+  - ONNX: `onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` (contains `onnx/model.onnx` and a `voices/` directory of voice styles)
+  - PyTorch (optional): `hexgrad/Kokoro-82M` (contains `kokoro-v1_0.pth`, `config.json`, and `voices/`)
+
+Examples
+```bash
+# Create a local directory
+mkdir -p models/kokoro
+
+# Option A: huggingface-cli (ONNX v1.0)
+pip install huggingface-hub
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+
+# Option B: direct URLs for ONNX (if CLI unavailable)
+wget https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped/resolve/main/onnx/model.onnx -O models/kokoro/onnx/model.onnx
+# Then download the voices/ directory assets from the same repo (or use huggingface-cli above)
+```
 
 3) Enable and point config to your files
 - Edit `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`:
@@ -88,9 +120,9 @@ providers:
   kokoro:
     enabled: true
     use_onnx: true
-    model_path: "models/kokoro-v0_19.onnx"
-    voices_json: "models/voices.json"
-    device: "cpu"    # or "cuda" if available
+    model_path: "models/kokoro/onnx/model.onnx"
+    voices_json: "models/kokoro/voices"   # use voices directory for v1.0 ONNX
+    device: "cpu"    # or "cuda" if using onnxruntime-gpu
 ```
 - Optional: move Kokoro earlier in `provider_priority` to prefer it.
 
@@ -116,13 +148,16 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
 ```
 
 Troubleshooting
-- `kokoro_onnx library not installed`: `pip install kokoro-onnx`
-- `voices.json not found` or `model not found`: fix paths in YAML.
-- `eSpeak lib not found`: install `espeak-ng` and set `PHONEMIZER_ESPEAK_LIBRARY`.
+- Missing dependencies
+  - kokoro_onnx: `pip install kokoro-onnx`
+  - onnxruntime: `pip install onnxruntime` (or `onnxruntime-gpu`)
+  - phonemizer / espeak-phonemizer: `pip install phonemizer espeak-phonemizer`
+- `voices assets not found` or `model not found`: fix `voices` directory or model path in YAML.
+- `eSpeak lib not found`: install `espeak-ng` and set `PHONEMIZER_ESPEAK_LIBRARY` to the library path.
 - Adapter previously failed and won’t retry: we enable retry by default (`performance.adapter_failure_retry_seconds: 300`). Or restart the server after fixing assets.
 
 Notes
-- PyTorch variant: set `use_onnx: false` and provide a PyTorch model path; requires `torch` and optionally GPU/MPS.
+- PyTorch variant (hexgrad/Kokoro-82M): set `use_onnx: false`, set `model_path: models/kokoro/kokoro-v1_0.pth`, ensure `config.json` sits alongside it, and set `voice_dir: models/kokoro/voices`. Requires `torch` and a compatible Kokoro PyTorch package. Set `device` to `cuda` or `mps` if available.
 
 ---
 
@@ -217,8 +252,8 @@ providers:
   kokoro:
     enabled: true
     use_onnx: true
-    model_path: "models/kokoro-v0_19.onnx"
-    voices_json: "models/voices.json"
+    model_path: "models/kokoro/onnx/model.onnx"
+    voices_json: "models/kokoro/voices"
     device: "cpu"
 performance:
   adapter_failure_retry_seconds: 300
@@ -271,12 +306,18 @@ providers:
 
 ### VibeVoice (Local, expressive multi-speaker)
 - Deps: `pip install torch torchaudio sentencepiece soundfile huggingface_hub`
-- Install: `pip install git+https://github.com/vibevoice-community/VibeVoice.git`
+- Install (official):
+  ```bash
+  git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
+  cd libs/VibeVoice && pip install -e .
+  cd ../..
+  ```
 - YAML:
 ```yaml
 providers:
   vibevoice:
     enabled: true
+    auto_download: true
     device: "cuda"  # or mps/cpu
 ```
 - Test: `model: vibevoice`, `voice: 1` (speaker index).
