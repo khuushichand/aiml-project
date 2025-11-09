@@ -9,6 +9,20 @@
 
 let _audioTTSAbort = null;
 
+// Central helper to insert HTML safely under CSP. Falls back to innerHTML.
+function setSafeHTML(el, html) {
+    try {
+        if (!el) return;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(el, html);
+        } else {
+            el.innerHTML = html;
+        }
+    } catch (_) {
+        try { el.innerHTML = html; } catch (_) {}
+    }
+}
+
 function updateTTSProviderOptions() {
     const provider = document.getElementById('audioTTS_provider').value;
     const modelSelect = document.getElementById('audioTTS_model');
@@ -477,7 +491,7 @@ async function flashListDecks() {
     try {
         const data = await window.apiClient.get('/api/v1/flashcards/decks');
         const el = document.getElementById('fc_manage_result');
-        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || []);
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || []));
         flashPopulateDecks();
     } catch (e) {
         const el = document.getElementById('fc_manage_result');
@@ -496,7 +510,7 @@ async function flashCreateDeck() {
         const payload = { name, description };
         const data = await window.apiClient.post('/api/v1/flashcards/decks', payload);
         const el = document.getElementById('fc_manage_result');
-        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || {}));
         flashPopulateDecks();
     } catch (e) {
         const el = document.getElementById('fc_manage_result');
@@ -577,7 +591,7 @@ async function flashCreateCard() {
     try {
         const data = await window.apiClient.post('/api/v1/flashcards', payload);
         const el = document.getElementById('fc_manage_result');
-        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || {}));
         // clear inputs (keep deck)
         try {
             document.getElementById('fc_front').value = '';
@@ -597,7 +611,7 @@ function flashRenderCardsList(resp) {
     try {
         const cont = document.getElementById('fc_cards_container');
         const rawPre = document.getElementById('fc_manage_result');
-        if (rawPre) rawPre.innerHTML = Utils.syntaxHighlightJSON(resp || {});
+        if (rawPre) setSafeHTML(rawPre, Utils.syntaxHighlightJSON(resp || {}));
         if (!cont) return;
         const items = (resp && resp.items) ? resp.items : [];
         if (!items.length) { cont.textContent = 'No cards found.'; return; }
@@ -645,7 +659,7 @@ function flashRenderCardsList(resp) {
                 `</tr>`;
         }
         html += '</tbody></table>';
-        cont.innerHTML = html;
+        setSafeHTML(cont, html);
         _fcBindTagEditors();
         _fcBindRowActions();
         // Bind master select
@@ -765,7 +779,7 @@ function _fcBindTagEditors() {
                     const span = document.createElement('span');
                     span.className = 'fc-chip';
                     span.setAttribute('data-tag', val);
-                    span.innerHTML = `${Utils.escapeHtml(val)}<button type="button" class="fc-chip-x" aria-label="Remove">×</button>`;
+                    setSafeHTML(span, `${Utils.escapeHtml(val)}<button type=\"button\" class=\"fc-chip-x\" aria-label=\"Remove\">×</button>`);
                     input.before(span);
                     input.value = '';
                 }
@@ -896,7 +910,7 @@ async function flashBulkSetTags() {
             const row = document.getElementById(_fcRowId(uuid));
             if (row) {
                 const cell = row.querySelector('.fc-tags');
-                if (cell) cell.parentElement.innerHTML = _fcRenderTagEditor(finalTags);
+                if (cell) setSafeHTML(cell.parentElement, _fcRenderTagEditor(finalTags));
             }
             ok++;
         } catch (_) { fail++; }
@@ -933,7 +947,7 @@ function _fcUpdateSelectionBar() {
             html += `<a href="#" class="fc-select-all-results">Select all ${_fcLastTotal} results</a> · `;
         }
         html += `<a href="#" class="fc-clear-selection">Clear selection</a>`;
-        bar.innerHTML = html;
+        setSafeHTML(bar, html);
         bar.style.display = 'block';
     } catch (_) {}
 }
@@ -1051,7 +1065,7 @@ async function flashImportJSONFile() {
         const fd = new FormData();
         fd.append('file', input.files[0]);
         const res = await window.apiClient.makeRequest('POST', '/api/v1/flashcards/import/json', { body: fd, headers: {} });
-        if (out) out.innerHTML = Utils.syntaxHighlightJSON(res || {});
+        if (out) setSafeHTML(out, Utils.syntaxHighlightJSON(res || {}));
         flashPopulateDecks();
     } catch (e) {
         if (out) out.textContent = `Error: ${e.message || e}`;
@@ -1089,7 +1103,7 @@ async function flashGenFetchItems() {
                 </label>`;
             }
         }
-        box.innerHTML = html || 'No items.';
+        if (html) setSafeHTML(box, html); else box.textContent = 'No items.';
     } catch (e) {
         box.textContent = `Error: ${e.message || e}`;
     }
@@ -1155,7 +1169,7 @@ async function flashGenerateFromSelection() {
         if (parsed) {
             // Expect either {items:[...]} or [...]
             const items = Array.isArray(parsed) ? parsed : (parsed.items || []);
-            preview.innerHTML = Utils.syntaxHighlightJSON(items);
+            setSafeHTML(preview, Utils.syntaxHighlightJSON(items));
             preview.dataset.items = JSON.stringify(items);
         } else {
             preview.textContent = text || '[no response]';
@@ -1299,7 +1313,7 @@ async function flashReviewRate(rating) {
     try {
         const data = await window.apiClient.post('/api/v1/flashcards/review', payload);
         const rr = document.getElementById('fc_review_result');
-        if (rr) rr.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        if (rr) setSafeHTML(rr, Utils.syntaxHighlightJSON(data || {}));
         // Load next due
         setTimeout(() => flashLoadDueCard(), 100);
     } catch (e) {
@@ -1320,7 +1334,7 @@ async function flashImportTSV() {
     try {
         const data = await window.apiClient.post('/api/v1/flashcards/import', payload);
         const el = document.getElementById('fc_import_result');
-        if (el) el.innerHTML = Utils.syntaxHighlightJSON(data || {});
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || {}));
         flashPopulateDecks();
     } catch (e) {
         const el = document.getElementById('fc_import_result');
@@ -1911,7 +1925,7 @@ async function loadProviderVoices() {
         // Show loading state
         if (voiceList) {
             voiceList.style.display = 'block';
-            voiceList.innerHTML = '<span class="loading-spinner"></span> Loading voices...';
+            setSafeHTML(voiceList, '<span class="loading-spinner"></span> Loading voices...');
         }
 
         const voicesEp = apiClient.endpoint('audio','voices_catalog') || '/api/v1/audio/voices/catalog';
@@ -1932,7 +1946,7 @@ async function loadProviderVoices() {
         // Render list
         if (voiceList) {
             if (!Array.isArray(voices) || !voices.length) {
-                voiceList.innerHTML = '<span class="text-muted">No voices reported by provider.</span>';
+                setSafeHTML(voiceList, '<span class="text-muted">No voices reported by provider.</span>');
             } else {
                 const items = voices.map(v => {
                     const id = v.id || v.name || 'voice';
@@ -2795,7 +2809,7 @@ function updateFriendlyIngestValidationState() {
         } else {
             // Render as list for clarity
             const list = errors.map(e => `<li>${e}</li>`).join('');
-            hintEl.innerHTML = `<ul style="margin: 6px 0 0 18px;">${list}</ul>`;
+            setSafeHTML(hintEl, `<ul style="margin: 6px 0 0 18px;">${list}</ul>`);
         }
     }
 
@@ -2806,7 +2820,7 @@ function updateFriendlyIngestValidationState() {
         } else {
             const prefix = '<strong>Please fix the following:</strong>';
             const list = errors.map(e => `<li>${e}</li>`).join('');
-            summaryEl.innerHTML = `${prefix}<ul style="margin: 6px 0 0 18px;">${list}</ul>`;
+            setSafeHTML(summaryEl, `${prefix}<ul style="margin: 6px 0 0 18px;">${list}</ul>`);
             summaryEl.classList.add('visible');
         }
     }
@@ -3101,7 +3115,7 @@ function renderMultiQueue(queue) {
     container.innerHTML = '';
 
     if (!Array.isArray(queue) || queue.length === 0) {
-        container.innerHTML = '<div style="color: var(--color-text-muted);">Queue is empty.</div>';
+        setSafeHTML(container, '<div style="color: var(--color-text-muted);">Queue is empty.</div>');
         return;
     }
 
@@ -3116,7 +3130,7 @@ function renderMultiQueue(queue) {
             metaHtml = `<div class="json-viewer-content" style="margin-top:8px;">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</div>`;
         }
 
-        card.innerHTML = `
+        const html = `
             <h3 style="margin-bottom:4px;">${escapeHtml(item.title || 'Untitled')} <small style="color: var(--color-text-muted);">(${item.ephemeral ? 'Ephemeral' : 'ID: ' + item.media_id})</small></h3>
             <div style="margin-bottom:8px; color: var(--color-text-secondary);">${escapeHtml(item.source || '')}</div>
             ${metaHtml}
@@ -3128,6 +3142,11 @@ function renderMultiQueue(queue) {
             <h4>Analysis</h4>
             <pre id="multi_analysis_${key}">(Not analyzed)</pre>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(card, html);
+        } else {
+            card.innerHTML = html;
+        }
         container.appendChild(card);
     });
 }
@@ -3173,7 +3192,7 @@ async function multiSearchItems() {
         } else {
             html = '(No results)';
         }
-        target.innerHTML = html;
+        setSafeHTML(target, html);
     } catch (e) {
         target.textContent = 'Search failed: ' + e.message;
     }
@@ -5005,7 +5024,11 @@ async function populateModelDropdowns() {
         if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
             console.warn('No LLM providers configured');
             document.querySelectorAll('.llm-model-select').forEach(select => {
-                select.innerHTML = '<option value="">No models available - check configuration</option>';
+                while (select.firstChild) select.removeChild(select.firstChild);
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No models available - check configuration';
+                select.appendChild(opt);
             });
             return;
         }
@@ -5052,7 +5075,7 @@ async function populateModelDropdowns() {
             }
             html += optionsHtml;
 
-            select.innerHTML = html;
+            setSafeHTML(select, html);
 
             if (currentValue) {
                 select.value = currentValue;
@@ -5069,7 +5092,11 @@ async function populateModelDropdowns() {
     } catch (error) {
         console.error('Failed to populate model dropdowns:', error);
         document.querySelectorAll('.llm-model-select').forEach(select => {
-            select.innerHTML = '<option value="">Error loading models</option>';
+            while (select.firstChild) select.removeChild(select.firstChild);
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Error loading models';
+            select.appendChild(opt);
         });
     }
 }
@@ -6258,7 +6285,7 @@ async function watchlistsListRuns() {
         }
         html += '</tbody></table>';
         const tableDiv = document.getElementById('watchlistsRuns_table');
-        if (tableDiv) tableDiv.innerHTML = html;
+        if (tableDiv) setSafeHTML(tableDiv, html);
         watchlistsSetResponse('watchlistsRuns_response', res);
     } catch (err) {
         watchlistsSetResponse('watchlistsRuns_response', `Error: ${err.message}`);

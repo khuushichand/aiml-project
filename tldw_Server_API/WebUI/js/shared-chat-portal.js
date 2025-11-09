@@ -196,6 +196,27 @@
     try { if (window.webUI && typeof window.webUI.migrateInlineHandlers === 'function') { window.webUI.migrateInlineHandlers(host); } } catch (_) {}
     // Ensure chat module scripts are present for any dynamic behavior
     try { if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') { window.ModuleLoader.ensureGroupScriptsLoaded('chat'); } } catch (_) {}
+    // Populate model dropdowns and ensure a default model is selected if none is chosen
+    try {
+      const pop = (window.apiClient && typeof window.apiClient.populateModelDropdowns === 'function')
+        ? window.apiClient.populateModelDropdowns()
+        : (typeof window.populateModelDropdowns === 'function' ? window.populateModelDropdowns() : null);
+      if (pop && typeof pop.then === 'function') {
+        await pop;
+      }
+      try {
+        const sel = document.getElementById('chatCompletions_model');
+        if (sel && (!sel.value || sel.value === '')) {
+          const providersInfo = (window.apiClient && window.apiClient.cachedProviders) ? window.apiClient.cachedProviders : null;
+          if (providersInfo && providersInfo.default_provider && Array.isArray(providersInfo.providers)) {
+            const dp = providersInfo.default_provider;
+            const p = providersInfo.providers.find(x => x && x.name === dp);
+            const dm = p && p.default_model ? `${p.name}/${p.default_model}` : null;
+            if (dm) sel.value = dm;
+          }
+        }
+      } catch (_) { /* ignore */ }
+    } catch (_) { /* ignore */ }
     togglePlaceholder(host, false);
     state.currentHost = hostName;
   }

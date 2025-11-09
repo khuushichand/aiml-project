@@ -30,6 +30,30 @@
         if (sm) sm.value = pref.model;
       }
     } catch (_) { /* ignore */ }
+
+    // Ensure model dropdowns are populated and select defaults on Simple page
+    try {
+      const doPopulate = (window.apiClient && typeof window.apiClient.populateModelDropdowns === 'function')
+        ? window.apiClient.populateModelDropdowns()
+        : (typeof window.populateModelDropdowns === 'function' ? window.populateModelDropdowns() : null);
+      if (doPopulate && typeof doPopulate.then === 'function') {
+        doPopulate.then(() => {
+          try {
+            // Within Simple landing, find any llm-model-select with empty value and set default
+            const providersInfo = (window.apiClient && window.apiClient.cachedProviders) ? window.apiClient.cachedProviders : null;
+            const dp = providersInfo && providersInfo.default_provider;
+            const prov = dp && Array.isArray(providersInfo.providers) ? providersInfo.providers.find(p => p && p.name === dp) : null;
+            const defaultVal = prov && prov.default_model ? `${prov.name}/${prov.default_model}` : null;
+            if (defaultVal) {
+              const root = document.getElementById('tabSimpleLanding') || document;
+              root.querySelectorAll('.llm-model-select').forEach((sel) => {
+                try { if (sel && (!sel.value || sel.value === '')) sel.value = defaultVal; } catch (_) {}
+              });
+            }
+          } catch (_) { /* ignore */ }
+        });
+      }
+    } catch (_) { /* ignore */ }
   }
 
   function startInlineJobsFeedback(container) {

@@ -17,7 +17,7 @@ const DictionariesUI = (() => {
     const container = el('dictsList');
     if (!container) return;
     if (!Array.isArray(list) || list.length === 0) {
-      container.innerHTML = '<div class="muted">No dictionaries found.</div>';
+      if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, '<div class="muted">No dictionaries found.</div>'); } else { container.innerHTML = '<div class="muted">No dictionaries found.</div>'; }
       return;
     }
     const rows = list.map(d => {
@@ -30,7 +30,7 @@ const DictionariesUI = (() => {
         <div class="muted" style="font-size:12px;">entries: ${d.entry_count ?? '-'}</div>
       </div>`;
     }).join('');
-    container.innerHTML = rows;
+    if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, rows); } else { container.innerHTML = rows; }
     // click handlers
     container.querySelectorAll('.list-item').forEach(item => {
       item.addEventListener('click', async () => {
@@ -119,7 +119,7 @@ const DictionariesUI = (() => {
       await apiClient.delete(`/api/v1/chat/dictionaries/${selected.id}`);
       selected = null;
       updateSelectedMeta();
-      el('entriesList').innerHTML = '';
+      const listEl = el('entriesList'); if (listEl) listEl.innerHTML = '';
       await refreshDictionaries();
       if (typeof Toast !== 'undefined') Toast.success('Dictionary deleted');
     } catch (e) {
@@ -147,7 +147,7 @@ const DictionariesUI = (() => {
     }
 
     if (!filtered || filtered.length === 0) {
-      listEl.innerHTML = '<div class="muted">No entries</div>';
+      if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(listEl, '<div class="muted">No entries</div>'); } else { listEl.innerHTML = '<div class="muted">No entries</div>'; }
       return;
     }
     const renderRow = (e) => `
@@ -189,9 +189,10 @@ const DictionariesUI = (() => {
         </div>`;
         html += byGroup[g].map(renderRow).join('');
       });
-      listEl.innerHTML = html;
+      if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(listEl, html); } else { listEl.innerHTML = html; }
     } else {
-      listEl.innerHTML = filtered.map(renderRow).join('');
+      const html2 = filtered.map(renderRow).join('');
+      if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(listEl, html2); } else { listEl.innerHTML = html2; }
     }
     listEl.querySelectorAll('button[data-del]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -775,7 +776,8 @@ const DictionariesUI = (() => {
     if (!dd) return;
     const groups = Array.from(new Set(currentEntries.map(e => e.group || '').filter(Boolean))).sort();
     const cur = dd.value;
-    dd.innerHTML = '<option value="">All groups</option>' + groups.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
+    const opts = '<option value="">All groups</option>' + groups.map(g => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('');
+    if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(dd, opts); } else { dd.innerHTML = opts; }
     if (groups.includes(cur)) dd.value = cur;
   }
 

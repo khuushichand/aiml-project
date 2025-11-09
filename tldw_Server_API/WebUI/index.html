@@ -313,8 +313,9 @@
                 </div>
                 <span id="dlq-badge" class="badge" title="Total DLQ depth">DLQ: 0</span>
                 <a href="/setup" class="badge" title="Open Setup Wizard" style="text-decoration:none;">Setup</a>
-                <span id="reqid-badge" class="badge" title="Last X-Request-ID" style="display:none;">RID: -</span>
-                <span id="trace-badge" class="badge" title="Last traceparent/X-Trace-Id" style="display:none;">Trace: -</span>
+                <!-- Correlation badges are force-hidden by default to avoid UI clutter. -->
+                <span id="reqid-badge" class="badge" title="Last X-Request-ID" style="display:none; visibility:hidden;">RID: -</span>
+                <span id="trace-badge" class="badge" title="Last traceparent/X-Trace-Id" style="display:none; visibility:hidden;">Trace: -</span>
                 <label id="advanced-toggle-wrapper" class="badge" style="cursor:pointer; user-select:none;">
                     <input type="checkbox" id="toggle-advanced" style="margin-right:6px; vertical-align:middle;">
                     <span id="advanced-toggle-label" style="vertical-align:middle;">Show Advanced Panels</span>

@@ -1099,6 +1099,16 @@ async def create_chat_completion(
                     cleaned_args["model"] = default_model_for_provider
                     if not request_data.model:
                         request_data.model = default_model_for_provider
+                else:
+                    # Fail fast with a clear client error instead of cascading into a 500
+                    # when downstream provider adapters require an explicit model.
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"Model is required for provider '{provider}'. Please select a model in the WebUI "
+                            f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
+                        ),
+                    )
                     model = default_model_for_provider
 
             def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:

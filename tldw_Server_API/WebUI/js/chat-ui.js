@@ -723,6 +723,33 @@ function initializeChatCompletionsTab() {
     } catch (e) {
         console.debug('Could not set default save_to_db from config:', e?.message || e);
     }
+
+    // Ensure a default model is selected if none chosen yet
+    try {
+        // Populate dropdowns first
+        const maybePopulate = (window.apiClient && typeof window.apiClient.populateModelDropdowns === 'function')
+            ? window.apiClient.populateModelDropdowns()
+            : (typeof window.populateModelDropdowns === 'function' ? window.populateModelDropdowns() : null);
+        if (maybePopulate && typeof maybePopulate.then === 'function') {
+            maybePopulate.then(() => {
+                try {
+                    const sel = document.getElementById(`${prefix}_model`);
+                    if (sel && (!sel.value || sel.value === '')) {
+                        const info = (window.apiClient && typeof window.apiClient.getAvailableProviders === 'function')
+                            ? window.apiClient.cachedProviders || null
+                            : null;
+                        const providersInfo = info || {};
+                        const dp = providersInfo.default_provider;
+                        if (dp && Array.isArray(providersInfo.providers)) {
+                            const p = providersInfo.providers.find(x => x && x.name === dp);
+                            const dm = p && p.default_model ? `${p.name}/${p.default_model}` : null;
+                            if (dm) sel.value = dm;
+                        }
+                    }
+                } catch (_) { /* ignore */ }
+            });
+        }
+    } catch (_) { /* ignore */ }
 }
 
 // Export for use in other modules

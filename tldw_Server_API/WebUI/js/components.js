@@ -96,6 +96,20 @@ class ToastManager {
     }
 }
 
+// Local SafeDOM helper for this module
+function setSafeHTML(el, html) {
+    if (!el) return;
+    try {
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(el, html);
+        } else {
+            el.innerHTML = html;
+        }
+    } catch (_) {
+        try { el.innerHTML = html; } catch (_) {}
+    }
+}
+
 class LoadingIndicator {
     constructor() {
         this.activeLoaders = new Map();
@@ -193,11 +207,7 @@ class Modal {
             </div>
             ${this.options.footer ? `<div class="modal-footer">${this.options.footer}</div>` : ''}
         `;
-        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
-            window.SafeDOM.setHTML(this.modal, __modalMarkup);
-        } else {
-            this.modal.innerHTML = __modalMarkup;
-        }
+        setSafeHTML(this.modal, __modalMarkup);
 
         // ARIA roles and labelling
         try {
@@ -280,13 +290,7 @@ class Modal {
 
     setContent(content) {
         const body = this.modal.querySelector('.modal-body');
-        if (body) {
-            if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
-                window.SafeDOM.setHTML(body, content);
-            } else {
-                body.innerHTML = content;
-            }
-        }
+        if (body) setSafeHTML(body, content);
     }
 }
 
@@ -312,29 +316,27 @@ class JSONViewer {
             if (this.options.enableCopy) {
                 const toolbar = document.createElement('div');
                 toolbar.className = 'json-viewer-toolbar';
-                const __toolbarMarkup = `
-                    <button class="btn btn-sm" onclick="Utils.copyToClipboard('${Utils.escapeHtml(JSON.stringify(this.json, null, 2))}')">
-                        Copy JSON
-                    </button>
-                    <button class="btn btn-sm" onclick="Utils.downloadData(${Utils.escapeHtml(JSON.stringify(this.json))}, 'data.json')">
-                        Download
-                    </button>
-                `;
-                if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
-                    window.SafeDOM.setHTML(toolbar, __toolbarMarkup);
-                } else {
-                    toolbar.innerHTML = __toolbarMarkup;
-                }
+                // Build toolbar buttons programmatically to avoid inline handlers
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'btn btn-sm';
+                copyBtn.textContent = 'Copy JSON';
+                copyBtn.addEventListener('click', async () => {
+                    try { await Utils.copyToClipboard(JSON.stringify(this.json, null, 2)); } catch (_) {}
+                });
+                const dlBtn = document.createElement('button');
+                dlBtn.className = 'btn btn-sm';
+                dlBtn.textContent = 'Download';
+                dlBtn.addEventListener('click', () => {
+                    try { Utils.downloadData(this.json, 'data.json'); } catch (_) {}
+                });
+                toolbar.appendChild(copyBtn);
+                toolbar.appendChild(dlBtn);
                 wrapper.appendChild(toolbar);
             }
 
         const content = document.createElement('div');
         content.className = 'json-viewer-content';
-        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
-            window.SafeDOM.setHTML(content, this.renderValue(this.json, 0));
-        } else {
-            content.innerHTML = this.renderValue(this.json, 0);
-        }
+        setSafeHTML(content, this.renderValue(this.json, 0));
         wrapper.appendChild(content);
 
         this.container.appendChild(wrapper);
@@ -343,6 +345,8 @@ class JSONViewer {
         if (this.options.enableCollapse) {
             this.attachCollapseHandlers();
         }
+        // Bind any quick-action buttons that were rendered
+        this.attachQuickActionHandlers(content);
     }
 
     renderValue(value, depth) {
@@ -426,31 +430,31 @@ class JSONViewer {
                 html += `<div class="json-item">`;
                 if (batchItem) {
                     const payload = encodeURIComponent(JSON.stringify(batchItem));
-                    html += `<button class="btn btn-sm" onclick="addSearchItemToBatchFromPayload(this)" data-payload="${payload}">➕ Add to Batch</button>`;
+                    html += `<button class="btn btn-sm json-qa" data-action="add-batch" data-payload="${payload}">➕ Add to Batch</button>`;
                 }
                 if (pmcItem) {
                     const payloadPmc = encodeURIComponent(JSON.stringify(pmcItem));
-                    html += ` <button class="btn btn-sm" onclick="addPmcItemToBatchFromPayload(this)" data-payload="${payloadPmc}">➕ Add to PMC Batch</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="add-pmc" data-payload="${payloadPmc}">➕ Add to PMC Batch</button>`;
                 }
                 if (zenodoItem) {
                     const payloadZen = encodeURIComponent(JSON.stringify(zenodoItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestZenodoFromPayload(this)" data-payload="${payloadZen}">🚀 Ingest (Zenodo)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-zenodo" data-payload="${payloadZen}">🚀 Ingest (Zenodo)</button>`;
                 }
                 if (vixraItem) {
                     const payloadVix = encodeURIComponent(JSON.stringify(vixraItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestVixraFromPayload(this)" data-payload="${payloadVix}">🚀 Ingest (viXra)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-vixra" data-payload="${payloadVix}">🚀 Ingest (viXra)</button>`;
                 }
                 if (figshareItem) {
                     const payloadFig = encodeURIComponent(JSON.stringify(figshareItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestFigshareFromPayload(this)" data-payload="${payloadFig}">🚀 Ingest (Figshare)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-figshare" data-payload="${payloadFig}">🚀 Ingest (Figshare)</button>`;
                 }
                 if (halItem) {
                     const payloadHal = encodeURIComponent(JSON.stringify(halItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestHalFromPayload(this)" data-payload="${payloadHal}">🚀 Ingest (HAL)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-hal" data-payload="${payloadHal}">🚀 Ingest (HAL)</button>`;
                 }
                 if (osfItem) {
                     const payloadOsf = encodeURIComponent(JSON.stringify(osfItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestOsfFromPayload(this)" data-payload="${payloadOsf}">🚀 Ingest (OSF)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-osf" data-payload="${payloadOsf}">🚀 Ingest (OSF)</button>`;
                 }
                 html += `</div>`;
             }
@@ -616,6 +620,31 @@ class JSONViewer {
         } catch {
             return null;
         }
+    }
+
+    attachQuickActionHandlers(rootEl) {
+        try {
+            const root = rootEl || this.container;
+            if (!root) return;
+            const map = {
+                'add-batch': (btn) => { try { window.addSearchItemToBatchFromPayload && window.addSearchItemToBatchFromPayload(btn); } catch(_){} },
+                'add-pmc': (btn) => { try { window.addPmcItemToBatchFromPayload && window.addPmcItemToBatchFromPayload(btn); } catch(_){} },
+                'ingest-zenodo': (btn) => { try { window.ingestZenodoFromPayload && window.ingestZenodoFromPayload(btn); } catch(_){} },
+                'ingest-vixra': (btn) => { try { window.ingestVixraFromPayload && window.ingestVixraFromPayload(btn); } catch(_){} },
+                'ingest-figshare': (btn) => { try { window.ingestFigshareFromPayload && window.ingestFigshareFromPayload(btn); } catch(_){} },
+                'ingest-hal': (btn) => { try { window.ingestHalFromPayload && window.ingestHalFromPayload(btn); } catch(_){} },
+                'ingest-osf': (btn) => { try { window.ingestOsfFromPayload && window.ingestOsfFromPayload(btn); } catch(_){} },
+            };
+            root.querySelectorAll('button.json-qa[data-action]')
+                .forEach((btn) => {
+                    if (btn._qaBound) return; btn._qaBound = true;
+                    btn.addEventListener('click', () => {
+                        const action = btn.getAttribute('data-action');
+                        const fn = map[action];
+                        if (typeof fn === 'function') fn(btn);
+                    });
+                });
+        } catch (_) {}
     }
 }
 
