@@ -522,7 +522,7 @@
       else if (data?.job_id) ids = [data.job_id];
       else if (Array.isArray(data?.jobs)) ids = data.jobs.map(j => j?.job_id || j?.id).filter(Boolean);
       const linkId = 'simpleIngest_view_jobs';
-      const idChips = ids.slice(0, 5).map(j => `<span class="chip">${String(j)}</span>`).join(' ');
+      const idChips = ids.slice(0, 5).map(j => `<span class="chip">${escapeHtml(String(j))}</span>`).join(' ');
       const html = `<div style="margin-top:6px;">${idChips} <a href="#" id="${linkId}">View in Admin → Jobs</a></div>`;
       const wrap = document.createElement('div');
       wrap.innerHTML = html;
