@@ -98,7 +98,10 @@
       return s;
     };
 
-    const devMarkers = false;
+    // Dev-only visual markers: enabled when localStorage.DEV_MIGRATE_MARKERS === '1'
+    const devMarkers = (() => {
+      try { return String(localStorage.getItem('DEV_MIGRATE_MARKERS') || '') === '1'; } catch (_) { return false; }
+    })();
 
     const bindFromCode = (el, evt, code) => {
       let bound = false;
@@ -202,6 +205,11 @@
     });
   }
 
-  window.WebUISanitizer = { sanitize, migrateInlineHandlers };
+  // Single source of truth for sanitization/migration.
+  // Expose a compatibility alias `sanitizeInlineHandlersAndScripts` used by older callers.
+  window.WebUISanitizer = {
+    sanitize,
+    sanitizeInlineHandlersAndScripts: sanitize,
+    migrateInlineHandlers,
+  };
 })();
-

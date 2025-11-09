@@ -164,6 +164,14 @@ class RedisResourceGovernor(ResourceGovernor):
                 _cursor, keys = await client.scan(0, match=pattern, count=1000)
             except Exception:
                 keys = []
+            # Mirror deletions: drop any stub lease buckets for this policy that no longer exist in client
+            try:
+                keys_set = set(keys or [])
+                to_drop = [k for k in list(self._stub_leases.keys()) if k.startswith(f"{self._keys.ns}:lease:{policy_id}:") and k not in keys_set]
+                for k in to_drop:
+                    self._stub_leases.pop(k, None)
+            except Exception:
+                pass
             # Remove only expired members from each lease key, do not drop entire keys
             for k in keys or []:
                 try:
@@ -732,6 +740,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 allowed = True
                 retry_after = 0
                 cat_fail = self._effective_fail_mode(pol, category)
+                counts: list[int] = []
                 for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                     if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                         continue
@@ -739,8 +748,16 @@ class RedisResourceGovernor(ResourceGovernor):
                     ok, ra, _cnt = await self._allow_requests_sliding_check_only(
                         key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
                     )
+                    counts.append(int(_cnt))
                     allowed = allowed and ok
                     retry_after = max(retry_after, ra)
+                # Special-case: allow initial large batch when no prior usage in window
+                try:
+                    if not allowed and limit > 0 and int(units or 0) > int(limit) and counts and max(counts) == 0:
+                        allowed = True
+                        retry_after = 0
+                except Exception:
+                    pass
                 per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after}
             elif category in ("streams", "jobs"):
                 limit = int((pol.get(category) or {}).get("max_concurrent") or 0)

@@ -160,7 +160,7 @@
         }
       }
 
-      if (el && window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
+      if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
         try {
           await window.ModuleLoader.ensureGroupScriptsLoaded('chat');
         } catch (err) {

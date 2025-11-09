@@ -1,6 +1,10 @@
 /**
  * Main JavaScript file for API WebUI
+ * NOTE: Sanitization and inline-handler migration are delegated to WebUISanitizer (js/sanitizer.js)
+ * to keep a single source of truth. Avoid duplicating sanitizer logic here.
  */
+
+// Ensure sanitizer.js is present (loaded before this file in index.html). Calls are guarded at runtime.
 
 class WebUI {
     constructor() {
@@ -680,237 +684,28 @@ class WebUI {
         }
     }
 
-    // Remove all <script> tags and migrate inline on* handlers using DOM parsing
+    // Remove all <script> tags and migrate inline on* handlers using shared sanitizer
     sanitizeInlineHandlersAndScripts(html) {
         try {
-            const input = String(html);
-            let doc = null;
-
-            // Prefer DOMParser for robust parsing (handles malformed tags/spacing)
-            try {
-                if (typeof DOMParser !== 'undefined') {
-                    const parser = new DOMParser();
-                    doc = parser.parseFromString(input, 'text/html');
-                }
-            } catch (_) { doc = null; }
-
-            // Fallback: use a detached HTML document so the live DOM never sees unsafe attrs
-            if (!doc) {
-                try {
-                    doc = document.implementation.createHTMLDocument('');
-                    doc.body.innerHTML = input;
-                } catch (_) {
-                    return input; // give up cleanly
-                }
+            if (window.WebUISanitizer && typeof window.WebUISanitizer.sanitizeInlineHandlersAndScripts === 'function') {
+                return window.WebUISanitizer.sanitizeInlineHandlersAndScripts(html);
             }
-
-            // 1) Remove all <script> elements (and any parsed descendants)
-            try {
-                const scripts = doc.querySelectorAll('script');
-                scripts.forEach((s) => { try { s.remove(); } catch (_) {} });
-            } catch (_) {}
-
-            // 2) For every element, migrate inline handler attributes (on*) to data-on*-b64 and remove originals
-            try {
-                const all = doc.querySelectorAll('*');
-                all.forEach((el) => {
-                    if (!el || !el.attributes) return;
-                    const toRemove = [];
-                    const toAdd = [];
-                    for (const attr of Array.from(el.attributes)) {
-                        const rawName = attr && attr.name ? String(attr.name) : '';
-                        if (!rawName) continue;
-                        const name = rawName.toLowerCase();
-                        // Match traditional inline handlers: onclick, onerror, onkeyup, etc.
-                        if (name.startsWith('on') && /^[a-z0-9_-]+$/.test(name.slice(2) || '')) {
-                            const val = attr.value || '';
-                            let b64 = '';
-                            try { b64 = btoa(val); } catch (_) { b64 = ''; }
-                            const dataName = `data-${name}-b64`;
-                            toAdd.push([dataName, b64]);
-                            toRemove.push(rawName);
-                        }
-                    }
-                    toAdd.forEach(([n, v]) => { try { el.setAttribute(n, v); } catch (_) {} });
-                    toRemove.forEach((n) => { try { el.removeAttribute(n); } catch (_) {} });
-                });
-            } catch (_) {}
-
-            // 3) Serialize back to HTML string; prefer body.innerHTML for fragments
-            try {
-                if (doc.body) return doc.body.innerHTML;
-                if (doc.documentElement) return doc.documentElement.outerHTML;
-            } catch (_) { /* fall through */ }
-            return input;
-        } catch (_) {
-            // Final fallback: return original HTML untouched
-            return html;
-        }
+            if (window.WebUISanitizer && typeof window.WebUISanitizer.sanitize === 'function') {
+                return window.WebUISanitizer.sanitize(html);
+            }
+        } catch (_) { /* ignore and fall back */ }
+        return String(html);
     }
 
     // Convert inline event attributes (onclick, onchange, etc.) to proper listeners
     migrateInlineHandlers(root) {
-        const scope = root || document;
-        const attrs = [
-            'onclick','onchange','oninput','onkeydown','onkeyup','onsubmit','ondblclick','onfocus','onblur',
-            'onmouseenter','onmouseleave','onmouseover','onmouseout','onmouseup','onmousedown','oncontextmenu',
-            'ondrag','ondragstart','ondragend','ondragover','ondrop','onload','onerror'
-        ];
-        const attrToEvent = (attr) => attr.slice(2);
-        // Simple parser for makeRequest('a','b','/path','json', {...}, 'stream') forms
-        const splitArgs = (s) => {
-            const out = [];
-            let buf = '';
-            let q = null; // quote char
-            let depth = 0; // brace depth
-            for (let i=0;i<s.length;i++){
-                const ch = s[i];
-                if (q) {
-                    if (ch === q && s[i-1] !== '\\') { q = null; buf += ch; continue; }
-                    buf += ch; continue;
-                }
-                if (ch === '"' || ch === "'") { q = ch; buf += ch; continue; }
-                if (ch === '{' || ch === '[') { depth++; buf += ch; continue; }
-                if (ch === '}' || ch === ']') { depth--; buf += ch; continue; }
-                if (ch === ',' && depth === 0) { out.push(buf.trim()); buf=''; continue; }
-                buf += ch;
-            }
-            if (buf.trim()) out.push(buf.trim());
-            return out;
-        };
-        const stripQuotes = (s) => {
-            if (!s) return s;
-            if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) return s.slice(1, -1);
-            return s;
-        };
-        const devMarkers = (() => {
-            try { return String(localStorage.getItem('DEV_MIGRATE_MARKERS') || '') === '1'; } catch (_) { return false; }
-        })();
-        // First handle preserved data-on*-b64 attributes
+        // Delegate to the shared sanitizer as the single source of truth.
         try {
-            const all = scope.querySelectorAll('*');
-            all.forEach((el) => {
-                if (!el || !el.attributes) return;
-                const toRemove = [];
-                for (const attr of Array.from(el.attributes)) {
-                    const name = attr.name || '';
-                    if (!name.startsWith('data-on') || !name.endsWith('-b64')) continue;
-                    const evt = name.slice('data-on'.length, -'-b64'.length).replace(/^[-_]+/, '');
-                    if (!evt) { toRemove.push(name); continue; }
-                    let code = '';
-                    try { code = atob(attr.value || ''); } catch (_) { code = ''; }
-                    if (!code) { toRemove.push(name); continue; }
-                    // Reuse binding logic below: synthesize a faux inline attr and let the same code path run
-                    // by temporarily setting the attribute and letting the legacy branch bind/remove it.
-                    try {
-                        const inlineName = `on${evt}`;
-                        el.setAttribute(inlineName, code);
-                    } catch (_) {}
-                    toRemove.push(name);
-                }
-                toRemove.forEach((n) => { try { el.removeAttribute(n); } catch(_){} });
-            });
-        } catch (_) { /* ignore */ }
-        attrs.forEach((attr) => {
-            const nodes = scope.querySelectorAll(`[${attr}]`);
-            nodes.forEach((el) => {
-                const original = el.getAttribute(attr);
-                if (!original) return;
-                const code = original.trim();
-                const evt = attrToEvent(attr);
-                let bound = false;
-
-                // Helpers: detect wrappers and build runtime arg resolver
-                const endsWithReturnFalse = /;\s*return\s+false\s*;?\s*$/s.test(code);
-                const startsWithReturn = /^\s*return\b/s.test(code);
-                const confirmMatch = code.match(/confirm\((['\"])(.*?)\1\)/s);
-                const confirmMessage = confirmMatch ? confirmMatch[2] : null;
-                const resolveArgs = (rawParts, event) => rawParts.map((p) => {
-                    const t = String(p).trim();
-                    if (!t) return t;
-                    if (t === 'event') return event;
-                    if (t === 'this') return el;
-                    if (t.startsWith('{') || t.startsWith('[')) {
-                        try { return JSON.parse(t); } catch (_) { return t; }
-                    }
-                    return stripQuotes(t);
-                });
-
-                // Case 1: makeRequest(...) with optional return/return false wrappers
-                const mr = code.match(/^\s*(?:if\s*\(.*?\)\s*)?(?:return\s*)?makeRequest\((.*)\)\s*;?\s*(?:return\s+false\s*;?)?\s*$/s);
-                if (mr) {
-                    const argStr = mr[1] || '';
-                    const rawParts = splitArgs(argStr);
-                    const listener = (event) => {
-                        try {
-                            if (confirmMessage && !window.confirm(confirmMessage)) return;
-                            const args = resolveArgs(rawParts, event);
-                            const ret = (window.makeRequest && typeof window.makeRequest === 'function') ? window.makeRequest.apply(el, args) : undefined;
-                            // Preserve return semantics: prevent default if explicit wrapper asked for it or handler returns false
-                            if (endsWithReturnFalse || ret === false || startsWithReturn) {
-                                // If startsWithReturn: honor returned false; if truthy, let default occur
-                                if (ret === false || endsWithReturnFalse) {
-                                    try { event.preventDefault(); event.stopPropagation(); } catch (_) {}
-                                }
-                            }
-                        } catch (e) {
-                            console.error('makeRequest handler failed', e);
-                        }
-                    };
-                    el.addEventListener(evt, listener);
-                    if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
-                    bound = true;
-                }
-
-                // Case 2: simple function call like foo() or foo(arg) with optional wrappers
-                if (!bound) {
-                    const m = code.match(/^\s*(?:return\s*)?([A-Za-z_$][\w$]*)\s*\((.*)\)\s*;?\s*(?:return\s+false\s*;?)?\s*$/s);
-                    if (m) {
-                        const fname = m[1];
-                        const argStr = m[2] || '';
-                        const rawParts = argStr ? splitArgs(argStr) : [];
-                        const listener = (event) => {
-                            try {
-                                const fn = window[fname];
-                                if (typeof fn === 'function') {
-                                    const args = resolveArgs(rawParts, event);
-                                    const ret = fn.apply(el, args);
-                                    if (endsWithReturnFalse || startsWithReturn) {
-                                        if (ret === false || endsWithReturnFalse) {
-                                            try { event.preventDefault(); event.stopPropagation(); } catch (_) {}
-                                        }
-                                    }
-                                }
-                            } catch (e) { console.error('Handler failed', e); }
-                        };
-                        el.addEventListener(evt, listener);
-                        if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
-                        bound = true;
-                    }
-                }
-
-                // Case 3: bare "return false;" handlers
-                if (!bound) {
-                    const rf = code.match(/^\s*return\s+false\s*;?\s*$/s);
-                    if (rf) {
-                        const listener = (event) => {
-                            try { event.preventDefault(); event.stopPropagation(); } catch (_) {}
-                        };
-                        el.addEventListener(evt, listener);
-                        if (devMarkers) { try { el.classList.add('migrated-inline'); el.dataset.migratedInline = '1'; } catch (_) {} }
-                        bound = true;
-                    }
-                }
-
-                if (bound) {
-                    // Only remove the inline attribute after we have a bound listener
-                    try { el.removeAttribute(attr); } catch (_) {}
-                } else {
-                    // As a last resort, leave inline attribute in place to avoid breaking flows; log for devs
-                    try { console.debug('Skipped inline handler migration for:', code.slice(0,120)); } catch(_){}
-                }
-            });
-        });
+            if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
+                return window.WebUISanitizer.migrateInlineHandlers(root);
+            }
+        } catch (_) {}
+        // No-op fallback if sanitizer unavailable (tests load sanitizer.js before this file).
     }
 
     // --------------------------
