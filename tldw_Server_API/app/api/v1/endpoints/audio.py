@@ -1964,12 +1964,13 @@ async def streaming_status():
         })
 
     except Exception as e:
-        logger.error(f"Error checking streaming status: {e}")
+        import traceback
+        logger.error(f"Error checking streaming status: {e}\n{traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={
                 "status": "error",
-                "message": str(e)
+                "message": "An internal error occurred. Please try again later."
             }
         )
 
