@@ -843,7 +843,8 @@ async def character_chat_completion(
                             if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
                                 logger.debug("Ignoring streaming session close error: %s", e)
                             else:
-                                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                                logger.exception("Exception occurred in streaming SSE async generator.")
+                                yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"
                         finally:
                             if not done_sent:
                                 yield "data: [DONE]\n\n"
@@ -863,7 +864,8 @@ async def character_chat_completion(
                                     done_sent = True
                                 yield ensure_sse_line(line)
                         except Exception as e:
-                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                            logger.exception("Exception occurred in streaming SSE generator.")
+                            yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"
                         finally:
                             if not done_sent:
                                 yield "data: [DONE]\n\n"
