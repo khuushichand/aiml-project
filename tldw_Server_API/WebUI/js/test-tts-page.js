@@ -112,7 +112,7 @@
       statusDiv.innerHTML = `✅ Success! Audio generated (${(blob.size / 1024).toFixed(2)} KB)`;
     } catch (error) {
       statusDiv.className = 'status error';
-      statusDiv.innerHTML = `❌ Error: ${error.message}`;
+      statusDiv.innerHTML = `❌ Error: ${escapeHTML(error.message)}`;
       audioEl.style.display = 'none';
     }
   }
