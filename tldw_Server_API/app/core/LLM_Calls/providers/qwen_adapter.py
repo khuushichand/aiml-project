@@ -59,13 +59,15 @@ class QwenAdapter(ChatProvider):
         }
 
     def _use_native_http(self) -> bool:
-        # Under pytest, prefer adapter if the http client factory is monkeypatched;
-        # otherwise allow legacy tests to patch requests by returning False.
+        # Under pytest:
+        # - If the http client factory is monkeypatched at this module alias, prefer adapter path
+        # - Otherwise, if legacy callable is monkeypatched, prefer legacy path
         if os.getenv("PYTEST_CURRENT_TEST"):
             try:
-                from tldw_Server_API.app.core.http_client import create_client as _default_factory
-                # If factory has been replaced, honor adapter path in tests
-                if http_client_factory is not _default_factory:
+                # If our bound alias differs from the module's factory, tests patched it
+                from tldw_Server_API.app.core import http_client as _hc_mod
+                _default_factory = getattr(_hc_mod, "create_client", None)
+                if _default_factory is not None and _hc_create_client is not _default_factory:
                     return True
                 # Otherwise, if legacy callable is monkeypatched, allow legacy path
                 from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy

@@ -1109,7 +1109,32 @@ async def qwen_chat_handler_async(
         "app_config": app_config,
     }
     if streaming:
-        return adapter.astream(request)
+        # Mirror Anthropic's guarded streaming behavior: surface exactly one
+        # compact SSE error frame then one [DONE] on failures, rather than
+        # raising exceptions that break tests expecting SSE semantics.
+        async def _guarded_astream():
+            try:
+                agen = adapter.astream(request)
+                # If adapter returns a coroutine instead of an async-iterable, await it
+                try:
+                    import inspect as _inspect  # local import to avoid module cost
+                    agen = await agen if _inspect.isawaitable(agen) else agen
+                except Exception:
+                    pass
+                async for line in agen:
+                    yield line
+            except Exception as _e:
+                msg = str(_e)
+                try:
+                    norm = adapter.normalize_error(_e)  # type: ignore[attr-defined]
+                    msg = getattr(norm, "message", msg) or msg
+                except Exception:
+                    pass
+                # Emit one error frame followed by [DONE]
+                safe = msg.replace("\\", "\\\\").replace('"', '\\"')
+                yield f"data: {{\"error\":{{\"message\":\"{safe}\",\"type\":\"qwen_stream_error\"}}}}\n\n"
+                yield "data: [DONE]\n\n"
+        return _guarded_astream()
     return await adapter.achat(request)
 
 

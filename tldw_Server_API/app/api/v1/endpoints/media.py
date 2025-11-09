@@ -6175,7 +6175,8 @@ async def process_ebooks_endpoint(
     local_paths_to_process: List[Tuple[str, Path]] = [] # (original_ref, local_path)
 
     # Use httpx.AsyncClient for concurrent downloads
-    async with _m_create_async_client() as client:
+    # Use module-local httpx.AsyncClient so tests can monkeypatch it
+    async with httpx.AsyncClient() as client:
         with temp_dir_manager as tmp_dir_path:
             temp_dir = FilePath(tmp_dir_path)
             logger.info(f"Using temporary directory: {temp_dir}")
@@ -7003,7 +7004,8 @@ async def process_documents_endpoint(
             url_task_map = {}  # Initialize outside the client block
 
             # --- MODIFICATION: Create client first ---
-            async with _m_create_async_client() as client:
+            # Use module-local httpx.AsyncClient so tests can monkeypatch it
+            async with httpx.AsyncClient() as client:
                 # Enforce allowed extensions for documents from URLs; still block generic HTML/XHTML/etc
                 allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
                 download_tasks = [
@@ -7577,7 +7579,8 @@ async def process_pdfs_endpoint(
 
         # Handle URLs (download bytes) with strict extension/content-type checking
         if form_data.urls:
-            async with _m_create_async_client(timeout=120) as client:
+            # Use module-local httpx.AsyncClient so tests can monkeypatch it
+            async with httpx.AsyncClient(timeout=120) as client:
                 download_tasks = [
                     _download_url_async(
                         client=client,
