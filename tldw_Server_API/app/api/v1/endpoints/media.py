@@ -291,10 +291,9 @@ async def process_code_endpoint(
     """
     urls = form_data.urls or []
     _validate_inputs("code", urls, files)
-    # SSRF mitigation: rely on central resolver-aware validator; skip during tests
-    if not (_is_test_mode() or os.getenv("PYTEST_CURRENT_TEST")):
-        for u in urls:
-            assert_url_safe(u)
+    # SSRF mitigation: always enforce URL validation, including during tests
+    for u in urls:
+        assert_url_safe(u)
     batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
     with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
         temp_dir = FilePath(temp_dir_path)
