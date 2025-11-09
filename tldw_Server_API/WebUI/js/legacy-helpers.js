@@ -84,7 +84,8 @@
                 try {
                     // Sum media and webscrape domains only
                     const agg = { processing: 0, queued: 0 };
-                    for (const dom of ['media','webscrape']) {
+                    const domains = ['media','webscrape','web_scrape','webscraping'];
+                    for (const dom of domains) {
                         try {
                             const res = await apiClient.get('/api/v1/jobs/stats', { domain: dom });
                             const arr = Array.isArray(res) ? res : (res && res.data) ? res.data : [];
