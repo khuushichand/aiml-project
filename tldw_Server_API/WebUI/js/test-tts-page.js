@@ -2,6 +2,19 @@
   const API_BASE = () => document.getElementById('api-url').value;
   const API_KEY = () => document.getElementById('api-key').value;
 
+  // Simple HTML escaping function to prevent XSS from error messages
+  function escapeHTML(str) {
+    return String(str).replace(/[&<>"']/g, function (m) {
+      return ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[m];
+    });
+  }
+
   async function checkHealth() {
     const statusDiv = document.getElementById('health-status');
     statusDiv.style.display = 'block';
@@ -37,7 +50,7 @@
       }
     } catch (error) {
       statusDiv.className = 'status error';
-      statusDiv.innerHTML = `Error checking health: ${error.message}`;
+      statusDiv.innerHTML = `Error checking health: ${escapeHTML(error.message)}`;
     }
   }
 
