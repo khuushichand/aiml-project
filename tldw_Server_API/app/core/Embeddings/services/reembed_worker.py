@@ -86,11 +86,27 @@ async def _redis_client() -> aioredis.Redis:
 
 
 def _is_test_env() -> bool:
-    """Return True if running under pytest or explicit TESTING env."""
+    """Return True if running under pytest or test-mode env toggles.
+
+    Sources:
+    - PYTEST_CURRENT_TEST (set by pytest)
+    - TESTING (legacy toggle)
+    - TEST_MODE / TLDW_TEST_MODE (standardized via core.testing.is_test_mode)
+    """
     try:
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-        return os.getenv("TESTING", "").lower() in ("1", "true", "yes", "on")
+        # Legacy
+        if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+            return True
+        # Standardized helper (no heavy imports)
+        try:
+            from tldw_Server_API.app.core.testing import is_test_mode as _is_tm
+            if _is_tm():
+                return True
+        except Exception:
+            pass
+        return False
     except Exception:
         return False
 

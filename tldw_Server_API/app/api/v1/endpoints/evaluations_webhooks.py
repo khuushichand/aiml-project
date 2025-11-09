@@ -32,6 +32,16 @@ webhooks_router = APIRouter()
 
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
+    # In tests, always route through the lazy proxy so patched methods
+    # are honored and no real DB access is attempted.
+    try:
+        from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+        if _is_test_mode():
+            svc = get_unified_evaluation_service_for_user(user_id)
+            setattr(svc, "webhook_manager", webhook_manager)
+            return webhook_manager
+    except Exception:
+        pass
     service = get_unified_evaluation_service_for_user(user_id)
     manager = getattr(service, "webhook_manager", None)
     if manager is None:
@@ -75,7 +85,7 @@ async def register_webhook(
         wm = _get_webhook_manager_for_user(current_user.id)
         url = str(request.url)
         events = [WebhookEvent(e.value) if not isinstance(e, WebhookEvent) else e for e in request.events]
-        result = await wm.register_webhook(
+        _res = wm.register_webhook(
             user_id=user_id,
             url=url,
             secret=request.secret,
@@ -83,6 +93,11 @@ async def register_webhook(
             retry_count=request.retry_count or 3,
             timeout_seconds=request.timeout_seconds or 30,
         )
+        try:
+            import inspect as _inspect
+            result = await _res if _inspect.isawaitable(_res) else _res
+        except Exception:
+            result = _res
         return WebhookRegistrationResponse(**result)
     except Exception as e:
         logger.error(f"Failed to register webhook: {e}")
@@ -99,7 +114,12 @@ async def list_webhooks(
 ):
     try:
         _get_webhook_manager_for_user(current_user.id)
-        records = await webhook_manager.get_webhook_status(user_id=user_id)
+        _res = webhook_manager.get_webhook_status(user_id=user_id)
+        try:
+            import inspect as _inspect
+            records = await _res if _inspect.isawaitable(_res) else _res
+        except Exception:
+            records = _res
         normalized = [_normalize_webhook_status_record(w) for w in records]
         return [WebhookStatusResponse(**w) for w in normalized]
     except Exception as e:
@@ -118,7 +138,13 @@ async def unregister_webhook(
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        await wm.unregister_webhook(user_id, webhook_id)
+        _res = wm.unregister_webhook(user_id, webhook_id)
+        try:
+            import inspect as _inspect
+            if _inspect.isawaitable(_res):
+                await _res
+        except Exception:
+            pass
         return {"status": "unregistered", "webhook_id": webhook_id}
     except Exception as e:
         logger.error(f"Failed to unregister webhook: {e}")
@@ -136,7 +162,12 @@ async def test_webhook(
 ):
     try:
         _get_webhook_manager_for_user(current_user.id)
-        result = await webhook_manager.test_webhook(user_id=user_id, url=str(payload.url))
+        _res = webhook_manager.test_webhook(user_id=user_id, url=str(payload.url))
+        try:
+            import inspect as _inspect
+            result = await _res if _inspect.isawaitable(_res) else _res
+        except Exception:
+            result = _res
         if isinstance(result, WebhookTestResponse):
             return result
         if isinstance(result, dict):

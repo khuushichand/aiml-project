@@ -1725,6 +1725,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "mcp-catalogs",
             "jobs",
             "personalization",
+            "evaluations",
         }
         if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True

@@ -387,7 +387,7 @@ if _ULTRA_MINIMAL_APP:
     except Exception as _h_e:  # noqa: BLE001
         logger.warning(f"Health endpoints unavailable; skipping import: {_h_e}")
         _HAS_HEALTH = False
-elif not _MINIMAL_TEST_APP:
+else:
     # Audio Endpoint (includes WebSocket streaming transcription)
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
@@ -496,7 +496,7 @@ elif not _MINIMAL_TEST_APP:
 #
 # Research/Paper Search and heavy routers/imports
 # In minimal test-app mode, import only what is needed for lightweight tests.
-if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
+if False and _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # Research Endpoint (lightweight subset for tests)
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
@@ -3078,7 +3078,7 @@ async def api_metrics():
     return registry.get_all_metrics()
 
 # Router for health monitoring endpoints (NEW)
-if _MINIMAL_TEST_APP:
+if _MINIMAL_TEST_APP and False:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
@@ -3101,6 +3101,72 @@ if _MINIMAL_TEST_APP:
         app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/health*, /api/v1/healthz, /api/v1/readyz
     except Exception as _health_min_err:
         logger.debug(f"Skipping health router in minimal test app: {_health_min_err}")
+    # Media endpoints (permission enforcement tests call /api/v1/media/add)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+        app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+    except Exception as _media_min_err:
+        logger.debug(f"Skipping media router in minimal test app: {_media_min_err}")
+    # Chat (OpenAI-compatible) endpoints for quota enforcement tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+        app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat", tags=["chat"])
+    except Exception as _chat_min_err:
+        logger.debug(f"Skipping chat router in minimal test app: {_chat_min_err}")
+    # LLM Providers endpoints (used by Chat_NEW unit tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
+        app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])  # /api/v1/llm/providers
+    except Exception as _llm_min_err:
+        logger.debug(f"Skipping llm providers router in minimal test app: {_llm_min_err}")
+    # Vector Stores (OpenAI-compatible admin + stores API)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
+        app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    except Exception as _vs_min_err:
+        logger.debug(f"Skipping vector-stores router in minimal test app: {_vs_min_err}")
+    # Embeddings (OpenAI-compatible) endpoints for policy/budget tests and OpenAPI presence
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
+        app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+    except Exception as _emb_min_err:
+        logger.debug(f"Skipping embeddings router in minimal test app: {_emb_min_err}")
+    # Media Embeddings endpoints (/api/v1/media/*/embeddings and jobs listing)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
+        app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
+    except Exception as _me_min_err:
+        logger.debug(f"Skipping media_embeddings router in minimal test app: {_me_min_err}")
+    # Chunking Templates endpoints (CRUD + apply)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+        app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
+    except Exception as _chunk_tpl_min_err:
+        logger.debug(f"Skipping chunking templates router in minimal test app: {_chunk_tpl_min_err}")
+    # Prompts endpoints (includes collections subpaths)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
+        app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
+    except Exception as _prompts_min_err:
+        logger.debug(f"Skipping prompts router in minimal test app: {_prompts_min_err}")
+    # Claims endpoints (status, list, rebuild)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
+        app.include_router(claims_router, prefix=f"{API_V1_PREFIX}", tags=["claims"])
+    except Exception as _claims_min_err:
+        logger.debug(f"Skipping claims router in minimal test app: {_claims_min_err}")
+    # RAG unified endpoints (router has its own /api/v1/rag prefix)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router
+        app.include_router(rag_unified_router, tags=["rag-unified"])
+    except Exception as _rag_min_err:
+        logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Chatbooks endpoints (export/import, jobs, download)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+        app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    except Exception as _chatbooks_min_err:
+        logger.debug(f"Skipping chatbooks router in minimal test app: {_chatbooks_min_err}")
     # Auth endpoints (login/register/refresh/logout/me)
     try:
         app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
@@ -3136,6 +3202,24 @@ if _MINIMAL_TEST_APP:
         app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     except Exception as _audit_min_err:
         logger.debug(f"Skipping audit router in minimal test app: {_audit_min_err}")
+    # Config info endpoints (includes /api/v1/config/jobs used by OpenAPI tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
+        app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    except Exception as _config_min_err:
+        logger.debug(f"Skipping config_info router in minimal test app: {_config_min_err}")
+    # Flashcards endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+        app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
+    except Exception as _flash_min_err:
+        logger.debug(f"Skipping flashcards router in minimal test app: {_flash_min_err}")
+    # Metrics endpoints (/api/v1/metrics/text)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
+        app.include_router(metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
+    except Exception as _metrics_min_err:
+        logger.debug(f"Skipping metrics router in minimal test app: {_metrics_min_err}")
     # AuthNZ debug routes for tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router

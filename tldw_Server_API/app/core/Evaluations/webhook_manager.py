@@ -1089,8 +1089,25 @@ def shutdown_webhook_manager_if_initialized() -> None:
                         task.cancel()
                     except Exception:
                         pass
+                # Close any underlying DB adapter to avoid leaking closed connections across tests
+                try:
+                    adapter = getattr(mgr, "db_adapter", None)
+                    if adapter is not None:
+                        try:
+                            adapter.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             finally:
                 try:
+                    # Also reset the global DB adapter so future lazy managers
+                    # do not reuse a closed connection across test lifecycles.
+                    try:
+                        from tldw_Server_API.app.core.Evaluations.db_adapter import close_database_adapter as _close_db
+                        _close_db()
+                    except Exception:
+                        pass
                     get_webhook_manager.cache_clear()  # type: ignore[attr-defined]
                 except Exception:
                     pass

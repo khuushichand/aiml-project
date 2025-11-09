@@ -336,8 +336,8 @@
         <div style="color:var(--color-base-0); font-size:0.9em">Wire success/failure paths without editing JSON manually.</div>
       </div>
       <div style="display:flex; gap:8px;">
-        <button class="api-button btn-sm" onclick="wfRoutingRefreshOptions(true)" title="Rebuild the step lists from the JSON definition">Refresh Step IDs</button>
-        <button class="api-button btn-sm" onclick="wfRoutingClear()" title="Clear the current routing inputs">Clear</button>
+        <button class="api-button btn-sm" id="wfRouting_refresh_ids" title="Rebuild the step lists from the JSON definition">Refresh Step IDs</button>
+        <button class="api-button btn-sm" id="wfRouting_clear" title="Clear the current routing inputs">Clear</button>
       </div>
     </div>
     <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
@@ -347,7 +347,7 @@
       <input list="wfRouting_target_ids" id="wfRouting_success" placeholder="next step id" style="min-width:180px" />
       <label for="wfRouting_failure" style="margin:0;">On failure</label>
       <input list="wfRouting_target_ids" id="wfRouting_failure" placeholder="fallback id (optional)" style="min-width:180px" />
-      <button class="api-button" onclick="wfApplyRouting()" title="Apply routing to the selected step">Apply Routing</button>
+      <button class="api-button" id="wfRouting_apply" title="Apply routing to the selected step">Apply Routing</button>
     </div>
     <div style="font-size:0.85em; color:var(--color-base-0); margin-top:6px;">
       Tip: Use the Branch step template to produce ready-made true/false paths.
@@ -362,7 +362,7 @@
         <div style="color:var(--color-base-0); font-size:0.9em">Create cron schedules that enqueue workflow runs</div>
       </div>
       <div>
-        <button class="api-button" onclick="wfSchedList()">Refresh</button>
+        <button class="api-button" id="wfSched_refresh">Refresh</button>
       </div>
     </div>
     <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
@@ -384,7 +384,7 @@
       <label style="display:flex; gap:6px; align-items:center"><input type="checkbox" id="wfSched_enabled" checked /> Enabled</label>
       <label style="display:flex; gap:6px; align-items:center" title="If enabled, run only when you are online (have an active session)"><input type="checkbox" id="wfSched_require_online" /> Require online</label>
       <input type="text" id="wfSched_inputs" placeholder='inputs JSON (optional)' style="flex:1; min-width:220px"/>
-      <button class="api-button" onclick="wfSchedCreate()">Create</button>
+      <button class="api-button" id="wfSched_create">Create</button>
     </div>
     <div id="wfSched_list"></div>
   </div>
@@ -416,7 +416,7 @@
     </select>
     <label>Inputs (JSON)</label>
     <input type="text" id="wfRun_inputs" placeholder='{"name":"Alice"}' />
-    <button class="api-button" onclick="wfRunSaved()">Run Saved</button>
+    <button class="api-button" id="wfRun_saved">Run Saved</button>
   </div>
   <div class="form-group" style="margin-bottom:4px">
     <button class="api-button" data-action="wf-copy-json" data-target="wfDef_result">Copy</button>
@@ -1159,7 +1159,7 @@
   <h2>Workflows: Runs</h2>
   <div class="form-group">
     <label>Quick</label>
-    <select id="wfList_quick" onchange="wfQuickHours()">
+    <select id="wfList_quick">
       <option value="">(none)</option>
       <option value="1">last 1h</option>
       <option value="24">last 24h</option>
@@ -1167,14 +1167,14 @@
       <option value="720">last 30d</option>
     </select>
     <div id="wfList_status_chips" style="margin-bottom:8px">
-      <span class="chip" data-status="queued" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">queued</span>
-      <span class="chip" data-status="running" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
-      <span class="chip" data-status="paused" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
-      <span class="chip" data-status="waiting_human" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
-      <span class="chip" data-status="waiting_approval" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_approval</span>
-      <span class="chip" data-status="succeeded" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
-      <span class="chip" data-status="failed" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
-      <span class="chip" data-status="cancelled" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
+      <span class="chip" data-status="queued" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">queued</span>
+      <span class="chip" data-status="running" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
+      <span class="chip" data-status="paused" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
+      <span class="chip" data-status="waiting_human" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
+      <span class="chip" data-status="waiting_approval" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_approval</span>
+      <span class="chip" data-status="succeeded" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
+      <span class="chip" data-status="failed" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
+      <span class="chip" data-status="cancelled" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
     </div>
     <label>Last N Hours</label>
     <input type="number" id="wfList_last_hours" min="1" style="width:80px" placeholder="e.g., 24">
@@ -1187,7 +1187,7 @@
     <label>Created Before</label>
     <input type="datetime-local" id="wfList_created_before" placeholder="YYYY-MM-DD HH:MM">
     <label>Date Presets</label>
-    <select id="wfList_presets" onchange="wfApplyPreset()">
+    <select id="wfList_presets">
       <option value="">(none)</option>
       <option value="today">Today</option>
       <option value="yesterday">Yesterday</option>
@@ -1212,50 +1212,50 @@
     <input type="number" id="wfList_limit" value="25" min="1" max="200" style="width:80px">
     <label>Offset</label>
     <input type="number" id="wfList_offset" value="0" min="0" style="width:80px">
-    <label style="margin-left:8px" title="When enabled, the cursor token is used and the 'offset' value is ignored."><input type="checkbox" id="wfList_use_cursor" onchange="wfSaveFilters()"> Use cursor</label>
-    <button class="api-button btn-sm" onclick="wfShowCursorHelp()" title="What is cursor pagination?">Cursor Help</button>
+    <label style="margin-left:8px" title="When enabled, the cursor token is used and the 'offset' value is ignored."><input type="checkbox" id="wfList_use_cursor"> Use cursor</label>
+    <button class="api-button btn-sm" id="wfCursor_help" title="What is cursor pagination?">Cursor Help</button>
     <label>Cursor</label>
-    <input type="text" id="wfList_cursor" placeholder="opaque token" style="width:260px" oninput="wfSaveFilters()">
-    <button class="api-button btn-sm" onclick="wfResetCursor()">Reset cursor</button>
-      <button class="api-button" onclick="wfListRuns()">List Runs</button>
-      <button class="api-button" onclick="wfCopyRunsCurl()" title="Copy the current runs list request as cURL, including cursor if enabled">Copy cURL (List)</button>
-      <button class="api-button" onclick="wfCopyShareLink()" title="Copy a URL with these filters applied">Copy Share Link</button>
-      <button class="api-button" onclick="wfClearFilters()">Clear Filters</button>
+    <input type="text" id="wfList_cursor" placeholder="opaque token" style="width:260px">
+    <button class="api-button btn-sm" id="wfCursor_reset">Reset cursor</button>
+      <button class="api-button" id="wfList_runs">List Runs</button>
+      <button class="api-button" id="wfList_copy_curl" title="Copy the current runs list request as cURL, including cursor if enabled">Copy cURL (List)</button>
+      <button class="api-button" id="wfList_copy_link" title="Copy a URL with these filters applied">Copy Share Link</button>
+      <button class="api-button" id="wfList_clear_filters">Clear Filters</button>
   </div>
   <div class="form-group">
     <label>Run ID</label>
     <input type="text" id="wfRun_run_id" placeholder="uuid" />
-    <button class="api-button" onclick="wfGetRun()">Get Status</button>
-    <button class="api-button" onclick="wfGetEvents()">Get Events</button>
+    <button class="api-button" id="wfRun_get">Get Status</button>
+    <button class="api-button" id="wfRun_get_events">Get Events</button>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-left:6px">
-      <input type="checkbox" id="wfWatch_toggle" onchange="wfToggleWatchStatus()" aria-label="Toggle run watcher">
+      <input type="checkbox" id="wfWatch_toggle" aria-label="Toggle run watcher">
       Watching
       <span id="wfWatch_spinner" class="wf-inline-spinner" style="display:none" aria-hidden="true"></span>
     </label>
     <label>Events Limit</label>
     <input type="number" id="wfEvents_limit" min="1" max="1000" value="500" style="width:90px"/>
-    <button class="api-button" onclick="wfGetNextEvents()">Load Next Events</button>
-    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto" onchange="wfToggleAutoEvents()"> Auto-refresh</label>
-    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_tail" onchange="wfToggleTail()"> Auto-follow tail</label>
+    <button class="api-button" id="wfEvents_next">Load Next Events</button>
+    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto"> Auto-refresh</label>
+    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_tail"> Auto-follow tail</label>
     <label style="margin-left:8px" title="Use server-provided Next-Cursor header for paging instead of since=last_seq"><input type="checkbox" id="wfEvents_use_cursor"> Use cursor (events)</label>
-    <button class="api-button btn-sm" id="wfEvents_next_cursor_btn" onclick="wfGetNextEvents()" disabled>Next (cursor)</button>
+    <button class="api-button btn-sm" id="wfEvents_next_cursor_btn" disabled>Next (cursor)</button>
     <label style="margin-left:8px">Filter (types)</label>
-    <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px" oninput="wfSyncEventTypeChips()"/>
-    <button class="api-button btn-sm" onclick="wfApplyErrorFilter()" title="Filter to failure and warning events">Errors/Warns</button>
-    <button class="api-button" onclick="wfListArtifacts()">List Artifacts</button>
-    <button class="api-button" onclick="wfDownloadAllServer()">Download All (server)</button>
-    <button class="api-button" onclick="wfDownloadAllClient()">Download All (client)</button>
+    <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px"/>
+    <button class="api-button btn-sm" id="wfEvents_error_filter" title="Filter to failure and warning events">Errors/Warns</button>
+    <button class="api-button" id="wfArtifacts_list">List Artifacts</button>
+    <button class="api-button" id="wfArtifacts_dl_server">Download All (server)</button>
+    <button class="api-button" id="wfArtifacts_dl_client">Download All (client)</button>
   </div>
   <div id="wfEvents_type_chips" class="wf-type-chips"></div>
   <div class="form-group">
-    <button class="api-button" onclick="wfPause()">Pause</button>
-    <button class="api-button" onclick="wfResume()">Resume</button>
-    <button class="api-button" onclick="wfCancel()">Cancel</button>
-    <button class="api-button" onclick="wfRetry()">Retry</button>
+    <button class="api-button" id="wfRun_pause">Pause</button>
+    <button class="api-button" id="wfRun_resume">Resume</button>
+    <button class="api-button" id="wfRun_cancel">Cancel</button>
+    <button class="api-button" id="wfRun_retry">Retry</button>
   </div>
   <div class="form-group" style="margin-bottom:4px">
-    <button class="api-button" onclick="wfCopyJson('wfRun_result')">Copy</button>
-    <button class="api-button" onclick="wfClearJson('wfRun_result')">Clear</button>
+    <button class="api-button" id="wfRun_copy_json">Copy</button>
+    <button class="api-button" id="wfRun_clear_json">Clear</button>
   </div>
   <pre id="wfRun_result" class="json-viewer"></pre>
   <div id="wfRuns_cursor_hint" style="margin-top:4px;color:var(--color-base-0)"></div>
@@ -1265,20 +1265,20 @@
   <div class="form-group" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;color:var(--color-base-0)">
     <label style="margin:0">Events next cursor</label>
     <input type="text" id="wfEvents_next_cursor_value" readonly style="min-width:280px" placeholder="(available when server returns Next-Cursor)">
-    <button class="api-button btn-sm" id="wfEvents_copy_cursor" onclick="wfCopyEventsCursor()" disabled>Copy</button>
+    <button class="api-button btn-sm" id="wfEvents_copy_cursor" disabled>Copy</button>
   </div>
   <div id="wfEvents_table"></div>
   <div id="wfRun_list" class="json-viewer" style="margin-top:8px"></div>
   <div class="form-group">
-    <button class="api-button" id="wfList_prev" onclick="wfPrevPage()" disabled>Prev</button>
-    <button class="api-button" id="wfList_next" onclick="wfNextPage()" disabled>Next</button>
-    <button class="api-button" id="wfList_next_cursor" onclick="wfNextCursor()" disabled>Next (cursor)</button>
+    <button class="api-button" id="wfList_prev" disabled>Prev</button>
+    <button class="api-button" id="wfList_next" disabled>Next</button>
+    <button class="api-button" id="wfList_next_cursor" disabled>Next (cursor)</button>
     <span id="wfList_page_info" style="margin-left:8px;color:var(--color-base-0)"></span>
     <span id="wfList_cursor_info" style="margin-left:8px;color:var(--color-base-0)"></span>
     <div style="margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
       <label style="margin:0">next_cursor</label>
       <input type="text" id="wfList_next_cursor_value" style="min-width:420px" readonly placeholder="(will appear after listing)"/>
-      <button class="api-button" id="wfList_copy_cursor_btn" onclick="wfCopyNextCursor()" disabled>Copy</button>
+      <button class="api-button" id="wfList_copy_cursor_btn" disabled>Copy</button>
     </div>
   </div>
   <div id="wfRun_artifacts" class="json-viewer"></div>
@@ -1289,7 +1289,7 @@
       <input type="number" id="wfDlq_limit" value="50" min="1" max="500" style="width:80px">
       <label>Offset</label>
       <input type="number" id="wfDlq_offset" value="0" min="0" style="width:80px">
-      <button class="api-button" onclick="wfDlqLoad()">Refresh</button>
+      <button class="api-button" id="wfDlq_refresh">Refresh</button>
     </div>
     <div id="wfDlq_table"></div>
   </div>
@@ -1966,13 +1966,13 @@
   <div id="wfModal_panel" role="document" tabindex="-1">
     <div class="wf-modal-header">
       <h3 id="wfModal_title">Details</h3>
-      <button type="button" class="api-button btn-sm" onclick="wfCloseModal()" aria-label="Close dialog">Close</button>
+      <button type="button" class="api-button btn-sm" id="wfModal_close_btn" aria-label="Close dialog">Close</button>
     </div>
     <div id="wfModal_description" class="visually-hidden"></div>
     <div id="wfModal_body" class="wf-modal-body" tabindex="0"></div>
     <div class="wf-modal-footer">
-      <button class="api-button" type="button" id="wfModal_copy_btn" onclick="wfCopyModal()" aria-label="Copy modal content">Copy</button>
-      <button class="api-button" type="button" onclick="wfCloseModal()">Close</button>
+      <button class="api-button" type="button" id="wfModal_copy_btn2" aria-label="Copy modal content">Copy</button>
+      <button class="api-button" type="button" id="wfModal_close_btn2">Close</button>
     </div>
   </div>
 </div>
@@ -1991,8 +1991,8 @@
     <input type="text" id="wfAppr_edited" placeholder='{"final_text":"..."}' />
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfApprove()">Approve</button>
-    <button class="api-button" onclick="wfReject()">Reject</button>
+    <button class="api-button" id="wfApprove_btn">Approve</button>
+    <button class="api-button" id="wfReject_btn">Reject</button>
   </div>
   <pre id="wfAppr_result" class="json-viewer"></pre>
   <script>
@@ -2039,8 +2039,8 @@
     <input type="text" id="wfAppr_edited" placeholder='{"final_text":"..."}' />
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfApprove()">Approve</button>
-    <button class="api-button" onclick="wfReject()">Reject</button>
+    <button class="api-button" id="wfApprove_btn2">Approve</button>
+    <button class="api-button" id="wfReject_btn2">Reject</button>
   </div>
   <pre id="wfAppr_result" class="json-viewer"></pre>
   <script>

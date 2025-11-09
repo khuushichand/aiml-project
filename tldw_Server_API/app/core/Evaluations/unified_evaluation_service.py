@@ -166,12 +166,14 @@ class UnifiedEvaluationService:
 
         self.audit_logger = _AuditShim()
 
-        # Initialize per-service webhook manager bound to this DB
-        try:
-            from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
-            self.webhook_manager = WebhookManager(db_path=effective_db_path)
-        except Exception:
-            self.webhook_manager = None
+        # Initialize per-service webhook manager bound to this DB only if enabled
+        self.webhook_manager = None
+        if self.enable_webhooks:
+            try:
+                from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
+                self.webhook_manager = WebhookManager(db_path=effective_db_path)
+            except Exception:
+                self.webhook_manager = None
 
         logger.info("Unified Evaluation Service initialized")
 
@@ -1477,7 +1479,11 @@ def get_unified_evaluation_service(db_path: Optional[str] = None) -> UnifiedEval
 
 
 def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationService:
-    """Get or create a per-user unified evaluation service bound to that user's DB."""
+    """Get or create a per-user unified evaluation service bound to that user's DB.
+
+    Accepts either int or str user IDs; coerces to int when possible so caches
+    built by tests using integer keys are hit even if a string ID is supplied.
+    """
     # Lazy init lock to avoid import-time issues
     global _service_instances_lock
     if _service_instances_lock is None:
@@ -1485,9 +1491,18 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
         _service_instances_lock = _threading.Lock()
 
     with _service_instances_lock:
+        # Normalize user id for cache key
+        try:
+            uid_key = int(user_id)  # type: ignore[arg-type]
+        except Exception:
+            try:
+                from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
+                uid_key = int(_DP.get_single_user_id())
+            except Exception:
+                uid_key = 1
         # Return existing and mark as recently used
-        if user_id in _service_instances_by_user:
-            svc = _service_instances_by_user.pop(user_id)
+        if uid_key in _service_instances_by_user:
+            svc = _service_instances_by_user.pop(uid_key)
             # If tests override the DB via env, ensure the cached instance matches
             try:
                 import os as _os
@@ -1497,13 +1512,13 @@ def get_unified_evaluation_service_for_user(user_id: int) -> UnifiedEvaluationSe
                     svc = UnifiedEvaluationService(db_path=override_path)
             except Exception:
                 pass
-            _service_instances_by_user[user_id] = svc
+            _service_instances_by_user[uid_key] = svc
             return svc
 
         # Create new service for this user
-        db_path = str(DatabasePaths.get_evaluations_db_path(user_id))
+        db_path = str(DatabasePaths.get_evaluations_db_path(uid_key))
         svc = UnifiedEvaluationService(db_path=db_path)
-        _service_instances_by_user[user_id] = svc
+        _service_instances_by_user[uid_key] = svc
 
         # Evict least-recently-used if over capacity
         if hasattr(_service_instances_by_user, "popitem") and len(_service_instances_by_user) > _MAX_SERVICE_INSTANCES:  # type: ignore[attr-defined]
