@@ -152,13 +152,28 @@
     try{ const topAdminBtn = document.querySelector('.top-tab-button[data-toptab="admin"]'); if (topAdminBtn) topAdminBtn.click(); setTimeout(()=>{ const adminJobsBtn = document.querySelector('#admin-subtabs .sub-tab-button[data-content-id="tabAdminJobs"]'); if (adminJobsBtn) adminJobsBtn.click(); let attempts=0; const tryApply=()=>{ const d=document.getElementById('adminJobs_domain'); const q=document.getElementById('adminJobs_queue'); const jt=document.getElementById('adminJobs_jobType'); if (d&&q&&jt){ d.value=domain||''; q.value=queue||''; jt.value=jobType||''; const topbar=document.getElementById('adminJobs_topbar'); if (topbar){ const desc=`${domain||'(any)'}/${queue||'(any)'}/${jobType||'(any)'}`; topbar.textContent = `Filter applied: ${desc}`; } try{ if (typeof adminJobsSaveFilters==='function') adminJobsSaveFilters(); }catch(_){ } try{ if (typeof updateSavedFiltersBadge==='function') updateSavedFiltersBadge({ domain, queue, job_type: jobType }); }catch(_){ } if (typeof adminFetchJobsStats==='function') adminFetchJobsStats(); return true; } return false; }; const interval=setInterval(()=>{ attempts += 1; if (tryApply() || attempts > 20) clearInterval(interval); }, 100); }, 100); }catch(e){ console.warn('Failed to navigate to Admin → Jobs with filter', e); }
   }
 
+  function escapeHTML(str) {
+    return String(str).replace(/[&<>"']/g, function(m) {
+      return ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[m];
+    });
+  }
+
   function runMetricsAnalysis(){
     const timeRange = (document.getElementById('metricsAnalysis_timeRange')||{}).value || '';
     const metric = (document.getElementById('metricsAnalysis_metric')||{}).value || '';
     const aggregation = (document.getElementById('metricsAnalysis_aggregation')||{}).value || '';
+    const safeMetric = escapeHTML(metric);
+    const safeTimeRange = escapeHTML(timeRange);
+    const safeAggregation = escapeHTML(aggregation);
     const chartContainer = document.getElementById('metricsAnalysis_chart'); if (chartContainer) chartContainer.innerHTML = `
       <div class="chart-placeholder">
-        <p>Chart: ${metric} over ${timeRange} (${aggregation})</p>
+        <p>Chart: ${safeMetric} over ${safeTimeRange} (${safeAggregation})</p>
         <div class="chart-bars">
           <div class="chart-bar" style="height: 60%;"></div>
           <div class="chart-bar" style="height: 80%;"></div>
@@ -173,8 +188,8 @@
       <div class="insights">
         <h4>Analysis Insights</h4>
         <ul>
-          <li>Peak ${metric} occurred at 14:30 UTC</li>
-          <li>Average ${aggregation} value: 234ms</li>
+          <li>Peak ${safeMetric} occurred at 14:30 UTC</li>
+          <li>Average ${safeAggregation} value: 234ms</li>
           <li>Detected anomaly at 12:15 UTC (3σ deviation)</li>
           <li>Trend: Increasing by 12% over selected period</li>
         </ul>
