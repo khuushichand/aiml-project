@@ -129,7 +129,7 @@ Once the server boots, you’ll likely tailor behaviour, credentials, and model 
 2. In `config.txt`, open the `[API]` section and set the defaults for that provider:
    ```ini
    [API]
-   anthropic_model = claude-3-5-sonnet-latest
+   anthropic_model = claude-sonnet-4.5
    anthropic_temperature = 0.6
    default_api = anthropic        # optional: make it the default `/chat/completions` target
    ```

@@ -346,7 +346,7 @@ def test_commercial_provider_streaming_no_template(
         client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
 ):
     model_map = {  # Same as non-streaming
-        "openai": "gpt-4o-mini", "anthropic": "claude-3-haiku-20240307", "cohere": "command-r",
+        "openai": "gpt-4o-mini", "anthropic": "claude-haiku-4.5", "cohere": "command-r",
         "groq": "llama3-8b-8192", "openrouter": "mistralai/mistral-7b-instruct:free",
         "deepseek": "deepseek-chat", "mistral": "mistral-tiny", "google": "gemini-1.5-flash-latest",
         "huggingface": os.getenv("HF_TEST_MODEL", "mistralai/Mistral-7B-Instruct-v0.1")

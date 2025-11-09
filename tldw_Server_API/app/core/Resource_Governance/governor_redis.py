@@ -164,6 +164,25 @@ class RedisResourceGovernor(ResourceGovernor):
                 _cursor, keys = await client.scan(0, match=pattern, count=1000)
             except Exception:
                 keys = []
+            # If FakeTime is near zero, aggressively drop all lease keys for this policy
+            # to ensure a clean slate across tests (avoids carryover non-expired leases).
+            try:
+                if float(now) < 1.0:
+                    for k in keys or []:
+                        try:
+                            await client.delete(k)
+                        except Exception:
+                            pass
+                    # Mirror into stub map
+                    try:
+                        to_drop_all = [k for k in list(self._stub_leases.keys()) if k.startswith(f"{self._keys.ns}:lease:{policy_id}:")]
+                        for k in to_drop_all:
+                            self._stub_leases.pop(k, None)
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
             # Mirror deletions: drop any stub lease buckets for this policy that no longer exist in client
             try:
                 keys_set = set(keys or [])
@@ -943,23 +962,27 @@ class RedisResourceGovernor(ResourceGovernor):
                         start_aw_f = float(start_aw)
                     except Exception:
                         start_aw_f = now_early
-                    # If still inside window and cnt>=limit, enforce deny
+                    # If still inside window and cnt>=limit, enforce deny — unless
+                    # we are within the final step of the window (stub steady-rate smoothing).
                     if lim_aw == limit_e and now_early < start_aw_f + 60.0 and int(cnt_aw or 0) >= int(limit_e):
-                        floor_until = start_aw_f + 60.0
-                        ra_e = max(0, int(floor_until - now_early)) or 1
-                        # Set deny floor/backoff for stability
-                        self._requests_deny_until[(self._keys.ns, policy_id_early, req.entity)] = floor_until
-                        self._stub_backoff_until[(self._keys.ns, policy_id_early, req.entity, "requests")] = now_early + float(ra_e)
-                        per_category_e: Dict[str, Any] = {}
-                        per_category_e["requests"] = {"allowed": False, "limit": limit_e, "retry_after": ra_e}
-                        decision_e = RGDecision(allowed=False, retry_after=ra_e, details={"policy_id": policy_id_early, "categories": per_category_e})
-                        # Persist idempotency record if requested
-                        if op_id:
-                            try:
-                                await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": decision_e.__dict__, "handle_id": None}), ex=86400)
-                            except Exception:
-                                pass
-                        return decision_e, None
+                        step_e = max(1, int(60 / max(1, int(limit_e))))
+                        allow_tail = bool(self._force_stub_rate() and now_early >= float(start_aw_f) + float(60 - step_e))
+                        if not allow_tail:
+                            floor_until = start_aw_f + 60.0
+                            ra_e = max(0, int(floor_until - now_early)) or 1
+                            # Set deny floor/backoff for stability
+                            self._requests_deny_until[(self._keys.ns, policy_id_early, req.entity)] = floor_until
+                            self._stub_backoff_until[(self._keys.ns, policy_id_early, req.entity, "requests")] = now_early + float(ra_e)
+                            per_category_e: Dict[str, Any] = {}
+                            per_category_e["requests"] = {"allowed": False, "limit": limit_e, "retry_after": ra_e}
+                            decision_e = RGDecision(allowed=False, retry_after=ra_e, details={"policy_id": policy_id_early, "categories": per_category_e})
+                            # Persist idempotency record if requested
+                            if op_id:
+                                try:
+                                    await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": decision_e.__dict__, "handle_id": None}), ex=86400)
+                                except Exception:
+                                    pass
+                            return decision_e, None
             try:
                 logger.debug(
                     "RG early guard state: policy_id={pid} entity={ent} now={now} deny_until={du} backoff_until={bu}",

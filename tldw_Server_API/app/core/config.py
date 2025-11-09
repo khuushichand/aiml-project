@@ -1802,7 +1802,7 @@ def load_and_log_configs():
 
         # LLM API Settings - streaming / temperature / top_p / min_p
         # Anthropic
-        anthropic_model = config_parser_object.get('API', 'anthropic_model', fallback='claude-3-5-sonnet-20240620')
+        anthropic_model = config_parser_object.get('API', 'anthropic_model', fallback='claude-sonnet-4.5')
         anthropic_streaming = config_parser_object.get('API', 'anthropic_streaming', fallback='False')
         anthropic_temperature = config_parser_object.get('API', 'anthropic_temperature', fallback='0.7')
         anthropic_top_p = config_parser_object.get('API', 'anthropic_top_p', fallback='0.95')

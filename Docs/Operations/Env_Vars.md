@@ -206,6 +206,10 @@ Runtime overrides (non-persistent) are available via API:
   export PRICING_OVERRIDES='{"openai":{"gpt-4o":{"prompt":0.005,"completion":0.015}}}'
   ``
   File-based overrides are also supported at `tldw_Server_API/Config_Files/model_pricing.json`.
+  In addition to cost tracking, this catalog now seeds the available models list for commercial providers
+  surfaced by `GET /api/v1/llm/providers`. Add a model here to have it appear in the WebUI model selectors
+  (you can still list models in `config.txt`; both sources are merged, with `model_pricing.json` acting as
+  the primary reference).
 
 ## Embeddings
 - `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage-specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.

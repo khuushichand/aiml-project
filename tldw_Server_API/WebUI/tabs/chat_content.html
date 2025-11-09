@@ -8,7 +8,7 @@
         <div class="basic-params">
             <h3>Basic Parameters</h3>
             <div class="help-inline" style="font-size: 0.9em; color: #555; margin: 6px 0 12px;">
-                <span title="Tip: You can either select a provider or prefix the model as provider/model (e.g., anthropic/claude-3-5-sonnet). The server parses prefixed models automatically if api_provider is not set. See the Providers tab for configured providers/models. Useful endpoints: /api/v1/llm/providers, /api/v1/llm/models.">ⓘ Provider/Model help</span>
+                <span title="Tip: You can either select a provider or prefix the model as provider/model (e.g., anthropic/claude-sonnet-4.5). The server parses prefixed models automatically if api_provider is not set. See the Providers tab for configured providers/models. Useful endpoints: /api/v1/llm/providers, /api/v1/llm/models.">ⓘ Provider/Model help</span>
                 <a href="/docs" target="_blank" style="margin-left:8px;">Open API Docs</a>
             </div>
 
@@ -282,7 +282,7 @@
                         <option value="local-llm">Local LLM</option>
                         <option value="custom-openai-api">Custom OpenAI API</option>
                     </select>
-                    <select id="chat-model" class="llm-model-select" style="margin-left: 10px;" title="Models reflect configured providers. You can paste a prefixed name like anthropic/claude-3-5-sonnet.">
+                    <select id="chat-model" class="llm-model-select" style="margin-left: 10px;" title="Models reflect configured providers. You can paste a prefixed name like anthropic/claude-sonnet-4.5.">
                         <option value="">Loading models...</option>
                     </select>
                 </div>
@@ -1078,11 +1078,14 @@ async function populateModelDropdowns() {
             return a.display_name.localeCompare(b.display_name);
         });
 
-        // Group models by provider
+        // Group models by provider, highlighting configured providers and disabling unconfigured ones
         sortedProviders.forEach(provider => {
             if (provider.models && provider.models.length > 0) {
-                const safeGroup = Utils.escapeHtml(String(provider.display_name || provider.name || 'Provider'));
-                optionsHtml += `<optgroup label="${safeGroup}">`;
+                const isConfigured = !!provider.is_configured;
+                const safeGroupBase = Utils.escapeHtml(String(provider.display_name || provider.name || 'Provider'));
+                const groupLabel = isConfigured ? `✅ ${safeGroupBase}` : `${safeGroupBase} (Not Configured)`;
+                const labelStyle = isConfigured ? '' : ' style="color:#888"';
+                optionsHtml += `<optgroup label="${groupLabel}"${labelStyle}>`;
 
                 provider.models.forEach(model => {
                     const value = `${provider.name}/${model}`;
@@ -1094,7 +1097,9 @@ async function populateModelDropdowns() {
                         defaultModel = value;
                     }
 
-                    optionsHtml += `<option value="${safeValue}"${isDefault ? ' data-default="true"' : ''}>${displayName}${isDefault ? ' (default)' : ''}</option>`;
+                    const disabled = isConfigured ? '' : ' disabled';
+                    const suffix = isConfigured ? '' : ' (requires API key)';
+                    optionsHtml += `<option value="${safeValue}"${isDefault ? ' data-default="true"' : ''}${disabled}>${displayName}${isDefault ? ' (default)' : ''}${suffix}</option>`;
                 });
 
                 optionsHtml += '</optgroup>';
@@ -1219,18 +1224,22 @@ function populateModelDropdown(selectElement, providersInfo) {
         return a.display_name.localeCompare(b.display_name);
     });
 
-    // Build groups and options via DOM APIs
+    // Build groups and options via DOM APIs, with configured highlighting
     sortedProviders.forEach(provider => {
         if (provider.models && provider.models.length > 0) {
             const group = document.createElement('optgroup');
-            group.label = String(provider.display_name || provider.name || 'Provider');
+            const isConfigured = !!provider.is_configured;
+            const base = String(provider.display_name || provider.name || 'Provider');
+            group.label = isConfigured ? `✅ ${base}` : `${base} (Not Configured)`;
+            if (!isConfigured) group.setAttribute('style', 'color:#888');
             provider.models.forEach(model => {
                 const value = `${provider.name}/${model}`;
                 const isDefault = provider.name === defaultProvider && provider.default_model === model;
                 if (isDefault) defaultModel = value;
                 const opt = document.createElement('option');
                 opt.value = value;
-                opt.textContent = `${model}${isDefault ? ' (default)' : ''}`;
+                opt.textContent = `${model}${isDefault ? ' (default)' : ''}${isConfigured ? '' : ' (requires API key)'}`;
+                if (!isConfigured) opt.disabled = true;
                 if (isDefault) opt.dataset.default = 'true';
                 group.appendChild(opt);
             });

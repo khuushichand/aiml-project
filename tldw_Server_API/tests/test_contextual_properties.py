@@ -349,7 +349,7 @@ TestContextualStateMachine.settings = settings(max_examples=10, stateful_step_co
 
 @given(
     enable_contextual=st.booleans(),
-    llm_model=st.sampled_from(["gpt-3.5-turbo", "gpt-4", "claude-3-opus", None]),
+    llm_model=st.sampled_from(["gpt-3.5-turbo", "gpt-4", "claude-opus-4.1", None]),
     context_window=st.one_of(st.none(), st.integers(min_value=100, max_value=2000))
 )
 def test_configuration_combinations(enable_contextual, llm_model, context_window):

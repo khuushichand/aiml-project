@@ -174,7 +174,7 @@ groq_api_key = gsk_your_groq_key_here
 
 # Optional: Configure default models
 openai_model = gpt-4
-anthropic_model = claude-3-sonnet-20240229
+anthropic_model = claude-sonnet-4.5
 ```
 
 ### 3. Summarization Quality Evaluation (G-Eval)

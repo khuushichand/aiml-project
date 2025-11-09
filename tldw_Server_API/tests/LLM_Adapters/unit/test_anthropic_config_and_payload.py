@@ -61,7 +61,7 @@ def test_anthropic_app_config_base_url_and_timeout(monkeypatch):
     a = AnthropicAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],
-        "model": "claude-3-sonnet",
+        "model": "claude-sonnet-4.5",
         "api_key": "k",
         "app_config": {"anthropic_api": {"api_base_url": "https://alt.anthropic.local/v1", "api_timeout": 33}},
     }
@@ -84,7 +84,7 @@ def test_anthropic_tool_choice_none_omits_tools(monkeypatch):
     a = AnthropicAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],
-        "model": "claude-3-haiku",
+        "model": "claude-haiku-4.5",
         "api_key": "k",
         "tools": tools,
         "tool_choice": "none",
@@ -108,7 +108,7 @@ def test_anthropic_tool_choice_specific_maps(monkeypatch):
     a = AnthropicAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],
-        "model": "claude-3-opus",
+        "model": "claude-opus-4.1",
         "api_key": "k",
         "tools": tools,
         "tool_choice": {"type": "function", "function": {"name": "lookup"}},
@@ -131,7 +131,7 @@ def test_anthropic_malformed_tools_ignored(monkeypatch):
     a = AnthropicAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],
-        "model": "claude-3-haiku",
+        "model": "claude-haiku-4.5",
         "api_key": "k",
         "tools": tools,
     }
@@ -156,7 +156,7 @@ def test_anthropic_multimodal_image_data_url(monkeypatch):
         ],
     }
     a = AnthropicAdapter()
-    request = {"messages": [msg], "model": "claude-3-haiku", "api_key": "k"}
+    request = {"messages": [msg], "model": "claude-haiku-4.5", "api_key": "k"}
     _ = a.chat(request)
     payload = captured.get("json") or {}
     parts: List[Dict[str, Any]] = payload.get("messages", [{}])[0].get("content", [])
@@ -182,7 +182,7 @@ def test_anthropic_multimodal_invalid_image_url_ignored(monkeypatch):
         ],
     }
     a = AnthropicAdapter()
-    request = {"messages": [msg], "model": "claude-3-haiku", "api_key": "k"}
+    request = {"messages": [msg], "model": "claude-haiku-4.5", "api_key": "k"}
     _ = a.chat(request)
     payload = captured.get("json") or {}
     parts: List[Dict[str, Any]] = payload.get("messages", [{}])[0].get("content", [])

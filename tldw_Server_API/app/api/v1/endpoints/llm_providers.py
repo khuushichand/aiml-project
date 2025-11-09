@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.Chat.provider_config import (
     PROVIDER_CAPABILITIES,
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
 
 #######################################################################################################################
@@ -77,9 +78,45 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "anthropic": {
+        "claude-sonnet-4.5": {
+            "context_window": 200_000,
+            "max_output_tokens": 64_000,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False
+            },
+            "modalities": {"input": ["text", "image", "file"], "output": ["text"]},
+            "notes": "Claude Sonnet 4.5; fast near-frontier model with tools and vision.",
+            "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+            "last_verified": None
+        },
+        "claude-haiku-4.5": {
+            "context_window": 200_000,
+            "max_output_tokens": 64_000,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False
+            },
+            "modalities": {"input": ["text", "image", "file"], "output": ["text"]},
+            "notes": "Claude Haiku 4.5; fastest model with near-frontier intelligence.",
+            "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+            "last_verified": None
+        },
         "claude-opus-4.1": {
             "context_window": 200_000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 32_000,
             "capabilities": {
                 "vision": True,
                 "audio_input": False,
@@ -620,6 +657,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'type': 'commercial',
                 'section': 'API'
             },
+            'minimax': {
+                'display_name': 'MiniMax',
+                'api_key_field': 'minimax_api_key',
+                'model_field': 'minimax_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
             # Local APIs (from Local-API section)
             'llama': {
                 'display_name': 'Llama.cpp',
@@ -724,9 +768,21 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
 
-            # If no models found in config, do not inject defaults.
-            if not models:
-                models = []
+            # Augment or seed with models from the pricing catalog for commercial providers.
+            # This makes model_pricing.json the primary reference for available models,
+            # while still honoring any explicit config.txt entries.
+            if provider_info['type'] == 'commercial':
+                try:
+                    pricing_models = list_provider_models(provider_name)
+                    # Heuristic: exclude obvious embedding model ids from chat model lists
+                    pricing_models = [m for m in pricing_models if 'embed' not in m.lower() and 'embedding' not in m.lower()]
+                except Exception:
+                    pricing_models = []
+                if pricing_models:
+                    # Preserve order: config models first, then pricing extras
+                    seen = set(m.strip() for m in models)
+                    extras = [m for m in pricing_models if m not in seen]
+                    models = models + extras
 
             # Build models and metadata
             models_info = [get_model_metadata(provider_name, m) for m in models]

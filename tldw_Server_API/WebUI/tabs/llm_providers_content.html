@@ -5,7 +5,8 @@
             <span class="endpoint-method get">GET</span>
             <span class="endpoint-path">/api/v1/llm/providers - List LLM Providers</span>
         </h2>
-        <p>Get a list of all configured LLM providers with their available models.</p>
+        <p>Get a list of all available LLM providers and models (catalog + config).
+           Configured/usable providers are highlighted; others are shown for discovery.</p>
 
         <button class="api-button" onclick="makeRequest('llmProvidersList', 'GET', '/api/v1/llm/providers', 'none')">
             Get Providers

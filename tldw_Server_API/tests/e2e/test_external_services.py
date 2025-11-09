@@ -179,7 +179,7 @@ class TestLLMProviderResilience:
         try:
             alternative_response = api_client.chat_completion(
                 messages=messages,
-                model="claude-3-haiku",  # Alternative
+                model="claude-haiku-4.5",  # Alternative
                 temperature=0.7
             )
         except:

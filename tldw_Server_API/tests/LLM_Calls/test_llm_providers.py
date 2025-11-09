@@ -1450,7 +1450,7 @@ class TestSSENormalization:
 
         response_payload = {
             "id": "msg_42",
-            "model": "claude-3-haiku-20240307",
+            "model": "claude-haiku-4.5",
             "content": [
                 {"type": "text", "text": "Hello"},
                 {"type": "tool_use", "id": "tool_99", "name": "lookup", "input": {"city": "Paris"}},

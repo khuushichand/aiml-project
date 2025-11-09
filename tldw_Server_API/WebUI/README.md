@@ -187,7 +187,8 @@ WebUI/
 ### Providers UI
 - Location: Providers tab (or Settings → Providers) in the WebUI
 - Capabilities:
-  - List configured providers and available models with metadata
+  - List all available providers and models (catalog + config) with clear highlighting of configured/usable providers
+  - Model dropdowns group by provider; unconfigured providers are greyed out and disabled with a note (requires API key)
   - Inspect provider health (status, circuit breaker, recent performance)
   - View request queue status (size, workers) and rate limiter settings
   - Copy `<provider>/<model>` names for use in Chat and RAG requests
