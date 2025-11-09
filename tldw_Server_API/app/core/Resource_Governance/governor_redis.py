@@ -115,19 +115,13 @@ class RedisResourceGovernor(ResourceGovernor):
     def _accept_window_enabled(self) -> bool:
         """Whether acceptance-window hardening should be active.
 
-        Disable when running under pytest or when explicitly requested via
-        RG_TEST_DISABLE_ACCEPT_WINDOW. This restores pure sliding-window
-        behavior for tests.
+        Enabled by default; can be explicitly disabled via
+        RG_TEST_DISABLE_ACCEPT_WINDOW. This ensures steady-rate smoothing is
+        available in tests unless explicitly turned off.
         """
         try:
-            # Explicit opt-in via RG_TEST_FORCE_STUB_RATE to enable steady-rate smoothing in tests
-            if str(os.getenv("RG_TEST_FORCE_STUB_RATE") or "").strip().lower() in ("1", "true", "yes"):
-                return True
-            # Explicit opt-out via env
+            # Explicit opt-out via env only
             if str(os.getenv("RG_TEST_DISABLE_ACCEPT_WINDOW") or "").strip().lower() in ("1", "true", "yes"):
-                return False
-            # Auto-disable in pytest contexts
-            if os.getenv("PYTEST_CURRENT_TEST") is not None:
                 return False
         except Exception:
             pass
@@ -917,7 +911,8 @@ class RedisResourceGovernor(ResourceGovernor):
                                 smoothing_ok = True
             except Exception:
                 smoothing_ok = False
-            if now_early < floor_until and not smoothing_ok:
+            # Only enforce early deny floor for requests category
+            if ("requests" in req.categories) and (now_early < floor_until) and not smoothing_ok:
                 try:
                     logger.debug(
                         "RG early deny guard hit: policy_id={pid} entity={ent} now={now} deny_until={du}",

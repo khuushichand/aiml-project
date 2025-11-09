@@ -57,7 +57,8 @@ class MetricsRegistry:
         """Initialize the metrics registry."""
         self.metrics: Dict[str, MetricDefinition] = {}
         self.instruments: Dict[str, Any] = {}
-        self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        # Increase ring buffer to avoid plateauing counts in longer test runs
+        self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=10000))
         self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
 
         # Initialize with telemetry manager
