@@ -282,10 +282,11 @@ async def create_session(
                     rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
                 except Exception:
                     rt = str(rt_attr) if rt_attr is not None else "unknown"
+            logger.exception("RuntimeUnavailable error occurred on sandbox session creation: %s", str(e))
             return JSONResponse(status_code=503, content={
                 "error": {
                     "code": "runtime_unavailable",
-                    "message": str(e),
+                    "message": "The requested runtime is currently unavailable.",
                     "details": {"runtime": rt, "available": False, "suggested": ["docker"]}
                 }
             })
