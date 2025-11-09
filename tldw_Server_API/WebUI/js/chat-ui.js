@@ -101,7 +101,7 @@ class ChatUI {
         messageDiv.id = `${prefix}_message_entry_${id}`;
         messageDiv.dataset.messageId = id;
 
-        messageDiv.innerHTML = `
+        const __markup = `
             <div class="message-header">
                 <span class="message-role-badge ${role}">${role}</span>
                 <button class="remove-message-btn" onclick="chatUI.removeMessage('${prefix}', ${id})" aria-label="Remove message">
@@ -172,6 +172,11 @@ class ChatUI {
                 </div>
             </div>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(messageDiv, __markup);
+        } else {
+            messageDiv.innerHTML = __markup;
+        }
 
         container.appendChild(messageDiv);
 

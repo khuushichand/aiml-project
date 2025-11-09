@@ -130,7 +130,11 @@ class MediaAnalysisManager {
             </div>
         `).join('');
 
-        resultsDiv.innerHTML = html;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(resultsDiv, html);
+        } else {
+            resultsDiv.innerHTML = html;
+        }
     }
 
     async loadAllMedia(page = 1) {
@@ -197,7 +201,11 @@ class MediaAnalysisManager {
             </div>
         `).join('');
 
-        mediaListDiv.innerHTML = html;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(mediaListDiv, html);
+        } else {
+            mediaListDiv.innerHTML = html;
+        }
     }
 
     updatePaginationControls() {

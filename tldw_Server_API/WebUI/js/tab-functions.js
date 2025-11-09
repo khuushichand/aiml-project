@@ -1467,7 +1467,7 @@ async function embeddingsListDLQ() {
                 </td>
             </tr>`;
         }).join('');
-        out.innerHTML = `
+        const __dlqMarkup = `
             <table class="table">
                 <thead>
                     <tr><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
@@ -1476,6 +1476,11 @@ async function embeddingsListDLQ() {
             </table>
             <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(out, __dlqMarkup);
+        } else {
+            out.innerHTML = __dlqMarkup;
+        }
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');
@@ -1549,7 +1554,7 @@ async function embeddingsListDLQ2() {
                 </td>
             </tr>`;
         }).join('');
-        out.innerHTML = `
+        const __dlq2Markup = `
             <table class="table">
                 <thead>
                     <tr><th></th><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
@@ -1558,6 +1563,11 @@ async function embeddingsListDLQ2() {
             </table>
             <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(out, __dlq2Markup);
+        } else {
+            out.innerHTML = __dlq2Markup;
+        }
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');

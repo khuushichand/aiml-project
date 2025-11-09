@@ -183,7 +183,7 @@ class Modal {
         // Create modal
         this.modal = document.createElement('div');
         this.modal.className = `modal modal-${this.options.size}`;
-        this.modal.innerHTML = `
+        const __modalMarkup = `
             <div class="modal-header">
                 <h2 class="modal-title">${this.options.title}</h2>
                 ${this.options.closeButton ? '<button class="modal-close" aria-label="Close">×</button>' : ''}
@@ -193,6 +193,11 @@ class Modal {
             </div>
             ${this.options.footer ? `<div class="modal-footer">${this.options.footer}</div>` : ''}
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(this.modal, __modalMarkup);
+        } else {
+            this.modal.innerHTML = __modalMarkup;
+        }
 
         // ARIA roles and labelling
         try {
@@ -276,7 +281,11 @@ class Modal {
     setContent(content) {
         const body = this.modal.querySelector('.modal-body');
         if (body) {
-            body.innerHTML = content;
+            if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+                window.SafeDOM.setHTML(body, content);
+            } else {
+                body.innerHTML = content;
+            }
         }
     }
 }
@@ -300,23 +309,32 @@ class JSONViewer {
         const wrapper = document.createElement('div');
         wrapper.className = `json-viewer json-viewer-${this.options.theme}`;
 
-        if (this.options.enableCopy) {
-            const toolbar = document.createElement('div');
-            toolbar.className = 'json-viewer-toolbar';
-            toolbar.innerHTML = `
-                <button class="btn btn-sm" onclick="Utils.copyToClipboard('${Utils.escapeHtml(JSON.stringify(this.json, null, 2))}')">
-                    Copy JSON
-                </button>
-                <button class="btn btn-sm" onclick="Utils.downloadData(${Utils.escapeHtml(JSON.stringify(this.json))}, 'data.json')">
-                    Download
-                </button>
-            `;
-            wrapper.appendChild(toolbar);
-        }
+            if (this.options.enableCopy) {
+                const toolbar = document.createElement('div');
+                toolbar.className = 'json-viewer-toolbar';
+                const __toolbarMarkup = `
+                    <button class="btn btn-sm" onclick="Utils.copyToClipboard('${Utils.escapeHtml(JSON.stringify(this.json, null, 2))}')">
+                        Copy JSON
+                    </button>
+                    <button class="btn btn-sm" onclick="Utils.downloadData(${Utils.escapeHtml(JSON.stringify(this.json))}, 'data.json')">
+                        Download
+                    </button>
+                `;
+                if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+                    window.SafeDOM.setHTML(toolbar, __toolbarMarkup);
+                } else {
+                    toolbar.innerHTML = __toolbarMarkup;
+                }
+                wrapper.appendChild(toolbar);
+            }
 
         const content = document.createElement('div');
         content.className = 'json-viewer-content';
-        content.innerHTML = this.renderValue(this.json, 0);
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(content, this.renderValue(this.json, 0));
+        } else {
+            content.innerHTML = this.renderValue(this.json, 0);
+        }
         wrapper.appendChild(content);
 
         this.container.appendChild(wrapper);

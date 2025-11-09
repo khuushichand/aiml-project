@@ -67,6 +67,8 @@ Run these from the project root to install a single TTS backend (deps + models w
 ```bash
 # Kokoro (v1.0 ONNX + voices)
 python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+# Overwrite existing assets: add --force
+# python Helper_Scripts/TTS_Installers/install_tts_kokoro.py --force
 
 # Dia / Higgs / VibeVoice
 python Helper_Scripts/TTS_Installers/install_tts_dia.py
@@ -86,6 +88,15 @@ python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py [--with-lang]
 Flags:
 - `TLDW_SETUP_SKIP_PIP=1` to skip pip installs
 - `TLDW_SETUP_SKIP_DOWNLOADS=1` to skip HF downloads
+- `TLDW_SETUP_FORCE_DOWNLOADS=1` to overwrite existing assets
+
+Alternative helper (assets only):
+```bash
+python Helper_Scripts/download_kokoro_assets.py \
+  --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+  --model-path models/kokoro/onnx/model.onnx \
+  --voices-dir models/kokoro/voices
+```
 
 ### Voice Management & Cloning
 

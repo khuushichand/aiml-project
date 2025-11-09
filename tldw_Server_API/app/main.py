@@ -502,6 +502,13 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
+    # Admin endpoints are used by several pytest modules; import for minimal app
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+        _HAS_ADMIN_MIN = True
+    except Exception as _admin_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping admin router import in minimal test app: {_admin_min_err}")
+        _HAS_ADMIN_MIN = False
     _HAS_UNIFIED_EVALUATIONS = False
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
@@ -3110,6 +3117,12 @@ if _MINIMAL_TEST_APP:
             app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-catalogs"])
         except Exception as _mcp_cat_err:  # noqa: BLE001
             logger.debug(f"Skipping MCP catalogs router in minimal test app: {_mcp_cat_err}")
+        # Include admin router in minimal mode if available
+        try:
+            if 'admin_router' in locals() and _HAS_ADMIN_MIN:
+                app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+        except Exception as _adm_inc_err:  # noqa: BLE001
+            logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
     except Exception as _mcp_min_err:  # noqa: BLE001
         logger.debug(f"Skipping MCP unified router in minimal test app: {_mcp_min_err}")
 else:

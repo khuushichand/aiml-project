@@ -585,6 +585,15 @@ spec:
 Recommended installer:
 ```bash
 python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+# Overwrite existing assets:
+# python Helper_Scripts/TTS_Installers/install_tts_kokoro.py --force
+```
+Alternative helper (assets only):
+```bash
+python Helper_Scripts/download_kokoro_assets.py \
+  --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+  --model-path models/kokoro/onnx/model.onnx \
+  --voices-dir models/kokoro/voices
 ```
 Manual (huggingface-cli):
 ```bash

@@ -651,14 +651,19 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
 
+    force = _force_downloads()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and not force:
+        logger.info('Skip existing file %s', destination)
+        return
     try:
-        # Download directly into destination parent; no symlink flag required
-        hf_hub_download(
+        # Download into cache, then copy to the exact destination path
+        src_fp = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
-            local_dir=str(destination.parent),
+            force_download=force,
         )
+        shutil.copy2(src_fp, destination)
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
     except Exception as exc:  # noqa: BLE001
@@ -675,6 +680,11 @@ def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
 
+    force = _force_downloads()
+    if destination.exists() and any(destination.iterdir()) and not force:
+        logger.info('Skip existing directory %s', destination)
+        return
+
     try:
         # Download snapshot into a temporary folder then copy requested subdir
         import tempfile
@@ -683,24 +693,34 @@ def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
                 repo_id=repo_id,
                 local_dir=str(_td),
                 allow_patterns=[f"{subdir}", f"{subdir}/*", f"{subdir}/**"],
+                force_download=force,
             ))
             src = snapshot_path / subdir
-        if not src.exists():
-            raise FileNotFoundError(f'Subdirectory {subdir!r} not found in snapshot of {repo_id}')
-            destination.mkdir(parents=True, exist_ok=True)
-            # Copy tree (merge/overwrite files)
-            for root, dirs, files in os.walk(src):
-                rel = Path(root).relative_to(src)
-                out_dir = destination / rel
-                out_dir.mkdir(parents=True, exist_ok=True)
-                for f in files:
-                    shutil.copy2(Path(root) / f, out_dir / f)
+            if not src.exists():
+                raise FileNotFoundError(f'Subdirectory {subdir!r} not found in snapshot of {repo_id}')
+            # Prepare destination directory
+            if destination.exists() and force:
+                if destination.is_dir():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # Copy directory tree while tempdir is alive
+            shutil.copytree(src, destination, dirs_exist_ok=True)
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
     except Exception as exc:  # noqa: BLE001
         if _is_httpx_network_error(exc):
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
         raise
+
+def _force_downloads() -> bool:
+    """Whether to force re-download/overwrite. Controlled via env flags."""
+    for key in ('TLDW_SETUP_FORCE_DOWNLOADS', 'TLDW_SETUP_FORCE', 'TLDW_FORCE'):
+        v = os.getenv(key)
+        if v and v not in ('0', 'false', 'False', 'no', 'NO'):
+            return True
+    return False
 
 def _snapshot_repo(repo_id: str) -> None:
     _ensure_downloads_allowed(f'{repo_id} snapshot')
@@ -711,7 +731,7 @@ def _snapshot_repo(repo_id: str) -> None:
 
     try:
         # Prefetch into cache; no local_dir required and no symlink flag
-        snapshot_download(repo_id=repo_id)
+        snapshot_download(repo_id=repo_id, force_download=_force_downloads())
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
     except Exception as exc:  # noqa: BLE001

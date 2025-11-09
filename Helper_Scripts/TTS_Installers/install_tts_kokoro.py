@@ -8,16 +8,23 @@ Defaults:
 
 Usage:
   python Helper_Scripts/TTS_Installers/install_tts_kokoro.py [--model-only|--voices-only] \
-      [--model-path PATH] [--voices-dir PATH]
+      [--model-path PATH] [--voices-dir PATH] [--force]
 
 Environment flags respected (optional):
 - TLDW_SETUP_SKIP_PIP=1         # skip pip installs
 - TLDW_SETUP_SKIP_DOWNLOADS=1   # skip HF downloads
+- TLDW_SETUP_FORCE_DOWNLOADS=1  # overwrite existing assets
 
 This script:
 1) Installs required pip packages for the kokoro adapter.
 2) Downloads the v1.0 ONNX model and voices directory from HF.
 3) Detects eSpeak NG and prints platform guidance if not found.
+
+Alternative (assets only):
+  python Helper_Scripts/download_kokoro_assets.py \
+      --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+      --model-path models/kokoro/onnx/model.onnx \
+      --voices-dir models/kokoro/voices
 """
 from __future__ import annotations
 
@@ -174,11 +181,15 @@ def main() -> int:
     ap.add_argument("--voices-dir", default="models/kokoro/voices", help="Destination directory for voices")
     ap.add_argument("--model-only", action="store_true", help="Only install model (skip voices)")
     ap.add_argument("--voices-only", action="store_true", help="Only install voices (skip model)")
+    ap.add_argument("--force", action="store_true", help="Overwrite existing assets and force re-downloads")
     args = ap.parse_args()
 
     if args.model_only and args.voices_only:
         print("Choose only one of --model-only or --voices-only", file=sys.stderr)
         return 2
+
+    if args.force:
+        os.environ['TLDW_SETUP_FORCE_DOWNLOADS'] = '1'
 
     model_path = Path(args.model_path)
     voices_dir = Path(args.voices_dir)

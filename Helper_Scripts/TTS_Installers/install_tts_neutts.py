@@ -8,13 +8,14 @@ This will:
 - optional: prefetch HF repos (backbone + codec) into local cache
 
 Usage:
-  python Helper_Scripts/TTS_Installers/install_tts_neutts.py [--prefetch] \
+  python Helper_Scripts/TTS_Installers/install_tts_neutts.py [--prefetch] [--force] \
       [--backbone neuphonic/neutts-air|<local path>|<gguf repo>] \
       [--codec neuphonic/neucodec|neuphonic/distill-neucodec|neuphonic/neucodec-onnx-decoder]
 
 Environment flags:
 - TLDW_SETUP_SKIP_PIP=1         # skip pip installs
 - TLDW_SETUP_SKIP_DOWNLOADS=1   # skip HF downloads
+- TLDW_SETUP_FORCE_DOWNLOADS=1  # force re-downloads (or pass --force)
 """
 from __future__ import annotations
 
@@ -32,6 +33,9 @@ def pip_install(pkgs: list[str]) -> None:
     if _skip_pip():
         raise RuntimeError("pip installs are disabled via TLDW_SETUP_SKIP_PIP")
     cmd = [sys.executable, "-m", "pip", "install", "-U"] + pkgs
+    idx = os.getenv('TLDW_SETUP_PIP_INDEX_URL')
+    if idx:
+        cmd.extend(['--index-url', idx])
     print("+", " ".join(cmd))
     subprocess.check_call(cmd)
 
@@ -46,6 +50,11 @@ def _skip_downloads() -> bool:
     return bool(flag and flag.strip().lower() in {"1", "true", "yes", "y", "on"})
 
 
+def _force_downloads() -> bool:
+    flag = os.getenv("TLDW_SETUP_FORCE_DOWNLOADS")
+    return bool(flag and flag.strip().lower() not in {"0", "false", "no", "off"})
+
+
 def prefetch(backbone: str, codec: str) -> None:
     if _skip_downloads():
         print("[neutts] Skipping downloads: TLDW_SETUP_SKIP_DOWNLOADS=1")
@@ -53,7 +62,10 @@ def prefetch(backbone: str, codec: str) -> None:
     try:
         from huggingface_hub import snapshot_download
     except Exception as e:
-        # Try to install huggingface_hub
+        # Try to install huggingface_hub (unless installs are disabled)
+        if _skip_pip():
+            print("[neutts] Cannot auto-install huggingface_hub due to TLDW_SETUP_SKIP_PIP=1; skipping downloads.")
+            return
         print("Installing huggingface_hub to enable downloads...")
         pip_install(["huggingface_hub>=0.23.0"])
         from huggingface_hub import snapshot_download  # type: ignore
@@ -64,7 +76,7 @@ def prefetch(backbone: str, codec: str) -> None:
             return
         print(f"[neutts] Prefetching {repo} ...")
         # Prefetch into HF cache; no local_dir needed and no symlink flag
-        snapshot_download(repo_id=repo)
+        snapshot_download(repo_id=repo, force_download=_force_downloads())
 
     snap(backbone)
     if codec:
@@ -78,6 +90,7 @@ def main() -> int:
     ap.add_argument("--codec", default=DEFAULT_CODEC, help="HF repo id for codec (or onnx decoder)")
     ap.add_argument("--with-gguf", action="store_true", help="also install llama-cpp-python for GGUF streaming")
     ap.add_argument("--with-onnx", action="store_true", help="also install onnxruntime for ONNX decoder codec")
+    ap.add_argument("--force", action="store_true", help="force re-downloads where applicable")
     args = ap.parse_args()
 
     # Core deps
@@ -104,6 +117,9 @@ def main() -> int:
             pip_install(opt_pkgs)
         except Exception as e:
             print(f"WARNING: Optional NeuTTS extras failed to install: {e}")
+
+    if args.force:
+        os.environ['TLDW_SETUP_FORCE_DOWNLOADS'] = '1'
 
     if args.prefetch:
         try:

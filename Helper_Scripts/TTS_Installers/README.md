@@ -7,6 +7,8 @@ Run from the project root with your Python environment activated (e.g., venv).
 Examples:
 - Kokoro (v1.0 ONNX + voices):
   python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+  # Overwrite existing assets:
+  # python Helper_Scripts/TTS_Installers/install_tts_kokoro.py --force
 
 - NeuTTS (deps + optional prefetch):
   python Helper_Scripts/TTS_Installers/install_tts_neutts.py --prefetch
@@ -31,5 +33,11 @@ Notes
 - Downloads respect environment flags:
   - Set TLDW_SETUP_SKIP_DOWNLOADS=1 to skip model downloads.
   - Set TLDW_SETUP_SKIP_PIP=1 to skip pip installs.
+  - Set TLDW_SETUP_FORCE_DOWNLOADS=1 (or pass --force where available) to overwrite existing assets.
 - Kokoro requires eSpeak NG (system library). The script detects it and prints platform-specific guidance if missing.
 
+Asset-only helper for Kokoro (no pip installs):
+  python Helper_Scripts/download_kokoro_assets.py \
+    --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+    --model-path models/kokoro/onnx/model.onnx \
+    --voices-dir models/kokoro/voices

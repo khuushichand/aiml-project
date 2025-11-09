@@ -26,6 +26,9 @@ def pip_install(pkgs: list[str]) -> None:
     if _skip_pip():
         raise RuntimeError("pip installs are disabled via TLDW_SETUP_SKIP_PIP")
     cmd = [sys.executable, "-m", "pip", "install", "-U"] + pkgs
+    idx = os.getenv('TLDW_SETUP_PIP_INDEX_URL')
+    if idx:
+        cmd.extend(['--index-url', idx])
     print("+", " ".join(cmd))
     subprocess.check_call(cmd)
 
@@ -85,4 +88,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

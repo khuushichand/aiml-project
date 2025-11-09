@@ -1295,7 +1295,7 @@ const TTS = {
         };
 
         // Two sections side-by-side (if space allows)
-        voiceList.innerHTML = `
+        const __voicesMarkup = `
             <div class="voice-sections" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
                 <div class="voice-section">
                     <h5>Your Custom Voices</h5>
@@ -1307,6 +1307,11 @@ const TTS = {
                 </div>
             </div>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(voiceList, __voicesMarkup);
+        } else {
+            voiceList.innerHTML = __voicesMarkup;
+        }
     },
 
     // Internal helper: switch UI to provider and select a voice in the correct control

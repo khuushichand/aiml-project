@@ -6,21 +6,24 @@ By default, installs deps and snapshots the 1.5B variant:
   microsoft/VibeVoice-1.5B
 
 Usage:
-  python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py [--variant {1.5B,7B,7B-Q8}]
+  python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py [--variant {1.5B,7B,7B-Q8}] [--force]
 
 Environment flags:
 - TLDW_SETUP_SKIP_PIP=1         # skip pip installs
 - TLDW_SETUP_SKIP_DOWNLOADS=1   # skip model downloads
+- TLDW_SETUP_FORCE_DOWNLOADS=1  # force re-downloads (or pass --force)
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Install VibeVoice TTS assets and deps")
     ap.add_argument("--variant", choices=["1.5B", "7B", "7B-Q8"], default="1.5B")
+    ap.add_argument("--force", action="store_true", help="force re-downloads where applicable")
     args = ap.parse_args()
 
     try:
@@ -30,6 +33,9 @@ def main() -> int:
         print("ERROR: Unable to import internal installer utilities:", e, file=sys.stderr)
         print("Run from the repo root and ensure 'pip install -e .' has been run.", file=sys.stderr)
         return 2
+
+    if args.force:
+        os.environ['TLDW_SETUP_FORCE_DOWNLOADS'] = '1'
 
     errors: list[str] = []
     plan = InstallPlan(tts=[TTSInstall(engine="vibevoice", variants=[args.variant])])
@@ -61,4 +67,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

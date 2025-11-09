@@ -751,7 +751,7 @@ async function ragFetchVlmBackends() {
     const epSpan = document.getElementById('ragVlmBackends_ep');
     const listEl = document.getElementById('ragVlmBackends_list');
     const pre = document.getElementById('ragVlmBackends_json');
-    if (listEl) listEl.innerHTML = 'Loading...';
+  if (listEl) listEl.innerHTML = 'Loading...';
     if (pre) pre.textContent = '(loading)';
 
     const caps = await apiClient.makeRequest('GET', '/api/v1/rag/capabilities');

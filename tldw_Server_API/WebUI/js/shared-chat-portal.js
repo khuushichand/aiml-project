@@ -90,8 +90,29 @@
           const resp = await fetch(url, { cache: 'no-cache' });
           if (resp && resp.ok) {
             const html = await resp.text();
+            // Sanitize before parsing so CSP never sees inline handlers
+            const sanitize = (s) => {
+              try {
+                if (window.webUI && typeof window.webUI.sanitizeInlineHandlersAndScripts === 'function') {
+                  return window.webUI.sanitizeInlineHandlersAndScripts(s);
+                }
+              } catch (_) {}
+              try {
+                // Minimal fallback: remove <script> blocks and rewrite inline handlers to data-on*-b64
+                let out = s.replace(/<script\b[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+                out = out.replace(/\s(on[\w-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+                  (m, attrName, _full, dquoted, squoted, unquoted) => {
+                    const raw = (dquoted !== undefined) ? dquoted : (squoted !== undefined) ? squoted : (unquoted || '');
+                    let b64 = '';
+                    try { b64 = btoa(raw); } catch (_) { b64 = ''; }
+                    return ` data-${attrName}-b64="${b64}"`;
+                  }
+                );
+                return out;
+              } catch (_) { return s; }
+            };
             const tmp = document.createElement('div');
-            tmp.innerHTML = html;
+            tmp.innerHTML = sanitize(html);
             const shared = tmp.querySelector('[data-shared-chat-ui]');
             if (shared) {
               // Adopt into current document by cloning

@@ -46,6 +46,16 @@ class WebUI {
         // Initialize Simple/Advanced mode toggle and default visibility
         this.initSimpleAdvancedToggle();
 
+        // Force-hide correlation badges unless user has explicitly enabled them
+        try {
+            if (String(localStorage.getItem('WEBUI_SHOW_CORRELATION')||'') !== '1') {
+                const ridEl0 = document.getElementById('reqid-badge');
+                const trEl0 = document.getElementById('trace-badge');
+                if (ridEl0) ridEl0.style.display = 'none';
+                if (trEl0) trEl0.style.display = 'none';
+            }
+        } catch(_){}
+
         // If opened via file://, show guidance banner
         if (window.location.protocol === 'file:') {
             try {
@@ -59,12 +69,18 @@ class WebUI {
 
         // Proactively migrate any inline handlers present in base HTML
         try { this.migrateInlineHandlers(document.body || document); } catch (_) {}
+        // Install CSP guard to sanitize/migrate inline handlers for any dynamic insertions
+        try { this.installCSPGuard(); } catch (_) {}
 
         console.log('WebUI initialized successfully');
     }
 
     updateCorrelationBadge(meta) {
         try {
+            // Respect user pref to show/hide correlation badges; default: hidden
+            let show = false;
+            try { show = String(localStorage.getItem('WEBUI_SHOW_CORRELATION')||'') === '1'; } catch(_) {}
+            if (!show) return;
             const rid = (meta && meta.requestId) ? String(meta.requestId) : '';
             const trace = (meta && (meta.traceparent || meta.traceId)) ? String(meta.traceparent || meta.traceId) : '';
             const ridEl = document.getElementById('reqid-badge');
@@ -142,6 +158,46 @@ class WebUI {
                 });
             } catch (_) { /* ignore */ }
         } catch (e) { /* ignore */ }
+    }
+
+    // Observe DOM insertions and migrate inline handlers quickly to avoid CSP blocks
+    installCSPGuard() {
+        const migrateNode = (node) => {
+            try {
+                if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
+                    window.WebUISanitizer.migrateInlineHandlers(node);
+                } else {
+                    this.migrateInlineHandlers(node);
+                }
+            } catch (_) {}
+        };
+        try {
+            const target = document.querySelector('.content-container') || document.getElementById('main-content-area') || document.body;
+            if (!target) return;
+            const mo = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    if (m.type === 'childList') {
+                        m.addedNodes && m.addedNodes.forEach((n) => { if (n && n.nodeType === 1) migrateNode(n); });
+                    } else if (m.type === 'attributes') {
+                        if (m.attributeName && m.attributeName.startsWith('on')) {
+                            migrateNode(m.target);
+                        }
+                    }
+                }
+            });
+            mo.observe(target, { subtree: true, childList: true, attributes: true, attributeFilter: ['onclick','onchange','oninput','onsubmit','onkeydown','onkeyup','onload','onerror'] });
+            this._cspGuardObserver = mo;
+        } catch (_) {}
+        // Capture-phase guard for common events: migrate then continue
+        const events = ['click','change','input','submit','keydown','keyup','dblclick','focus','blur','mouseenter','mouseleave','mouseover','mouseout','mouseup','mousedown','contextmenu','drag','dragstart','dragend','dragover','drop'];
+        events.forEach((evt) => {
+            try {
+                document.addEventListener(evt, (e) => {
+                    const path = (e.composedPath && e.composedPath()) || []; // includes ancestors
+                    path.forEach((el) => { if (el && el.nodeType === 1) migrateNode(el); });
+                }, true);
+            } catch (_) {}
+        });
     }
 
     async applyFeatureVisibilityFromServer() {
@@ -532,15 +588,23 @@ class WebUI {
 
         const html = await response.text();
         const mainContentArea = document.getElementById('main-content-area');
-        // Ensure inline scripts inside tab HTML are executed
+        // Sanitize string first so the browser never sees inline handler attributes
+        // during parsing (avoids CSP script-src-attr violations).
+        const sanitizedHtml = this.sanitizeInlineHandlersAndScripts(html);
         const temp = document.createElement('div');
-        temp.innerHTML = html;
-        const scripts = Array.from(temp.querySelectorAll('script'));
-        scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
-        mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
-        // Convert inline event attributes into listeners to avoid CSP 'unsafe-inline'
-        try { this.migrateInlineHandlers(mainContentArea); } catch (_) {}
-        // Do not execute inline <script> blocks to comply with CSP (no 'unsafe-inline').
+        temp.innerHTML = sanitizedHtml;
+        // Convert preserved handler markers to listeners BEFORE insertion
+        try {
+            if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
+                window.WebUISanitizer.migrateInlineHandlers(temp);
+            } else {
+                this.migrateInlineHandlers(temp);
+            }
+        } catch (_) {}
+        // Move the sanitized nodes into the live DOM to preserve bound listeners
+        while (temp.firstChild) {
+            mainContentArea.appendChild(temp.firstChild);
+        }
         // Group-specific scripts are loaded via ModuleLoader when the tab is activated.
 
         // Re-initialize form handlers for newly loaded content
@@ -561,6 +625,26 @@ class WebUI {
                     populateModelDropdowns();
                 }
             }, 100);
+        }
+    }
+
+    // Remove inline <script> and rewrite inline handler attributes to data-* before parse
+    sanitizeInlineHandlersAndScripts(html) {
+        try {
+            // Drop any <script>...</script> blocks
+            let out = html.replace(/<script\b[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+            // Replace on*="..." with data-on*-b64="<base64(code)>"
+            out = out.replace(/\s(on[\w-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+                (m, attrName, _full, dquoted, squoted, unquoted) => {
+                    const raw = (dquoted !== undefined) ? dquoted : (squoted !== undefined) ? squoted : (unquoted || '');
+                    let b64 = '';
+                    try { b64 = btoa(raw); } catch (_) { b64 = ''; }
+                    return ` data-${attrName}-b64="${b64}"`;
+                }
+            );
+            return out;
+        } catch (_) {
+            return html;
         }
     }
 
@@ -602,6 +686,31 @@ class WebUI {
         const devMarkers = (() => {
             try { return String(localStorage.getItem('DEV_MIGRATE_MARKERS') || '') === '1'; } catch (_) { return false; }
         })();
+        // First handle preserved data-on*-b64 attributes
+        try {
+            const all = scope.querySelectorAll('*');
+            all.forEach((el) => {
+                if (!el || !el.attributes) return;
+                const toRemove = [];
+                for (const attr of Array.from(el.attributes)) {
+                    const name = attr.name || '';
+                    if (!name.startsWith('data-on') || !name.endsWith('-b64')) continue;
+                    const evt = name.slice('data-on'.length, -'-b64'.length).replace(/^[-_]+/, '');
+                    if (!evt) { toRemove.push(name); continue; }
+                    let code = '';
+                    try { code = atob(attr.value || ''); } catch (_) { code = ''; }
+                    if (!code) { toRemove.push(name); continue; }
+                    // Reuse binding logic below: synthesize a faux inline attr and let the same code path run
+                    // by temporarily setting the attribute and letting the legacy branch bind/remove it.
+                    try {
+                        const inlineName = `on${evt}`;
+                        el.setAttribute(inlineName, code);
+                    } catch (_) {}
+                    toRemove.push(name);
+                }
+                toRemove.forEach((n) => { try { el.removeAttribute(n); } catch(_){} });
+            });
+        } catch (_) { /* ignore */ }
         attrs.forEach((attr) => {
             const nodes = scope.querySelectorAll(`[${attr}]`);
             nodes.forEach((el) => {

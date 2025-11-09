@@ -68,7 +68,11 @@ class EndpointHelper {
             <pre id="${id}_curl" style="display: none;"></pre>
         `;
 
-        section.innerHTML = html;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(section, html);
+        } else {
+            section.innerHTML = html;
+        }
         return section;
     }
 
