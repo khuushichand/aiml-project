@@ -230,14 +230,17 @@ class RobotsFilter:
                 # Use thread offload to keep interface consistent with other code paths
                 resp = await asyncio.to_thread(
                     http_fetch,
-                    robots_url,
                     method="GET",
-                    backend=self.backend,
+                    url=robots_url,
                     timeout=self.timeout,
                     allow_redirects=True,
                 )
-                text = resp.get("text") if isinstance(resp, dict) else None
-                status = resp.get("status") if isinstance(resp, dict) else None
+                if isinstance(resp, dict):
+                    text = resp.get("text")
+                    status = resp.get("status")
+                else:
+                    text = getattr(resp, "text", None)
+                    status = getattr(resp, "status_code", None)
                 if not text or (isinstance(status, int) and status >= 400):
                     # Treat missing/unreadable robots as allow
                     self._cache[host] = (None, time.time())

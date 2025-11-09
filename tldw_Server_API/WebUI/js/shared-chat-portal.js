@@ -98,17 +98,49 @@
                 }
               } catch (_) {}
               try {
-                // Minimal fallback: remove <script> blocks and rewrite inline handlers to data-on*-b64
-                let out = s.replace(/<script\b[\s\S]*?>[\s\S]*?<\/script>/gi, '');
-                out = out.replace(/\s(on[\w-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi,
-                  (m, attrName, _full, dquoted, squoted, unquoted) => {
-                    const raw = (dquoted !== undefined) ? dquoted : (squoted !== undefined) ? squoted : (unquoted || '');
-                    let b64 = '';
-                    try { b64 = btoa(raw); } catch (_) { b64 = ''; }
-                    return ` data-${attrName}-b64="${b64}"`;
+                const input = String(s);
+                let doc = null;
+                try {
+                  if (typeof DOMParser !== 'undefined') {
+                    const parser = new DOMParser();
+                    doc = parser.parseFromString(input, 'text/html');
                   }
-                );
-                return out;
+                } catch (_) { doc = null; }
+                if (!doc) {
+                  try {
+                    doc = document.implementation.createHTMLDocument('');
+                    doc.body.innerHTML = input;
+                  } catch (_) { return input; }
+                }
+                try { doc.querySelectorAll('script').forEach((n) => { try { n.remove(); } catch (_) {} }); } catch (_) {}
+                try {
+                  const all = doc.querySelectorAll('*');
+                  all.forEach((el) => {
+                    if (!el || !el.attributes) return;
+                    const toRemove = [];
+                    const toAdd = [];
+                    for (const attr of Array.from(el.attributes)) {
+                      const rawName = attr && attr.name ? String(attr.name) : '';
+                      if (!rawName) continue;
+                      const name = rawName.toLowerCase();
+                      if (name.startsWith('on') && /^[a-z0-9_-]+$/.test(name.slice(2) || '')) {
+                        const val = attr.value || '';
+                        let b64 = '';
+                        try { b64 = btoa(val); } catch (_) { b64 = ''; }
+                        const dataName = `data-${name}-b64`;
+                        toAdd.push([dataName, b64]);
+                        toRemove.push(rawName);
+                      }
+                    }
+                    toAdd.forEach(([n, v]) => { try { el.setAttribute(n, v); } catch (_) {} });
+                    toRemove.forEach((n) => { try { el.removeAttribute(n); } catch (_) {} });
+                  });
+                } catch (_) {}
+                try {
+                  if (doc.body) return doc.body.innerHTML;
+                  if (doc.documentElement) return doc.documentElement.outerHTML;
+                } catch (_) {}
+                return input;
               } catch (_) { return s; }
             };
             const tmp = document.createElement('div');

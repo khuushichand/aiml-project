@@ -7,18 +7,64 @@
 (function () {
   function sanitize(html) {
     try {
-      // Drop any <script>...</script> blocks
-      let out = String(html).replace(/<script\b[\s\S]*?>[\s\S]*?<\/script>/gi, '');
-      // Replace on*="..." with data-on*-b64="<base64(code)>"
-      out = out.replace(/\s(on[\w-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi,
-        (m, attrName, _full, dquoted, squoted, unquoted) => {
-          const raw = (dquoted !== undefined) ? dquoted : (squoted !== undefined) ? squoted : (unquoted || '');
-          let b64 = '';
-          try { b64 = btoa(raw); } catch (_) { b64 = ''; }
-          return ` data-${attrName}-b64="${b64}"`;
+      const input = String(html);
+      let doc = null;
+
+      // Prefer DOMParser for robust parsing and malformed tag handling
+      try {
+        if (typeof DOMParser !== 'undefined') {
+          const parser = new DOMParser();
+          doc = parser.parseFromString(input, 'text/html');
         }
-      );
-      return out;
+      } catch (_) { doc = null; }
+
+      // Fallback: detached HTML document so inline on* never hits live DOM
+      if (!doc) {
+        try {
+          doc = document.implementation.createHTMLDocument('');
+          doc.body.innerHTML = input;
+        } catch (_) {
+          return input;
+        }
+      }
+
+      // 1) Remove all <script> elements
+      try {
+        const scripts = doc.querySelectorAll('script');
+        scripts.forEach((s) => { try { s.remove(); } catch (_) {} });
+      } catch (_) {}
+
+      // 2) Migrate inline handler attributes (on*) to data-on*-b64, then remove original on*
+      try {
+        const all = doc.querySelectorAll('*');
+        all.forEach((el) => {
+          if (!el || !el.attributes) return;
+          const toRemove = [];
+          const toAdd = [];
+          for (const attr of Array.from(el.attributes)) {
+            const rawName = attr && attr.name ? String(attr.name) : '';
+            if (!rawName) continue;
+            const name = rawName.toLowerCase();
+            if (name.startsWith('on') && /^[a-z0-9_-]+$/.test(name.slice(2) || '')) {
+              const val = attr.value || '';
+              let b64 = '';
+              try { b64 = btoa(val); } catch (_) { b64 = ''; }
+              const dataName = `data-${name}-b64`;
+              toAdd.push([dataName, b64]);
+              toRemove.push(rawName);
+            }
+          }
+          toAdd.forEach(([n, v]) => { try { el.setAttribute(n, v); } catch (_) {} });
+          toRemove.forEach((n) => { try { el.removeAttribute(n); } catch (_) {} });
+        });
+      } catch (_) {}
+
+      // 3) Serialize back; for fragments body.innerHTML is ideal
+      try {
+        if (doc.body) return doc.body.innerHTML;
+        if (doc.documentElement) return doc.documentElement.outerHTML;
+      } catch (_) {}
+      return input;
     } catch (_) {
       return String(html);
     }
