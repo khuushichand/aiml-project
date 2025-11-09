@@ -3260,6 +3260,12 @@ if _MINIMAL_TEST_APP and False:
         app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     except Exception as _adm_inc_err:  # noqa: BLE001
         logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
+    # Resource Governor admin/diag endpoints are required for RG tests in minimal app
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router
+        app.include_router(resource_governor_router, prefix=f"{API_V1_PREFIX}", tags=["resource-governor"])
+    except Exception as _rg_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping resource_governor router in minimal test app: {_rg_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:

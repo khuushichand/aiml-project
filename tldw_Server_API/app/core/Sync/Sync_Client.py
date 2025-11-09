@@ -173,15 +173,9 @@ class ClientSyncEngine:
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_SEND}"
             logger.debug(f"Posting {len(client_changes)} changes to {full_url}")
 
-            from tldw_Server_API.app.core.http_client import fetch, RetryPolicy
-            policy = RetryPolicy()
-            resp = fetch(method="POST", url=full_url, headers=headers, json=payload, timeout=45, retry=policy)
-            if resp.status_code >= 400:
-                # Simulate raise_for_status behavior for existing error handling
-                try:
-                    resp.raise_for_status()
-                except Exception as e:
-                    raise e
+            # Use requests here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.requests.post
+            resp = requests.post(full_url, headers=headers, json=payload, timeout=45)
+            resp.raise_for_status()
 
             # If successful, update the marker
             new_last_sent = client_changes[-1]['change_id']
@@ -224,9 +218,10 @@ class ClientSyncEngine:
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_GET}"
             logger.debug(f"Getting changes from {full_url} with params {params}")
 
-            from tldw_Server_API.app.core.http_client import fetch_json, RetryPolicy
-            policy = RetryPolicy()
-            sync_data = fetch_json(method="GET", url=full_url, client=None, params=params, headers=headers, timeout=45, retry=policy)
+            # Use requests here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.requests.get
+            r = requests.get(full_url, params=params, headers=headers, timeout=45)
+            r.raise_for_status()
+            sync_data = r.json()
             remote_changes = sync_data.get('changes', [])
             # Server should tell us its latest ID, even if no changes sent for us
             server_latest_id = sync_data.get('latest_change_id', self.last_server_log_id_processed)

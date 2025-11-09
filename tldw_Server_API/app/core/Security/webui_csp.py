@@ -98,14 +98,9 @@ class WebUICSPMiddleware(BaseHTTPMiddleware):
                 allow_inline_scripts = True
                 allow_eval = True
             else:
-                # /webui: disallow inline by default, but permit inline in tests to support legacy handlers during E2E
-                test_mode = False
-                try:
-                    raw_tm = os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")
-                    test_mode = (raw_tm.strip().lower() in {"1", "true", "yes", "on", "y"}) or (os.getenv("PYTEST_CURRENT_TEST") is not None)
-                except Exception:
-                    test_mode = False
-                allow_inline_scripts = True if test_mode else False
+                # /webui: always disallow inline script handlers in script-src
+                # Tests assert that /webui never includes 'unsafe-inline' in script-src
+                allow_inline_scripts = False
 
                 # Eval policy precedence (simplified and explicit):
                 # 1) Compute production flag once from env.

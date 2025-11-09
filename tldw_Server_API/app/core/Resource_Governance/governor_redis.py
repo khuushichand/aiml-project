@@ -130,8 +130,8 @@ class RedisResourceGovernor(ResourceGovernor):
 
     def _force_stub_rate(self) -> bool:
         try:
-            # Prefer explicit env; fall back to test detection
-            val = os.getenv("RG_TEST_FORCE_STUB_RATE") or os.getenv("TEST_MODE") or os.getenv("PYTEST_CURRENT_TEST")
+            # Only honor explicit test override; do NOT infer from generic test env
+            val = os.getenv("RG_TEST_FORCE_STUB_RATE")
             if val is None:
                 return False
             return str(val).strip().lower() in ("1", "true", "yes")
@@ -296,31 +296,26 @@ class RedisResourceGovernor(ResourceGovernor):
     # --- Sliding window helpers (non-mutating and mutating) ---
     async def _purge_and_count(self, *, key: str, now: float, window: int) -> int:
         client = await self._client_get()
-        try:
-            await client.zremrangebyscore(key, float("-inf"), now - window)
-        except Exception:
-            # ignore purge errors; counting may still work or fail downstream
-            pass
-        try:
-            cnt = int(await client.zcard(key))
-            # Test hardening for FakeTime near 0: if the oldest entry's score is
-            # ahead of the test clock (oscore > now), clear the key once to avoid
-            # cross-run contamination. Do not clear if entries are at 'now' (fresh).
-            if cnt > 0 and now < 1.0 and key not in self._test_cleared_keys:
-                try:
-                    oldest = await client.zrange(key, 0, 0)
-                    if oldest:
-                        oscore = await client.zscore(key, oldest[0])
-                        if oscore is not None and float(oscore) > float(now):
-                            await client.delete(key)
-                            self._test_cleared_keys.add(key)
-                            return 0
-                except Exception:
-                    # best-effort only
-                    pass
-            return cnt
-        except Exception:
-            return 0
+        # Purge and count must reflect backend errors so fail modes apply correctly.
+        # Let exceptions propagate to caller for fail_closed handling.
+        await client.zremrangebyscore(key, float("-inf"), now - window)
+        cnt = int(await client.zcard(key))
+        # Test hardening for FakeTime near 0: if the oldest entry's score is
+        # ahead of the test clock (oscore > now), clear the key once to avoid
+        # cross-run contamination. Do not clear if entries are at 'now' (fresh).
+        if cnt > 0 and now < 1.0 and key not in self._test_cleared_keys:
+            try:
+                oldest = await client.zrange(key, 0, 0)
+                if oldest:
+                    oscore = await client.zscore(key, oldest[0])
+                    if oscore is not None and float(oscore) > float(now):
+                        await client.delete(key)
+                        self._test_cleared_keys.add(key)
+                        return 0
+            except Exception:
+                # best-effort only for this test cleanup branch
+                pass
+        return cnt
 
     async def _add_members(self, *, key: str, members: list[str], now: float) -> None:
         client = await self._client_get()
