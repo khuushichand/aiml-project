@@ -85,16 +85,18 @@ class RedisResourceGovernor(ResourceGovernor):
         # key → {member_id: expires_at_epoch}
         self._stub_leases: Dict[str, Dict[str, float]] = {}
         # Backoff map for coarse Retry-After enforcement in stub mode
-        self._stub_backoff_until: Dict[Tuple[str, str, str], float] = {}
+        # Keyed by (ns, policy_id, entity, category) to avoid cross-instance leakage
+        self._stub_backoff_until: Dict[Tuple[str, str, str, str], float] = {}
         # Test hardening: track keys we have cleared once when FakeTime is near 0
         # to avoid clearing freshly added entries repeatedly within a test case.
         self._test_cleared_keys: set[str] = set()
         # Test hardening: track per-policy window purge once when FakeTime is near 0
         self._test_windows_policy_cleared: set[str] = set()
         # Requests-specific deny-until floor to stabilize burst behavior
-        self._requests_deny_until: Dict[Tuple[str, str], float] = {}
-        # Requests acceptance tracker per (policy, entity) to harden burst behavior
-        self._requests_accept_window: Dict[Tuple[str, str], Tuple[float, int, int]] = {}
+        # Keyed by (ns, policy_id, entity)
+        self._requests_deny_until: Dict[Tuple[str, str, str], float] = {}
+        # Requests acceptance tracker per (ns, policy, entity) to harden burst behavior
+        self._requests_accept_window: Dict[Tuple[str, str, str], Tuple[float, int, int]] = {}
         ensure_rg_metrics_registered()
         # Stub delegate (memory governor) for in-memory client path
         try:
@@ -216,7 +218,7 @@ class RedisResourceGovernor(ResourceGovernor):
             # Always attempt for real Redis; for stub this provides no value
             if not (await self._is_real_redis()) and not prefer_aw:
                 return
-            start_old, lim_old, _cnt_old = self._requests_accept_window.get((policy_id, entity), (None, None, None))  # type: ignore[assignment]
+            start_old, lim_old, _cnt_old = self._requests_accept_window.get((self._keys.ns, policy_id, entity), (None, None, None))  # type: ignore[assignment]
             # If active and same limit and still within window, keep
             if start_old is not None and lim_old == limit and now < float(start_old) + 60.0:
                 return
@@ -238,7 +240,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         start = min(now, float(oscore))
             except Exception:
                 start = now
-            self._requests_accept_window[(policy_id, entity)] = (float(start), int(limit), int(cnt))
+            self._requests_accept_window[(self._keys.ns, policy_id, entity)] = (float(start), int(limit), int(cnt))
             try:
                 logger.debug(
                     "RG accept-window bootstrap: policy_id={pid} entity={ent} start={st} cnt={cnt} limit={lim}",
@@ -634,7 +636,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 if self._accept_window_enabled():
                     try:
                         key_aw = (policy_id, req.entity)
-                        start_aw, lim_aw, cnt_aw = self._requests_accept_window.get(key_aw, (None, None, None))  # type: ignore[assignment]
+                        start_aw, lim_aw, cnt_aw = self._requests_accept_window.get((self._keys.ns,) + key_aw, (None, None, None))  # type: ignore[assignment]
                         if start_aw is not None and lim_aw == limit and now < float(start_aw) + float(window):
                             if int((cnt_aw or 0) + units) > int(limit):
                                 allowed = False
@@ -642,7 +644,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         pass
                 # Requests deny floor based on prior denial
-                key_e = (policy_id, req.entity)
+                key_e = (self._keys.ns, policy_id, req.entity)
                 deny_until = float(self._requests_deny_until.get(key_e, 0.0) or 0.0)
                 if now < deny_until:
                     allowed = False
@@ -650,7 +652,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 # Backoff guard (memory + Redis TTL): if we recently denied this
                 # entity/policy, keep denying until the backoff window elapses to
                 # prevent premature admits due to rounding or clock drift.
-                key_b = (policy_id, req.entity, category)
+                key_b = (self._keys.ns, policy_id, req.entity, category)
                 backoff_until = float(self._stub_backoff_until.get(key_b, 0.0) or 0.0)
                 # Only consult in-memory backoff (FakeTime-aware). Redis TTL is set
                 # for cross-process stability but is not used to gate decisions here
@@ -828,8 +830,8 @@ class RedisResourceGovernor(ResourceGovernor):
         try:
             policy_id_early = req.tags.get("policy_id") or "default"
             now_early = self._time()
-            deny_until = float(self._requests_deny_until.get((policy_id_early, req.entity), 0.0) or 0.0)
-            backoff_until = float(self._stub_backoff_until.get((policy_id_early, req.entity, "requests"), 0.0) or 0.0)
+            deny_until = float(self._requests_deny_until.get((self._keys.ns, policy_id_early, req.entity), 0.0) or 0.0)
+            backoff_until = float(self._stub_backoff_until.get((self._keys.ns, policy_id_early, req.entity, "requests"), 0.0) or 0.0)
             # Acceptance-window early guard: if we already accepted up to the limit
             # within this window, deny until the window reset even before running checks.
             try:
@@ -838,7 +840,7 @@ class RedisResourceGovernor(ResourceGovernor):
             except Exception:
                 limit_e = 0
             if limit_e > 0 and "requests" in req.categories:
-                aw = self._requests_accept_window.get((policy_id_early, req.entity))
+                aw = self._requests_accept_window.get((self._keys.ns, policy_id_early, req.entity))
                 if aw is not None:
                     start_aw, lim_aw, cnt_aw = aw
                     try:
@@ -850,8 +852,8 @@ class RedisResourceGovernor(ResourceGovernor):
                         floor_until = start_aw_f + 60.0
                         ra_e = max(0, int(floor_until - now_early)) or 1
                         # Set deny floor/backoff for stability
-                        self._requests_deny_until[(policy_id_early, req.entity)] = floor_until
-                        self._stub_backoff_until[(policy_id_early, req.entity, "requests")] = now_early + float(ra_e)
+                        self._requests_deny_until[(self._keys.ns, policy_id_early, req.entity)] = floor_until
+                        self._stub_backoff_until[(self._keys.ns, policy_id_early, req.entity, "requests")] = now_early + float(ra_e)
                         per_category_e: Dict[str, Any] = {}
                         per_category_e["requests"] = {"allowed": False, "limit": limit_e, "retry_after": ra_e}
                         decision_e = RGDecision(allowed=False, retry_after=ra_e, details={"policy_id": policy_id_early, "categories": per_category_e})
@@ -973,7 +975,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         if ra_b <= 0:
                             continue
                         # Memory backoff
-                        key_b = (policy_id_b, req.entity, cat_name)
+                        key_b = (self._keys.ns, policy_id_b, req.entity, cat_name)
                         self._stub_backoff_until[key_b] = now_b + float(ra_b)
                         # Requests-specific deny-until floor: use policy window (60s)
                         if cat_name == "requests":
@@ -984,7 +986,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 win = 60
                             # Prefer RA if reasonable, otherwise full window for stability
                             floor_s = int(ra_b) if int(ra_b) >= 2 else int(win)
-                            self._requests_deny_until[(policy_id_b, req.entity)] = now_b + float(floor_s)
+                            self._requests_deny_until[(self._keys.ns, policy_id_b, req.entity)] = now_b + float(floor_s)
                             try:
                                 logger.debug(
                                     "RG set deny-until: policy_id={pid} entity={ent} now={now} floor_s={floor} deny_until={du}",
@@ -992,7 +994,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     ent=req.entity,
                                     now=now_b,
                                     floor=floor_s,
-                                    du=self._requests_deny_until.get((policy_id_b, req.entity)),
+                                    du=self._requests_deny_until.get((self._keys.ns, policy_id_b, req.entity)),
                                 )
                             except Exception:
                                 pass
@@ -1021,11 +1023,11 @@ class RedisResourceGovernor(ResourceGovernor):
                 limit_req = int((pol_tmp.get("requests") or {}).get("rpm") or 0)
                 if limit_req > 0:
                     key_aw = (dec.details.get("policy_id") or req.tags.get("policy_id") or "default", req.entity)
-                    start, lim, cnt = self._requests_accept_window.get(key_aw, (now, limit_req, 0))
+                    start, lim, cnt = self._requests_accept_window.get((self._keys.ns,) + key_aw, (now, limit_req, 0))
                     if now >= float(start) + 60.0 or lim != limit_req:
                         start, lim, cnt = now, limit_req, 0
                     cnt += 1
-                    self._requests_accept_window[key_aw] = (start, lim, cnt)
+                    self._requests_accept_window[(self._keys.ns,) + key_aw] = (start, lim, cnt)
                     try:
                         logger.debug(
                             "RG accept-window pre-add: policy_id={pid} entity={ent} start={st} cnt={cnt} limit={lim}",
@@ -1035,7 +1037,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         pass
                     if cnt >= limit_req:
                         floor_until = float(start) + 60.0
-                        self._requests_deny_until[key_aw] = max(self._requests_deny_until.get(key_aw, 0.0), floor_until)
+                        self._requests_deny_until[(self._keys.ns,) + key_aw] = max(self._requests_deny_until.get((self._keys.ns,) + key_aw, 0.0), floor_until)
                         try:
                             logger.debug(
                                 "RG accept-window pre-add floor set: policy_id={pid} entity={ent} start={st} cnt={cnt} floor_until={fu}",
@@ -1277,8 +1279,8 @@ class RedisResourceGovernor(ResourceGovernor):
                 if "requests" in req.categories:
                     # Prefer RA if >=2, else full window
                     floor_df = int(ra_df) if int(ra_df) >= 2 else 60
-                    self._requests_deny_until[(policy_id_df, req.entity)] = now_df + float(floor_df)
-                    self._stub_backoff_until[(policy_id_df, req.entity, "requests")] = now_df + float(ra_df)
+                    self._requests_deny_until[(self._keys.ns, policy_id_df, req.entity)] = now_df + float(floor_df)
+                    self._stub_backoff_until[(self._keys.ns, policy_id_df, req.entity, "requests")] = now_df + float(ra_df)
             except Exception:
                 pass
             for category, scopes in added_members.items():
@@ -1413,11 +1415,11 @@ class RedisResourceGovernor(ResourceGovernor):
                 limit_req = int((pol.get("requests") or {}).get("rpm") or 0)
                 if limit_req > 0:
                     key_aw = (policy_id, req.entity)
-                    start, lim, cnt = self._requests_accept_window.get(key_aw, (now, limit_req, 0))
+                    start, lim, cnt = self._requests_accept_window.get((self._keys.ns,) + key_aw, (now, limit_req, 0))
                     if now >= float(start) + 60.0 or lim != limit_req:
                         start, lim, cnt = now, limit_req, 0
                     cnt += 1
-                    self._requests_accept_window[key_aw] = (start, lim, cnt)
+                    self._requests_accept_window[(self._keys.ns,) + key_aw] = (start, lim, cnt)
                     try:
                         logger.debug(
                             "RG accept-window track: policy_id={pid} entity={ent} start={st} cnt={cnt} limit={lim}",
@@ -1431,7 +1433,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         pass
                     if cnt >= limit_req:
                         floor_until = float(start) + 60.0
-                        self._requests_deny_until[key_aw] = max(self._requests_deny_until.get(key_aw, 0.0), floor_until)
+                        self._requests_deny_until[(self._keys.ns,) + key_aw] = max(self._requests_deny_until.get((self._keys.ns,) + key_aw, 0.0), floor_until)
                         try:
                             logger.debug(
                                 "RG accept-window floor set: policy_id={pid} entity={ent} start={st} cnt={cnt} floor_until={fu}",

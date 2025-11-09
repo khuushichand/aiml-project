@@ -2178,6 +2178,7 @@ function renderWizardSummary() {
   }
 
   function hideWizard() {
+    try { stopKokoroEspeakAutoRefresh(); } catch (_) {}
     if (elements.wizardSection) {
       elements.wizardSection.hidden = true;
     }

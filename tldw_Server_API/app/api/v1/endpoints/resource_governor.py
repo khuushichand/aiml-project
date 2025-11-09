@@ -52,7 +52,12 @@ async def get_resource_governor_policy(
     """
     try:
         loader = getattr(_app.state, "rg_policy_loader", None)
-        store = getattr(_app.state, "rg_policy_store", None)
+        # Prefer process env for store selection when app.state is unset
+        try:
+            store_env = os.getenv("RG_POLICY_STORE")
+        except Exception:
+            store_env = None
+        store = getattr(_app.state, "rg_policy_store", None) or (store_env or "file")
         # If loader missing or points to a different path than RG_POLICY_PATH, (re)initialize
         try:
             env_path = os.getenv("RG_POLICY_PATH")
@@ -69,20 +74,51 @@ async def get_resource_governor_policy(
         elif env_path and snap and str(getattr(snap, "source_path", "")) != str(env_path):
             needs_reload = True
         if needs_reload:
-            # Best-effort fallback to a default file-based loader using env
+            # Initialize a loader based on current store selection
             try:
-                from tldw_Server_API.app.core.Resource_Governance.policy_loader import PolicyLoader, PolicyReloadConfig, default_policy_loader as _rg_default_loader
-                if env_path:
-                    reload_enabled = (os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"})
-                    interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
-                    loader = PolicyLoader(env_path, PolicyReloadConfig(enabled=reload_enabled, interval_sec=interval))
+                from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                    PolicyLoader,
+                    PolicyReloadConfig,
+                    default_policy_loader as _rg_default_loader,
+                    db_policy_loader as _rg_db_loader,
+                )
+                # Decide store mode: 'db' → AuthNZ-backed; otherwise file-based
+                if str(store).lower() == "db":
+                    # DB-backed snapshot loader
+                    try:
+                        from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
+                            AuthNZPolicyStore as _RGDBStore,
+                        )
+                        _store = _RGDBStore()
+                        interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
+                        reload_enabled = (os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"})
+                        loader = _rg_db_loader(_store, PolicyReloadConfig(enabled=reload_enabled, interval_sec=interval))
+                        await loader.load_once()
+                        _app.state.rg_policy_loader = loader
+                        _app.state.rg_policy_store = "db"
+                    except Exception as _db_e:
+                        # Fall back to file loader if DB path can't init
+                        logger.warning(f"RG policy loader DB init failed; falling back to file store: {_db_e}")
+                        if env_path:
+                            reload_enabled = (os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"})
+                            interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
+                            loader = PolicyLoader(env_path, PolicyReloadConfig(enabled=reload_enabled, interval_sec=interval))
+                        else:
+                            loader = _rg_default_loader()
+                        await loader.load_once()
+                        _app.state.rg_policy_loader = loader
+                        _app.state.rg_policy_store = "file"
                 else:
-                    loader = _rg_default_loader()
-                await loader.load_once()
-                _app.state.rg_policy_loader = loader
-                if store is None:
-                    store = "file"
-                _app.state.rg_policy_store = store
+                    # File-based loader
+                    if env_path:
+                        reload_enabled = (os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"})
+                        interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
+                        loader = PolicyLoader(env_path, PolicyReloadConfig(enabled=reload_enabled, interval_sec=interval))
+                    else:
+                        loader = _rg_default_loader()
+                    await loader.load_once()
+                    _app.state.rg_policy_loader = loader
+                    _app.state.rg_policy_store = "file"
                 # Update snapshot metadata for health/routes that read app.state
                 try:
                     snap_meta = loader.get_snapshot()
@@ -142,7 +178,8 @@ async def upsert_policy(
         await admin.upsert_policy(policy_id, body.payload, version=body.version)
         # Best-effort loader refresh when using DB store
         try:
-            if getattr(_app.state, "rg_policy_store", None) == "db":
+            _store_mode = getattr(_app.state, "rg_policy_store", None) or os.getenv("RG_POLICY_STORE", "file").lower()
+            if _store_mode == "db":
                 loader = getattr(_app.state, "rg_policy_loader", None)
                 if loader is not None:
                     await loader.load_once()
@@ -164,7 +201,8 @@ async def delete_policy(
         deleted = await admin.delete_policy(policy_id)
         # Best-effort loader refresh when using DB store
         try:
-            if getattr(_app.state, "rg_policy_store", None) == "db":
+            _store_mode = getattr(_app.state, "rg_policy_store", None) or os.getenv("RG_POLICY_STORE", "file").lower()
+            if _store_mode == "db":
                 loader = getattr(_app.state, "rg_policy_loader", None)
                 if loader is not None:
                     await loader.load_once()

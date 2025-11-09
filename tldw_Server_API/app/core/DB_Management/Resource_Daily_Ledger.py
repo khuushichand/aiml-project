@@ -126,11 +126,25 @@ class ResourceDailyLedger:
                 # asyncpg returns 'INSERT 0 1' on insert; 'INSERT 0 0' on conflict/no-op
                 return str(res).endswith(" 1")
             else:
+                # Robust idempotency for SQLite: check existence before insert.
+                exists_q = (
+                    "SELECT 1 FROM resource_daily_ledger WHERE day_utc = ? AND entity_scope = ? AND entity_value = ? AND category = ? AND op_id = ? LIMIT 1"
+                )
+                exists = await self.db_pool.fetchval(
+                    exists_q,
+                    day,
+                    entry.entity_scope,
+                    entry.entity_value,
+                    entry.category,
+                    entry.op_id,
+                )
+                if exists:
+                    return False
                 q = (
-                    "INSERT OR IGNORE INTO resource_daily_ledger (day_utc, entity_scope, entity_value, category, units, op_id, occurred_at, created_at) "
+                    "INSERT INTO resource_daily_ledger (day_utc, entity_scope, entity_value, category, units, op_id, occurred_at, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))"
                 )
-                res = await self.db_pool.execute(
+                await self.db_pool.execute(
                     q,
                     day,
                     entry.entity_scope,
@@ -140,23 +154,7 @@ class ResourceDailyLedger:
                     entry.op_id,
                     entry.occurred_at.isoformat(),
                 )
-                # Prefer rowcount when available: 1 if inserted, 0 if ignored
-                try:
-                    rc_attr = getattr(res, "rowcount", None)
-                    rc = int(rc_attr) if rc_attr is not None else -1
-                except (AttributeError, TypeError, ValueError) as rc_err:
-                    logger.warning(
-                        "ResourceDailyLedger.add: SQLite rowcount unavailable; treating as no-insert. "
-                        f"day={day}, scope={entry.entity_scope}, value={entry.entity_value}, "
-                        f"category={entry.category}, op_id={entry.op_id}, res={res!r}, err={rc_err}"
-                    )
-                    return False
-                if rc in (0, 1):
-                    return rc == 1
-                logger.debug(
-                    f"ResourceDailyLedger.add: unexpected SQLite rowcount={rc}; treating as no-insert. res={res!r}"
-                )
-                return False
+                return True
         except Exception as e:
             logger.error(f"ResourceDailyLedger.add failed: {e}")
             raise

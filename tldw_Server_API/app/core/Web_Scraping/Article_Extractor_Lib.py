@@ -32,11 +32,14 @@ from urllib.parse import (
 )
 from xml.dom import minidom
 import xml.etree.ElementTree as xET
+
+import requests
 #
 # External Libraries
 from bs4 import BeautifulSoup
 import aiohttp
 import pandas as pd
+from loguru import logger
 from playwright.async_api import (
     TimeoutError,
     async_playwright
@@ -166,15 +169,15 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
     return default
 
 
-def is_allowed_by_robots(url: str, user_agent: str, *, backend: str = "httpx", timeout: float = 5.0) -> bool:
+def is_allowed_by_robots(url: str, user_agent: str, *, timeout: float = 5.0) -> bool:
     """Check robots.txt for allow/deny. Fails open (allow) if robots not reachable.
 
     Enforces egress policy via http_client.fetch().
     """
     try:
         robots_url = _robots_url_for(url)
-        resp = http_fetch(robots_url, method="GET", backend=backend, timeout=timeout, allow_redirects=True)
-        if resp["status"] >= 400 or not resp["text"]:
+        resp = http_fetch(method="GET", url=robots_url, timeout=timeout, allow_redirects=True)
+        if resp.get("status", 0) >= 400 or not resp.get("text"):
             return True  # treat missing/unreadable robots as allow
         rp = RobotFileParser()
         rp.parse(resp["text"].splitlines())
@@ -184,19 +187,19 @@ def is_allowed_by_robots(url: str, user_agent: str, *, backend: str = "httpx", t
         return True
 
 
-async def is_allowed_by_robots_async(url: str, user_agent: str, *, backend: str = "httpx", timeout: float = 5.0) -> bool:
+async def is_allowed_by_robots_async(url: str, user_agent: str, *, timeout: float = 5.0) -> bool:
     """Async robots.txt check using asyncio.to_thread for network fetch."""
     try:
         robots_url = _robots_url_for(url)
+        # Use keyword args expected by http_fetch
         resp = await asyncio.to_thread(
             http_fetch,
-            robots_url,
             method="GET",
-            backend=backend,
+            url=robots_url,
             timeout=timeout,
             allow_redirects=True,
         )
-        if resp["status"] >= 400 or not resp["text"]:
+        if resp.get("status", 0) >= 400 or not resp.get("text"):
             return True
         rp = RobotFileParser()
         rp.parse(resp["text"].splitlines())
@@ -256,14 +259,14 @@ def _strip_boilerplate_sections(text: str) -> str:
 def get_page_title(url: str) -> str:
     try:
         resp = http_fetch(method="GET", url=url, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
+        if resp.get("status", 0) == 200:
+            soup = BeautifulSoup(resp.get("text", ""), 'html.parser')
             title_tag = soup.find('title')
             title = title_tag.string.strip() if title_tag and title_tag.string else "Untitled"
             log_counter("page_title_extracted", labels={"success": "true"})
             return title
         else: #debug code for problem in suceeded request but non 200 code
-            logging.error(f"Failed to fetch {url}, status code: {resp.status_code}")
+            logging.error(f"Failed to fetch {url}, status code: {resp.get('status')}")
             return "Untitled"
     except Exception as e:
         logging.error(f"Error fetching page title: {e}")
@@ -392,7 +395,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
     # robots.txt enforcement (fail open if error)
     effective_ua = ua_headers.get("User-Agent", web_scraping_user_agent)
     if getattr(plan, "respect_robots", True):
-        if not await is_allowed_by_robots_async(url, effective_ua, backend="httpx"):
+        if not await is_allowed_by_robots_async(url, effective_ua):
             logging.warning("Robots policy disallows fetching this URL; skipping fetch")
             try:
                 parsed = urlparse(url)
@@ -590,11 +593,11 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
                 cookie_hdr = "; ".join([f"{k}={v}" for k, v in cookie_map.items()])
                 headers["Cookie"] = cookie_hdr
         resp = http_fetch(method="GET", url=url, timeout=30, headers=headers)
-        if resp.status_code != 200:
-            logging.error(f"Failed to fetch {url}, status: {resp.status_code}")
+        if resp.get("status", 0) != 200:
+            logging.error(f"Failed to fetch {url}, status: {resp.get('status')}")
             return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
 
-        article_data = extract_article_data_from_html(resp.text, url)
+        article_data = extract_article_data_from_html(resp.get("text", ""), url)
         if article_data.get("extraction_successful"):
             article_data["content"] = convert_html_to_markdown(article_data["content"])
         return article_data
@@ -902,9 +905,9 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
 
         # Avoid passing kwargs to allow simple monkeypatch fakes in tests
         resp = http_fetch(method="GET", url=sitemap_url, timeout=10)
-        if resp.status_code >= 400:
+        if resp.get("status", 0) >= 400:
             return []
-        root = xET.fromstring(resp.content)
+        root = xET.fromstring(resp.get("text", ""))
 
         results = []
         for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
@@ -945,9 +948,9 @@ def collect_internal_links(base_url: str) -> set:
 
         try:
             resp = http_fetch(method="GET", url=current_url, timeout=10)
-            if resp.status_code >= 400:
+            if resp.get("status", 0) >= 400:
                 continue
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            soup = BeautifulSoup(resp.get("text", ""), 'html.parser')
 
             # Collect internal links
             for link in soup.find_all('a', href=True):

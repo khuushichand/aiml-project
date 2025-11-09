@@ -564,6 +564,12 @@ async def get_db_pool() -> DatabasePool:
 async def reset_db_pool():
     """Reset database pool (mainly for testing)"""
     global _db_pool
+    # Ensure subsequent get_db_pool() picks up environment changes by resetting settings
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
+        _reset_settings()
+    except Exception:
+        pass
     if _db_pool:
         try:
             await _db_pool.close()
