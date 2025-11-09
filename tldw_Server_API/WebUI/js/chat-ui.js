@@ -104,14 +104,12 @@ class ChatUI {
         const __markup = `
             <div class="message-header">
                 <span class="message-role-badge ${role}">${role}</span>
-                <button class="remove-message-btn" onclick="chatUI.removeMessage('${prefix}', ${id})" aria-label="Remove message">
-                    ×
-                </button>
+                <button class="remove-message-btn" data-action="remove-message" aria-label="Remove message">×</button>
             </div>
             <div class="message-body">
                 <div class="form-group">
                     <label for="${prefix}_message_role_${id}">Role:</label>
-                    <select id="${prefix}_message_role_${id}" class="message-role-select" onchange="chatUI.handleRoleChange('${prefix}', ${id})">
+                    <select id="${prefix}_message_role_${id}" class="message-role-select">
                         <option value="system" ${role === 'system' ? 'selected' : ''}>System</option>
                         <option value="user" ${role === 'user' ? 'selected' : ''}>User</option>
                         <option value="assistant" ${role === 'assistant' ? 'selected' : ''}>Assistant</option>
@@ -127,15 +125,10 @@ class ChatUI {
                             class="message-content-area"
                             rows="3"
                             placeholder="Enter message content..."
-                            oninput="chatUI.handleContentChange('${prefix}', ${id})"
                         >${content}</textarea>
                         <div class="message-content-toolbar">
-                            <button class="btn btn-sm" onclick="chatUI.formatJSON('${prefix}', ${id})" title="Format as JSON">
-                                { }
-                            </button>
-                            <button class="btn btn-sm" onclick="chatUI.clearContent('${prefix}', ${id})" title="Clear">
-                                Clear
-                            </button>
+                            <button class="btn btn-sm" data-action="format-json" title="Format as JSON">{ }</button>
+                            <button class="btn btn-sm" data-action="clear-content" title="Clear">Clear</button>
                         </div>
                     </div>
                 </div>
@@ -144,7 +137,7 @@ class ChatUI {
                     <div class="form-group">
                         <label for="${prefix}_message_image_${id}">Image (Optional):</label>
                         <div class="file-input-wrapper">
-                            <input type="file" id="${prefix}_message_image_${id}" accept="image/*" onchange="chatUI.handleImageUpload('${prefix}', ${id})">
+                            <input type="file" id="${prefix}_message_image_${id}" accept="image/*">
                             <label class="file-input-label">
                                 <span class="file-input-icon">🖼️</span>
                                 <span class="file-input-text">Choose image or drag here</span>
@@ -152,7 +145,7 @@ class ChatUI {
                         </div>
                         <div id="${prefix}_message_image_preview_${id}" class="image-preview-container" style="display: none;">
                             <img class="message-image-preview" alt="Image preview">
-                            <button class="btn btn-sm btn-danger" onclick="chatUI.clearImage('${prefix}', ${id})">Remove Image</button>
+                            <button class="btn btn-sm btn-danger" data-action="remove-image">Remove Image</button>
                         </div>
                     </div>
                 </div>
@@ -179,6 +172,41 @@ class ChatUI {
         }
 
         container.appendChild(messageDiv);
+
+        // Bind events programmatically (no inline handlers)
+        try {
+            const removeBtn = messageDiv.querySelector('.remove-message-btn[data-action="remove-message"]');
+            if (removeBtn && !removeBtn._b) { removeBtn._b = true; removeBtn.addEventListener('click', () => this.removeMessage(prefix, id)); }
+
+            const roleSelect = messageDiv.querySelector(`#${prefix}_message_role_${id}`);
+            if (roleSelect && !roleSelect._b) { roleSelect._b = true; roleSelect.addEventListener('change', () => this.handleRoleChange(prefix, id)); }
+
+            const contentArea = messageDiv.querySelector(`#${prefix}_message_content_${id}`);
+            if (contentArea && !contentArea._b) { contentArea._b = true; contentArea.addEventListener('input', () => this.handleContentChange(prefix, id)); }
+
+            const toolbar = messageDiv.querySelector('.message-content-toolbar');
+            if (toolbar && !toolbar._b) {
+                toolbar._b = true;
+                toolbar.addEventListener('click', (ev) => {
+                    const t = ev.target.closest('button[data-action]');
+                    if (!t) return;
+                    const action = t.getAttribute('data-action');
+                    if (action === 'format-json') {
+                        this.formatJSON(prefix, id);
+                    } else if (action === 'clear-content') {
+                        this.clearContent(prefix, id);
+                    }
+                });
+            }
+
+            const fileInput = messageDiv.querySelector(`#${prefix}_message_image_${id}`);
+            if (fileInput && !fileInput._b) { fileInput._b = true; fileInput.addEventListener('change', () => this.handleImageUpload(prefix, id)); }
+
+            const removeImageBtn = messageDiv.querySelector('[data-action="remove-image"]');
+            if (removeImageBtn && !removeImageBtn._b) { removeImageBtn._b = true; removeImageBtn.addEventListener('click', () => this.clearImage(prefix, id)); }
+        } catch (e) {
+            console.debug('Failed to bind chat message handlers', e);
+        }
 
         // Initialize drag and drop for the image input
         this.initImageDragDrop(prefix, id);
@@ -750,6 +778,67 @@ function initializeChatCompletionsTab() {
             });
         }
     } catch (_) { /* ignore */ }
+
+    // Bind top-level controls (remove inline handlers)
+    try {
+        const logprobsCb = document.getElementById(`${prefix}_logprobs`);
+        if (logprobsCb && !logprobsCb._b) { logprobsCb._b = true; logprobsCb.addEventListener('change', () => { try { if (typeof window.toggleLogprobs === 'function') window.toggleLogprobs(); } catch(_){} }); }
+
+        const toolChoiceSel = document.getElementById(`${prefix}_tool_choice`);
+        if (toolChoiceSel && !toolChoiceSel._b) { toolChoiceSel._b = true; toolChoiceSel.addEventListener('change', () => { try { if (typeof window.toggleToolChoiceJSON === 'function') window.toggleToolChoiceJSON(); } catch(_){} }); }
+
+        const sendReqBtn = document.getElementById(`${prefix}_send_request`);
+        if (sendReqBtn && !sendReqBtn._b) { sendReqBtn._b = true; sendReqBtn.addEventListener('click', () => { try { if (typeof window.makeChatCompletionsRequest === 'function') window.makeChatCompletionsRequest(); } catch(_){} }); }
+
+        const updSysBtn = document.getElementById('chat-update-system');
+        if (updSysBtn && !updSysBtn._b) { updSysBtn._b = true; updSysBtn.addEventListener('click', () => { try { if (typeof window.updateSystemPrompt === 'function') window.updateSystemPrompt(); } catch(_){} }); }
+
+        const resetConvBtn = document.getElementById('chat-reset-conv');
+        if (resetConvBtn && !resetConvBtn._b) { resetConvBtn._b = true; resetConvBtn.addEventListener('click', () => { try { if (typeof window.resetChatConversation === 'function') window.resetChatConversation(); } catch(_){} }); }
+
+        const sendBtn = document.getElementById('chat-send-btn');
+        if (sendBtn && !sendBtn._b) { sendBtn._b = true; sendBtn.addEventListener('click', () => { try { if (typeof window.sendChatMessage === 'function') window.sendChatMessage(); } catch(_){} }); }
+
+        const stopBtn = document.getElementById('chat-stop-btn');
+        if (stopBtn && !stopBtn._b) { stopBtn._b = true; stopBtn.addEventListener('click', () => { try { if (typeof window.stopChatStream === 'function') window.stopChatStream(); } catch(_){} }); }
+
+        const clearBtn = document.getElementById('chat-clear-btn');
+        if (clearBtn && !clearBtn._b) { clearBtn._b = true; clearBtn.addEventListener('click', () => { try { if (typeof window.clearChat === 'function') window.clearChat(); } catch(_){} }); }
+
+        const copyLastBtn = document.getElementById('chat-copy-last-btn');
+        if (copyLastBtn && !copyLastBtn._b) { copyLastBtn._b = true; copyLastBtn.addEventListener('click', () => { try { if (typeof window.copyLastAssistantMessage === 'function') window.copyLastAssistantMessage(); } catch(_){} }); }
+
+        const retryBtn = document.getElementById('chat-retry-btn');
+        if (retryBtn && !retryBtn._b) { retryBtn._b = true; retryBtn.addEventListener('click', () => { try { if (typeof window.retryLastUserMessage === 'function') window.retryLastUserMessage(); } catch(_){} }); }
+
+        const editBtn = document.getElementById('chat-edit-last-btn');
+        if (editBtn && !editBtn._b) { editBtn._b = true; editBtn.addEventListener('click', () => { try { if (typeof window.editLastUserMessage === 'function') window.editLastUserMessage(); } catch(_){} }); }
+
+        // Characters/Conversations endpoint helpers
+        const bindCmd = (id, fn, needsConfirm=false) => {
+            const el = document.getElementById(id); if (!el || el._b) return; el._b = true;
+            el.addEventListener('click', () => {
+                if (needsConfirm) {
+                    const msg = el.getAttribute('data-confirm') || 'Are you sure?';
+                    if (!confirm(msg)) return;
+                }
+                try { if (typeof window[fn] === 'function') window[fn](); } catch(_){}
+            });
+        };
+        bindCmd('btn_createCharacter', 'createCharacter');
+        bindCmd('btn_listCharacters', 'listCharacters');
+        bindCmd('btn_getCharacter', 'getCharacter');
+        bindCmd('btn_updateCharacter', 'updateCharacter');
+        bindCmd('btn_deleteCharacter', 'deleteCharacter', true);
+        bindCmd('btn_createConversation', 'createConversation');
+        bindCmd('btn_listConversations', 'listConversations');
+        bindCmd('btn_sendConversationMessage', 'sendConversationMessage');
+        bindCmd('btn_updateConversation', 'updateConversation');
+        bindCmd('btn_deleteConversation', 'deleteConversation', true);
+        bindCmd('btn_exportConversation', 'exportConversation');
+        bindCmd('btn_exportCharacter', 'exportCharacter');
+        bindCmd('btn_getConversationDetails', 'getConversationDetails');
+    } catch(_) { /* ignore */ }
 }
 
 // Export for use in other modules

@@ -2016,6 +2016,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"App Shutdown: Evaluations pool shutdown skipped/failed: {e}")
 
+    # Shutdown Evaluations webhook manager (no-op if never initialized)
+    try:
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import shutdown_webhook_manager_if_initialized as _shutdown_webhooks
+        _shutdown_webhooks()
+        logger.info("App Shutdown: Evaluations webhook manager shutdown (lazy)")
+    except Exception as e:
+        logger.debug(f"App Shutdown: Evaluations webhook manager shutdown skipped/failed: {e}")
+
     # Shutdown Unified Audit Services (via DI cache)
     try:
         from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
@@ -3082,16 +3090,52 @@ if _MINIMAL_TEST_APP:
     # Include audio endpoints (REST + WebSocket) for e2e middleware/header tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
-        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}", tags=["audio"])
-        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}", tags=["audio-ws"])
+        # Mount under /api/v1/audio to match test expectations and non-minimal routing
+        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-ws"])
     except Exception as _audio_min_err:
         logger.debug(f"Skipping audio routers in minimal test app: {_audio_min_err}")
+    # Health endpoints (required by AuthNZ integration tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/health*, /api/v1/healthz, /api/v1/readyz
+    except Exception as _health_min_err:
+        logger.debug(f"Skipping health router in minimal test app: {_health_min_err}")
+    # Auth endpoints (login/register/refresh/logout/me)
+    try:
+        app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    except Exception as _auth_min_err:
+        logger.debug(f"Skipping auth router in minimal test app: {_auth_min_err}")
+    # Enhanced auth endpoints (MFA, password reset) when available
+    try:
+        if _HAS_AUTH_ENHANCED:
+            app.include_router(auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
+    except Exception as _auth_enh_min_err:
+        logger.debug(f"Skipping enhanced auth router in minimal test app: {_auth_enh_min_err}")
+    # Users endpoints (sessions, change-password, storage, me)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+        app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    except Exception as _users_min_err:
+        logger.debug(f"Skipping users router in minimal test app: {_users_min_err}")
     # Include Jobs admin endpoints for tests that exercise jobs stats/counters
     try:
         from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
         app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
     except Exception as _e:
         logger.debug(f"Skipping jobs_admin router in minimal test app: {_e}")
+    # Include Audio Jobs (admin + listing) for tests under minimal mode
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
+        app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
+    except Exception as _audio_jobs_min_err:
+        logger.debug(f"Skipping audio_jobs router in minimal test app: {_audio_jobs_min_err}")
+    # Include Audit endpoints in minimal test app so tests relying on /api/v1/audit/* don't 404
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
+        app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
+    except Exception as _audit_min_err:
+        logger.debug(f"Skipping audit router in minimal test app: {_audit_min_err}")
     # AuthNZ debug routes for tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
@@ -3117,14 +3161,21 @@ if _MINIMAL_TEST_APP:
             app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-catalogs"])
         except Exception as _mcp_cat_err:  # noqa: BLE001
             logger.debug(f"Skipping MCP catalogs router in minimal test app: {_mcp_cat_err}")
-        # Include admin router in minimal mode if available
+        # Privileges endpoints used by tests that introspect RBAC snapshots
         try:
-            if 'admin_router' in locals() and _HAS_ADMIN_MIN:
-                app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
-        except Exception as _adm_inc_err:  # noqa: BLE001
-            logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
+            from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
+            app.include_router(privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
+        except Exception as _priv_min_err:  # noqa: BLE001
+            logger.debug(f"Skipping privileges router in minimal test app: {_priv_min_err}")
     except Exception as _mcp_min_err:  # noqa: BLE001
         logger.debug(f"Skipping MCP unified router in minimal test app: {_mcp_min_err}")
+    # Include admin router in minimal mode if available (ensure not gated by MCP import)
+    try:
+        if 'admin_router' not in locals():
+            from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+        app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    except Exception as _adm_inc_err:  # noqa: BLE001
+        logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:

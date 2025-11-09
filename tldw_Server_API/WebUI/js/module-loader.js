@@ -44,6 +44,7 @@
     vector_stores: ['js/vector-stores.js'],
     // Additional groups
     webscraping: ['js/webscraping.js'],
+    workflows: ['js/workflows.js'],
     // Placeholders (documenting groups that intentionally load no extra scripts)
     flashcards: [],
     llamacpp: [],

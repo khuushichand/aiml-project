@@ -447,8 +447,8 @@ class WebhookManager:
     ) -> List[Dict[str, Any]]:
         """Get active webhooks for user and event."""
         # In TEST_MODE, ignore event filtering to maximize delivery determinism
-        import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+        if _is_test_mode():
             with self.db_adapter.transaction():
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, secret, retry_count, timeout_seconds
@@ -485,8 +485,8 @@ class WebhookManager:
                 })
 
             # In TEST_MODE, if no event-specific webhooks found, fall back to all active webhooks for the user
-            import os as _os
-            if not webhooks and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+            if not webhooks and _is_test_mode():
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, secret, retry_count, timeout_seconds
                     FROM webhook_registrations
@@ -502,7 +502,8 @@ class WebhookManager:
                     })
 
             # Final safety: in TEST_MODE, if still no webhooks for this user, try all active webhooks
-            if not webhooks and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+            if not webhooks and _is_test_mode():
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, secret, retry_count, timeout_seconds
                     FROM webhook_registrations
@@ -535,10 +536,8 @@ class WebhookManager:
         import socket
         # In tests, we both skip DNS validation and prefer aiohttp so that
         # aioresponses can intercept requests deterministically.
-        testing_env = (
-            os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
-            or "PYTEST_CURRENT_TEST" in os.environ
-        )
+        from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+        testing_env = (_is_test_mode() or "PYTEST_CURRENT_TEST" in os.environ)
         skip_dns = testing_env
         if not skip_dns:
             try:

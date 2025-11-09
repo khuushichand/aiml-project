@@ -5,13 +5,13 @@
         <p>Real-time monitoring of system performance and health metrics.</p>
 
         <div class="metrics-controls">
-            <button class="btn btn-primary" onclick="refreshMetrics()">
+            <button class="btn btn-primary" id="metrics-refresh">
                 Refresh Metrics
             </button>
-            <button class="btn btn-secondary" onclick="startAutoRefresh()">
+            <button class="btn btn-secondary" id="metrics-auto-start">
                 Auto-Refresh (5s)
             </button>
-            <button class="btn btn-secondary" onclick="stopAutoRefresh()">
+            <button class="btn btn-secondary" id="metrics-auto-stop">
                 Stop Auto-Refresh
             </button>
         </div>
@@ -80,15 +80,15 @@
                 <span id="orchestrator_sse_status" class="badge badge-secondary" title="SSE connection status" style="margin-right:6px;">disconnected</span>
                 <span id="orchestrator_fallback_badge" class="badge badge-warn" style="display:none;" title="Polling summary returned zeroed snapshot (Redis/Orchestrator unavailable)">fallback</span>
                 <span id="orchestrator_fallback_hint" class="text-muted" style="display:none; font-size: 12px;">(zeroed payload; ages/flags unavailable)
-                    <a href="#" onclick="openMonitoringDocs(event)" title="Open Monitoring README for guidance" style="margin-left:6px; text-decoration: underline;">learn more</a>
+                    <a href="#" data-action="open-monitoring-docs" title="Open Monitoring README for guidance" style="margin-left:6px; text-decoration: underline;">learn more</a>
                 </span>
             </h3>
             <div class="metrics-controls">
-                <button class="btn btn-primary" onclick="fetchOrchestratorSummary()">Refresh</button>
-                <button class="btn btn-secondary" onclick="startOrchestratorAutoRefresh()">Auto-Refresh (10s)</button>
-                <button class="btn btn-secondary" onclick="stopOrchestratorAutoRefresh()">Stop</button>
+                <button class="btn btn-primary" id="orchestrator-refresh">Refresh</button>
+                <button class="btn btn-secondary" id="orchestrator-auto-start">Auto-Refresh (10s)</button>
+                <button class="btn btn-secondary" id="orchestrator-auto-stop">Stop</button>
                 <label style="margin-left:8px;">
-                    <input type="checkbox" id="orchestrator_live_sse" onchange="toggleOrchestratorSSE(this)"> Live (SSE)
+                    <input type="checkbox" id="orchestrator_live_sse"> Live (SSE)
                 </label>
             </div>
             <div class="table-responsive mt-2">
@@ -126,7 +126,7 @@
         </h2>
         <p>Get metrics in Prometheus format for scraping by monitoring systems.</p>
 
-        <button class="api-button" onclick="makeRequest('metricsPrometheus', 'GET', '/metrics', 'none')">
+        <button class="api-button" data-action="exec-endpoint" data-id="metricsPrometheus" data-method="GET" data-path="/metrics" data-body="none">
             Get Prometheus Metrics
         </button>
 
@@ -156,7 +156,7 @@
             </select>
         </div>
 
-        <button class="api-button" onclick="makeRequest('metricsJSON', 'GET', '/api/v1/metrics', 'query')">
+        <button class="api-button" data-action="exec-endpoint" data-id="metricsJSON" data-method="GET" data-path="/api/v1/metrics" data-body="query">
             Get JSON Metrics
         </button>
 
@@ -174,7 +174,7 @@
         </h2>
         <p>Check the health status of the metrics collection service.</p>
 
-        <button class="api-button" onclick="makeRequest('metricsHealth', 'GET', '/api/v1/metrics/health', 'none')">
+        <button class="api-button" data-action="exec-endpoint" data-id="metricsHealth" data-method="GET" data-path="/api/v1/metrics/health" data-body="none">
             Check Metrics Health
         </button>
 
@@ -203,7 +203,7 @@
 }</textarea>
         </div>
 
-        <button class="api-button btn-warning" onclick="if(confirm('Are you sure you want to reset metrics?')) makeRequest('metricsReset', 'POST', '/api/v1/metrics/reset', 'json')">
+        <button class="api-button btn-warning" data-action="exec-endpoint" data-id="metricsReset" data-method="POST" data-path="/api/v1/metrics/reset" data-body="json" data-confirm="Are you sure you want to reset metrics?">
             Reset Metrics
         </button>
 
@@ -248,9 +248,9 @@
         </div>
 
         <div class="metrics-controls">
-            <button class="btn btn-primary" onclick="fetchJobsStats()">Refresh</button>
-            <button class="btn btn-secondary" onclick="startJobsStatsAutoRefresh()">Auto-Refresh (10s)</button>
-            <button class="btn btn-secondary" onclick="stopJobsStatsAutoRefresh()">Stop</button>
+            <button class="btn btn-primary" id="jobsStats_refresh">Refresh</button>
+            <button class="btn btn-secondary" id="jobsStats_auto_start">Auto-Refresh (10s)</button>
+            <button class="btn btn-secondary" id="jobsStats_auto_stop">Stop</button>
         </div>
 
         <div class="table-responsive mt-2">
@@ -668,7 +668,7 @@
             </select>
         </div>
 
-        <button class="btn btn-primary" onclick="runMetricsAnalysis()">
+        <button class="btn btn-primary" id="metricsAnalysis_run">
             Run Analysis
         </button>
 
@@ -721,7 +721,7 @@
 }</textarea>
         </div>
 
-        <button class="btn btn-primary" onclick="saveMetricsAlerts()">
+        <button class="btn btn-primary" id="metricsAlerts_save">
             Save Alerts
         </button>
     </div>

@@ -142,7 +142,7 @@
 
                 <div class="form-group">
                     <label>
-                        <input type="checkbox" id="chatCompletions_logprobs" onchange="toggleLogprobs()"> Return Log Probabilities
+                        <input type="checkbox" id="chatCompletions_logprobs"> Return Log Probabilities
                     </label>
                 </div>
 
@@ -188,7 +188,7 @@
 
                 <div class="form-group">
                     <label for="chatCompletions_tool_choice">Tool Choice:</label>
-                    <select id="chatCompletions_tool_choice" onchange="toggleToolChoiceJSON()">
+                    <select id="chatCompletions_tool_choice">
                         <option value="auto">Auto</option>
                         <option value="none">None</option>
                         <option value="required">Required</option>
@@ -203,7 +203,7 @@
             </fieldset>
         </details>
 
-        <button class="api-button" onclick="makeChatCompletionsRequest()" style="margin-top: 20px;">Send Request</button>
+        <button class="api-button" id="chatCompletions_send_request" style="margin-top: 20px;">Send Request</button>
 
         <h3>Response:</h3>
         <pre id="chatCompletions_response">---</pre>
@@ -221,7 +221,7 @@
             <div class="form-group" style="margin-bottom: 15px;">
                 <label for="chat-system-prompt">System Prompt:</label>
                 <textarea id="chat-system-prompt" placeholder="Enter system prompt..." style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">You are a helpful assistant.</textarea>
-                <button class="btn btn-sm" onclick="updateSystemPrompt()" style="margin-top: 5px;">Update System Prompt</button>
+                <button class="btn btn-sm" id="chat-update-system" style="margin-top: 5px;">Update System Prompt</button>
             </div>
 
             <div id="chat-messages" class="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; background: #f9f9f9;">
@@ -252,16 +252,16 @@
                     </div>
                     <label for="chat-conversation-id" class="muted" style="margin-left:auto;">Conversation ID:</label>
                     <input id="chat-conversation-id" type="text" readonly style="flex:1; min-width:220px;" placeholder="(not set)">
-                    <button class="btn btn-sm" onclick="resetChatConversation()" title="Clear conversation id">Reset</button>
+                    <button class="btn btn-sm" id="chat-reset-conv" title="Clear conversation id">Reset</button>
                 </div>
 
                 <div class="btn-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <button class="btn btn-primary" id="chat-send-btn" onclick="sendChatMessage()" aria-label="Send message" role="button">Send</button>
-                    <button class="btn btn-warning" id="chat-stop-btn" onclick="stopChatStream()" aria-label="Stop streaming" role="button" style="display:none;">Stop</button>
-                    <button class="btn btn-secondary" onclick="clearChat()" aria-label="Clear chat history" role="button">Clear Chat</button>
-                    <button class="btn" onclick="copyLastAssistantMessage()" title="Copy last answer">Copy Last Answer</button>
-                    <button class="btn" onclick="retryLastUserMessage()" title="Retry last user message">Retry</button>
-                    <button class="btn" onclick="editLastUserMessage()" title="Edit last user message inline">Edit Last</button>
+                    <button class="btn btn-primary" id="chat-send-btn" aria-label="Send message" role="button">Send</button>
+                    <button class="btn btn-warning" id="chat-stop-btn" aria-label="Stop streaming" role="button" style="display:none;">Stop</button>
+                    <button class="btn btn-secondary" id="chat-clear-btn" aria-label="Clear chat history" role="button">Clear Chat</button>
+                    <button class="btn" id="chat-copy-last-btn" title="Copy last answer">Copy Last Answer</button>
+                    <button class="btn" id="chat-retry-btn" title="Retry last user message">Retry</button>
+                    <button class="btn" id="chat-edit-last-btn" title="Edit last user message inline">Edit Last</button>
                     <select id="chat-provider" style="margin-left: 10px;" title="You can also set the model as provider/model without selecting a provider here.">
                         <option value="">All Providers</option>
                         <option value="openai">OpenAI</option>
@@ -551,7 +551,7 @@
             <label for="importCharacter_character_file">Character File:</label>
             <input type="file" id="importCharacter_character_file" name="character_file" accept=".png,.webp,.json,.md">
         </div>
-        <button class="api-button" onclick="makeRequest('importCharacter', 'POST', '/api/v1/characters/import', 'form')">Send Request</button>
+        <button class="api-button" data-action="exec-endpoint" data-id="importCharacter" data-method="POST" data-path="/api/v1/characters/import" data-body="form">Send Request</button>
         <h3>cURL Command:</h3>
         <pre id="importCharacter_curl">---</pre>
         <h3>Response:</h3>
@@ -568,7 +568,7 @@
             <label for="listCharacters_offset">Offset:</label>
             <input type="number" id="listCharacters_offset" name="offset" value="0">
         </div>
-        <button class="api-button" onclick="makeRequest('listCharacters', 'GET', '/api/v1/characters/', 'query')">Send Request</button>
+        <button class="api-button" data-action="exec-endpoint" data-id="listCharacters" data-method="GET" data-path="/api/v1/characters/" data-body="query">Send Request</button>
         <h3>cURL Command:</h3>
         <pre id="listCharacters_curl">---</pre>
         <h3>Response:</h3>
@@ -602,7 +602,7 @@
 }</textarea>
             <small><code>image_base64</code> should be a base64 encoded string of the image, without the 'data:image/...;base64,' prefix. List/Dict fields can be JSON strings or actual lists/dicts if using a client that sends structured JSON.</small>
         </div>
-        <button class="api-button" onclick="makeRequest('createCharacter', 'POST', '/api/v1/characters/', 'json')">Send Request</button>
+        <button class="api-button" data-action="exec-endpoint" data-id="createCharacter" data-method="POST" data-path="/api/v1/characters/" data-body="json">Send Request</button>
         <h3>cURL Command:</h3>
         <pre id="createCharacter_curl">---</pre>
         <h3>Response:</h3>
@@ -615,7 +615,7 @@
             <label for="getCharacter_character_id">Character ID:</label>
             <input type="number" id="getCharacter_character_id" value="1">
         </div>
-        <button class="api-button" onclick="makeRequest('getCharacter', 'GET', '/api/v1/characters/{character_id}')">Send Request</button>
+        <button class="api-button" data-action="exec-endpoint" data-id="getCharacter" data-method="GET" data-path="/api/v1/characters/{character_id}" data-body="none">Send Request</button>
         <h3>cURL Command:</h3>
         <pre id="getCharacter_curl">---</pre>
         <h3>Response:</h3>
@@ -637,7 +637,7 @@
 }</textarea>
             <small>To remove an image, pass <code>image_base64: null</code> or an empty string.</small>
         </div>
-        <button class="api-button" onclick="makeRequest('updateCharacter', 'PUT', '/api/v1/characters/{character_id}', 'json')">Send Request</button>
+        <button class="api-button" data-action="exec-endpoint" data-id="updateCharacter" data-method="PUT" data-path="/api/v1/characters/{character_id}" data-body="json">Send Request</button>
         <h3>cURL Command:</h3>
         <pre id="updateCharacter_curl">---</pre>
         <h3>Response:</h3>
@@ -650,7 +650,7 @@
             <label for="deleteCharacter_character_id">Character ID:</label>
             <input type="number" id="deleteCharacter_character_id" value="1">
         </div>
-        <button class="api-button" onclick="makeRequest('deleteCharacter', 'DELETE', '/api/v1/characters/{character_id}')">Send Request</button>
+        <button class="api-button" data-action="exec-endpoint" data-id="deleteCharacter" data-method="DELETE" data-path="/api/v1/characters/{character_id}" data-body="none">Send Request</button>
         <h3>cURL Command:</h3>
         <pre id="deleteCharacter_curl">---</pre>
         <h3>Response:</h3>
@@ -672,7 +672,7 @@
                 <option value="markdown">Markdown</option>
             </select>
         </div>
-        <button class="api-button" onclick="exportCharacter()">Export Character</button>
+        <button class="api-button" id="btn_exportCharacter">Export Character</button>
         <h3>Response:</h3>
         <pre id="exportCharacter_response">---</pre>
     </div>
@@ -1567,7 +1567,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         </fieldset>
 
-        <button class="api-button" onclick="createCharacter()">
+        <button class="api-button" id="btn_createCharacter">
             Create Character
         </button>
 
@@ -1582,7 +1582,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </h2>
         <p>List all available characters.</p>
 
-        <button class="api-button" onclick="listCharacters()">
+        <button class="api-button" id="btn_listCharacters">
             List Characters
         </button>
 
@@ -1602,7 +1602,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <input type="text" id="charactersGet_id" placeholder="Enter character ID">
         </div>
 
-        <button class="api-button" onclick="getCharacter()">
+        <button class="api-button" id="btn_getCharacter">
             Get Character
         </button>
 
@@ -1634,7 +1634,7 @@ document.addEventListener('DOMContentLoaded', () => {
 }</textarea>
         </div>
 
-        <button class="api-button" onclick="updateCharacter()">
+        <button class="api-button" id="btn_updateCharacter">
             Update Character
         </button>
 
@@ -1654,7 +1654,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <input type="text" id="charactersDelete_id" placeholder="Enter character ID">
         </div>
 
-        <button class="api-button btn-danger" onclick="if(confirm('Delete this character?')) deleteCharacter()">
+        <button class="api-button btn-danger" id="btn_deleteCharacter" data-confirm="Delete this character?">
             Delete Character
         </button>
 
@@ -1697,7 +1697,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <textarea id="conversationsCreate_metadata" class="code-input" rows="3">{}</textarea>
         </div>
 
-        <button class="api-button" onclick="createConversation()">
+        <button class="api-button" id="btn_createConversation">
             Create Conversation
         </button>
 
@@ -1728,7 +1728,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         </div>
 
-        <button class="api-button" onclick="listConversations()">
+        <button class="api-button" id="btn_listConversations">
             List Conversations
         </button>
 
@@ -1755,7 +1755,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </label>
         </div>
 
-        <button class="api-button" onclick="getConversationDetails()">
+        <button class="api-button" id="btn_getConversationDetails">
             Get Conversation
         </button>
 
@@ -1805,7 +1805,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </label>
         </div>
 
-        <button class="api-button" onclick="sendConversationMessage()">
+        <button class="api-button" id="btn_sendConversationMessage">
             Send Message
         </button>
 
@@ -1836,7 +1836,7 @@ document.addEventListener('DOMContentLoaded', () => {
 }</textarea>
         </div>
 
-        <button class="api-button" onclick="updateConversation()">
+        <button class="api-button" id="btn_updateConversation">
             Update Conversation
         </button>
 
@@ -1856,7 +1856,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <input type="text" id="conversationsDelete_id" placeholder="Enter conversation ID">
         </div>
 
-        <button class="api-button btn-danger" onclick="if(confirm('Delete this conversation and all its messages?')) deleteConversation()">
+        <button class="api-button btn-danger" id="btn_deleteConversation" data-confirm="Delete this conversation and all its messages?">
             Delete Conversation
         </button>
 
@@ -1885,7 +1885,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </select>
         </div>
 
-        <button class="api-button" onclick="exportConversation()">
+        <button class="api-button" id="btn_exportConversation">
             Export Conversation
         </button>
 

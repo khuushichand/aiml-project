@@ -72,6 +72,35 @@ class WebUI {
         // Install CSP guard to sanitize/migrate inline handlers for any dynamic insertions
         try { this.installCSPGuard(); } catch (_) {}
 
+        // Bind generic endpoint exec buttons across the app (no inline handlers)
+        try {
+            document.addEventListener('click', async (e) => {
+                const btn = e.target && e.target.closest('button[data-action="exec-endpoint"]');
+                if (!btn) return;
+                e.preventDefault();
+                const id = btn.getAttribute('data-id');
+                const method = btn.getAttribute('data-method') || 'GET';
+                const path = btn.getAttribute('data-path') || '';
+                const bodyType = btn.getAttribute('data-body') || 'none';
+                const confirmMsg = btn.getAttribute('data-confirm') || '';
+                if (confirmMsg && !confirm(confirmMsg)) return;
+                const responseEl = document.getElementById(`${id}_response`);
+                try {
+                    if (responseEl) responseEl.textContent = '';
+                    // Try global endpointHelper instance if available
+                    if (window.endpointHelper && typeof window.endpointHelper.executeRequest === 'function') {
+                        await window.endpointHelper.executeRequest(id, method, path, bodyType);
+                        return;
+                    }
+                    const body = (bodyType === 'json') ? (function(){ const ta = document.getElementById(`${id}_payload`); try { return ta && ta.value ? JSON.parse(ta.value) : {}; } catch(_) { return {}; } })() : null;
+                    const res = await apiClient.makeRequest(method, path, { body });
+                    if (responseEl) responseEl.textContent = (typeof res === 'string') ? res : JSON.stringify(res, null, 2);
+                } catch(err) {
+                    if (responseEl) responseEl.textContent = `Error: ${err.message}`;
+                }
+            }, true);
+        } catch(_) {}
+
         console.log('WebUI initialized successfully');
     }
 
@@ -537,6 +566,14 @@ class WebUI {
         if (contentId && (contentId.startsWith('tabAudio') || contentId === 'tabTranscriptSeg') && typeof bindAudioTabHandlers === 'function') {
             bindAudioTabHandlers();
         }
+        if (contentId === 'tabAudioStreaming' && window.initializeAudioStreamingTab) {
+            try { window.initializeAudioStreamingTab(); } catch (_) {}
+        }
+
+        // Metrics tab(s)
+        if (contentId && contentId.startsWith('tabMetrics') && typeof window.initializeMetricsTab === 'function') {
+            try { window.initializeMetricsTab(contentId); } catch (_) {}
+        }
 
         // Flashcards tab
         if (contentId && contentId.startsWith('tabFlashcards') && typeof initializeFlashcardsTab === 'function') {
@@ -544,6 +581,21 @@ class WebUI {
         }
         if (contentId && contentId.startsWith('tabMedia') && typeof bindMediaCommonHandlers === 'function') {
             bindMediaCommonHandlers();
+        }
+
+        // Vector Stores tab
+        if (contentId === 'tabVectorStores' && window.initializeVectorStoresTab) {
+            try { window.initializeVectorStoresTab(); } catch (_) {}
+        }
+
+        // Personalization tab
+        if (contentId === 'tabPersonalization' && typeof window.initializePersonalizationTab === 'function') {
+            window.initializePersonalizationTab();
+        }
+
+        // Workflows tab(s)
+        if (contentId && contentId.startsWith('tabWorkflows') && typeof window.initializeWorkflowsTab === 'function') {
+            try { window.initializeWorkflowsTab(contentId); } catch (_) {}
         }
 
         // Initialize model dropdowns for tabs that have LLM selection
@@ -1283,7 +1335,7 @@ class WebUI {
         let historyHtml = `
             <div class="history-list">
                 <div class="history-controls mb-3">
-                    <button class="btn btn-sm btn-danger" onclick="webUI.clearHistory()">Clear History</button>
+                    <button class="btn btn-sm btn-danger" id="clear-history-btn">Clear History</button>
                 </div>
                 <div class="history-items">
         `;
@@ -1324,6 +1376,18 @@ class WebUI {
             size: 'large'
         });
         modal.show();
+
+        // Bind Clear History button without inline handlers
+        try {
+            const btn = modal.modal && modal.modal.querySelector('#clear-history-btn');
+            if (btn && !btn._bound) {
+                btn._bound = true;
+                btn.addEventListener('click', (e) => {
+                    try { e.preventDefault(); } catch (_) {}
+                    try { this.clearHistory(); } catch (_) {}
+                });
+            }
+        } catch (_) { /* ignore */ }
     }
 
     clearHistory() {

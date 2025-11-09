@@ -724,13 +724,9 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
 
-            # If no models found in config, inject safe, current defaults only for Anthropic
-            # per project direction to use 4.0/4.1 and avoid deprecated 3.5.
+            # If no models found in config, do not inject defaults.
             if not models:
-                if provider_name == 'anthropic':
-                    models = ['claude-opus-4.1', 'claude-sonnet-4']
-                else:
-                    models = []
+                models = []
 
             # Build models and metadata
             models_info = [get_model_metadata(provider_name, m) for m in models]
@@ -804,15 +800,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
         if config_parser.has_section('API') and config_parser.has_option('API', 'default_api'):
             default_api = config_parser.get('API', 'default_api', fallback='openai')
 
-        # Also check for additional models that might be listed elsewhere
-        # For example, in the RAG or Embeddings sections
-        if config_parser.has_section('Embeddings') and config_parser.has_option('Embeddings', 'contextual_llm_model'):
-            contextual_model = config_parser.get('Embeddings', 'contextual_llm_model', fallback='')
-            # Try to determine which provider this model belongs to
-            if contextual_model and 'gpt' in contextual_model.lower():
-                for p in providers:
-                    if p['name'] == 'openai' and contextual_model not in p['models']:
-                        p['models'].append(contextual_model)
+        # Strict policy: do not pull models from other sections.
 
         return {
             'providers': providers,

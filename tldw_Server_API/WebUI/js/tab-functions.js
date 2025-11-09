@@ -1471,12 +1471,12 @@ async function embeddingsListDLQ() {
                 <td>${Utils.escapeHtml(state)}</td>
                 <td>${Utils.escapeHtml(note)}</td>
                 <td>
-                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
-                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <button class="api-button" data-action="dlq-requeue" data-entry-id="${eid}">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" data-action="dlq-skip" data-job-id="${job}">Skip</button>` : ''}
                     <div class="btn-group" style="margin-top:4px">
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
-                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="quarantined">Quarantine</button>
+                      <button class="api-button" data-action="dlq-approve" data-entry-id="${eid}">Approve</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="ignored">Ignore</button>
                     </div>
                 </td>
             </tr>`;
@@ -1495,6 +1495,32 @@ async function embeddingsListDLQ() {
         } else {
             out.innerHTML = __dlqMarkup;
         }
+
+        // Bind DLQ actions via delegation
+        try {
+            if (out && !out._dlqBound) {
+                out._dlqBound = true;
+                out.addEventListener('click', (ev) => {
+                    const btn = ev.target && ev.target.closest('button[data-action]');
+                    if (!btn) return;
+                    const action = btn.getAttribute('data-action');
+                    if (action === 'dlq-requeue') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsRequeueDLQ(id);
+                    } else if (action === 'dlq-skip') {
+                        const jobId = btn.getAttribute('data-job-id');
+                        if (jobId) embeddingsSkipJob(jobId);
+                    } else if (action === 'dlq-set-state') {
+                        const id = btn.getAttribute('data-entry-id');
+                        const state = btn.getAttribute('data-state');
+                        if (id && state) embeddingsSetDLQState(id, state);
+                    } else if (action === 'dlq-approve') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsApproveDLQ(id);
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');
@@ -1558,12 +1584,12 @@ async function embeddingsListDLQ2() {
                 <td>${Utils.escapeHtml(state)}</td>
                 <td>${Utils.escapeHtml(note)}</td>
                 <td>
-                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
-                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <button class="api-button" data-action="dlq-requeue" data-entry-id="${eid}">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" data-action="dlq-skip" data-job-id="${job}">Skip</button>` : ''}
                     <div class="btn-group" style="margin-top:4px">
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
-                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="quarantined">Quarantine</button>
+                      <button class="api-button" data-action="dlq-approve" data-entry-id="${eid}">Approve</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="ignored">Ignore</button>
                     </div>
                 </td>
             </tr>`;
@@ -1582,6 +1608,32 @@ async function embeddingsListDLQ2() {
         } else {
             out.innerHTML = __dlq2Markup;
         }
+
+        // Bind DLQ actions via delegation (reuse same handler)
+        try {
+            if (out && !out._dlqBound) {
+                out._dlqBound = true;
+                out.addEventListener('click', (ev) => {
+                    const btn = ev.target && ev.target.closest('button[data-action]');
+                    if (!btn) return;
+                    const action = btn.getAttribute('data-action');
+                    if (action === 'dlq-requeue') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsRequeueDLQ(id);
+                    } else if (action === 'dlq-skip') {
+                        const jobId = btn.getAttribute('data-job-id');
+                        if (jobId) embeddingsSkipJob(jobId);
+                    } else if (action === 'dlq-set-state') {
+                        const id = btn.getAttribute('data-entry-id');
+                        const state = btn.getAttribute('data-state');
+                        if (id && state) embeddingsSetDLQState(id, state);
+                    } else if (action === 'dlq-approve') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsApproveDLQ(id);
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');
@@ -3135,9 +3187,9 @@ function renderMultiQueue(queue) {
             <div style="margin-bottom:8px; color: var(--color-text-secondary);">${escapeHtml(item.source || '')}</div>
             ${metaHtml}
             <div class="form-group" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                <button class="btn btn-primary" onclick="${item.ephemeral ? `multiAnalyzeEphemeral('${key}')` : `multiAnalyzeItem(${key})`}">Analyze</button>
-                <button class="btn" onclick="${item.ephemeral ? `multiSaveEphemeralAnalysis('${key}')` : `multiSaveItemAnalysis(${key})`}">Save Analysis</button>
-                <button class="btn btn-danger" onclick="${item.ephemeral ? `multiRemoveEphemeral('${key}')` : `multiRemoveFromQueue(${key})`}">Remove</button>
+                <button class="btn btn-primary" data-action="multi-analyze" data-key="${key}" data-ephemeral="${item.ephemeral ? '1' : '0'}">Analyze</button>
+                <button class="btn" data-action="multi-save" data-key="${key}" data-ephemeral="${item.ephemeral ? '1' : '0'}">Save Analysis</button>
+                <button class="btn btn-danger" data-action="multi-remove" data-key="${key}" data-ephemeral="${item.ephemeral ? '1' : '0'}">Remove</button>
             </div>
             <h4>Analysis</h4>
             <pre id="multi_analysis_${key}">(Not analyzed)</pre>
@@ -3149,6 +3201,27 @@ function renderMultiQueue(queue) {
         }
         container.appendChild(card);
     });
+
+    // Bind container actions via delegation (once)
+    try {
+        if (!container._multiBound) {
+            container._multiBound = true;
+            container.addEventListener('click', (ev) => {
+                const btn = ev.target && ev.target.closest('button[data-action]');
+                if (!btn) return;
+                const action = btn.getAttribute('data-action');
+                const key = btn.getAttribute('data-key');
+                const isEphemeral = btn.getAttribute('data-ephemeral') === '1';
+                if (action === 'multi-analyze') {
+                    try { isEphemeral ? multiAnalyzeEphemeral(key) : multiAnalyzeItem(key); } catch (_) {}
+                } else if (action === 'multi-save') {
+                    try { isEphemeral ? multiSaveEphemeralAnalysis(key) : multiSaveItemAnalysis(key); } catch (_) {}
+                } else if (action === 'multi-remove') {
+                    try { isEphemeral ? multiRemoveEphemeral(key) : multiRemoveFromQueue(key); } catch (_) {}
+                }
+            });
+        }
+    } catch (_) { /* ignore */ }
 }
 
 function multiPersistQueue(queue) {

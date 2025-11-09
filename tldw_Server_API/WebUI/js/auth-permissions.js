@@ -43,14 +43,18 @@ function _ap_renderSummary() {
   const items = _ap_filteredItems();
   const { total, allowed, blocked } = _ap_summarize(items);
   const ts = AUTH_PERM_CACHE.lastLoadedAt ? new Date(AUTH_PERM_CACHE.lastLoadedAt).toLocaleString() : '-';
-  el.innerHTML = `Items: <strong>${total}</strong> · Allowed: <strong>${allowed}</strong> · Blocked: <strong>${blocked}</strong> · Loaded: ${_ap_escape(ts)}`;
+  if (window.SafeDOM && window.SafeDOM.setHTML) {
+    window.SafeDOM.setHTML(el, `Items: <strong>${total}</strong> · Allowed: <strong>${allowed}</strong> · Blocked: <strong>${blocked}</strong> · Loaded: ${_ap_escape(ts)}`);
+  } else {
+    el.innerHTML = `Items: <strong>${total}</strong> · Allowed: <strong>${allowed}</strong> · Blocked: <strong>${blocked}</strong> · Loaded: ${_ap_escape(ts)}`;
+  }
 }
 
 function _ap_renderMatrixByScope() {
   const container = document.getElementById('authPermMatrixByScope');
   if (!container) return;
   const items = _ap_filteredItems();
-  if (!items.length) { container.innerHTML = '<p>No data. Click Refresh to load.</p>'; return; }
+  if (!items.length) { if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, '<p>No data. Click Refresh to load.</p>'); } else { container.innerHTML = '<p>No data. Click Refresh to load.</p>'; } return; }
   // Build unique sets
   const scopes = Array.from(new Set(items.map(it => it.privilege_scope_id))).sort();
   const endpoints = Array.from(new Set(items.map(it => `${(it.method || '').toUpperCase()} ${it.endpoint}`))).sort();
@@ -79,14 +83,14 @@ function _ap_renderMatrixByScope() {
     html += '</tr>';
   }
   html += '</tbody></table></div>';
-  container.innerHTML = html;
+  if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, html); } else { container.innerHTML = html; }
 }
 
 function _ap_renderList() {
   const container = document.getElementById('authPermList');
   if (!container) return;
   const items = _ap_filteredItems();
-  if (!items.length) { container.innerHTML = '<p>No permission entries.</p>'; return; }
+  if (!items.length) { if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, '<p>No permission entries.</p>'); } else { container.innerHTML = '<p>No permission entries.</p>'; } return; }
   let html = '<div class="scroll-y"><table class="simple-table small-table">';
   html += '<thead><tr>' +
     '<th>Method</th><th>Endpoint</th><th>Scope</th><th>Status</th><th>Sensitivity</th><th>Feature Flag</th><th>Rate Class</th>' +
@@ -104,7 +108,7 @@ function _ap_renderList() {
       '</tr>';
   }
   html += '</tbody></table></div>';
-  container.innerHTML = html;
+  if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, html); } else { container.innerHTML = html; }
 }
 
 function _ap_renderAll() {
@@ -124,7 +128,9 @@ async function loadSelfPermissions() {
     if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Loaded permissions');
   } catch (e) {
     const container = document.getElementById('authPermList');
-    if (container) container.innerHTML = `<pre>${_ap_escape(JSON.stringify(e.response || e, null, 2))}</pre>`;
+    if (container) {
+      if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, `<pre>${_ap_escape(JSON.stringify(e.response || e, null, 2))}</pre>`); } else { container.innerHTML = `<pre>${_ap_escape(JSON.stringify(e.response || e, null, 2))}</pre>`; }
+    }
     const matrix = document.getElementById('authPermMatrixByScope');
     if (matrix) matrix.innerHTML = '';
     const summary = document.getElementById('authPermSummary');

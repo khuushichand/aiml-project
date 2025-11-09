@@ -2,6 +2,58 @@
 // Uses addEventListener bindings and avoids inline event attributes.
 
 (function () {
+  function initializeVectorStoresTab() {
+    const root = document.getElementById('tabVectorStores');
+    if (!root || root._vsBound) return;
+    root._vsBound = true;
+
+    // Click bindings via delegation
+    root.addEventListener('click', async (ev) => {
+      const btn = ev.target && ev.target.closest('button[data-action]');
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      try {
+        if (action === 'vs-create') return vsCreate();
+        if (action === 'vs-list') return vsList();
+        if (action === 'vs-duplicate') return vsDuplicateSelected();
+        if (action === 'vs-rename-from-panel') return vsRenameSelectedFromPanel();
+        if (action === 'vs-load') return vsLoadStore();
+        if (action === 'vs-save') return vsSaveStore();
+        if (action === 'vs-delete') return vsDeleteStore();
+        if (action === 'vs-create-from-media') return uiCreateStoreFromMedia();
+        if (action === 'vs-load-stores') return uiLoadExistingStores();
+        if (action === 'vs-update-from-media') return uiUpdateStoreFromMedia();
+        if (action === 'vs-rename-selected') return uiRenameSelectedStore();
+        if (action === 'vs-refresh-badge') return vsUpdateIndexBadgeFromId();
+        if (action === 'vs-upsert') return vsUpsertVector();
+        if (action === 'vs-list-vectors') return vsListVectors();
+        if (action === 'vs-prev') return vsPrevPage();
+        if (action === 'vs-next') return vsNextPage();
+        if (action === 'vs-query') return vsQuery();
+        if (action === 'vs-bulk-upsert') return vsBulkUpsert();
+        if (action === 'vs-delete-vector') return vsDeleteVector();
+        if (action === 'vs-delete-by-filter') return vsDeleteByFilter();
+        if (action === 'vs-admin-index-info') return vsAdminIndexInfo();
+        if (action === 'vs-admin-set-ef') return vsAdminSetEfSearch();
+        if (action === 'vs-admin-rebuild') return vsAdminRebuildIndex();
+        if (action === 'vb-load-users') return vbLoadUsers();
+        if (action === 'vb-refresh') return vbList();
+      } catch (e) {
+        console.error('Vector stores action failed:', action, e);
+      }
+    });
+
+    // Blur bindings for badges
+    const bindBlur = (id) => {
+      const el = document.getElementById(id);
+      if (el && !el._vsBlur) { el._vsBlur = true; el.addEventListener('blur', () => { try { vsUpdateIndexBadgeFromId(); } catch {} }); }
+    };
+    bindBlur('vs_id');
+    bindBlur('vs_admin_id');
+
+    // Optional initial list to populate selects
+    try { uiLoadExistingStores(); } catch {}
+  }
   async function vsCreate() {
     const name = document.getElementById('vs_name')?.value.trim();
     const dim = parseInt(document.getElementById('vs_dimensions')?.value || '1536');
@@ -551,5 +603,6 @@
     vsRefreshRowBadge, vsRenameQuick, vsSelect, vsDuplicateSelected,
     vsRenameSelectedFromPanel, uiCreateStoreFromMedia, uiUpdateStoreFromMedia,
     uiLoadExistingStores, uiRenameSelectedStore, vbList, vbLoadUsers,
+    initializeVectorStoresTab,
   });
 })();

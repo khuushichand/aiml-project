@@ -51,16 +51,14 @@ class EndpointHelper {
             html += this.createFormField(field, id);
         });
 
-        // Add request button
+        // Add request + cURL buttons (no inline handlers)
         const buttonClass = method === 'DELETE' ? 'btn-danger' : '';
-        const confirmDelete = method === 'DELETE' ? `if(confirm('Are you sure?')) ` : '';
-
         html += `
             <button class="api-button ${buttonClass}"
-                    onclick="${confirmDelete}endpointHelper.executeRequest('${id}', '${method}', '${path}', '${bodyType}', '${timeout}')">
+                    data-action="exec" data-id="${id}" data-method="${method}" data-path="${path}" data-body="${bodyType}" data-timeout="${timeout}">
                 ${this.getButtonText(method)}
             </button>
-            <button class="btn btn-secondary" onclick="endpointHelper.showCurl('${id}', '${method}', '${path}', '${bodyType}')" style="margin-left: 10px;">
+            <button class="btn btn-secondary" data-action="curl" data-id="${id}" data-method="${method}" data-path="${path}" data-body="${bodyType}" style="margin-left: 10px;">
                 Show cURL
             </button>
             <pre id="${id}_response"></pre>
@@ -73,6 +71,40 @@ class EndpointHelper {
         } else {
             section.innerHTML = html;
         }
+        // Bind actions
+        try {
+            const execBtn = section.querySelector('button[data-action="exec"]');
+            if (execBtn && !execBtn._bound) {
+                execBtn._bound = true;
+                execBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const m = execBtn.getAttribute('data-method');
+                    if (m === 'DELETE') {
+                        if (!confirm('Are you sure?')) return;
+                    }
+                    this.executeRequest(
+                        execBtn.getAttribute('data-id'),
+                        m,
+                        execBtn.getAttribute('data-path'),
+                        execBtn.getAttribute('data-body'),
+                        execBtn.getAttribute('data-timeout') || 'default'
+                    );
+                });
+            }
+            const curlBtn = section.querySelector('button[data-action="curl"]');
+            if (curlBtn && !curlBtn._bound) {
+                curlBtn._bound = true;
+                curlBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.showCurl(
+                        curlBtn.getAttribute('data-id'),
+                        curlBtn.getAttribute('data-method'),
+                        curlBtn.getAttribute('data-path'),
+                        curlBtn.getAttribute('data-body')
+                    );
+                });
+            }
+        } catch (_) {}
         return section;
     }
 
@@ -622,6 +654,7 @@ class EndpointHelper {
 
 // Create global instance
 const endpointHelper = new EndpointHelper();
+try { window.endpointHelper = endpointHelper; } catch (_) {}
 
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {

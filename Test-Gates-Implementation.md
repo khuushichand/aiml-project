@@ -40,6 +40,9 @@ Non‑Goals
 - Use existing route policy from config/env (`API-Routes` in `config.txt`, `ROUTES_DISABLE`, `ROUTES_ENABLE`).
 - Effect: if a route is disabled, its module is not imported and cannot trigger heavy work.
 
+- Precedence: `enable` overrides `disable`; `disable` overrides defaults; `enable` overrides `stable_only`.
+  - During tests, certain routes are force‑enabled to avoid 404s (workflows, sandbox, scheduler, mcp‑unified, mcp‑catalogs, jobs, personalization).
+
 3) Minimal test profile by default
 - In tests, set `MINIMAL_TEST_APP=1` and extend `ROUTES_DISABLE` to include heavy keys (e.g., `evaluations`) unless explicitly opted‑in.
 - Provide pytest marker/fixture to enable heavy routes for specific tests/suites.
@@ -51,7 +54,7 @@ Non‑Goals
 ## Environment & Config Toggles
 
 Config file: `tldw_Server_API/Config_Files/config.txt` section `[API-Routes]`
-- `stable_only = true|false` (default is false unless configured or overridden by env)
+- `stable_only = true|false` (default is false when config is loaded; if config cannot be read, a conservative default of true is used).
 - `disable = a,b,c`
 - `enable = x,y,z`
 - `experimental_routes = k1,k2`
@@ -65,6 +68,14 @@ Environment variables (precedence > config.txt):
 - `ULTRA_MINIMAL_APP`       — health‑only profile (diagnostics).
 - `TEST_MODE` / `TLDW_TEST_MODE` — unified test flags; treat truthy values as {1,true,yes,y,on}.
 - `RUN_EVALUATIONS`         — opt‑in heavy Evaluations routes for tests/CI.
+
+- `DISABLE_HEAVY_STARTUP`   — force synchronous startup (disable deferral of heavy work).
+- `DEFER_HEAVY_STARTUP`     — defer heavy/non‑critical startup tasks to background.
+- Jobs/metrics worker toggles to avoid starting background workers in tests/CI:
+  - `AUDIO_JOBS_WORKER_ENABLED`, `JOBS_WEBHOOKS_ENABLED`, `JOBS_WEBHOOKS_URL`, `JOBS_METRICS_GAUGES_ENABLED`, `JOBS_METRICS_RECONCILE_ENABLE`, `JOBS_CRYPTO_ROTATE_SERVICE_ENABLED`.
+
+Notes:
+- Route keys are lowercase and comma/space separated; both `-` and `_` are commonly used.
 
 Recommended test defaults:
 - `MINIMAL_TEST_APP=1`
@@ -101,11 +112,13 @@ Stage 4 — Default Minimal Test Profile
   - Extend `ROUTES_DISABLE` to include `evaluations` unless `RUN_EVALUATIONS=1`.
 - Add pytest marker `evaluations`; a session fixture toggles env accordingly for marked tests.
 
-- Stage 5 — TEST_MODE & Pool Sizing Harmonization
+Stage 5 — TEST_MODE & Pool Sizing Harmonization
 - File: `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` and related deps
   - Accept truthy `TEST_MODE` / `TLDW_TEST_MODE` variants.
 - File: `tldw_Server_API/app/core/Evaluations/connection_pool.py`
   - Use small pool sizes when `TEST_MODE` is truthy.
+  
+- Add shared helper `is_test_mode()` for consistent detection across modules (checks both envs; truthy set {1,true,yes,y,on}).
 
 Stage 6 — Docs & CI
 - Update project docs (this file + Development doc): usage of toggles and patterns.
@@ -180,7 +193,8 @@ Expect: fast startup, no Evaluations pool logs, test completes quickly.
 ```
 export RUN_EVALUATIONS=1
 unset MINIMAL_TEST_APP
-export ROUTES_DISABLE="${ROUTES_DISABLE//evaluations/}"
+ROUTES_DISABLE="$(echo "$ROUTES_DISABLE" | tr ',' '\n' | awk 'tolower($0)!="evaluations" && $0!=""' | paste -sd, -)"
+export TEST_MODE=1
 pytest -m evaluations -q
 ```
 Expect: evaluations routes loaded; pools created; graceful shutdown.
@@ -195,6 +209,11 @@ Examples
   - `def shutdown_evaluations_pool_if_initialized():` call `get_connection_manager().shutdown()` then `get_connection_manager.cache_clear()` if instantiated.
 - Import-within-gate pattern (in `main.py`):
   - `if route_enabled("evaluations"):` then import and `app.include_router(...)`; otherwise log disabled.
+
+- Shutdown helpers in `main.py` lifespan teardown (after app subsystems):
+  - `from tldw_Server_API.app.core.Evaluations.connection_pool import shutdown_evaluations_pool_if_initialized`
+  - `from tldw_Server_API.app.core.Evaluations.webhook_manager import shutdown_webhook_manager_if_initialized`
+  - Call both in shutdown; helpers are no‑ops if never initialized.
 
 Contributor checklist for heavy modules
 - No import-time threads/connections or background tasks.

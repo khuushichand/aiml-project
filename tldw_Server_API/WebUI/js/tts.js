@@ -1256,13 +1256,13 @@ const TTS = {
                     <p class="text-muted">${provider}</p>
                     <small>${description || 'No description'}</small>
                     <div class="voice-actions">
-                        <button class="btn btn-sm btn-primary" onclick="TTS.useCustomVoiceFromEl(this)">
+                        <button class="btn btn-sm btn-primary" data-action="use-custom-voice">
                             <i class="fas fa-check"></i> Use Voice
                         </button>
-                        <button class="btn btn-sm btn-secondary" onclick="TTS.previewVoice('${id}')">
+                        <button class="btn btn-sm btn-secondary" data-action="preview-voice" data-voice-id="${id}">
                             <i class="fas fa-play"></i> Preview
                         </button>
-                        <button class="btn btn-sm btn-danger" onclick="TTS.deleteVoice('${id}')">
+                        <button class="btn btn-sm btn-danger" data-action="delete-voice" data-voice-id="${id}">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -1286,7 +1286,7 @@ const TTS = {
                     <p class="text-muted">${provider}${meta ? ` • ${meta}` : ''}</p>
                     <small>${description}</small>
                     <div class="voice-actions">
-                        <button class="btn btn-sm btn-primary" onclick="TTS.useCatalogVoiceFromEl(this)">
+                        <button class="btn btn-sm btn-primary" data-action="use-catalog-voice">
                             <i class="fas fa-check"></i> Use Voice
                         </button>
                     </div>
@@ -1312,6 +1312,29 @@ const TTS = {
         } else {
             voiceList.innerHTML = __voicesMarkup;
         }
+
+        // Delegate voice list actions without inline handlers
+        try {
+            if (!voiceList._bound) {
+                voiceList._bound = true;
+                voiceList.addEventListener('click', function (ev) {
+                    const btn = ev.target && ev.target.closest('button[data-action]');
+                    if (!btn) return;
+                    const action = btn.getAttribute('data-action');
+                    if (action === 'use-custom-voice') {
+                        try { TTS.useCustomVoiceFromEl.call(TTS, btn); } catch (_) {}
+                    } else if (action === 'use-catalog-voice') {
+                        try { TTS.useCatalogVoiceFromEl.call(TTS, btn); } catch (_) {}
+                    } else if (action === 'preview-voice') {
+                        const id = btn.getAttribute('data-voice-id');
+                        try { TTS.previewVoice(id); } catch (_) {}
+                    } else if (action === 'delete-voice') {
+                        const id = btn.getAttribute('data-voice-id');
+                        try { TTS.deleteVoice(id); } catch (_) {}
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
     },
 
     // Internal helper: switch UI to provider and select a voice in the correct control
@@ -1565,11 +1588,24 @@ const TTS = {
                     <small>${item.text}</small><br>
                     <small class="text-muted">${new Date(item.timestamp).toLocaleString()}</small>
                 </div>
-                <button class="btn btn-sm btn-secondary" onclick="TTS.replayHistory(${index})">
+                <button class="btn btn-sm btn-secondary" data-action="replay" data-index="${index}">
                     <i class="fas fa-redo"></i> Replay
                 </button>
             </div>
         `).join('');
+
+        // Bind replay events without inline handlers
+        try {
+            if (!historyList._bound) {
+                historyList._bound = true;
+                historyList.addEventListener('click', (ev) => {
+                    const btn = ev.target && ev.target.closest('button[data-action="replay"]');
+                    if (!btn) return;
+                    const idx = parseInt(btn.getAttribute('data-index') || '0', 10);
+                    try { TTS.replayHistory(idx); } catch (_) {}
+                });
+            }
+        } catch (_) { /* ignore */ }
     },
 
     // Replay from history

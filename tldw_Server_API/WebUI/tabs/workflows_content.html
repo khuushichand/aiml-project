@@ -271,57 +271,57 @@
         <div style="color:var(--color-base-0); font-size:0.9em">Read-only snapshot of effective Workflows settings</div>
       </div>
       <div>
-        <button class="api-button" onclick="wfLoadConfig()">Refresh</button>
+        <button class="api-button" id="wfCfg_refresh">Refresh</button>
       </div>
     </div>
     <div id="wfConfig_card" style="margin-top:8px"></div>
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfGetStepTypes()">Get Step Types</button>
+    <button class="api-button" id="wfStepTypes_btn">Get Step Types</button>
   </div>
   <div class="form-group">
     <label for="wfDef_payload">Definition JSON</label>
     <div id="wfTpl_featured" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:6px 0">
       <span style="opacity:0.85">Featured:</span>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('site_watch_digest_tts')">Site Watch + Digest + TTS</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('site_watch_digest_tts')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('site_watch_digest_tts')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('pdf_qa')">PDF → Q&A</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('pdf_qa')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('pdf_qa')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('paper_roundup')">Paper Roundup</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('paper_roundup')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('paper_roundup')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('policy_checker')">Policy Checker</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('policy_checker')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('policy_checker')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('podcast_summary_narration')">Podcast → Summary → TTS</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('podcast_summary_narration')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('podcast_summary_narration')">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="site_watch_digest_tts">Site Watch + Digest + TTS</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="site_watch_digest_tts">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="site_watch_digest_tts">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="pdf_qa">PDF → Q&A</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="pdf_qa">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="pdf_qa">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="paper_roundup">Paper Roundup</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="paper_roundup">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="paper_roundup">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="policy_checker">Policy Checker</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="policy_checker">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="policy_checker">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="podcast_summary_narration">Podcast → Summary → TTS</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="podcast_summary_narration">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="podcast_summary_narration">Run & Watch</button>
     </div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
       <label style="margin:0">Templates</label>
-      <input id="wfTpl_search" type="search" placeholder="Search templates..." style="min-width:200px" onkeydown="if(event.key==='Enter'){wfTplLoadList()}" oninput="wfTplQueryChanged()"/>
+      <input id="wfTpl_search" type="search" placeholder="Search templates..." style="min-width:200px" />
       <label style="margin:0 0 0 6px">Tag</label>
       <select id="wfTpl_tag" style="min-width:160px"><option value="">(all)</option></select>
       <select id="wfTpl_select" style="min-width:240px"></select>
-      <button class="api-button" onclick="wfTplLoadList()">Search/Refresh</button>
-      <button class="api-button" onclick="wfTplApply()">Load Selected</button>
-      <button class="api-button" onclick="wfTplInsert()">Insert Selected</button>
-      <button class="api-button" onclick="wfTplRun()">Run This Template</button>
-      <button class="api-button" onclick="wfTplRunWatch()">Run & Watch</button>
-      <button class="api-button" onclick="wfTplSaveAsNew()" title="Save the editor JSON as a local template stored in your browser">Save as New</button>
-      <button class="api-button btn-sm" onclick="wfTplDeleteLocal()" title="Delete the selected local template">Delete Local</button>
-      <button class="api-button" onclick="wfTplCopyCurlAlt()" title="Copy a shell snippet that uses jq to parse the workflow id and start a run">Copy cURL (Create+Run)</button>
+      <button class="api-button" id="wfTpl_search_btn">Search/Refresh</button>
+      <button class="api-button" id="wfTpl_apply_btn">Load Selected</button>
+      <button class="api-button" id="wfTpl_insert_btn">Insert Selected</button>
+      <button class="api-button" id="wfTpl_run_btn">Run This Template</button>
+      <button class="api-button" id="wfTpl_runwatch_btn">Run & Watch</button>
+      <button class="api-button" id="wfTpl_saveas_btn" title="Save the editor JSON as a local template stored in your browser">Save as New</button>
+      <button class="api-button btn-sm" id="wfTpl_delete_local_btn" title="Delete the selected local template">Delete Local</button>
+      <button class="api-button" id="wfTpl_copy_curl_btn" title="Copy a shell snippet that uses jq to parse the workflow id and start a run">Copy cURL (Create+Run)</button>
       <label style="display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--color-base-0); font-size:0.9em" title="jq is used to extract the workflow id from the create response. Toggle 'No jq' for a placeholder-based script.">
         <span id="wfTpl_curl_note" title="Default: jq required. Switch to 'No jq' for a manual WID placeholder.">Requires jq</span>
         <span class="wf-help" title="The generated shell snippet uses jq to parse JSON responses. Toggle 'No jq' to output a placeholder-based script if jq is unavailable.">i</span>
         <span style="opacity:0.8">|</span>
-        <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
+        <input type="checkbox" id="wfTpl_curl_nojq" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
       </label>
-      <button class="api-button" onclick="wfTplResetFilters()" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
+      <button class="api-button" id="wfTpl_reset_filters" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
     </div>
-    <textarea id="wfDef_payload" rows="12" style="width:100%" oninput="wfRoutingDebounceRefresh()">{
+    <textarea id="wfDef_payload" rows="12" style="width:100%">{
   "name": "hello",
   "version": 1,
   "steps": [
@@ -389,22 +389,22 @@
     <div id="wfSched_list"></div>
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfCreateDefinition()">Create Definition</button>
-    <button class="api-button" onclick="wfListDefinitions()">List Definitions</button>
-    <button class="api-button" onclick="wfInsertDelay()">Insert Delay Step</button>
-    <button class="api-button" onclick="wfInsertLog()">Insert Log Step</button>
-    <button class="api-button" onclick="wfInsertBranch()">Insert Branch Step</button>
-    <button class="api-button" onclick="wfInsertPrompt()">Insert Prompt Step</button>
-    <button class="api-button" onclick="wfInsertRagSearch()">Insert RAG Search Step</button>
-    <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
-    <button class="api-button" onclick="wfInsertTTS()">Insert TTS Step</button>
-    <button class="api-button" onclick="wfInsertProcessMedia()">Insert Process Media Step</button>
-    <button class="api-button" onclick="wfInsertRSSFetch()">Insert RSS Fetch Step</button>
-    <button class="api-button" onclick="wfInsertEmbed()">Insert Embed Step</button>
-    <button class="api-button" onclick="wfInsertTranslate()">Insert Translate Step</button>
-    <button class="api-button" onclick="wfInsertSTT()">Insert STT Transcribe Step</button>
-    <button class="api-button" onclick="wfInsertNotify()">Insert Notify Step</button>
-    <button class="api-button" onclick="wfInsertDiff()">Insert Diff Change Step</button>
+    <button class="api-button" id="wfDef_create">Create Definition</button>
+    <button class="api-button" id="wfDef_list">List Definitions</button>
+    <button class="api-button" data-action="wf-insert" data-kind="delay">Insert Delay Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="log">Insert Log Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="branch">Insert Branch Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="prompt">Insert Prompt Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="rag">Insert RAG Search Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="ingest">Insert Media Ingest Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="tts">Insert TTS Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="process_media">Insert Process Media Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="rss">Insert RSS Fetch Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="embed">Insert Embed Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="translate">Insert Translate Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="stt">Insert STT Transcribe Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="notify">Insert Notify Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="diff">Insert Diff Change Step</button>
   </div>
   <div class="form-group">
     <label>Workflow ID</label>
@@ -419,8 +419,8 @@
     <button class="api-button" onclick="wfRunSaved()">Run Saved</button>
   </div>
   <div class="form-group" style="margin-bottom:4px">
-    <button class="api-button" onclick="wfCopyJson('wfDef_result')">Copy</button>
-    <button class="api-button" onclick="wfClearJson('wfDef_result')">Clear</button>
+    <button class="api-button" data-action="wf-copy-json" data-target="wfDef_result">Copy</button>
+    <button class="api-button" data-action="wf-clear-json" data-target="wfDef_result">Clear</button>
   </div>
   <pre id="wfDef_result" class="json-viewer"></pre>
   <script>

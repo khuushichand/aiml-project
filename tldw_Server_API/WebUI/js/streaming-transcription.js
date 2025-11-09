@@ -738,12 +738,46 @@ function updateModelOptions() {
     }
 }
 
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    // Only initialize if we're on the streaming tab
-    if (document.getElementById('tabAudioStreaming')) {
-        console.log('Streaming transcription module loaded');
-        // Ensure language/options are initialized for current model selection
-        try { updateModelOptions(); } catch (e) { /* noop */ }
-    }
-});
+// CSP-safe initializer for the tab
+function initializeAudioStreamingTab() {
+    const root = document.getElementById('tabAudioStreaming');
+    if (!root || root._asBound) return;
+    root._asBound = true;
+
+    // Bind model change
+    try {
+        const modelSel = document.getElementById('streamingModel');
+        if (modelSel && !modelSel._bound) { modelSel._bound = true; modelSel.addEventListener('change', () => updateModelOptions()); }
+    } catch {}
+
+    // Bind VAD toggle
+    try {
+        const vadCheckbox = document.getElementById('streamingEnableVAD');
+        const vadThresholdGroup = document.getElementById('vadThresholdGroup');
+        if (vadCheckbox && vadThresholdGroup && !vadCheckbox._bound) {
+            vadCheckbox._bound = true;
+            const sync = () => { vadThresholdGroup.style.display = vadCheckbox.checked ? 'block' : 'none'; };
+            vadCheckbox.addEventListener('change', sync);
+            sync();
+        }
+    } catch {}
+
+    // Buttons via delegation
+    root.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        try {
+            if (action === 'as-connect') return toggleStreamingConnection();
+            if (action === 'as-start') return startStreamingRecording();
+            if (action === 'as-stop') return stopStreamingRecording();
+            if (action === 'as-clear') return clearStreamingTranscript();
+        } catch (e) { console.error('Audio streaming action failed:', action, e); }
+    });
+
+    // Initialize options for current model selection
+    try { updateModelOptions(); } catch (e) { /* noop */ }
+}
+
+// Expose initializer
+window.initializeAudioStreamingTab = initializeAudioStreamingTab;
