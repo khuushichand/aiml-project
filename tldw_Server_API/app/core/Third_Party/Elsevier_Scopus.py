@@ -17,7 +17,7 @@ def _missing_key_error() -> str:
 BASE_URL = "https://api.elsevier.com/content/search/scopus"
 
 
- 
+
 
 
 def _headers() -> Dict[str, str]:

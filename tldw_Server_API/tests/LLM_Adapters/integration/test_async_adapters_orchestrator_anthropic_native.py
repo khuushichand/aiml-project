@@ -95,4 +95,3 @@ async def test_orchestrator_async_anthropic_native_stream(monkeypatch):
         chunks.append(ch)
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
-

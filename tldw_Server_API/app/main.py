@@ -526,15 +526,7 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
-    # Unified Evaluation endpoint (guarded; can be heavy and optional in some test contexts)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
-        _HAS_UNIFIED_EVALUATIONS = True
-    except Exception as _evals_import_err:  # noqa: BLE001 - log and continue for deterministic startup
-        logger.warning(f"Unified Evaluation endpoints unavailable; skipping import: {_evals_import_err}")
-        _HAS_UNIFIED_EVALUATIONS = False
-    from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
-    from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
+    # Note: Evaluations, OCR, and VLM are imported later inside route-enabled gates
     # Benchmark Endpoint
     from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
     # Sync Endpoint
@@ -2009,20 +2001,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping request queue: {e}")
 
-    # Shutdown Evaluations connection manager (stops maintenance thread for tests)
-    # Guard against import side-effects: only access if module already imported
+    # Shutdown Evaluations pool via lazy helper (no-op if never initialized)
     try:
-        import sys as _sys
-        _mod = _sys.modules.get("tldw_Server_API.app.core.Evaluations.connection_pool")
-        _cm = getattr(_mod, "connection_manager", None) if _mod is not None else None
-        if _cm is not None:
-            try:
-                _cm.shutdown()
-                logger.info("App Shutdown: Evaluations connection manager shutdown")
-            except Exception as _cm_err:  # noqa: BLE001
-                logger.error(f"App Shutdown: Error shutting down evaluations connection manager: {_cm_err}")
+        from tldw_Server_API.app.core.Evaluations.connection_pool import shutdown_evaluations_pool_if_initialized as _shutdown_evals
+        _shutdown_evals()
+        logger.info("App Shutdown: Evaluations connection manager shutdown (lazy)")
     except Exception as e:
-        logger.error(f"App Shutdown: Error accessing evaluations connection manager: {e}")
+        logger.debug(f"App Shutdown: Evaluations pool shutdown skipped/failed: {e}")
 
     # Shutdown Unified Audit Services (via DI cache)
     try:
@@ -3146,10 +3131,33 @@ else:
         _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
     _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     _include_if_enabled("paper-search", paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
-    if _HAS_UNIFIED_EVALUATIONS:
-        _include_if_enabled("evaluations", unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-    _include_if_enabled("ocr", ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
-    _include_if_enabled("vlm", vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+    # Heavy routers: import only when enabled to avoid import-time side effects
+    try:
+        if route_enabled("evaluations"):
+            from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+        else:
+            logger.info("Route disabled by policy: evaluations")
+    except Exception as _evals_rt_err:  # noqa: BLE001
+        logger.warning(f"Route gating error for evaluations; skipping import. Error: {_evals_rt_err}")
+
+    try:
+        if route_enabled("ocr"):
+            from tldw_Server_API.app.api.v1.endpoints.ocr import router as _ocr_router
+            app.include_router(_ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
+        else:
+            logger.info("Route disabled by policy: ocr")
+    except Exception as _ocr_rt_err:  # noqa: BLE001
+        logger.warning(f"Route gating error for ocr; skipping import. Error: {_ocr_rt_err}")
+
+    try:
+        if route_enabled("vlm"):
+            from tldw_Server_API.app.api.v1.endpoints.vlm import router as _vlm_router
+            app.include_router(_vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+        else:
+            logger.info("Route disabled by policy: vlm")
+    except Exception as _vlm_rt_err:  # noqa: BLE001
+        logger.warning(f"Route gating error for vlm; skipping import. Error: {_vlm_rt_err}")
     _include_if_enabled("benchmarks", benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"], default_stable=False)
     from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
     try:

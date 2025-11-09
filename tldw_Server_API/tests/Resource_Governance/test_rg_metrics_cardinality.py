@@ -44,4 +44,3 @@ async def test_rg_metrics_cardinality_and_counters():
     assert all("entity" not in mv.labels for mv in vals_deny)
     vals_ref = reg.values.get("rg_refunds_total", [])
     assert all("entity" not in mv.labels for mv in vals_ref)
-

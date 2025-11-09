@@ -1,6 +1,6 @@
 # Realtime Voice Latency PRD
 
-Owner: Core Voice & API Team  
+Owner: Core Voice & API Team
 Status: Draft (v0.1)
 
 ## Overview

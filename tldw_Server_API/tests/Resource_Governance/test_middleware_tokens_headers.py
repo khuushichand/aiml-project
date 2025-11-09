@@ -90,4 +90,3 @@ async def test_middleware_adds_tokens_headers_on_success():
         assert r.headers.get("X-RateLimit-Tokens-Remaining") == "59"
         assert r.headers.get("X-RateLimit-PerMinute-Limit") == "60"
         assert r.headers.get("X-RateLimit-PerMinute-Remaining") == "59"
-

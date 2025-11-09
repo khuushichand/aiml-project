@@ -26,4 +26,3 @@ def test_audio_ws_invalid_json_yields_validation_error(monkeypatch):
             assert msg.get("code") == "validation_error"
             # compat shim from WebSocketStream
             assert msg.get("error_type") == "validation_error"
-

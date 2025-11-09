@@ -45,4 +45,3 @@ async def test_resource_daily_ledger_postgres_peek_range(test_db_pool):
     days = {d["day_utc"]: d["units"] for d in peek.get("days", [])}
     assert days.get(start_day) == 5
     assert days.get(end_day) == 7
-

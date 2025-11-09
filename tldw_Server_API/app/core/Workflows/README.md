@@ -76,4 +76,3 @@ Related Schemas
   - Use IANA timezones in cron; invalid expressions return 422.
   - Streaming endpoints require proper client handling (SSE); in tests some streaming paths may be skipped.
   - Secrets are in‑memory only; never persisted to DB—expect `None` after engine cleanup.
-

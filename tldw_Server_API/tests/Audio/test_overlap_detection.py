@@ -54,4 +54,3 @@ def test_overlap_detection_fields_via_mock_similarity(monkeypatch):
     assert out[2].get("primary_confidence") == pytest.approx(0.60)
     assert out[2].get("secondary_speakers")[0]["speaker_id"] == 0
     assert out[2].get("secondary_speakers")[0]["confidence"] == pytest.approx(0.40)
-

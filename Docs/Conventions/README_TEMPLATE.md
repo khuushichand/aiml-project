@@ -41,4 +41,3 @@ Example Quick Start (optional)
 # svc = SomeClass(...)
 # result = svc.run(...)
 ```
-

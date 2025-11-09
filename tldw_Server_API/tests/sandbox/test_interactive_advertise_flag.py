@@ -28,4 +28,3 @@ def test_interactive_supported_advertised_when_execution_enabled(monkeypatch) ->
         docker = next((rt for rt in data.get("runtimes", []) if rt.get("name") == "docker"), None)
         assert docker is not None
         assert docker.get("interactive_supported") is True
-

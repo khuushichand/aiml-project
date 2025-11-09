@@ -94,4 +94,3 @@ Provider adapters for external scholarly/metadata services used by the Paper Sea
   - XML/HTML parsing can be brittle (arXiv/PMC); prefer small, defensive transformations.
 - Roadmap/TODOs:
   - Expand provider parity (additional OSF preprint servers), add cache hints, and consider adapter‑level metrics (success rate/latency per provider).
-

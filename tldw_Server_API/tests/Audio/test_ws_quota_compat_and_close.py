@@ -52,4 +52,3 @@ def test_audio_ws_quota_error_includes_error_type_and_closes_1008(monkeypatch):
             with pytest.raises(WebSocketDisconnect) as exc:
                 ws.receive_text()
             assert getattr(exc.value, "code", None) == 1008
-

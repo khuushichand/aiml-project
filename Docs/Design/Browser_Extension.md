@@ -409,7 +409,7 @@ Example Requests
     `{
       "delimiter": "\t",
       "has_header": true,
-      "content": "Deck\tFront\tBack\tTags\tNotes\nDefault\tWhat is RAG?\tRetrieval-Augmented Generation\tAI;RAG\tcore concept\nDefault\tCloze example {{c1::mask}}\t\tcloze;example\t" 
+      "content": "Deck\tFront\tBack\tTags\tNotes\nDefault\tWhat is RAG?\tRetrieval-Augmented Generation\tAI;RAG\tcore concept\nDefault\tCloze example {{c1::mask}}\t\tcloze;example\t"
     }`
   - Response: `{ "imported": N, "items": [{"uuid":"...","deck_id":1}, ...], "errors": [...] }`
   - Limits: see “Flashcards import limits” in Schema Notes.

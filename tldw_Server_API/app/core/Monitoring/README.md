@@ -76,4 +76,3 @@
   - Webhook/email sends are best‑effort and may be disabled in restricted environments; rely on JSONL for auditability.
   - Large texts are truncated for scanning; test your rules with realistic snippets.
   - Regex complexity can impact performance; prefer literals or well‑scoped regexes.
-

@@ -74,4 +74,3 @@ Related Services/DB
   - Ensure the core scheduler is started (`get_global_scheduler()`) before enqueueing (services handle this in app lifespan).
   - Cron/timezone validation uses APScheduler; always pass IANA tz names (e.g., `UTC`).
   - PostgreSQL backends require proper connection strings and schema privileges; see DB_Management docs.
-

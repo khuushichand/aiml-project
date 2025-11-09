@@ -51,4 +51,3 @@ async def test_sse_multiline_and_comments():
     finally:
         import asyncio
         await client.aclose()
-

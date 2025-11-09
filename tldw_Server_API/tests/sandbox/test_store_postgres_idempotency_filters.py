@@ -57,4 +57,3 @@ def test_postgres_idempotency_filters_with_iso_and_z(monkeypatch):
     to_iso2 = _z(datetime.fromtimestamp(base, tz=timezone.utc) + timedelta(seconds=120))
     cnt = st.count_idempotency(endpoint="pgtest/sessions", created_at_from=from_iso2, created_at_to=to_iso2)
     assert isinstance(cnt, int) and cnt >= 1
-

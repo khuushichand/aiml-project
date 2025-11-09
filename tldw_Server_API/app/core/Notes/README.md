@@ -105,4 +105,3 @@ Related Schemas
   - Missing `expected-version` on delete/update returns 400/409; clients must refetch and retry.
   - Large exports: prefer CSV streaming; consider filtering or pagination.
   - Rate limits apply per action; tests may bypass or lower limits depending on `TEST_MODE`.
-

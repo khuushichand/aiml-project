@@ -74,4 +74,3 @@ async def test_chat_api_call_async_streaming(monkeypatch):
         chunks.append(line)
     assert any("data:" in c for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
-

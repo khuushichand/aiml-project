@@ -64,4 +64,3 @@
 - Local Dev Tips
   - Start a Postgres via docker-compose to exercise RLS; set `JOBS_DB_URL` accordingly.
   - Use admin endpoints to pause/resume queues and to retry/reschedule stuck jobs during testing.
-

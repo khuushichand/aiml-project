@@ -73,4 +73,3 @@ Two‑way synchronization between a client’s local Media DB and the server’s
   - Link/unlink operations for junction tables require UUID lookups; skip gracefully if parents don’t exist locally.
 - Roadmap/TODOs:
   - Implement authenticated client requests; externalize configuration; add end‑to‑end tests and monitoring/metrics for sync volume and latency.
-

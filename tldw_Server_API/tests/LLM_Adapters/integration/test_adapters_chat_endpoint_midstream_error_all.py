@@ -89,4 +89,3 @@ def test_endpoint_midstream_error_single_sse_and_done(monkeypatch, authenticated
         # And then exactly one error and one [DONE]
         assert sum(1 for ln in lines if '"error"' in ln) == 1
         assert sum(1 for ln in lines if ln.strip().lower() == "data: [done]") == 1
-

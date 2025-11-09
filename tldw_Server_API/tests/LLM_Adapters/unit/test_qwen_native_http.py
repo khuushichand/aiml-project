@@ -85,4 +85,3 @@ def test_qwen_adapter_native_http_streaming(monkeypatch):
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "qwen-plus", "api_key": "k", "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
-

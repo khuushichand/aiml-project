@@ -39,4 +39,3 @@ def test_silhouette_estimation_capped(monkeypatch):
     assert max(attempts) <= 5, f"Tried {max(attempts)} speakers when max_speakers=5"
     # Should attempt exactly 2..5
     assert attempts == [2, 3, 4, 5]
-

@@ -67,4 +67,3 @@ async def test_fallback_memory_requests_allows_when_redis_broken(monkeypatch):
     d, h = await rg.reserve(RGRequest(entity="user:x", categories={"requests": {"units": 1}}, tags={"policy_id": "p"}))
     # Fallback memory path should allow
     assert d.allowed and h
-

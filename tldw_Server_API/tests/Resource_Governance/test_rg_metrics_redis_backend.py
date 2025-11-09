@@ -52,4 +52,3 @@ async def test_redis_backend_metrics_allow_deny_refund_paths():
         assert after_ref["count"] >= before_ref["count"] + 1
     else:
         assert after_ref["count"] >= 1
-

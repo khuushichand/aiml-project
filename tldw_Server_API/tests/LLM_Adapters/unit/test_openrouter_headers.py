@@ -63,4 +63,3 @@ def test_openrouter_headers_include_site_meta(monkeypatch):
     assert cap.last_headers.get("X-Title") == "TLDW-Test"
     # Authorization preserved
     assert cap.last_headers.get("Authorization", "").startswith("Bearer ")
-

@@ -41,4 +41,3 @@ def test_llm_providers_merges_adapter_capabilities(monkeypatch, client_user_only
     assert caps.get("json_mode") is True
     assert caps.get("supports_tools") is True
     assert caps.get("extra_cap") == "adapter"
-

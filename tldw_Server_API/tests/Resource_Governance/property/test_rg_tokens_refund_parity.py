@@ -56,4 +56,3 @@ async def test_tokens_refund_parity_and_steady_no_denials(per_min, first_units, 
             d, h = await rg2.reserve(RGRequest(entity=e, categories={"tokens": {"units": 1}}, tags={"policy_id": "p"}))
             assert d.allowed and h
             ft2.advance(10.0)
-

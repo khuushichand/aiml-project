@@ -105,4 +105,3 @@ async def test_custom_openai_async_streaming(monkeypatch):
         lines.append(ch)
     assert any("data:" in l for l in lines)
     assert sum(1 for l in lines if "[DONE]" in l) == 1
-

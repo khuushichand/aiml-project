@@ -16,4 +16,3 @@ services:
       # STREAM_HEARTBEAT_MODE: ${STREAM_HEARTBEAT_MODE:-data}
       # Optional: shorter heartbeat for local dev
       # STREAM_HEARTBEAT_INTERVAL_S: ${STREAM_HEARTBEAT_INTERVAL_S:-10}
-

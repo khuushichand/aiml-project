@@ -93,4 +93,3 @@ This document tracks staged implementation with concrete success criteria and te
 - Centralize route constants and validate against OpenAPI at startup (warn on mismatch).
 - Keep tokens in background memory; only persist refresh tokens if strictly necessary.
 - Use optional host permissions for user‑configured origins (Chrome/Edge MV3).
-

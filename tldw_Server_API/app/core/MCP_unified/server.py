@@ -795,7 +795,7 @@ class MCPServer:
             await stream.start()
             # Handle messages (domain JSON-RPC payloads go through send_json; no event-wrapping)
             await self._handle_websocket_messages(connection, stream)
-        
+
         except WebSocketDisconnect:
             logger.bind(connection_id=connection_id).info(f"WebSocket disconnected: {connection_id}")
         except Exception as e:

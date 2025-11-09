@@ -58,4 +58,3 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
             except Exception:
                 # Never fail a request due to logging
                 pass
-

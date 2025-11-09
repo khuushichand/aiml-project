@@ -71,4 +71,3 @@ async def test_mistral_async_streaming(monkeypatch):
         parts.append(ln)
     assert any(p.startswith("data: ") and "[DONE]" not in p for p in parts)
     assert sum(1 for p in parts if p.strip() == "data: [DONE]") == 1
-

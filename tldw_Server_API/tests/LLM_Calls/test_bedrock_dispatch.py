@@ -99,4 +99,3 @@ def test_dispatch_to_bedrock_adapter_stream(monkeypatch):
     assert len(chunks) >= 3  # two chunks + DONE
     assert chunks[0].startswith('data: ')
     assert chunks[-1].strip().endswith('[DONE]')
-

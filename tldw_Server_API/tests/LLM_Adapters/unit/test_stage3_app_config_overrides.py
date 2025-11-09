@@ -124,4 +124,3 @@ def test_deepseek_app_config_timeout(monkeypatch):
     }
     _ = a.chat(req)
     assert captured.get("timeout") == 88
-

@@ -30,4 +30,3 @@ async def test_health_reports_policy_snapshot(monkeypatch):
         assert data["rg_policy_version"] >= 1
         assert data.get("rg_policy_store") == "file"
         assert isinstance(data.get("rg_policy_count"), int)
-

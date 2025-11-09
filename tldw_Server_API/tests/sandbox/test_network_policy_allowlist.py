@@ -36,4 +36,3 @@ def test_build_restore_blob_shapes_rules_with_label():
     assert "-A DOCKER-USER -s 172.18.0.2 -d 1.2.3.0/24 -j ACCEPT" in blob
     assert "-A DOCKER-USER -s 172.18.0.2 -d 9.9.9.9/32 -j ACCEPT" in blob
     assert "-A DOCKER-USER -s 172.18.0.2 -j DROP" in blob
-

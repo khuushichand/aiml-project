@@ -26,7 +26,7 @@ def _build_url(scope: Optional[str]) -> str:
         return BASE_URL
     return f"{BASE_URL}{s}/"
 
- 
+
 
 
 DEFAULT_FL = (

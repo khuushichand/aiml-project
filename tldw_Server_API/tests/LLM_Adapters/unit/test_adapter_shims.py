@@ -209,4 +209,3 @@ def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
         assert captured.get("random_seed") == 123
         assert captured.get("top_k") == 42
         assert captured.get("safe_prompt") is True
-

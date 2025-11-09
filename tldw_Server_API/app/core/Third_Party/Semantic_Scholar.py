@@ -128,4 +128,3 @@ Abstract:
 Links:{pdf_link}{s2_link}
 """
     return formatted
-

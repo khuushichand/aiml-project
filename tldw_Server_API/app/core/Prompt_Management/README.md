@@ -38,7 +38,7 @@ Related Endpoints (file:line)
 
 Related Schemas
 - Prompts API: tldw_Server_API/app/api/v1/schemas/prompt_schemas.py:1
-- Prompt Studio base/project/prompt/test/optimization: 
+- Prompt Studio base/project/prompt/test/optimization:
   - tldw_Server_API/app/api/v1/schemas/prompt_studio_base.py:1
   - tldw_Server_API/app/api/v1/schemas/prompt_studio_project.py:1
   - tldw_Server_API/app/api/v1/schemas/prompt_studio_schemas.py:1
@@ -59,7 +59,7 @@ Related Schemas
   - Prompts interop: tldw_Server_API/app/core/Prompt_Management/Prompts_Interop.py:1 (export/search/keywords utilities, singleton DB init)
   - Prompt Studio DB: tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py:1 (dual-backend, helpers, row adapters)
   - Prompt engineering utilities: tldw_Server_API/app/core/Prompt_Management/Prompt_Engineering.py:1 (meta-prompt generator)
-  - Prompt Studio runtime: 
+  - Prompt Studio runtime:
     - Event broadcaster: tldw_Server_API/app/core/Prompt_Management/prompt_studio/event_broadcaster.py:2
     - Metrics/monitoring: tldw_Server_API/app/core/Prompt_Management/prompt_studio/monitoring.py:1
     - MCTS optimizer: tldw_Server_API/app/core/Prompt_Management/prompt_studio/mcts_optimizer.py:1
@@ -103,4 +103,3 @@ Related Schemas
   - Prompt Studio write operations require proper user context and permissions; expect 403/401 if deps aren’t satisfied.
   - In PG mode, lock contention can surface; metrics (e.g., `prompt_studio.pg_advisory.*`) help diagnose.
   - Large exports may produce big payloads; use CSV for compactness and chunked downloading when possible.
-

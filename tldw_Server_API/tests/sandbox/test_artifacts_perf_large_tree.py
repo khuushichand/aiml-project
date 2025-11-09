@@ -56,4 +56,3 @@ def test_artifacts_list_perf_large_tree(tmp_path: Path, monkeypatch) -> None:
         assert len(items) == len(files)
         # Generous threshold to avoid flakiness in CI
         assert dt < 5.0, f"artifact listing too slow: {dt:.3f}s for {len(files)} files"
-

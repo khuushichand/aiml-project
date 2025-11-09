@@ -37,4 +37,3 @@ async def test_real_redis_streams_ttl_expiry_allows_later(real_redis, rg_unique_
     await asyncio.sleep(3)
     d3, h3 = await rg.reserve(req)
     assert d3.allowed and h3
-

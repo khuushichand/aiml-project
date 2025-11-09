@@ -19,4 +19,3 @@ def test_agglomerative_param_compatibility():
         ok = True
 
     assert ok is True
-

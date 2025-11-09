@@ -24,4 +24,3 @@ def test_get_pg_env_builds_from_container_style(monkeypatch):
     monkeypatch.setenv("POSTGRES_TEST_DB", "tldw_content")
     pg = get_pg_env()
     assert pg.dsn == "postgresql://tldw:tldw@127.0.0.1:55432/tldw_content"
-

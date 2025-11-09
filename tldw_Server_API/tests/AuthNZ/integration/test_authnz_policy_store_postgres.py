@@ -34,4 +34,3 @@ async def test_authnz_policy_store_postgres_integration(test_db_pool):
     assert policies.get("chat.default", {}).get("requests", {}).get("rpm") == 200
     assert tenant.get("enabled") is True
     assert isinstance(updated_at, float)
-

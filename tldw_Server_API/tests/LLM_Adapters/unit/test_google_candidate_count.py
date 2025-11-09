@@ -55,4 +55,3 @@ def test_google_includes_candidate_count_when_n_set(monkeypatch):
     out = adapter.chat(req)
     assert out["object"] == "chat.completion"
     assert captured.get("candidateCount") == 2
-

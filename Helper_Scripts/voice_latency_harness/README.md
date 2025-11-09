@@ -18,4 +18,3 @@ Outputs:
 Notes:
 - The WS TTS example client is provided under `examples/ws_tts_client.py` (server endpoint optional).
 - The PCM client example is provided under `examples/pcm_stream_client.py`.
-

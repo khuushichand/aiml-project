@@ -127,4 +127,3 @@ def test_chat_endpoint_streaming_error_openrouter(monkeypatch, authenticated_cli
         saw_done = sum(1 for ln in lines if ln.strip().lower() == "data: [done]") == 1
         assert saw_error, f"Expected SSE error, got: {lines[:5]}"
         assert saw_done, "Expected a single [DONE] sentinel"
-

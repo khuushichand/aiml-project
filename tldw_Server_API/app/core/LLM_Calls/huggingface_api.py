@@ -302,7 +302,7 @@ class HuggingFaceAPI:
             except Exception:
                 pass
             return False
-        
+
     async def get_model_readme(self, repo_id: str) -> Optional[str]:
         """
         Get the README content for a model.

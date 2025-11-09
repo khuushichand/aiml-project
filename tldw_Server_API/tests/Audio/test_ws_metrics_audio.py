@@ -38,4 +38,3 @@ async def test_audio_ws_emits_ws_latency_metrics_on_commit():
 
     after = reg.get_metric_stats("ws_send_latency_ms").get("count", 0)
     assert after >= before + 1
-

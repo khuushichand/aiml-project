@@ -28,4 +28,3 @@ Variables
 Notes
 - If you run the server in mock mode for benchmarking (`CHAT_FORCE_MOCK=1`), the upstream LLM panels still work since metrics are recorded by the gateway (decorators and usage tracker).
 - The HTTP latency panels are driven by `http_request_duration_seconds_bucket`. LLM latency panels are driven by `llm_request_duration_seconds_bucket`.
-

@@ -6,6 +6,9 @@
   let jobsStatsTimer = null;
   let __boundEnhancements = false;
   let simpleChatStreamHandle = null;
+  // Ephemeral client-threaded chat history for Simple Chat
+  let __simpleChatHistory = [];
+  const __simpleChatMaxHistory = 40; // keep last N messages
 
   function setSimpleDefaults() {
     try {
@@ -214,13 +217,24 @@
     const msg = (input.value || '').trim();
     if (!msg) return;
     input.value = '';
-    const payload = { messages: [{ role: 'user', content: msg }] };
+    // Build payload using ephemeral local history + current user message
+    try {
+      // Push user message into local history
+      __simpleChatHistory.push({ role: 'user', content: msg });
+      // Trim history to last N messages
+      if (__simpleChatHistory.length > __simpleChatMaxHistory) {
+        __simpleChatHistory = __simpleChatHistory.slice(-__simpleChatMaxHistory);
+      }
+    } catch (_) {}
+    const payload = { messages: __simpleChatHistory.slice() };
     const model = modelSel ? (modelSel.value || '') : '';
     if (model) payload.model = model;
     if (saveEl && saveEl.checked) payload.save_to_db = true;
 
     const wantStream = !!document.getElementById('simpleChat_stream_toggle')?.checked;
     if (wantStream) {
+      // Ensure server streams via SSE
+      payload.stream = true;
       // Streaming path (optional fallback to non-stream on failure)
       try {
         await simpleChatStartStream(payload);
@@ -234,6 +248,25 @@
       try {
         Loading.show(out.parentElement, 'Sending...');
         const res = await apiClient.post('/api/v1/chat/completions', payload);
+        // Render plain answer content if present
+        try {
+          const answerEl = document.getElementById('simpleChat_answer');
+          const streamBox = document.getElementById('simpleChat_stream');
+          if (answerEl) {
+            const content = res?.choices?.[0]?.message?.content || res?.message || '';
+            if (typeof content === 'string' && content) {
+              if (typeof renderMarkdownToElement === 'function') { renderMarkdownToElement(content, answerEl); }
+              else { answerEl.textContent = content; }
+              if (streamBox) streamBox.style.display = '';
+              try {
+                __simpleChatHistory.push({ role: 'assistant', content });
+                if (__simpleChatHistory.length > __simpleChatMaxHistory) {
+                  __simpleChatHistory = __simpleChatHistory.slice(-__simpleChatMaxHistory);
+                }
+              } catch (_) {}
+            }
+          }
+        } catch (_) { /* ignore */ }
         out.textContent = JSON.stringify(res, null, 2);
         try { endpointHelper.updateCorrelationSnippet(out); } catch(_){}
       } catch (e) {
@@ -281,9 +314,14 @@
       body: requestPayload,
       onEvent: (evt) => {
         try {
-          const delta = evt?.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string' && delta.length > 0) {
-            assembled += delta;
+          // Support multiple streaming shapes
+          let piece = evt?.choices?.[0]?.delta?.content;
+          if (!piece && evt?.choices?.[0]?.text) piece = evt.choices[0].text; // some providers
+          if (!piece && typeof evt?.content === 'string') piece = evt.content; // generic
+          if (!piece && evt?.choices?.[0]?.message?.content && !assembled) piece = evt.choices[0].message.content; // final-only message
+
+          if (typeof piece === 'string' && piece.length > 0) {
+            assembled += piece;
             try {
               if (typeof renderMarkdownToElement === 'function') { renderMarkdownToElement(assembled, answerEl); }
               else { answerEl.textContent = assembled; }
@@ -312,6 +350,15 @@
         const finalObj = { message: assembled, usage: usage || null, finished_at: new Date().toISOString() };
         out.textContent = JSON.stringify(finalObj, null, 2);
         endpointHelper.updateCorrelationSnippet(out);
+        // Append assistant message to ephemeral history
+        if (assembled && assembled.length > 0) {
+          try {
+            __simpleChatHistory.push({ role: 'assistant', content: assembled });
+            if (__simpleChatHistory.length > __simpleChatMaxHistory) {
+              __simpleChatHistory = __simpleChatHistory.slice(-__simpleChatMaxHistory);
+            }
+          } catch (_) {}
+        }
       } catch (_) {}
     } catch (e) {
       stopBtn.style.display = 'none';
@@ -508,6 +555,7 @@
       }
     } catch (_) {}
     bindSimpleHandlers();
+    try { bindSimpleCollapsibles(); } catch(_){}
     setSimpleDefaults();
     // Re-apply defaults shortly after models populate
     setTimeout(setSimpleDefaults, 200);
@@ -555,6 +603,66 @@
       if (st && typeof savedStream === 'boolean') st.checked = savedStream;
     } catch (_) {}
   };
+
+  // Collapsible controls for Simple Landing panels
+  function bindSimpleCollapsibles() {
+    const ids = ['simpleIngest','simpleChat','simpleSearch'];
+    ids.forEach((id) => {
+      const header = document.querySelector(`.collapsible-header[data-collapsible="${id}"]`);
+      const btn = document.querySelector(`.collapsible-toggle-btn[data-target="${id}"]`);
+      const body = document.getElementById(`${id}_body`);
+      if (!header || !btn || !body) return;
+
+      // Restore saved state
+      try {
+        const saved = Utils.getFromStorage(`simple-collapsed-${id}`);
+        const collapsed = saved === true; // store booleans only
+        setCollapsedState(id, collapsed);
+      } catch (_) {}
+
+      if (!header._bound) {
+        header.addEventListener('click', (e) => {
+          // Avoid double-toggle when clicking the button; button has its own handler
+          try {
+            const targetEl = e && e.target && e.target.closest ? e.target.closest('.collapsible-toggle-btn') : null;
+            if (targetEl) return;
+          } catch (_) {}
+          toggleCollapsible(id);
+        });
+        header._bound = true;
+      }
+      if (!btn._bound) {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleCollapsible(id);
+        });
+        btn._bound = true;
+      }
+    });
+  }
+
+  function setCollapsedState(id, collapsed) {
+    try {
+      const header = document.querySelector(`.collapsible-header[data-collapsible="${id}"]`);
+      const btn = document.querySelector(`.collapsible-toggle-btn[data-target="${id}"]`);
+      const body = document.getElementById(`${id}_body`);
+      if (!header || !btn || !body) return;
+      body.style.display = collapsed ? 'none' : '';
+      header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.textContent = collapsed ? 'Show' : 'Hide';
+      Utils.saveToStorage(`simple-collapsed-${id}`, collapsed);
+    } catch (_) {}
+  }
+
+  function toggleCollapsible(id) {
+    try {
+      const body = document.getElementById(`${id}_body`);
+      if (!body) return;
+      const collapsed = body.style.display !== 'none' ? true : false;
+      setCollapsedState(id, collapsed);
+    } catch (_) {}
+  }
 
   function updateSimpleIngestUI() {
     try {
@@ -713,6 +821,20 @@
           try { Utils.saveToStorage('simple-chat-stream', !!streamToggle.checked); } catch(_){}
         });
         streamToggle._uxBound = true;
+      }
+      // Reset ephemeral chat thread
+      const resetBtn = document.getElementById('simpleChat_reset');
+      if (resetBtn && !resetBtn._bound) {
+        resetBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          try { __simpleChatHistory = []; } catch (_) {}
+          try {
+            const ans = document.getElementById('simpleChat_answer'); if (ans) ans.textContent = '';
+            const out = document.getElementById('simpleChat_response'); if (out) out.textContent = '---';
+          } catch (_) {}
+          try { Toast && Toast.info ? Toast.info('Simple Chat thread reset') : 0; } catch (_) {}
+        });
+        resetBtn._bound = true;
       }
 
       // Search: enable/disable search, clear button

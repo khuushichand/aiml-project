@@ -93,4 +93,3 @@ def test_bedrock_adapter_base_url_from_runtime_endpoint(monkeypatch):
         assert fake.last_url == "https://bedrock-runtime.us-test-1.amazonaws.com/openai/v1/chat/completions"
     finally:
         monkeypatch.delenv("BEDROCK_RUNTIME_ENDPOINT", raising=False)
-

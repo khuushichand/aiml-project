@@ -63,4 +63,3 @@
   - Consolidate web search orchestration into `core/WebSearch` (currently delegated to `core/Web_Scraping`).
   - Add caching for frequently repeated paper queries and search results.
   - Expand standardized evidence capture for aggregated answers.
-

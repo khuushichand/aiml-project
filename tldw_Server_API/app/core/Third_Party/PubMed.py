@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.http_client import fetch_json, fetch
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
-    
+
 
 
 def _build_term(query: str, free_full_text: bool) -> str:

@@ -50,4 +50,3 @@
 - Pitfalls & Gotchas
   - Avoid logging secrets. The redaction is best‑effort and may miss exotic formats.
   - If you create additional handlers via `logging.config.dictConfig`, interception in `main.py` wraps configuration to keep routing through Loguru.
-

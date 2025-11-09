@@ -175,4 +175,3 @@ async def test_hub_redis_no_duplicate_local_origin(monkeypatch: pytest.MonkeyPat
     # Ensure no duplicate immediately follows
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(q.get(), timeout=0.2)
-

@@ -80,4 +80,3 @@ def test_custom_openai_adapter_knobs():
         assert captured.get("maxp") == 0.5 or captured.get("topp") == 0.5
         assert captured.get("topk") == 20
         assert captured.get("minp") == 0.1
-

@@ -46,4 +46,3 @@ def test_ws_quota_close_code_toggle_to_1008(monkeypatch):
                 ws.receive_text()
             # Starlette's WebSocketDisconnect carries the close code
             assert getattr(exc.value, "code", None) == 1008
-

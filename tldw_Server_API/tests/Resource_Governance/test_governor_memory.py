@@ -103,4 +103,3 @@ async def test_commit_refund_difference_returns_tokens():
     req2 = RGRequest(entity="user:5", categories={"tokens": {"units": 600}}, tags={"policy_id": "p"})
     d2, h2 = await rg.reserve(req2, op_id="t2")
     assert d2.allowed and h2
-

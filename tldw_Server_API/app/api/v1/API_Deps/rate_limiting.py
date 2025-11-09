@@ -10,8 +10,9 @@ def get_test_aware_remote_address(request):
     Custom key function for rate limiting that bypasses limits in TEST_MODE.
     Returns None in TEST_MODE to effectively disable rate limiting.
     """
-    # ONLY check for TEST_MODE in environment - NEVER trust client headers
-    if os.getenv("TEST_MODE") == "true":
+    # ONLY check for server-side test mode envs — NEVER trust client headers
+    raw = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
         return None  # Bypass rate limiting in test mode
 
     return _original_get_remote_address(request)

@@ -146,7 +146,7 @@ def search_biorxiv(
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
 
-        
+
         def _details_path(cursor: int) -> str:
             # Support date range or numeric intervals (N or Nd)
             if recent_days and recent_days > 0:
@@ -285,7 +285,7 @@ def search_biorxiv_pubs(
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
 
-        
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -380,7 +380,7 @@ def search_biorxiv_publisher(
         BATCH = 100
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
-        
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -445,7 +445,7 @@ def search_biorxiv_pub(
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
 
-        
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -523,7 +523,7 @@ def search_biorxiv_funder(
         BATCH = 100
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
-        
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:

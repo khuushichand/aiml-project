@@ -38,4 +38,3 @@ class InMemoryPolicyStore:
 
     async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float]:
         return self._version, dict(self._policies), dict(self._tenant), float(self._updated_at)
-

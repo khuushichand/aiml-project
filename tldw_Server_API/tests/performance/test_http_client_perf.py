@@ -101,4 +101,3 @@ def test_download_throughput_mock(tmp_path):
         print(f"download_throughput ops={N} time={dt:.3f}s qps={qps:.1f}")
     finally:
         client.close()
-

@@ -18,7 +18,7 @@ BASE_URL = "https://api.osf.io/v2/preprints/"
 PROVIDER = "eartharxiv"
 
 
- 
+
 
 
 def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:

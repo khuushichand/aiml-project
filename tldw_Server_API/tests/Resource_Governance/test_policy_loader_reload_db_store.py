@@ -55,4 +55,3 @@ route_map:
     assert snap2.version >= 2
     # Route map precedence: file route_map survives DB policy changes
     assert snap2.route_map.get("by_path", {}).get("/api/v1/alt/*") == "file.policy"
-

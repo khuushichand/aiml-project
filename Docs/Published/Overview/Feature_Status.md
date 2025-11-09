@@ -137,4 +137,3 @@ Legend
 | VLM backends listing | Experimental | `/api/v1/vlm/backends` | [code](tldw_Server_API/app/api/v1/endpoints/vlm.py) |
 | Next.js WebUI | Working | Primary client | [code](tldw-frontend/) |
 | Legacy WebUI (/webui) | Working | Feature-frozen legacy | [code](tldw_Server_API/WebUI/) |
-

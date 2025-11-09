@@ -42,4 +42,3 @@
   - Permission mapping (403), `tools/list` shape: tldw_Server_API/tests/MCP/test_mcp_http_403_mapping.py:22
 - Local Dev Tips
   - Ensure MCP Unified server is configured and running (or initialized in-process) before invoking `ToolExecutor`.
-

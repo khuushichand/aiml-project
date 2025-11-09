@@ -95,7 +95,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - API changes:
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
 - Frontend:
-    - Legacy: /webui 
+    - Legacy: /webui
     - Or integrate directly against the API;
 ---
 
@@ -480,6 +480,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
+- TTS onboarding: `Docs/User_Guides/TTS_Getting_Started.md` – hosted/local provider setup, verification, and troubleshooting
 - Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
 
 ### Resource Governor Config

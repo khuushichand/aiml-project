@@ -41,4 +41,3 @@ async def test_audio_ws_pings_increment_metric(monkeypatch):
 
     # Expect at least 3-4 ping attempts over ~220ms with 50ms interval
     assert after >= before + 2
-

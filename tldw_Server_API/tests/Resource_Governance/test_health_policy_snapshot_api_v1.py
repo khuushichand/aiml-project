@@ -26,4 +26,3 @@ async def test_api_v1_health_reports_rg_policy_snapshot(monkeypatch):
         assert data["rg_policy_version"] >= 1
         assert data.get("rg_policy_store") in {"file", "db", None}
         assert isinstance(data.get("rg_policy_count"), int)
-

@@ -188,4 +188,3 @@ def test_anthropic_multimodal_invalid_image_url_ignored(monkeypatch):
     parts: List[Dict[str, Any]] = payload.get("messages", [{}])[0].get("content", [])
     assert any(p.get("type") == "text" for p in parts)
     assert not any(p.get("type") == "image" for p in parts)
-

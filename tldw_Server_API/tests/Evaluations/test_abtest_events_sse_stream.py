@@ -92,4 +92,3 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done():
             os.unlink(eval_db_path)
         except Exception:
             pass
-

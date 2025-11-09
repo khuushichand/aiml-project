@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.http_client import fetch
 import xml.etree.ElementTree as ET
 
 
- 
+
 
 
 # ---------------- IDEAS (RePEc) API: handle -> reference metadata ----------------

@@ -43,4 +43,3 @@ def test_google_gemini_streaming_sse_passthrough(monkeypatch):
     # Lines should match our SSE body split
     assert lines[0].startswith("data: ")
     assert lines[-1].strip() == "data: [DONE]"
-

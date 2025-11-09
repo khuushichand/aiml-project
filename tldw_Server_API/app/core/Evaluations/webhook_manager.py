@@ -1048,5 +1048,53 @@ class WebhookManager:
             }
 
 
-# Global instance
-webhook_manager = WebhookManager()
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def get_webhook_manager() -> "WebhookManager":
+    """Lazily construct a singleton WebhookManager."""
+    return WebhookManager()
+
+
+class _LazyWebhookManagerProxy:
+    """A lightweight proxy that lazily initializes the real manager on first use."""
+
+    def __getattr__(self, name):
+        mgr = get_webhook_manager()
+        return getattr(mgr, name)
+
+    def __call__(self, *args, **kwargs):
+        return get_webhook_manager()(*args, **kwargs)
+
+
+# Backwards-compatible accessor used by tests and modules
+webhook_manager = _LazyWebhookManagerProxy()
+
+
+def shutdown_webhook_manager_if_initialized() -> None:
+    """Shutdown the webhook manager if it has been created; no-op otherwise.
+
+    Cancels any background retry task and clears the lazy cache to allow
+    reinitialization in subsequent runs.
+    """
+    try:
+        info = get_webhook_manager.cache_info()  # type: ignore[attr-defined]
+        if (getattr(info, "hits", 0) or getattr(info, "misses", 0)):
+            mgr = get_webhook_manager()
+            try:
+                task = getattr(mgr, "_retry_task", None)
+                if task is not None:
+                    try:
+                        # Best effort cancellation for asyncio Task
+                        task.cancel()
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    get_webhook_manager.cache_clear()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+    except Exception:
+        # Never raise during teardown
+        pass

@@ -60,4 +60,3 @@ async def test_create_async_client_applies_min_tls(monkeypatch):
     hc.create_async_client(enforce_tls_min_version=True, tls_min_version="1.2")
     assert isinstance(captured.get("verify"), FakeCtx)
     assert captured["verify"].minimum_version == ssl.TLSVersion.TLSv1_2
-

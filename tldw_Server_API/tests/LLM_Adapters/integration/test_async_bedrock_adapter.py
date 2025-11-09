@@ -107,4 +107,3 @@ async def test_bedrock_async_non_stream_via_orchestrator(monkeypatch):
     assert isinstance(resp, dict)
     # Minimal shape check
     assert "choices" in resp
-

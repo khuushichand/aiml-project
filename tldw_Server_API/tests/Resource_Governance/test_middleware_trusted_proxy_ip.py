@@ -75,4 +75,3 @@ async def test_middleware_ignores_xff_without_trusted_proxy(monkeypatch):
         assert r.status_code == 200
         # When proxy is not trusted, fallback to peer (TestClient defaults to 127.0.0.1)
         assert r.json().get("client_ip") in {"127.0.0.1", "::1"}
-

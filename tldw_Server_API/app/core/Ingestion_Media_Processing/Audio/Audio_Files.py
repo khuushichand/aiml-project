@@ -369,7 +369,7 @@ def download_audio_file(
                 f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)"
             )
             return str(save_path)
-        
+
     except AudioFileSizeError:
         logging.error(f"Audio download aborted: file exceeded configured limit for {url}")
         # Ensure partial file is removed if present

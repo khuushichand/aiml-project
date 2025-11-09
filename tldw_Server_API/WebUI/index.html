@@ -1023,7 +1023,11 @@
                     <!-- Ingest File/URL -->
                     <div class="column">
                         <div class="endpoint-section" id="simpleIngest">
-                            <h3>Ingest File or URL</h3>
+                            <div class="collapsible-header" data-collapsible="simpleIngest">
+                                <h3>Ingest File or URL</h3>
+                                <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleIngest">Hide</button>
+                            </div>
+                            <div class="collapsible-body" id="simpleIngest_body">
                             <div class="form-group">
                                 <label for="simpleIngest_media_type">Media Type</label>
                                 <select id="simpleIngest_media_type">
@@ -1135,13 +1139,18 @@
                             <pre id="simpleIngest_response">---</pre>
                             <div id="simpleIngest_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
                             <pre id="simpleIngest_curl" style="display:none;"></pre>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Chat quick box -->
                     <div class="column">
                         <div class="endpoint-section" id="simpleChat">
-                            <h3>Chat</h3>
+                            <div class="collapsible-header" data-collapsible="simpleChat">
+                                <h3>Chat</h3>
+                                <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleChat">Hide</button>
+                            </div>
+                            <div class="collapsible-body" id="simpleChat_body">
                             <div class="form-group">
                                 <label for="simpleChat_model">Model</label>
                                 <select id="simpleChat_model" class="llm-model-select">
@@ -1159,6 +1168,7 @@
                             <div class="btn-group">
                                 <button class="api-button" id="simpleChat_send" disabled>Send</button>
                                 <button class="btn btn-secondary" id="simpleChat_show_curl" title="Show cURL for this request">Show cURL</button>
+                                <button class="btn btn-secondary" id="simpleChat_reset" title="Reset ephemeral thread">Reset Thread</button>
                             </div>
                             <h4>Answer</h4>
                             <div id="simpleChat_stream" class="endpoint-section" style="padding:8px; margin:6px 0;">
@@ -1172,13 +1182,18 @@
                             <pre id="simpleChat_response">---</pre>
                             <div id="simpleChat_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
                             <pre id="simpleChat_curl" style="display:none;"></pre>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Search content -->
                     <div class="column">
                         <div class="endpoint-section" id="simpleSearch">
-                            <h3>Search Content</h3>
+                            <div class="collapsible-header" data-collapsible="simpleSearch">
+                                <h3>Search Content</h3>
+                                <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleSearch">Hide</button>
+                            </div>
+                            <div class="collapsible-body" id="simpleSearch_body">
                             <div class="form-group">
                                 <label for="simpleSearch_q">Query</label>
                                 <div style="display:flex; gap:8px; align-items:center;">
@@ -1211,6 +1226,7 @@
                             </div>
                             <div id="simpleSearch_results" style="margin-top:8px;"></div>
                             <pre id="simpleSearch_curl" style="display:none;"></pre>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -47,4 +47,3 @@ async def test_concurrency_race_renew_and_ttl_expiry_behavior():
     ft.advance(4.0)
     d4, h4 = await rg.reserve(req)
     assert d4.allowed and h4
-

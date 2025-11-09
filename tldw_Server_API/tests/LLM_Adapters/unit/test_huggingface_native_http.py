@@ -95,4 +95,3 @@ def test_huggingface_adapter_native_http_streaming(monkeypatch):
     chunks = list(a.stream(request))
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
-

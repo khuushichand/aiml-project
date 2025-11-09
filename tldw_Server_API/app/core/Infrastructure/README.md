@@ -106,4 +106,3 @@ Centralized helpers for shared runtime infrastructure. Today this module focuses
 - Roadmap/TODOs:
   - Consider factories for additional infra (Postgres pool, object storage) following the same pattern.
   - Expand metrics (pool usage, cache hit/miss) if/when additional factories are introduced.
-

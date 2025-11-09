@@ -71,4 +71,3 @@ async def test_rg_metrics_allow_deny_refund_paths():
         assert after_ref["count"] >= before_ref["count"]
     else:
         assert after_ref["count"] >= 1
-

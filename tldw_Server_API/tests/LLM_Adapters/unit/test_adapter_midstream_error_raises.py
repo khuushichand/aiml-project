@@ -96,4 +96,3 @@ def test_adapter_midstream_error_raises(monkeypatch, adapter_path: str):
         list(adapter.stream(req))
     # The adapter should map non-HTTP transport errors to ChatProviderError
     assert ei.value.__class__.__name__ in {"ChatProviderError", "ChatAPIError"}
-

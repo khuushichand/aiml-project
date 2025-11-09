@@ -51,4 +51,3 @@ def test_cluster_mode_smoke_with_postgres(monkeypatch):
     assert hasattr(st, "count_runs")
     # Should not raise
     _ = int(st.count_runs())
-

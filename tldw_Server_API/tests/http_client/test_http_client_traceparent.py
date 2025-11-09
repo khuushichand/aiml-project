@@ -58,4 +58,3 @@ def test_traceparent_header_injected_with_fake_span(monkeypatch):
         assert len(parts[1]) == 32 and len(parts[2]) == 16
     finally:
         client.close()
-

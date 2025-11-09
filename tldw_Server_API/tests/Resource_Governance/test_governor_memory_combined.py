@@ -51,4 +51,3 @@ async def test_combined_requests_tokens_retry_after_aggregation():
         ra_req = int((cats.get("requests") or {}).get("retry_after") or 0)
         ra_tok = int((cats.get("tokens") or {}).get("retry_after") or 0)
         assert int(d2.retry_after or 0) == max(ra_req, ra_tok)
-

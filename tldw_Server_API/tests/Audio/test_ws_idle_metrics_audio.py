@@ -43,4 +43,3 @@ async def test_audio_ws_idle_timeout_increments_metric(monkeypatch):
     ).get("count", 0)
 
     assert after >= before + 1
-

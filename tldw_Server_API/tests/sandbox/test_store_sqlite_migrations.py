@@ -40,4 +40,3 @@ def test_sqlite_store_migrations_add_new_columns(tmp_path) -> None:
     assert "runtime_version" in cols
     assert "resource_usage" in cols
     con2.close()
-

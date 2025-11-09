@@ -25,4 +25,3 @@ def test_sqlite_idempotency_gc_deletes_expired(tmp_path, monkeypatch) -> None:
     items = store.list_idempotency(endpoint="gc/test", limit=10, offset=0)
     keys = [it.get("key") for it in items]
     assert "new" in keys and "old" not in keys
-

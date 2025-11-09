@@ -88,4 +88,3 @@ def test_postgres_store_adds_missing_columns(monkeypatch):
             cols = {r[0] for r in cur.fetchall()}
             assert "runtime_version" in cols
             assert "resource_usage" in cols
-

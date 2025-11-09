@@ -38,4 +38,3 @@ def test_x_request_id_header_injected(monkeypatch):
         assert seen["x_request_id"] == 'req-123'
     finally:
         client.close()
-

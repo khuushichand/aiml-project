@@ -55,4 +55,3 @@
 - Pitfalls & Gotchas
   - Avoid large attachments when not necessary; Watchlists helpers include an option to inline or attach content.
   - Ensure recipients are present or enable the fallback to user email when appropriate.
-

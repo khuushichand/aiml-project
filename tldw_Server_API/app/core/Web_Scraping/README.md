@@ -84,4 +84,3 @@
   - Consolidate duplicate web search logic with `core/WebSearch` and preserve unified tests.
   - Optional on-disk cache for search results and scraping responses to reduce egress and cost.
   - Expand structured relevance output to reduce regex-based parsing.
-

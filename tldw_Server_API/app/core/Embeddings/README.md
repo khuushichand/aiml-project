@@ -99,4 +99,3 @@ curl -X POST http://127.0.0.1:8000/api/v1/embeddings \
   -H "Content-Type: application/json" -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   -d '{"model": "text-embedding-3-small", "input": "Embeddings test"}'
 ```
-

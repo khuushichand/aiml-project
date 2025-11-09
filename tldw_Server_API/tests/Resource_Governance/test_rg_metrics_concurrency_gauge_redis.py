@@ -32,4 +32,3 @@ async def test_concurrency_gauge_updates_on_reserve_and_release():
     st_global2 = reg.get_metric_stats("rg_concurrency_active", labels={"category": "streams", "scope": "global", "policy_id": policy_id})
     assert st_user2 and st_user2["latest"] == 0
     assert st_global2 and st_global2["latest"] == 0
-

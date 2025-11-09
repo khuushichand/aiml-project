@@ -101,4 +101,3 @@ def _labels(
     if reason is not None:
         labels["reason"] = reason
     return labels
-

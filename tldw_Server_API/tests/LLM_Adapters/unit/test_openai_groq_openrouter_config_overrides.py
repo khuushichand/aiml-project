@@ -111,4 +111,3 @@ def test_openrouter_app_config_base_url_and_timeout(monkeypatch):
     _ = a.chat(req)
     assert captured.get("timeout") == 44
     assert str(captured.get("url", "")).startswith("https://openrouter.mock/api/v1/chat/completions")
-

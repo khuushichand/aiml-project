@@ -15,7 +15,6 @@ import os
 import re
 import sqlite3
 from math import ceil
-import ipaddress
 import aiofiles
 import asyncio
 import functools
@@ -275,41 +274,6 @@ async def get_process_code_form(
             serializable_errors.append(err)
         raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
 
-
-
-def is_url_safe(url: str, allowed_domains: Optional[Set[str]] = None) -> bool:
-    """
-    Checks if the URL is safe from SSRF; i.e., does not resolve to internal/private IPs and optionally matches an allowed domain list.
-    """
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
-            return False
-        host = parsed.hostname
-        if not host:
-            return False
-        # If allowed_domains is specified, only allow listed domains (strict)
-        if allowed_domains is not None:
-            # Simple domain match, can be improved if subdomains matter
-            if host not in allowed_domains and not any(host.endswith("." + d) for d in allowed_domains):
-                return False
-        # Check if host is IP (v4 or v6)
-        try:
-            ip = ipaddress.ip_address(host)
-            # Disallow internal/private IP ranges
-            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
-                return False
-        except ValueError:
-            # Not an IP address; allow domain unless blacklisted
-            pass
-        # Disallow specific cloud metadata endpoint
-        if host == "169.254.169.254":
-            return False
-        return True
-    except Exception:
-        return False
-
 @router.post(
     "/process-code",
     summary="Process code files (NO DB Persistence)",
@@ -326,11 +290,9 @@ async def process_code_endpoint(
     """
     urls = form_data.urls or []
     _validate_inputs("code", urls, files)
-    # SSRF mitigation: check that all URLs in form_data.urls are safe
-    # Optionally specify allowed domains here, eg allowed_domains = {"github.com", "gitlab.com"}
+    # SSRF mitigation: rely on central resolver-aware validator
     for u in urls:
-        if not is_url_safe(u ):
-            raise HTTPException(status_code=400, detail=f"URL not allowed for SSRF protection: {u}")
+        assert_url_safe(u)
     batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
     with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
         temp_dir = FilePath(temp_dir_path)
@@ -8626,6 +8588,7 @@ async def _download_url_async(
         allowed_extensions = set()  # Default to empty set if None
 
     # Generate a safe filename (defer final naming until after we see headers)
+    test_mode_active = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
     try:
         # Extract last path segment from original URL as a fallback seed
         try:
@@ -8638,8 +8601,21 @@ async def _download_url_async(
         # filename/extension (from headers + final URL) and to download bytes.
         # Otherwise, fall back to HEAD + centralized adownload helper.
         if client is not None:
-            async with client.stream("GET", url, follow_redirects=True, timeout=60.0) as get_resp:
+            final_url = url
+            if not test_mode_active:
+                try:
+                    head = await _m_afetch(method="HEAD", url=url, client=None, timeout=60.0)
+                    try:
+                        final_url = str(getattr(head, "request", head).url)
+                    except Exception:
+                        final_url = url
+                except Exception:
+                    final_url = url
+            async with client.stream("GET", final_url, follow_redirects=False, timeout=60.0) as get_resp:
                 get_resp.raise_for_status()
+                if 300 <= get_resp.status_code < 400:
+                    raise ValueError(
+                        f"Redirect encountered while downloading {final_url}; unable to follow unvalidated redirects.")
 
                 # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
                 candidate_name = None
@@ -8725,30 +8701,52 @@ async def _download_url_async(
 
                 # Stream body to file
                 target_path.parent.mkdir(parents=True, exist_ok=True)
-                with target_path.open('wb') as f:
+                async with aiofiles.open(target_path, 'wb') as f:
                     async for chunk in get_resp.aiter_bytes():
                         if chunk:
-                            f.write(chunk)
+                            await f.write(chunk)
 
                 logger.info(f"Successfully downloaded {url} to {target_path}")
                 return target_path
 
-        # Fallback: no client provided. Use HEAD + centralized download helper.
+        # Fallback: no client provided. Prefer HEAD for naming; if it fails, stream download with a fresh client.
+        response = None
         try:
             head_resp = await _m_afetch(method="HEAD", url=url, timeout=60.0)
-            # Build a lightweight object to reuse existing logic for naming
+
             class _RespLike:
                 def __init__(self, u, headers):
                     self.url = u
                     self.headers = headers
-            response = _RespLike(httpx.URL(url), head_resp.headers)
+
+            # Use the resolved request URL (after redirects) so filenames/extensions reflect the final destination.
+            resolved_url = None
+            try:
+                resolved_url = getattr(head_resp, "request", head_resp).url
+            except Exception:
+                resolved_url = getattr(head_resp, "url", None)
+            if resolved_url is None:
+                resolved_url = httpx.URL(url)
+            response = _RespLike(resolved_url, head_resp.headers)
         except Exception:
-            # If HEAD fails, synthesize minimal headers
-            class _RespLike:
-                def __init__(self, u, headers):
-                    self.url = u
-                    self.headers = headers
-            response = _RespLike(httpx.URL(url), {})
+            response = None
+
+        if response is None:
+            temp_client = _m_create_async_client()
+            try:
+                return await _download_url_async(
+                    client=temp_client,
+                    url=url,
+                    target_dir=target_dir,
+                    allowed_extensions=allowed_extensions,
+                    check_extension=check_extension,
+                    disallow_content_types=disallow_content_types,
+                )
+            finally:
+                try:
+                    await temp_client.aclose()
+                except Exception:
+                    pass
 
         # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
         candidate_name = None

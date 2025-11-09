@@ -35,4 +35,3 @@ async def test_prometheus_metrics_endpoint_includes_rg_series(monkeypatch):
         assert "entity=" not in body
         # Presence of our deny counter series
         assert "rg_denials_total" in body
-

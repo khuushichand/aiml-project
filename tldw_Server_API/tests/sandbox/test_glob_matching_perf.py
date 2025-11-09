@@ -24,4 +24,3 @@ def test_glob_matching_perf_on_large_set() -> None:
     assert len(matched) > 0
     # Should be very fast even on modest hardware
     assert dt < 0.5, f"glob matching too slow: {dt:.3f}s over {len(files)} files"
-

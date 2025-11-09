@@ -31,4 +31,3 @@ def test_refresh_egress_rules_deletes_then_applies(monkeypatch: pytest.MonkeyPat
     # First call is delete, then apply
     assert calls and calls[0] == "del:lbl"
     assert any(c.startswith("apply:lbl:172.18.0.2:") for c in calls)
-

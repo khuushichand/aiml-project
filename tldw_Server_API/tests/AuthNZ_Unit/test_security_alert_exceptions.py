@@ -141,4 +141,3 @@ async def test_webhook_sink_raises_custom_error(monkeypatch):
 
     with pytest.raises(SecurityAlertWebhookError):
         await dispatcher._send_webhook(_make_record())
-

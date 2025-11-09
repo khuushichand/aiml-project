@@ -43,4 +43,3 @@ async def test_retry_after_header_is_honored(monkeypatch):
         assert elapsed >= 0.04  # rough guard that delay happened
     finally:
         await client.aclose()
-

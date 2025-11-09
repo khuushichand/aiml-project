@@ -170,4 +170,3 @@ class RPSShape(LoadTestShape):
                 return (users, spawn_rate)
             t += dur
         return None
-

@@ -56,4 +56,3 @@ def test_artifact_download_invalid_range_returns_416(monkeypatch) -> None:
         )
         assert r.status_code == 416
         assert r.headers.get("Content-Range") == "bytes */10"
-

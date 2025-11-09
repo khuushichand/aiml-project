@@ -1276,6 +1276,11 @@ pre:hover .copy-button {
     gap: var(--spacing-lg);
 }
 
+/* Simple Landing: stack quick actions vertically for more space */
+#tabSimpleLanding > .columns {
+    grid-template-columns: 1fr;
+}
+
 .hidden {
     display: none !important;
 }
@@ -1719,8 +1724,12 @@ pre:hover .copy-button {
 .fc-chip .fc-chip-x:hover { color: var(--color-text); }
 .fc-tag-input { min-width: 80px; border: 1px solid var(--color-border); padding: 2px 6px; border-radius: var(--radius-sm); }
 /* Collapsible Sections */
-.collapsible-header h3 { display:inline-block; }
+.collapsible-header { display:flex; align-items:center; justify-content:space-between; gap: 8px; cursor: pointer; }
+.collapsible-header h3 { display:inline-block; margin: 0; }
 .collapsible-body { margin-top: 8px; }
+
+/* Collapsible toggle button visual when used as a separate control */
+.collapsible-toggle-btn { margin-left: auto; }
 
 /* Simple progress bar (already styled inline in HTML) */
 .progress-container { position: relative; }

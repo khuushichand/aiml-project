@@ -100,4 +100,3 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
                 assert collected == expected
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-

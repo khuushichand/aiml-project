@@ -68,4 +68,3 @@ async def test_async_streaming_error_sse_single_done(monkeypatch, provider: str,
     assert sum(1 for l in lines if l.strip() == "data: [DONE]") == 1
     # All lines start with 'data: '
     assert all(l.startswith("data: ") for l in lines)
-

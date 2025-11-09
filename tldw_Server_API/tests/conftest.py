@@ -21,6 +21,19 @@ try:
     existing_disable = os.getenv("ROUTES_DISABLE", "")
     if "research" not in existing_disable:
         os.environ["ROUTES_DISABLE"] = (existing_disable + ",research").strip(",")
+    # Prefer minimal app profile by default for faster, deterministic tests
+    os.environ.setdefault("MINIMAL_TEST_APP", "1")
+    # Unless explicitly opted-in, disable Evaluations routes during tests to avoid heavy imports
+    _run_evals = str(os.getenv("RUN_EVALUATIONS", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+    _rd = os.getenv("ROUTES_DISABLE", "")
+    if _run_evals:
+        # Remove 'evaluations' from ROUTES_DISABLE if present
+        parts = [p for p in _rd.replace(" ", ",").split(",") if p]
+        parts = [p for p in parts if p.lower() != "evaluations"]
+        os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(parts))
+    else:
+        if "evaluations" not in ",".join([_rd]):
+            os.environ["ROUTES_DISABLE"] = ( (_rd + ",evaluations").strip(",") )
     # Enable deterministic test behaviors across subsystems
     os.environ.setdefault("TEST_MODE", "1")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
@@ -70,17 +83,29 @@ def pytest_collection_modifyitems(config, items):  # pragma: no cover - collecti
         run_jobs = str(os.getenv("RUN_JOBS", "")).lower() in {"1", "true", "yes", "y", "on"}
     except Exception:
         run_jobs = False
-    if run_jobs:
-        return
+    try:
+        run_evals = str(os.getenv("RUN_EVALUATIONS", "")).lower() in {"1", "true", "yes", "y", "on"}
+    except Exception:
+        run_evals = False
+
     skip_jobs = _pytest_jobs_gate.mark.skip(reason="Jobs tests run only in the jobs-suite CI workflow")
+    skip_evals = _pytest_jobs_gate.mark.skip(reason="Evaluations tests run only when RUN_EVALUATIONS=1")
     jobs_markers = {"jobs", "pg_jobs", "pg_jobs_stress"}
     for item in items:
         try:
-            if any(m.name in jobs_markers for m in item.iter_markers()):
+            if not run_jobs and any(m.name in jobs_markers for m in item.iter_markers()):
                 item.add_marker(skip_jobs)
+            if not run_evals and any(m.name == "evaluations" for m in item.iter_markers()):
+                item.add_marker(skip_evals)
         except Exception:
             # Never break collection on marker inspection
             pass
+
+def pytest_configure(config):  # pragma: no cover - registration only
+    try:
+        config.addinivalue_line("markers", "evaluations: heavy Evaluations tests (opt-in via RUN_EVALUATIONS=1)")
+    except Exception:
+        pass
 
 
 # Bump file-descriptor limit for macOS/Linux test runs to avoid spurious

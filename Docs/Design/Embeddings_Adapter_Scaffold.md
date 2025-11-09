@@ -16,4 +16,3 @@ Next steps
 - Wire a shim for embeddings to allow endpoint opt-in via env flag without touching the production embeddings service.
 - Extend registry defaults as more embeddings providers are adapted.
 - Conformance tests: shape of responses, error mapping, batch behavior, and performance smoke.
-

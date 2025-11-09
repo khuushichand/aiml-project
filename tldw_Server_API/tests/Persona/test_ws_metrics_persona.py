@@ -49,4 +49,3 @@ async def test_persona_ws_emits_ws_latency_metrics(monkeypatch):
     ).get("count", 0)
 
     assert after >= before + 1
-
