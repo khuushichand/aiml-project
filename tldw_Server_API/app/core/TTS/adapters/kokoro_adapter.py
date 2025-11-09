@@ -144,9 +144,9 @@ class KokoroAdapter(TTSAdapter):
             self.device = "cuda" if cuda_avail else "cpu"
 
         # Model paths
-        self.model_path = self.config.get("kokoro_model_path", "kokoro-v0_19.onnx")
+        self.model_path = self.config.get("kokoro_model_path", "models/kokoro/onnx/model.onnx")
         # Maintain both attribute names for compatibility with tests and internal code
-        self.voices_json_path = self.config.get("kokoro_voices_json", "voices.json")
+        self.voices_json_path = self.config.get("kokoro_voices_json", "models/kokoro/voices")
         self.voices_json = self.voices_json_path
         self.voice_dir = self.config.get("kokoro_voice_dir", "voices")
 

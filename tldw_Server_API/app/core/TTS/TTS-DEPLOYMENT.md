@@ -75,6 +75,8 @@ pip install \
     onnxruntime \
     kokoro-onnx \
     phonemizer \
+    espeak-phonemizer \
+    huggingface-hub \
     "index-tts @ git+https://github.com/index-tts/index-tts.git"
 
 # For GPU acceleration
@@ -82,7 +84,7 @@ pip install onnxruntime-gpu  # For ONNX models
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118  # For PyTorch
 
 # For voice cloning support
-pip install huggingface-hub transformers accelerate
+pip install transformers accelerate
 
 # For transcription
 pip install faster-whisper openai-whisper
@@ -171,8 +173,8 @@ providers:
   kokoro:
     enabled: true
     use_onnx: true
-    model_path: ./models/kokoro/kokoro-v0_19.onnx
-    voices_json: ./models/kokoro/voices.json
+    model_path: ./models/kokoro/onnx/model.onnx
+    voices_json: ./models/kokoro/voices
     device: cpu  # or cuda
     phonemizer_backend: espeak
 
@@ -408,11 +410,11 @@ RUN pip install \
 COPY tldw_Server_API/ ./tldw_Server_API/
 COPY config.txt .
 
-# Create model directory
-RUN mkdir -p models
+# Create Kokoro model directories (v1.0 layout)
+RUN mkdir -p models/kokoro/onnx models/kokoro/voices
 
-# Set environment variables
-ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+# Set environment variables (only needed if auto-detect fails)
+# ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
 ENV PYTHONPATH=/app
 ENV TRANSFORMERS_CACHE=/app/models
 
@@ -579,16 +581,23 @@ spec:
 
 ### Downloading Local Models
 
-#### Kokoro (ONNX)
+#### Kokoro (ONNX v1.0)
+Recommended installer:
 ```bash
-# Create directory
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+```
+Manual (huggingface-cli):
+```bash
+pip install huggingface-hub
 mkdir -p models/kokoro
-
-# Download model
-wget https://huggingface.co/kokoro-82m/resolve/main/kokoro-v0_19.onnx \
-     -O models/kokoro/kokoro-v0_19.onnx
-wget https://huggingface.co/kokoro-82m/resolve/main/voices.json \
-     -O models/kokoro/voices.json
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+```
+Resulting layout:
+```
+models/kokoro/
+  onnx/model.onnx
+  voices/
 ```
 
 #### Higgs Audio V2

@@ -1310,6 +1310,8 @@ class WebUI {
 let webUI;
 document.addEventListener('DOMContentLoaded', () => {
     webUI = new WebUI();
+    // Expose instance on window so other modules can reliably detect readiness
+    try { window.webUI = webUI; } catch (_) {}
     try { document.dispatchEvent(new Event('webui-ready')); } catch (_) {}
 });
 

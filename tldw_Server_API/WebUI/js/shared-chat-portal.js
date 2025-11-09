@@ -9,12 +9,20 @@
     sharedEl: null,
     loadingPromise: null,
     currentHost: null,
+    notifiedFailure: false,
   };
 
   function waitForWebUI() {
-    if (window.webUI) return Promise.resolve();
+    if (typeof window !== 'undefined' && window.webUI) return Promise.resolve();
+    // Fallback: resolve after DOM is ready if webUI was already constructed
+    if (document && (document.readyState === 'complete' || document.readyState === 'interactive')) {
+      if (typeof window !== 'undefined' && window.webUI) return Promise.resolve();
+    }
     return new Promise((resolve) => {
-      document.addEventListener('webui-ready', () => resolve(), { once: true });
+      const onReady = () => resolve();
+      document.addEventListener('webui-ready', onReady, { once: true });
+      // Safety timeout in case the event fired before we attached the listener
+      setTimeout(() => { if (typeof window !== 'undefined' && window.webUI) resolve(); }, 1500);
     });
   }
 
@@ -50,11 +58,54 @@
           }
         } catch (err) {
           console.error('SharedChatPortal: failed to load chat group', err);
+          // Surface a user-visible hint to diagnose tab HTML/script load failures
+          if (!state.notifiedFailure) {
+            state.notifiedFailure = true;
+            try {
+              const msg = 'Failed to load Chat UI (tabs/chat_content.html). See console/network tab.';
+              if (typeof Toast !== 'undefined' && Toast && typeof Toast.error === 'function') {
+                Toast.error(msg);
+              }
+            } catch (_) { /* no-op */ }
+            try {
+              // Update any visible chat placeholders with a brief error note
+              document.querySelectorAll('[data-chat-placeholder]').forEach((ph) => {
+                if (!ph) return;
+                const note = 'Chat interface failed to load. Check server logs and /webui/tabs/chat_content.html.';
+                ph.textContent = note;
+                ph.style.removeProperty('display');
+              });
+            } catch (_) { /* ignore */ }
+          }
         }
         el = document.querySelector('[data-shared-chat-ui]');
       }
 
       state.sharedEl = el || null;
+
+      // Fallback: if chat group loaded but markup not found, fetch and extract just the shared UI subtree
+      if (!state.sharedEl) {
+        try {
+          const url = new URL('tabs/chat_content.html', window.location.href).toString();
+          const resp = await fetch(url, { cache: 'no-cache' });
+          if (resp && resp.ok) {
+            const html = await resp.text();
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            const shared = tmp.querySelector('[data-shared-chat-ui]');
+            if (shared) {
+              // Adopt into current document by cloning
+              state.sharedEl = shared.cloneNode(true);
+            } else {
+              console.warn('SharedChatPortal: fallback fetch succeeded but no [data-shared-chat-ui] present');
+            }
+          } else {
+            console.warn('SharedChatPortal: fallback fetch for chat_content.html failed', resp && resp.status);
+          }
+        } catch (e) {
+          console.debug('SharedChatPortal: fallback fetch error', e);
+        }
+      }
 
       if (el && window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
         try {
@@ -68,6 +119,25 @@
     })();
 
     await state.loadingPromise;
+    if (!state.sharedEl) {
+      // Element still not present after load — surface a clear hint
+      if (!state.notifiedFailure) {
+        state.notifiedFailure = true;
+        try {
+          const msg = 'Chat UI markup not found after load. Verify /webui/tabs/chat_content.html loads.';
+          if (typeof Toast !== 'undefined' && Toast && typeof Toast.error === 'function') {
+            Toast.error(msg);
+          }
+        } catch (_) {}
+        try {
+          document.querySelectorAll('[data-chat-placeholder]').forEach((ph) => {
+            if (!ph) return;
+            ph.textContent = 'Chat interface unavailable (missing markup). Open Chat tab once or check network.';
+            ph.style.removeProperty('display');
+          });
+        } catch (_) {}
+      }
+    }
     return state.sharedEl;
   }
 
@@ -79,6 +149,13 @@
     const shared = await ensureSharedElement();
     if (!shared) {
       togglePlaceholder(host, true);
+      // Minimal inline hint on the host where it failed to mount
+      try {
+        const ph = host.querySelector('[data-chat-placeholder]');
+        if (ph) {
+          ph.textContent = 'Unable to mount Chat UI. See console/network for tabs/chat_content.html.';
+        }
+      } catch (_) {}
       return;
     }
 
@@ -94,6 +171,10 @@
     }
 
     host.appendChild(shared);
+    // Bind inline handlers safely for the newly inserted subtree
+    try { if (window.webUI && typeof window.webUI.migrateInlineHandlers === 'function') { window.webUI.migrateInlineHandlers(host); } } catch (_) {}
+    // Ensure chat module scripts are present for any dynamic behavior
+    try { if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') { window.ModuleLoader.ensureGroupScriptsLoaded('chat'); } } catch (_) {}
     togglePlaceholder(host, false);
     state.currentHost = hostName;
   }

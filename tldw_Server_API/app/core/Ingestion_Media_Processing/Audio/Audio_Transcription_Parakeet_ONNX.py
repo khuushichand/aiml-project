@@ -285,10 +285,11 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
             model_dir = cache_dir / model_path.replace('/', '_')
 
             if not model_dir.exists():
+                # Limit download to ONNX files only to avoid fetching entire repositories
                 snapshot_download(
                     repo_id=model_path,
                     local_dir=str(model_dir),
-                    local_dir_use_symlinks=False
+                    allow_patterns=["*.onnx", "**/*.onnx"],
                 )
 
         # Find ONNX files

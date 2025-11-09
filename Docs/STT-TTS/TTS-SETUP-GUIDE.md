@@ -24,6 +24,32 @@ ELEVENLABS_API_KEY=your-api-key-here
 
 ## Local Model Providers
 
+### One-Command Installers (Recommended)
+Use these helpers from the repo root to install a specific backend in isolation:
+
+```bash
+# Kokoro (v1.0 ONNX + voices)
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+
+# Dia / Higgs / VibeVoice
+python Helper_Scripts/TTS_Installers/install_tts_dia.py
+python Helper_Scripts/TTS_Installers/install_tts_higgs.py
+python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py --variant 1.5B
+
+# NeuTTS (deps; optional prefetch)
+python Helper_Scripts/TTS_Installers/install_tts_neutts.py --prefetch
+
+# IndexTTS2 (deps + checkpoints folder scaffold)
+python Helper_Scripts/TTS_Installers/install_tts_index_tts2.py
+
+# Chatterbox (deps only)
+python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py [--with-lang]
+```
+
+Flags:
+- `TLDW_SETUP_SKIP_PIP=1` to skip pip installs
+- `TLDW_SETUP_SKIP_DOWNLOADS=1` to skip HF downloads
+
 ### Model Auto-Download Controls
 
 Local providers (Kokoro, Higgs, Dia, Chatterbox, VibeVoice) can auto-download models the first time you use them. You can control this behavior globally or per provider.
@@ -82,17 +108,16 @@ Tip (CI/Dev): The test suite sets `TTS_AUTO_DOWNLOAD=0` to avoid network during 
 Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX Runtime or PyTorch. We recommend the v1.0 ONNX artifacts for most users.
 
 #### Installation
+Preferred:
 ```bash
-# Install dependencies
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+```
+Manual alternative:
+```bash
 pip install onnxruntime kokoro-onnx phonemizer espeak-phonemizer
-
-# For GPU acceleration (optional)
-pip install onnxruntime-gpu
-
-# Install eSpeak NG (required by the phonemizer; auto-detected on most systems)
-# macOS:   brew install espeak-ng
-# Ubuntu:  sudo apt-get install -y espeak-ng
-# Windows: install eSpeak NG (set PHONEMIZER_ESPEAK_LIBRARY only if auto-detect fails)
+# Optional GPU: pip install onnxruntime-gpu
+# Install eSpeak NG: brew install espeak-ng  |  sudo apt-get install -y espeak-ng
+# Env var only if needed: export PHONEMIZER_ESPEAK_LIBRARY=/path/to/libespeak-ng
 ```
 
 #### Download Models (v1.0 ONNX)
@@ -137,9 +162,9 @@ kokoro:
 ```
 
 #### System Requirements
-- **Disk Space**: ~300–330MB for `model.onnx`, more for variants and voices directory
+- **Disk Space**: ~300–330MB for `model.onnx`, plus voices directory
 - **RAM**: 2GB minimum
-- **eSpeak NG**: required by the phonemizer (`espeak-ng` and `PHONEMIZER_ESPEAK_LIBRARY`)
+- **eSpeak NG**: install system package; env var only for non-standard library paths
 
 ### Higgs Audio V2 Setup
 

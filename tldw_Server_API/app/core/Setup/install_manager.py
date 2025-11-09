@@ -653,11 +653,11 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
+        # Download directly into destination parent; no symlink flag required
         hf_hub_download(
             repo_id=repo_id,
             filename=filename,
             local_dir=str(destination.parent),
-            local_dir_use_symlinks=False,
         )
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
@@ -676,19 +676,25 @@ def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
         raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
 
     try:
-        # Download snapshot to local cache
-        snapshot_path = Path(snapshot_download(repo_id=repo_id, local_dir_use_symlinks=False))
-        src = snapshot_path / subdir
+        # Download snapshot into a temporary folder then copy requested subdir
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="tldw_hf_") as _td:
+            snapshot_path = Path(snapshot_download(
+                repo_id=repo_id,
+                local_dir=str(_td),
+                allow_patterns=[f"{subdir}", f"{subdir}/*", f"{subdir}/**"],
+            ))
+            src = snapshot_path / subdir
         if not src.exists():
             raise FileNotFoundError(f'Subdirectory {subdir!r} not found in snapshot of {repo_id}')
-        destination.mkdir(parents=True, exist_ok=True)
-        # Copy tree (merge/overwrite files)
-        for root, dirs, files in os.walk(src):
-            rel = Path(root).relative_to(src)
-            out_dir = destination / rel
-            out_dir.mkdir(parents=True, exist_ok=True)
-            for f in files:
-                shutil.copy2(Path(root) / f, out_dir / f)
+            destination.mkdir(parents=True, exist_ok=True)
+            # Copy tree (merge/overwrite files)
+            for root, dirs, files in os.walk(src):
+                rel = Path(root).relative_to(src)
+                out_dir = destination / rel
+                out_dir.mkdir(parents=True, exist_ok=True)
+                for f in files:
+                    shutil.copy2(Path(root) / f, out_dir / f)
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
     except Exception as exc:  # noqa: BLE001
@@ -704,7 +710,8 @@ def _snapshot_repo(repo_id: str) -> None:
         raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
 
     try:
-        snapshot_download(repo_id=repo_id, local_dir_use_symlinks=False)
+        # Prefetch into cache; no local_dir required and no symlink flag
+        snapshot_download(repo_id=repo_id)
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
     except Exception as exc:  # noqa: BLE001

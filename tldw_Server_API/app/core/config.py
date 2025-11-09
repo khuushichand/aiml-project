@@ -161,8 +161,8 @@ global_default_chunk_language = "en"
 # FIXME - TTS Config
 APP_CONFIG = {
     "OPENAI_API_KEY": "sk-...",
-    "KOKORO_ONNX_MODEL_PATH_DEFAULT": "path/to/your/downloaded/kokoro-v0_19.onnx",
-    "KOKORO_ONNX_VOICES_JSON_DEFAULT": "path/to/your/downloaded/voices.json",
+    "KOKORO_ONNX_MODEL_PATH_DEFAULT": "models/kokoro/onnx/model.onnx",
+    "KOKORO_ONNX_VOICES_JSON_DEFAULT": "models/kokoro/voices",
     "KOKORO_DEVICE_DEFAULT": "cpu", # or "cuda"
     "ELEVENLABS_API_KEY": "el-...",
     "local_kokoro_default_onnx": { # Specific overrides for this backend_id

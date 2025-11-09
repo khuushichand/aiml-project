@@ -43,6 +43,32 @@ Notes:
 - Local providers will not download model assets unless you explicitly set `auto_download: true` (or export `TTS_AUTO_DOWNLOAD=1` / `VIBEVOICE_AUTO_DOWNLOAD=1`).
 - You can override API keys and some settings via `Config_Files/config.txt` or environment variables.
 
+## One-Command Installers
+Run these from the project root to install a single TTS backend (deps + models where applicable):
+
+```bash
+# Kokoro (v1.0 ONNX + voices)
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+
+# NeuTTS (deps; optional prefetch)
+python Helper_Scripts/TTS_Installers/install_tts_neutts.py --prefetch
+
+# Dia / Higgs / VibeVoice
+python Helper_Scripts/TTS_Installers/install_tts_dia.py
+python Helper_Scripts/TTS_Installers/install_tts_higgs.py
+python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py --variant 1.5B
+
+# IndexTTS2 (deps + checkpoints folder)
+python Helper_Scripts/TTS_Installers/install_tts_index_tts2.py
+
+# Chatterbox (deps only)
+python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py [--with-lang]
+```
+
+Installer flags:
+- `TLDW_SETUP_SKIP_PIP=1` to skip pip installs
+- `TLDW_SETUP_SKIP_DOWNLOADS=1` to skip model downloads
+
 ## Key Files & Paths
 - `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` — canonical provider settings + priority list.
 - `Config_Files/config.txt` — optional INI overrides (e.g., `[TTS-Settings]` block).
@@ -140,7 +166,11 @@ Notes:
 Each section highlights installation, configuration, and a smoke test.
 
 ### Kokoro ONNX
-- **Install**: `pip install -e ".[TTS_kokoro_onnx]"` and `brew install espeak-ng` (or platform equivalent). Export `PHONEMIZER_ESPEAK_LIBRARY` if the library is in a non-standard path.
+- **Install**: Prefer the installer (auto-detects eSpeak NG):
+  ```bash
+  python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+  ```
+  Or manually: `pip install -e ".[TTS_kokoro_onnx]"` and install `espeak-ng`. The env var `PHONEMIZER_ESPEAK_LIBRARY` is only needed for non-standard library paths.
 - **Models** (v1.0): download from `onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` — use `onnx/model.onnx` and the `voices/` directory, placed under `models/kokoro/`.
 - **Config**:
   ```yaml

@@ -66,7 +66,11 @@ Troubleshooting
 ## Option B — Kokoro TTS (Local, ONNX)
 Offline TTS using Kokoro ONNX. Good quality and fast on CPU; optional GPU via ONNX Runtime.
 
-1) Install dependencies
+1) Install (one command)
+```bash
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+```
+If you prefer manual steps, install dependencies instead:
 ```bash
 # Python packages (CPU)
 pip install onnxruntime kokoro-onnx phonemizer espeak-phonemizer huggingface-hub
@@ -92,7 +96,7 @@ export PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
 # set PHONEMIZER_ESPEAK_LIBRARY=C:\\Program Files\\eSpeak NG\\libespeak-ng.dll
 ```
 
-2) Download model files
+2) Download model files (skipped if you use the installer)
 - Place files under a `models/` folder at the repo root (example paths below).
 - Recommended sources:
   - ONNX: `onnx-community/Kokoro-82M-v1.0-ONNX-timestamped` (contains `onnx/model.onnx` and a `voices/` directory of voice styles)
@@ -113,7 +117,7 @@ wget https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped/reso
 # Then download the voices/ directory assets from the same repo (or use huggingface-cli above)
 ```
 
-3) Enable and point config to your files
+3) Enable and point config to your files (the installer writes defaults under models/kokoro/)
 - Edit `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`:
 ```yaml
 providers:

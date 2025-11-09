@@ -650,7 +650,11 @@ class TTSAdapterFactory:
         # Kokoro models
         "kokoro": TTSProvider.KOKORO,
         "kokoro-v0_19": TTSProvider.KOKORO,
+        "kokoro-v1_0": TTSProvider.KOKORO,
+        "kokoro-v1.0": TTSProvider.KOKORO,
+        "kokoro-1.0": TTSProvider.KOKORO,
         "kokoro-onnx": TTSProvider.KOKORO,
+        "onnx-community/kokoro-82m-v1.0-onnx-timestamped": TTSProvider.KOKORO,
 
         # Higgs models
         "higgs": TTSProvider.HIGGS,

@@ -1700,6 +1700,15 @@ function renderInstallOptionCard(category, option) {
       updateKokoroEspeakBadge(badge).catch(() => {});
       // Start auto-refresh every ~10s while this step is visible
       startKokoroEspeakAutoRefresh(badge, 10000);
+      // Manual refresh button
+      const rbtn = document.createElement('button');
+      rbtn.type = 'button';
+      rbtn.className = 'btn btn-sm btn-secondary';
+      rbtn.title = 'Refresh eSpeak status';
+      rbtn.style.marginLeft = '6px';
+      rbtn.innerHTML = '<i class="icon-refresh"></i>';
+      rbtn.addEventListener('click', (ev) => { ev.preventDefault(); updateKokoroEspeakBadge(badge).catch(() => {}); });
+      header.appendChild(rbtn);
     }
   } catch (_) { /* ignore */ }
 

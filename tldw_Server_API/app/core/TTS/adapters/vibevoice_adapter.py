@@ -528,7 +528,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 local_dir=str(self.model_dir),
                 cache_dir=str(self.cache_dir),
                 resume_download=True,
-                local_dir_use_symlinks=False
+                # No symlinks parameter needed in recent huggingface_hub
             )
             if progress.pbar:
                 progress.pbar.close()
