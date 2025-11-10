@@ -24,6 +24,8 @@ class WebUI {
         this.searchPreloaded = false;
         this.theme = 'light';
         this.apiStatusCheckInterval = null;
+        // Prevent the startup fallback from overriding a user selection race
+        this._defaultTabSettled = false;
         this.init();
     }
 
@@ -767,6 +769,8 @@ class WebUI {
         if (content) {
             content.classList.add('active');
             console.log(`Showing tab: ${contentId}`);
+            // Mark that a concrete content has been shown to avoid fallback forcing
+            this._defaultTabSettled = true;
         } else {
             console.warn(`Tab content not found: ${contentId}`);
         }
@@ -818,6 +822,8 @@ class WebUI {
 
         // Ensure at least one content tab is visible
         setTimeout(() => {
+            // If a tab was selected/activated since load, do not force anything
+            if (this._defaultTabSettled) return;
             const activeTabs = document.querySelectorAll('.tab-content.active');
             if (activeTabs.length === 0) {
                 // Force show Global Settings as fallback
@@ -825,6 +831,7 @@ class WebUI {
                 if (globalSettings) {
                     globalSettings.classList.add('active');
                     console.log('Forced Global Settings tab to be visible');
+                    this._defaultTabSettled = true;
                 }
             }
         }, 100);

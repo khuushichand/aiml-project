@@ -235,6 +235,12 @@
     if (window.webUI && typeof window.webUI.migrateInlineHandlers === 'function') {
       window.webUI.migrateInlineHandlers(host);
     }
+    // Ensure the chat tab initializer runs so buttons get bound when mounted via portal
+    try {
+      if (typeof window.initializeChatCompletionsTab === 'function') {
+        window.initializeChatCompletionsTab();
+      }
+    } catch (_) { /* ignore */ }
     // Populate model dropdowns and ensure a default model is selected if none is chosen
     try {
       const pop = (window.apiClient && typeof window.apiClient.populateModelDropdowns === 'function')

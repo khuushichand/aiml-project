@@ -14,9 +14,13 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
 )
 from loguru import logger
+import re
 
-# Expose a patchable factory for tests; production uses the centralized client
-http_client_factory = _hc_create_client
+# Expose a patchable factory for tests; production uses the centralized client.
+# Important: make this a delegating function so that monkeypatching
+# `_hc_create_client` in tests takes effect (rather than binding once at import).
+def http_client_factory(*args, **kwargs):  # pragma: no cover - behavior verified by unit tests
+    return _hc_create_client(*args, **kwargs)
 
 
 class DeepSeekAdapter(ChatProvider):
@@ -65,7 +69,8 @@ class DeepSeekAdapter(ChatProvider):
         if os.getenv("PYTEST_CURRENT_TEST"):
             try:
                 from tldw_Server_API.app.core.http_client import create_client as _default_factory
-                if http_client_factory is not _default_factory:
+                # If tests monkeypatch the module-level factory (_hc_create_client), prefer native adapter
+                if _hc_create_client is not _default_factory:
                     return True
                 from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
                 fn = getattr(_legacy, "chat_with_deepseek", None)
@@ -290,6 +295,16 @@ class DeepSeekAdapter(ChatProvider):
         return _legacy.legacy_chat_with_deepseek(**kwargs)
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
+        def _redact_secrets(text: str) -> str:
+            try:
+                # Redact Authorization bearer tokens
+                text = re.sub(r"(?i)(Authorization\s*:\s*Bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
+                text = re.sub(r"(?i)(Bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
+                # Redact phrases like "api key: XYZ" or "api_key=XYZ"
+                text = re.sub(r"(?i)(api[ _-]?key\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", text)
+            except Exception:
+                pass
+            return text
         try:
             import httpx  # type: ignore
         except Exception:  # pragma: no cover
@@ -314,12 +329,14 @@ class DeepSeekAdapter(ChatProvider):
                 eobj = body["error"]
                 msg = (eobj.get("message") or "").strip()
                 typ = (eobj.get("type") or "").strip()
-                detail = (f"{typ} {msg}" if typ else msg) or str(exc)
+                composed = (f"{typ} {msg}" if typ else msg) or str(exc)
+                detail = _redact_secrets(composed)
             else:
                 try:
-                    detail = resp.text if resp is not None else str(exc)
+                    raw = resp.text if resp is not None else str(exc)
+                    detail = _redact_secrets(raw)
                 except Exception:
-                    detail = str(exc)
+                    detail = _redact_secrets(str(exc))
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
