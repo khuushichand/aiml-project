@@ -9,7 +9,7 @@ Goal
 
 References
 - PRD: `Docs/Design/Stream_Abstraction_PRD.md` (Status: Pilot Rollout)
-- Dev Overlay: `Dockerfiles/Dockerfiles/docker-compose.dev.yml`
+- Dev Overlay: `Dockerfiles/docker-compose.dev.yml`
 - Metrics Dashboard: `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json`
 
 Checklist
@@ -28,7 +28,7 @@ Phase A — Dev validation
 
 Phase B — Staging flip
 - [ ] Enable `STREAMS_UNIFIED=1` in staging
-- [ ] Use dev overlay in non‑prod: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml up -d --build`
+- [ ] Use dev overlay in non‑prod: `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
 - [ ] Import Grafana dashboard and confirm labels for key endpoints
 - [ ] Soak for 48h; watch idle timeouts and ping failures
 - [ ] Document any client compatibility issues (Audio `error_type` alias still on)

@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-COMPOSE_FILE="${REPO_ROOT}/tldw_Server_API/Dockerfiles/docker-compose.postgres.yml"
+COMPOSE_FILE="${REPO_ROOT}/Dockerfiles/docker-compose.postgres.yml"
 
 # Defaults aligned with tests
 : "${TEST_DB_HOST:=localhost}"

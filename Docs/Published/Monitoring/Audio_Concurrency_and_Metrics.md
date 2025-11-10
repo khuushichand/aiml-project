@@ -26,7 +26,7 @@ GPU worker container (stub):
 
 ```bash
 # Build
-docker build -f tldw_Server_API/Dockerfiles/Dockerfile.audio_gpu_worker -t tldw-audio-gpu-worker .
+docker build -f Dockerfiles/Dockerfile.audio_gpu_worker -t tldw-audio-gpu-worker .
 
 # Run (reads JOBS_DB_URL)
 docker run --rm -e JOBS_DB_URL="sqlite:///./Databases/jobs.db" tldw-audio-gpu-worker

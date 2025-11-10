@@ -318,7 +318,7 @@ Notes
 | `OTEL_EXPORTER_OTLP_PROTOCOL`   | `grpc`              | `grpc` or `http/protobuf` |
 | `OTEL_EXPORTER_OTLP_HEADERS`    | (empty)             | Optional headers string |
 | `OTEL_EXPORTER_OTLP_INSECURE`   | `true`              | Allow insecure transport |
-| `STREAMS_UNIFIED`               | `0`                 | Feature flag: unified SSE/WS streams in pilot endpoints. Recommended `1` in non‑prod. Use the dev overlay: `Dockerfiles/Dockerfiles/docker-compose.dev.yml`. |
+| `STREAMS_UNIFIED`               | `0`                 | Feature flag: unified SSE/WS streams in pilot endpoints. Recommended `1` in non‑prod. Use the dev overlay: `Dockerfiles/docker-compose.dev.yml`. |
 
 Quick rollback
 
@@ -326,8 +326,8 @@ Quick rollback
 
 Non‑prod defaults
 
-- `Dockerfiles/Dockerfiles/docker-compose.dev.yml` exports `STREAMS_UNIFIED=1` for dev/staging overlays.
-- `Dockerfiles/Dockerfiles/docker-compose.test.yml` also sets `STREAMS_UNIFIED=1` for test environments.
+- `Dockerfiles/docker-compose.dev.yml` exports `STREAMS_UNIFIED=1` for dev/staging overlays.
+- `Dockerfiles/docker-compose.test.yml` also sets `STREAMS_UNIFIED=1` for test environments.
   In production, keep the flag unset or `0` until you’re ready to flip more broadly.
 | `STREAM_HEARTBEAT_INTERVAL_S`   | `10`                | Default heartbeat interval for streams (seconds) |
 | `STREAM_HEARTBEAT_MODE`         | `comment`           | `comment` or `data` heartbeats (prefer `data` behind reverse proxies) |
