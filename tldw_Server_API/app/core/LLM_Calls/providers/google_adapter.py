@@ -183,11 +183,12 @@ class GoogleAdapter(ChatProvider):
             gc["topK"] = request.get("top_k")
         if request.get("max_tokens") is not None:
             gc["maxOutputTokens"] = request.get("max_tokens")
-        # Support multi-candidate responses when n is provided
+        # Support multi-candidate responses when n is provided (Gemini expects this in generationConfig)
         if request.get("n") is not None:
-            payload["candidateCount"] = request.get("n")
+            gc["candidateCount"] = request.get("n")
+        # Stop sequences belong to generationConfig for the models API
         if request.get("stop") is not None:
-            payload["stopSequences"] = request.get("stop")
+            gc["stopSequences"] = request.get("stop")
         # Best-effort system instruction
         if system_message:
             payload["systemInstruction"] = {"parts": [{"text": system_message}]}

@@ -400,12 +400,14 @@ class TestConfigurationLoading:
 
         # Should be loaded from config
         assert STREAMING_IDLE_TIMEOUT > 0
-        assert HEARTBEAT_INTERVAL > 0
+        # Legacy heartbeat may be disabled (0) when unified streaming is used
+        assert HEARTBEAT_INTERVAL >= 0
 
         # Reasonable values
         assert STREAMING_IDLE_TIMEOUT >= 60  # At least 1 minute
-        assert HEARTBEAT_INTERVAL >= 10  # At least 10 seconds
-        assert HEARTBEAT_INTERVAL < STREAMING_IDLE_TIMEOUT  # Heartbeat before timeout
+        if HEARTBEAT_INTERVAL > 0:
+            assert HEARTBEAT_INTERVAL >= 10  # At least 10 seconds
+            assert HEARTBEAT_INTERVAL < STREAMING_IDLE_TIMEOUT  # Heartbeat before timeout
 
 
 class TestValidationImprovements:

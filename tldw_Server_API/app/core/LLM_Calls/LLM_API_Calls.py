@@ -2464,7 +2464,7 @@ def chat_with_cohere(
     current_num_generations = num_generations if num_generations is not None else _safe_cast(
         cohere_config.get('num_generations'), int, None)
 
-    api_base_url = cohere_config.get('api_base_url', 'https://api.cohere.com').rstrip('/')
+    api_base_url = cohere_config.get('api_base_url', 'https://api.cohere.ai').rstrip('/')
     # Using /v1/chat is standard for Cohere's current Chat API
     COHERE_CHAT_URL = f"{api_base_url}/v1/chat"
 
@@ -2477,8 +2477,6 @@ def chat_with_cohere(
         "Authorization": f"Bearer {final_api_key}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if streaming else "application/json",
-        # Consider using a more recent API version or removing if not strictly needed, to get Cohere's latest defaults
-        "Cohere-Version": cohere_config.get('api_version_date', "2024-05-13")
     }
 
     chat_history_for_cohere = []
@@ -2737,6 +2735,9 @@ def chat_with_cohere(
         logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
         # This will catch the ReadTimeout after retries are exhausted
         raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504) # 504 for gateway timeout like
+    except KeyError as e:
+        # Surface clearer configuration error if payload/response shape assumptions break
+        raise ChatBadRequestError(provider="cohere", message=f"Key error while preparing or parsing Cohere payload/response: {e}")
     except Exception as e:
         logging.error(f"Cohere API call: Unexpected error: {e}", exc_info=True)
         if not isinstance(e, ChatAPIError):
@@ -2881,7 +2882,35 @@ def _legacy_chat_with_deepseek_impl(
             )
             try:
                 response = session.post(api_url, headers=headers, json=data, timeout=120)
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    # Fallback: retry once with a minimal payload if upstream returns 5xx
+                    status_code = getattr(e.response, 'status_code', 500)
+                    if status_code and status_code >= 500:
+                        minimal_payload = {
+                            "model": current_model,
+                            "messages": (
+                                [{"role": "system", "content": system_message}] if system_message else []
+                            ) + input_data,
+                            "stream": False,
+                        }
+                        try:
+                            resp2 = session.post(api_url, headers=headers, json=minimal_payload, timeout=120)
+                            resp2.raise_for_status()
+                            try:
+                                return resp2.json()
+                            finally:
+                                try:
+                                    resp2.close()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            # Re-raise original error if fallback also fails
+                            raise
+                    # If not a 5xx, re-raise
+                    raise
+                # Success path
                 try:
                     return response.json()
                 finally:

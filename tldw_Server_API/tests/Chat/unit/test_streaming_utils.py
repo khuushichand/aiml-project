@@ -471,7 +471,9 @@ class TestConstants:
 
     def test_default_heartbeat(self):
         """Test default heartbeat interval."""
-        assert HEARTBEAT_INTERVAL == 30  # 30 seconds
+        # Legacy heartbeat is disabled via config (0) to avoid duplicate heartbeats
+        # when unified streaming is enabled. Expect 0 in test configuration.
+        assert HEARTBEAT_INTERVAL == 0
 
 
 class TestStreamingResponseHandlerIntegration:

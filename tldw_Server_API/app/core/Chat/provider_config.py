@@ -187,7 +187,9 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'topp': 'topp',
         'topk': 'topk',
         'tools': 'tools',
-        'tool_choice': 'tool_choice',
+        # Cohere's legacy /v1/chat handler signature does not accept tool_choice
+        # and passing it causes a TypeError. Only apply when a dedicated adapter
+        # path supports it.
         'max_tokens': 'max_tokens',
         'seed': 'seed',
         'stop': 'stop_sequences',

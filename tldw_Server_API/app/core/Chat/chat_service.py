@@ -37,6 +37,10 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import (
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
+    STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
+)
 from tldw_Server_API.app.core.Chat.request_queue import (
     get_request_queue,
     RequestPriority,
@@ -1160,8 +1164,8 @@ async def execute_streaming_call(
                 conversation_id=final_conversation_id,
                 model_name=model,
                 save_callback=save_callback,
-                idle_timeout=300,
-                heartbeat_interval=30,
+                idle_timeout=CHAT_IDLE_TIMEOUT,
+                heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None,
             )
             try:
