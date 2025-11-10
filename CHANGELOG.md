@@ -16,6 +16,7 @@ and this project adheres to Some kind of Versioning
 ### Fixed 
 - Numpy requirement in base install
 - Default API now respected via config/not just ENV var.
+- Too many issues to count.
 
 ### Added
 - Unified requests module

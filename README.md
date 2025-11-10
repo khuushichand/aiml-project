@@ -50,7 +50,7 @@ The long-term vision is a personal research assistant inspired by The Young Lady
 
 ## Current Status
 
-### Status: Version 0.1.0 published - tldw_server is now in beta
+### Status: Version 0.1.4 published - tldw_server is now in beta
 - Expect bugs, and random issues.
 - Please report any found/encountered.
 - CI/CD reporting green is Top priority next to bug squashing.
