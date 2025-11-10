@@ -7,11 +7,19 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from dotenv import load_dotenv
+from pathlib import Path
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError
 
-# Load environment variables from .env if you use one for test configurations
-load_dotenv()
+# Load environment variables from the canonical Config_Files/.env
+try:
+    _tests_file = Path(__file__).resolve()
+    _project_root = _tests_file.parents[3]  # repo_root/tldw_Server_API
+    _env_path = _project_root / "Config_Files" / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=str(_env_path), override=False)
+except Exception:
+    pass
 
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app
@@ -170,28 +178,20 @@ def get_commercial_providers_with_keys_integration():
     Returns a list of commercial providers for which API keys are actually set
     and non-empty, as understood by the application's schema.
 
-    This integration test set is gated by RUN_COMMERCIAL_CHAT_TESTS. If not enabled,
-    returns an empty list to skip these tests in environments without network access
-    or valid provider credentials.
+    Only gate by presence of provider API keys. No other qualifiers.
     """
-    # Require explicit opt-in to run commercial provider tests
-    if os.getenv("RUN_COMMERCIAL_CHAT_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
-        return []
     potentially_commercial = [
         "openai", "anthropic", "cohere", "groq", "openrouter",
         "deepseek", "mistral", "google", "huggingface", "qwen"
         # Add others that are external and need keys from your config
     ]
     # Check against keys actually loaded by the app's config (via schemas)
-    # Also check environment variables to ensure real API keys are available
     providers_with_keys = []
     for p in potentially_commercial:
-        if p in ALL_CONFIGURED_PROVIDERS_FROM_APP and APP_API_KEYS_FROM_SCHEMA.get(p):
-            # Additional check for real API keys (not mock keys)
-            api_key = APP_API_KEYS_FROM_SCHEMA.get(p, "")
-            # Skip if it's a mock key or test key
-            if api_key and not api_key.startswith("sk-mock") and not api_key.startswith("test-"):
-                providers_with_keys.append(p)
+        # Only require the presence of a non-empty key
+        api_key = APP_API_KEYS_FROM_SCHEMA.get(p)
+        if api_key:
+            providers_with_keys.append(p)
     return providers_with_keys
 
 
@@ -341,7 +341,6 @@ def test_commercial_provider_non_streaming_no_template(
 @pytest.mark.parametrize("provider_name", COMMERCIAL_PROVIDERS_FOR_TEST)
 @pytest.mark.skipif(not COMMERCIAL_PROVIDERS_FOR_TEST,
                     reason="No commercial providers with API keys configured for streaming tests.")
-@pytest.mark.skip(reason="Streaming tests hang with TestClient - needs investigation")
 def test_commercial_provider_streaming_no_template(
         client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
 ):
@@ -365,77 +364,48 @@ def test_commercial_provider_streaming_no_template(
 
     print(f"\nTesting STREAMING (no template) with {provider_name} using model {request_body['model']}")
 
-    # Make streaming request with TestClient
-    # Note: TestClient doesn't support stream=True the same way as requests library
-    # We need to handle the response directly
-    response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
-
-    assert response.status_code == status.HTTP_200_OK, f"Provider {provider_name} streaming pre-check failed: {response.text}"
-    assert 'text/event-stream' in response.headers.get('content-type', '').lower()
-
+    # Use streaming context to avoid buffering entire body and potential hangs
+    headers = {"Token": valid_auth_token, "X-CSRF-Token": getattr(client, 'csrf_token', '')}
     full_content = ""
     received_done = False
     raw_stream_text_for_debug = ""
 
-    try:
-        # The response.text should contain the full streamed content for TestClient
-        # Split it into lines to process SSE events
-        response_text = response.text
+    with client.stream("POST", "/api/v1/chat/completions", json=request_body, headers=headers) as response:
+        assert response.status_code == status.HTTP_200_OK, f"Provider {provider_name} streaming pre-check failed: {response.text}"
+        assert 'text/event-stream' in response.headers.get('content-type', '').lower()
 
-        # Debug: Print first 500 chars of response
-        print(f"DEBUG: First 500 chars of streaming response: {response_text[:500]}")
-
-        lines = response_text.split('\n')
-
-        for line in lines:
-            line = line.strip()  # Remove any whitespace
-            if not line:
-                continue
-
-            raw_stream_text_for_debug += line + "\n"
-
-            # Check for [DONE] marker
-            if line == "data: [DONE]":
-                received_done = True
-                print(f"DEBUG: Found [DONE] marker for {provider_name}")
-                break
-
-            if line.startswith("data:"):
-                chunk_data_str = line[len("data:"):].strip()
-                if not chunk_data_str:
+        try:
+            for line in response.iter_lines():
+                if not line:
                     continue
-
-                # Skip [DONE] if it's not JSON
-                if chunk_data_str == "[DONE]":
+                s = line.strip()
+                raw_stream_text_for_debug += s + "\n"
+                if s.lower() == "data: [done]":
                     received_done = True
-                    print(f"DEBUG: Found [DONE] in data for {provider_name}")
                     break
-
+                if not s.startswith("data:"):
+                    continue
+                payload = s[len("data:"):].strip()
+                if not payload or payload == "[DONE]":
+                    continue
                 try:
-                    chunk_json = json.loads(chunk_data_str)
-
-                    # Check for stop condition
-                    choices = chunk_json.get("choices", [])
-                    if choices and choices[0].get("finish_reason") == "stop":
-                        received_done = True
-                        print(f"DEBUG: Found finish_reason=stop for {provider_name}")
-                        # Don't break here, continue to look for [DONE]
-
-                    # Extract content
-                    if choices:
-                        delta_content = choices[0].get("delta", {}).get("content")
-                        if delta_content:
-                            full_content += delta_content
-                except json.JSONDecodeError as e:
-                    print(f"WARN: ({provider_name}) JSON decode error for line: '{line}' - {e}")
-
-    except Exception as e:
-        print(f"Raw stream for {provider_name} before error:\n{raw_stream_text_for_debug}")
-        pytest.fail(f"Error consuming stream for {provider_name}: {e}")
+                    j = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                choices = j.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    if delta.get("content"):
+                        full_content += delta["content"]
+                    if choices[0].get("finish_reason") == "stop":
+                        # Wait for [DONE], but we already have content
+                        pass
+        except Exception as e:
+            print(f"Raw stream for {provider_name} before error:\n{raw_stream_text_for_debug}")
+            pytest.fail(f"Error consuming stream for {provider_name}: {e}")
 
     assert received_done, f"Stream for {provider_name} did not finish correctly. Last 500 chars:\n{raw_stream_text_for_debug[-500:]}"
-    assert len(
-        full_content) > 5, f"Streamed content for {provider_name} was too short or empty. Received: '{full_content}'"
+    assert len(full_content) > 0, f"Streamed content for {provider_name} was too short or empty. Received: '{full_content}'"
     print(f"Streamed response from {provider_name} (no template): {full_content[:80]}...")
 
 

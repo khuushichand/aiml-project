@@ -7,9 +7,18 @@ import json
 import os
 import datetime
 from dotenv import load_dotenv
+from pathlib import Path
 
 # Load environment variables
-load_dotenv()
+# Ensure keys are loaded from the canonical Config_Files/.env
+try:
+    _this = Path(__file__).resolve()
+    _project_root = _this.parents[3]  # repo_root/tldw_Server_API
+    _env_path = _project_root / "Config_Files" / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=str(_env_path), override=False)
+except Exception:
+    pass
 
 # Import your FastAPI app instance
 from tldw_Server_API.app.main import app

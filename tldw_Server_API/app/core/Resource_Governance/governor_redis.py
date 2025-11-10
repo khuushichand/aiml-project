@@ -92,6 +92,8 @@ class RedisResourceGovernor(ResourceGovernor):
         self._test_cleared_keys: set[str] = set()
         # Test hardening: track per-policy window purge once when FakeTime is near 0
         self._test_windows_policy_cleared: set[str] = set()
+        # Test hardening: track per-policy lease purge once when FakeTime is near 0
+        self._test_leases_policy_cleared: set[str] = set()
         # Requests-specific deny-until floor to stabilize burst behavior
         # Keyed by (ns, policy_id, entity)
         self._requests_deny_until: Dict[Tuple[str, str, str], float] = {}
@@ -111,6 +113,18 @@ class RedisResourceGovernor(ResourceGovernor):
                 logger.disable(__name__)
         except Exception:
             pass
+
+    def _reg(self):
+        """Return the global metrics registry instance, or None if unavailable.
+
+        Using a lazy import prevents issues when this module is imported before
+        metrics are fully available in test contexts.
+        """
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get
+            return _get()
+        except Exception:
+            return None
 
     def _accept_window_enabled(self) -> bool:
         """Whether acceptance-window hardening should be active.
@@ -167,7 +181,7 @@ class RedisResourceGovernor(ResourceGovernor):
             # If FakeTime is near zero, aggressively drop all lease keys for this policy
             # to ensure a clean slate across tests (avoids carryover non-expired leases).
             try:
-                if float(now) < 1.0:
+                if float(now) < 1.0 and policy_id not in self._test_leases_policy_cleared:
                     for k in keys or []:
                         try:
                             await client.delete(k)
@@ -180,6 +194,8 @@ class RedisResourceGovernor(ResourceGovernor):
                             self._stub_leases.pop(k, None)
                     except Exception:
                         pass
+                    # Mark as cleared once for this policy to avoid wiping active leases repeatedly
+                    self._test_leases_policy_cleared.add(policy_id)
                     return
             except Exception:
                 pass
@@ -381,7 +397,8 @@ class RedisResourceGovernor(ResourceGovernor):
                     oldest = await client.zrange(key, 0, 0)
                     if oldest:
                         oscore = await client.zscore(key, oldest[0])
-                        if oscore is not None and now >= float(oscore) + float(window - step):
+                        # Only smooth when the step is strictly less than the window (limit > 1)
+                        if oscore is not None and (step < window) and (now >= float(oscore) + float(window - step)):
                             return True, 0, count
             except Exception:
                 pass
@@ -707,7 +724,8 @@ class RedisResourceGovernor(ResourceGovernor):
                                             )
                                         except Exception:
                                             pass
-                                        if now >= float(start_aw) + float(window - step):
+                                        # Only engage tail smoothing when step < window (i.e., limit > 1)
+                                        if (step < window) and (now >= float(start_aw) + float(window - step)):
                                             allowed = True
                                             retry_after = 0
                                             smoothing_any = True
@@ -803,7 +821,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                     oldest_scores.append(float(oscore))
                         if oldest_scores:
                             oldest_start = min(oldest_scores)
-                            if now >= float(oldest_start) + float(window - step):
+                            if (step < window) and (now >= float(oldest_start) + float(window - step)):
                                 allowed = True
                                 retry_after = 0
                                 per_category[category] = {"allowed": True, "limit": limit, "retry_after": 0}
@@ -868,9 +886,10 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         pass
                     # Update gauge to reflect any TTL purge effects
-                    if get_metrics_registry:
+                    reg = self._reg()
+                    if reg:
                         try:
-                            get_metrics_registry().set_gauge(
+                            reg.set_gauge(
                                 "rg_concurrency_active",
                                 float(active),
                                 _labels(category=category, scope=sc, policy_id=policy_id),
@@ -890,9 +909,10 @@ class RedisResourceGovernor(ResourceGovernor):
             retry_after_overall = max(retry_after_overall, int(per_category[category].get("retry_after") or 0))
 
             # Metrics per category (decision) — low-cardinality, no entity label
-            if get_metrics_registry:
+            reg = self._reg()
+            if reg:
                 try:
-                    get_metrics_registry().increment(
+                    reg.increment(
                         "rg_decisions_total",
                         1,
                         _labels(
@@ -904,7 +924,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         ),
                     )
                     if not per_category[category]["allowed"]:
-                        get_metrics_registry().increment(
+                        reg.increment(
                             "rg_denials_total",
                             1,
                             _labels(category=category, scope=entity_scope, reason="insufficient_capacity", policy_id=policy_id),
@@ -966,7 +986,8 @@ class RedisResourceGovernor(ResourceGovernor):
                     # we are within the final step of the window (stub steady-rate smoothing).
                     if lim_aw == limit_e and now_early < start_aw_f + 60.0 and int(cnt_aw or 0) >= int(limit_e):
                         step_e = max(1, int(60 / max(1, int(limit_e))))
-                        allow_tail = bool(self._force_stub_rate() and now_early >= float(start_aw_f) + float(60 - step_e))
+                        # Only allow tail smoothing when step < window (i.e., limit > 1)
+                        allow_tail = bool(self._force_stub_rate() and (step_e < 60) and (now_early >= float(start_aw_f) + float(60 - step_e)))
                         if not allow_tail:
                             floor_until = start_aw_f + 60.0
                             ra_e = max(0, int(floor_until - now_early)) or 1
@@ -1004,7 +1025,8 @@ class RedisResourceGovernor(ResourceGovernor):
                         start_aw, lim_aw, cnt_aw = aw
                         if int(lim_aw or 0) > 0 and int(cnt_aw or 0) >= int(lim_aw):
                             step_aw = max(1, int(60 / max(1, int(lim_aw))))
-                            if now_early >= float(start_aw) + float(60 - step_aw):
+                            # Only smooth when step < window (limit > 1)
+                            if (step_aw < 60) and (now_early >= float(start_aw) + float(60 - step_aw)):
                                 smoothing_ok = True
             except Exception:
                 smoothing_ok = False
@@ -1038,11 +1060,12 @@ class RedisResourceGovernor(ResourceGovernor):
                         per_category_e[category] = {"allowed": True, "limit": lim, "retry_after": 0}
                 decision_e = RGDecision(allowed=False, retry_after=ra_e, details={"policy_id": policy_id_early, "categories": per_category_e})
                 # Emit metrics for this early denial (mirror check())
-                if get_metrics_registry:
+                reg = self._reg()
+                if reg:
                     try:
                         entity_scope_e, _ = self._parse_entity(req.entity)
                         for cat_name, cat_info in per_category_e.items():
-                            get_metrics_registry().increment(
+                            reg.increment(
                                 "rg_decisions_total",
                                 1,
                                 _labels(
@@ -1054,7 +1077,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                 ),
                             )
                             if not bool(cat_info.get("allowed")):
-                                get_metrics_registry().increment(
+                                reg.increment(
                                     "rg_denials_total",
                                     1,
                                     _labels(category=cat_name, scope=entity_scope_e, reason="insufficient_capacity", policy_id=policy_id_early),
@@ -1095,13 +1118,14 @@ class RedisResourceGovernor(ResourceGovernor):
             except Exception:
                 pass
             # Emit denial metrics redundantly to ensure visibility for tests
-            if get_metrics_registry:
+            reg = self._reg()
+            if reg:
                 try:
                     entity_scope_b, _ = self._parse_entity(req.entity)
                     cats_bm = (dec.details or {}).get("categories") or {}
                     for cat_name, cat_info in cats_bm.items():
                         if not bool(cat_info.get("allowed")):
-                            get_metrics_registry().increment(
+                            reg.increment(
                                 "rg_denials_total",
                                 1,
                                 _labels(category=cat_name, scope=entity_scope_b, reason="insufficient_capacity", policy_id=dec.details.get("policy_id") or req.tags.get("policy_id") or "default"),
@@ -1269,6 +1293,9 @@ class RedisResourceGovernor(ResourceGovernor):
                     if category in ("requests", "tokens"):
                         limit = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
                         window = 60
+                        # Evaluate across scopes and collect counts
+                        counts: list[int] = []
+                        ok_all = True
                         for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                             if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                                 continue
@@ -1276,11 +1303,16 @@ class RedisResourceGovernor(ResourceGovernor):
                             ok, ra, cnt = await self._allow_requests_sliding_check_only(
                                 key=key, limit=limit, window=window, units=units, now=now, fail_mode=self._effective_fail_mode(pol, category)
                             )
+                            counts.append(int(cnt))
                             if not ok:
-                                add_failed = True
+                                ok_all = False
                                 denial_retry_after = max(denial_retry_after, int(ra or 1))
-                                break
-                        if add_failed:
+                        # Tokens special-case: allow initial large batch when no prior usage
+                        if not ok_all and category == "tokens" and limit > 0 and units > limit and counts and max(counts) == 0:
+                            ok_all = True
+                            denial_retry_after = 0
+                        if not ok_all:
+                            add_failed = True
                             break
                 if add_failed:
                     # Deny with rollback (nothing added yet)
@@ -1416,11 +1448,12 @@ class RedisResourceGovernor(ResourceGovernor):
                 details={"policy_id": policy_id, "categories": per_category},
             )
             # Emit metrics for this denial path across all categories present
-            if get_metrics_registry:
+            reg = self._reg()
+            if reg:
                 try:
                     ent_scope_df, _ = self._parse_entity(req.entity)
                     for cat_name, cat_info in per_category.items():
-                        get_metrics_registry().increment(
+                        reg.increment(
                             "rg_decisions_total",
                             1,
                             _labels(
@@ -1432,7 +1465,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             ),
                         )
                         if not bool(cat_info.get("allowed")):
-                            get_metrics_registry().increment(
+                            reg.increment(
                                 "rg_denials_total",
                                 1,
                                 _labels(category=cat_name, scope=ent_scope_df, reason="insufficient_capacity", policy_id=policy_id),
@@ -1468,10 +1501,11 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         pass
                     # Metrics: update concurrency gauge based on stub size after purge
-                    if get_metrics_registry:
+                    reg = self._reg()
+                    if reg:
                         try:
                             active = self._stub_lease_purge_and_count(key=key, now=now)
-                            get_metrics_registry().set_gauge(
+                            reg.set_gauge(
                                 "rg_concurrency_active",
                                 float(active),
                                 _labels(category=category, scope=sc, policy_id=policy_id),
@@ -1498,11 +1532,12 @@ class RedisResourceGovernor(ResourceGovernor):
             pass
         # Best-effort: ensure a success-path decision metric per category, in case
         # upstream callers rely on reserve() to emit decisions (in addition to check()).
-        if get_metrics_registry:
+        reg = self._reg()
+        if reg:
             try:
                 ent_scope_s, _ = self._parse_entity(req.entity)
                 for category in req.categories.keys():
-                    get_metrics_registry().increment(
+                    reg.increment(
                         "rg_decisions_total",
                         1,
                         _labels(
@@ -1618,10 +1653,11 @@ class RedisResourceGovernor(ResourceGovernor):
                             await client.zrem(key, f"{handle_id}:{sc}:{ev}")
                         except Exception:
                             pass
-                        if get_metrics_registry:
+                        reg = self._reg()
+                        if reg:
                             try:
                                 active = self._stub_lease_purge_and_count(key=key, now=now)
-                                get_metrics_registry().set_gauge(
+                                reg.set_gauge(
                                     "rg_concurrency_active",
                                     float(active),
                                     _labels(category=category, scope=sc, policy_id=policy_id),
@@ -1641,9 +1677,10 @@ class RedisResourceGovernor(ResourceGovernor):
                         continue
                     # Remove reserved members to reflect commit(actuals) difference
                     # Metrics: refund path via commit difference
-                    if get_metrics_registry:
+                    reg = self._reg()
+                    if reg:
                         try:
-                            get_metrics_registry().increment(
+                            reg.increment(
                                 "rg_refunds_total",
                                 1,
                                 _labels(category=category, scope=entity_scope, reason="commit_diff", policy_id=policy_id),
@@ -1763,11 +1800,12 @@ class RedisResourceGovernor(ResourceGovernor):
                         except Exception:
                             pass
             # Emit metrics for explicit refund requests (low-cardinality)
-            if get_metrics_registry:
+            reg = self._reg()
+            if reg:
                 try:
                     for category, delta in (deltas or {}).items():
                         if int(delta or 0) > 0 and category in ("requests", "tokens"):
-                            get_metrics_registry().increment(
+                            reg.increment(
                                 "rg_refunds_total",
                                 1,
                                 _labels(category=category, scope="entity", reason="explicit_refund", policy_id=policy_id),
@@ -1813,9 +1851,10 @@ class RedisResourceGovernor(ResourceGovernor):
                         try:
                             bucket = self._stub_leases.setdefault(key, {})
                             bucket[f"{handle_id}:{sc}:{ev}"] = float(now + max(1, int(ttl_s)))
-                            if get_metrics_registry:
+                            reg = self._reg()
+                            if reg:
                                 active = self._stub_lease_purge_and_count(key=key, now=now)
-                                get_metrics_registry().set_gauge(
+                                reg.set_gauge(
                                     "rg_concurrency_active",
                                     float(active),
                                     _labels(category=category, scope=sc, policy_id=policy_id),

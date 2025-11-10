@@ -12,6 +12,23 @@ files. Global plugin registration now lives in the repository root
 """
 
 import os
+from pathlib import Path
+try:
+    # Ensure tests see provider keys from the canonical location
+    # Load once at collection time, without overriding explicit env
+    from dotenv import load_dotenv  # type: ignore
+    _tests_root = Path(__file__).resolve()
+    _project_root = _tests_root.parents[1]  # tldw_Server_API/
+    _env_path = _project_root / "Config_Files" / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=str(_env_path), override=False)
+        # If a real OpenAI key is present, prefer OpenAI as the default provider
+        # to ensure real-integration tests hit OpenAI when provider is unspecified.
+        if os.getenv("OPENAI_API_KEY") and not os.getenv("DEFAULT_LLM_PROVIDER"):
+            os.environ.setdefault("DEFAULT_LLM_PROVIDER", "openai")
+except Exception:
+    # Never fail collection due to dotenv issues
+    pass
 import logging
 # Ensure problematic optional routers don't import during test collection
 # and enable test-friendly behaviors before importing the app.

@@ -316,11 +316,13 @@ class TestEmbeddingsE2E:
             assert success, f"Failed to ensure embeddings for media {media_id}"
 
         # Now test RAG search
+        # Use unified RAG search endpoint; translate legacy 'limit' -> 'top_k'
         search_response = api_client.client.post(
-            f"{api_client.base_url}/api/v1/rag/simple",
+            f"{api_client.base_url}/api/v1/rag/search",
             json={
                 "query": "test document content",
-                "limit": 5
+                "top_k": 5,
+                "sources": ["media_db"],
             }
         )
 

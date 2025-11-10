@@ -458,24 +458,56 @@ class APIClient:
         return self._handle_rate_limit(_search)
 
     def rag_simple_search(self, query: str, databases: List[str] = None, **kwargs) -> Dict[str, Any]:
-        """Perform simple RAG search."""
+        """Perform simple RAG search using the unified endpoint.
+
+        Backward-compatible with older tests that passed `databases`; this
+        translates to unified `sources` (e.g., media -> media_db).
+        """
+        # Map legacy databases -> unified sources
+        legacy_to_sources = {
+            "media": "media_db",
+            "media_db": "media_db",
+            "notes": "notes",
+            "characters": "characters",
+            "chats": "chats",
+        }
+        sources = None
+        if databases:
+            sources = [legacy_to_sources.get(db, db) for db in databases]
+        # Build minimal unified request
         data = {
             "query": query,
-            "databases": databases or ["media"],
-            **kwargs
+            **({"sources": sources} if sources else {}),
+            **kwargs,
         }
+        # Call unified RAG endpoint
         response = self.client.post(
-            f"{API_PREFIX}/rag/search/simple",  # Fixed path: /rag/search/simple instead of /rag/simple/search
-            json=data
+            f"{API_PREFIX}/rag/search",
+            json=data,
         )
         response.raise_for_status()
         return response.json()
 
     def rag_advanced_search(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Perform advanced RAG search with full configuration."""
+        """Perform advanced RAG search via the unified endpoint.
+
+        Accepts legacy `databases` and converts to unified `sources`.
+        """
+        cfg = dict(config or {})
+        # Translate legacy key if present
+        if "databases" in cfg and "sources" not in cfg:
+            legacy_to_sources = {
+                "media": "media_db",
+                "media_db": "media_db",
+                "notes": "notes",
+                "characters": "characters",
+                "chats": "chats",
+            }
+            dbs = cfg.pop("databases") or []
+            cfg["sources"] = [legacy_to_sources.get(db, db) for db in dbs]
         response = self.client.post(
-            f"{API_PREFIX}/rag/search/complex",  # Fixed path: /rag/search/complex for consistency
-            json=config
+            f"{API_PREFIX}/rag/search",
+            json=cfg,
         )
         response.raise_for_status()
         return response.json()
@@ -528,7 +560,8 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
         try:
             with httpx.Client(timeout=5) as temp_client:
                 response = temp_client.get(health_url)
-                if response.status_code == 200:
+                # Treat 200 OK and 206 Partial Content (degraded) as "server is up"
+                if response.status_code in (200, 206):
                     health_data = response.json()
                     print(f"✅ API server is running in {health_data.get('auth_mode', 'unknown')} mode")
                     return health_data
