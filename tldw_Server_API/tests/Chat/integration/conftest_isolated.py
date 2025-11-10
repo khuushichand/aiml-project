@@ -9,7 +9,9 @@ from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
 from typing import Dict, Any
 
-from tldw_Server_API.app.main import app
+def _get_app():
+    from tldw_Server_API.app.main import app as _app
+    return _app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
@@ -64,7 +66,7 @@ def isolated_client(isolated_db):
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     # Create a new TestClient instance with isolated overrides
-    test_app = app
+    test_app = _get_app()
     original_overrides = test_app.dependency_overrides.copy()
 
     # Override database dependency
@@ -162,7 +164,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
     """Client for unit tests with all external dependencies mocked."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
-    test_app = app
+    test_app = _get_app()
     original_overrides = test_app.dependency_overrides.copy()
 
     # Override database

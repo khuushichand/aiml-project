@@ -1,0 +1,49 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/macbook-dev/Documents/GitHub/tldw_server2
+configfile: pyproject.toml
+plugins: asyncio-1.2.0, anyio-4.11.0, hypothesis-6.142.5, Faker-37.12.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collected 93 items
+
+tldw_Server_API/tests/sandbox/test_admin_details_resource_usage.py .     [  1%]
+tldw_Server_API/tests/sandbox/test_admin_idempotency_and_usage.py ..     [  3%]
+tldw_Server_API/tests/sandbox/test_admin_list_filters_pagination.py ..   [  5%]
+tldw_Server_API/tests/sandbox/test_admin_rbac.py .                       [  6%]
+tldw_Server_API/tests/sandbox/test_artifact_content_type_and_path.py .   [  7%]
+tldw_Server_API/tests/sandbox/test_artifact_range.py .                   [  8%]
+tldw_Server_API/tests/sandbox/test_artifact_sharing_shared_dir.py .      [  9%]
+tldw_Server_API/tests/sandbox/test_artifact_traversal_integration.py s   [ 10%]
+tldw_Server_API/tests/sandbox/test_artifacts_api.py .                    [ 11%]
+tldw_Server_API/tests/sandbox/test_cancel_endpoint_ws_and_status.py .    [ 12%]
+tldw_Server_API/tests/sandbox/test_cancel_idempotent.py .                [ 13%]
+tldw_Server_API/tests/sandbox/test_docker_egress_allowlist_integration.py s [ 15%]
+                                                                         [ 15%]
+tldw_Server_API/tests/sandbox/test_docker_egress_enforcement.py FFs      [ 18%]
+tldw_Server_API/tests/sandbox/test_docker_runner_fake.py FF              [ 20%]
+tldw_Server_API/tests/sandbox/test_feature_discovery_flags.py ..F        [ 23%]
+tldw_Server_API/tests/sandbox/test_firecracker_fake_and_admin_runtime_version.py . [ 24%]
+                                                                         [ 24%]
+tldw_Server_API/tests/sandbox/test_firecracker_smoke.py .                [ 25%]
+tldw_Server_API/tests/sandbox/test_idempotency_filters.py ...Fs....s     [ 36%]
+tldw_Server_API/tests/sandbox/test_idempotency_ttl_and_conflict.py ..    [ 38%]
+tldw_Server_API/tests/sandbox/test_interactive_advertise_flag.py .       [ 39%]
+tldw_Server_API/tests/sandbox/test_network_policy_allowlist.py ..        [ 41%]
+tldw_Server_API/tests/sandbox/test_network_policy_parser.py ..           [ 44%]
+tldw_Server_API/tests/sandbox/test_policy_hash_determinism.py .          [ 45%]
+tldw_Server_API/tests/sandbox/test_queue_full_429.py .                   [ 46%]
+tldw_Server_API/tests/sandbox/test_queue_wait_metric.py .                [ 47%]
+tldw_Server_API/tests/sandbox/test_redis_fanout.py .sF                   [ 50%]
+tldw_Server_API/tests/sandbox/test_runner_cancel_and_timeouts.py ...     [ 53%]
+tldw_Server_API/tests/sandbox/test_runner_cpu_cgroup_metrics.py .....    [ 59%]
+tldw_Server_API/tests/sandbox/test_runtime_unavailable.py ..             [ 61%]
+tldw_Server_API/tests/sandbox/test_runtimes_queue_fields.py .            [ 62%]
+tldw_Server_API/tests/sandbox/test_sandbox_api.py ..F                    [ 65%]
+tldw_Server_API/tests/sandbox/test_sandbox_public_health.py .            [ 66%]
+tldw_Server_API/tests/sandbox/test_session_policy_hash.py .              [ 67%]
+tldw_Server_API/tests/sandbox/test_store_cluster_mode.py Fs              [ 69%]
+tldw_Server_API/tests/sandbox/test_store_postgres_migrations.py s        [ 70%]
+tldw_Server_API/tests/sandbox/test_streams_hub_lifecycle.py ...          [ 74%]
+tldw_Server_API/tests/sandbox/test_streams_hub_resume_and_ordering.py .. [ 76%]
+.                                                                        [ 77%]
+tldw_Server_API/tests/sandbox/test_ws_heartbeat_seq.py

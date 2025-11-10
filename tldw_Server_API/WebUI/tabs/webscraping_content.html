@@ -234,8 +234,8 @@
         </div>
 
         <div class="form-group">
-            <button class="api-button" id="friendlyIngest_submit" onclick="submitWebScrapingIngestFriendly(false)">Build & Submit</button>
-            <button class="btn btn-secondary" onclick="submitWebScrapingIngestFriendly(true)">Show cURL</button>
+            <button class="api-button" id="friendlyIngest_submit">Build & Submit</button>
+            <button class="btn btn-secondary" id="friendlyIngest_show_curl">Show cURL</button>
         </div>
         <div id="friendlyIngest_validation_hint" aria-live="polite" style="color: var(--color-error, #c62828);"></div>
         <textarea id="friendlyIngest_payload" style="display:none;"></textarea>
@@ -309,7 +309,7 @@
             </small>
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingIngest', 'POST', '/api/v1/media/ingest-web-content', 'json')">
+        <button class="api-button" id="btnWSIngestSubmit">
             Submit
         </button>
         <h3>cURL Command:</h3>
@@ -348,7 +348,7 @@
             </small>
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingProcessLegacy', 'POST', '/api/v1/media/process-web-scraping', 'json')">
+        <button class="api-button" id="btnWSLegacySubmit">
             Submit
         </button>
         <h3>cURL Command:</h3>
@@ -367,7 +367,7 @@
         </h2>
         <p>Get web scraping service status and active jobs</p>
 
-        <button class="api-button" onclick="makeRequest('webScrapingStatus', 'GET', '/api/v1/web-scraping/status', 'none')">
+        <button class="api-button" id="btnWSStatus">
             Check Status
         </button>
 
@@ -388,9 +388,7 @@
             <input type="text" id="webScrapingJobGet_job_id" placeholder="Enter job ID">
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingJobGet', 'GET', '/api/v1/web-scraping/job/{job_id}', 'none')">
-            Get Job Details
-        </button>
+        <button class="api-button" id="btnWSJobGet">Get Job Details</button>
 
         <pre id="webScrapingJobGet_response"></pre>
     </div>
@@ -407,9 +405,7 @@
             <input type="text" id="webScrapingJobDelete_job_id" placeholder="Enter job ID">
         </div>
 
-        <button class="api-button btn-danger" onclick="if(confirm('Cancel this job?')) makeRequest('webScrapingJobDelete', 'DELETE', '/api/v1/web-scraping/job/{job_id}', 'none')">
-            Cancel Job
-        </button>
+        <button class="api-button btn-danger" id="btnWSJobDelete">Cancel Job</button>
 
         <pre id="webScrapingJobDelete_response"></pre>
     </div>
@@ -426,9 +422,7 @@
             <input type="text" id="webScrapingProgress_task_id" placeholder="Enter task ID">
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingProgress', 'GET', '/api/v1/web-scraping/progress/{task_id}', 'none')">
-            Check Progress
-        </button>
+        <button class="api-button" id="btnWSProgress">Check Progress</button>
 
         <pre id="webScrapingProgress_response"></pre>
     </div>
@@ -443,9 +437,7 @@
         <p>Initialize the web scraping service.</p>
         <small>No request body required. Uses server configuration.</small>
 
-        <button class="api-button" onclick="makeRequest('webScrapingInit', 'POST', '/api/v1/web-scraping/service/initialize', 'none')">
-            Initialize Service
-        </button>
+        <button class="api-button" id="btnWSInit">Initialize Service</button>
 
         <pre id="webScrapingInit_response"></pre>
     </div>
@@ -458,9 +450,7 @@
         <p>Shutdown the web scraping service.</p>
         <small>No request body required. Shuts down gracefully.</small>
 
-        <button class="api-button btn-danger" onclick="if(confirm('Shutdown web scraping service?')) makeRequest('webScrapingShutdown', 'POST', '/api/v1/web-scraping/service/shutdown', 'none')">
-            Shutdown Service
-        </button>
+        <button class="api-button btn-danger" id="btnWSShutdown">Shutdown Service</button>
 
         <pre id="webScrapingShutdown_response"></pre>
     </div>
@@ -479,9 +469,7 @@
             <input type="text" id="webScrapingCookiesGet_domain" placeholder="example.com">
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingCookiesGet', 'GET', '/api/v1/web-scraping/cookies/{domain}', 'none')">
-            Get Cookies
-        </button>
+        <button class="api-button" id="btnWSCookiesGet">Get Cookies</button>
 
         <pre id="webScrapingCookiesGet_response"></pre>
     </div>
@@ -512,9 +500,7 @@
 ]</textarea>
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingCookiesSet', 'POST', '/api/v1/web-scraping/cookies/{domain}', 'json')">
-            Set Cookies
-        </button>
+        <button class="api-button" id="btnWSCookiesSet">Set Cookies</button>
 
         <pre id="webScrapingCookiesSet_response"></pre>
     </div>
@@ -533,21 +519,8 @@
             <input type="text" id="webScrapingDuplicates_url" placeholder="https://example.com/page" data-query="true">
         </div>
 
-        <button class="api-button" onclick="makeRequest('webScrapingDuplicates', 'GET', '/api/v1/web-scraping/duplicates/check', 'query')">
-            Check Duplicates
-        </button>
+        <button class="api-button" id="btnWSDuplicates">Check Duplicates</button>
 
         <pre id="webScrapingDuplicates_response"></pre>
     </div>
 </div>
-
-<script>
-// No-op helpers retained for backward compatibility; requests now send no body
-function handleWebScrapingInit() {
-    makeRequest('webScrapingInit', 'POST', '/api/v1/web-scraping/service/initialize', 'none');
-}
-
-function handleWebScrapingShutdown() {
-    makeRequest('webScrapingShutdown', 'POST', '/api/v1/web-scraping/service/shutdown', 'none');
-}
-</script>

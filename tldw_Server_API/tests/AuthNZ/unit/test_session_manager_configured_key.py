@@ -39,21 +39,21 @@ async def test_session_manager_accepts_configured_fernet_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_session_manager_persists_generated_key(monkeypatch, tmp_path):
-    # Ensure persistence path points at temporary directory
+    # Prefer API component storage for session key to avoid using PROJECT_ROOT
+    monkeypatch.setenv("SESSION_KEY_STORAGE", "api")
+    # Still set PROJECT_ROOT to a tmp dir for isolation of other paths
     monkeypatch.setitem(core_settings, "PROJECT_ROOT", tmp_path)
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/auth.db")
     monkeypatch.setenv("JWT_SECRET_KEY", "old-secret-value-12345678901234567890ABCDEF")
     reset_settings()
 
-    key_path = tmp_path / "Config_Files" / "session_encryption.key"
-    if key_path.exists():
-        key_path.unlink()
-
     manager = SessionManager()
     sample = "persist-me"
     encrypted = manager.encrypt_token(sample)
-    assert key_path.exists(), "session_encryption.key should be persisted"
+    # Expect the API path to exist when SESSION_KEY_STORAGE=api
+    api_key_path = manager._resolve_api_key_path()
+    assert api_key_path is not None and api_key_path.exists(), "API session_encryption.key should exist"
     assert manager.decrypt_token(encrypted) == sample
 
     await reset_session_manager()
@@ -63,7 +63,7 @@ async def test_session_manager_persists_generated_key(monkeypatch, tmp_path):
     assert manager_again.decrypt_token(encrypted) == sample
 
     await reset_session_manager()
-    for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY"):
+    for env_key in ("AUTH_MODE", "DATABASE_URL", "JWT_SECRET_KEY", "SESSION_KEY_STORAGE"):
         monkeypatch.delenv(env_key, raising=False)
     reset_settings()
 

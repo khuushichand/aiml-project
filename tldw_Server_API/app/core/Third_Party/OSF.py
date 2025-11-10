@@ -16,35 +16,10 @@ Notes:
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BASE_URL = "https://api.osf.io/v2/preprints/"
-
-
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({"Accept": "application/json"})
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
 
 
 def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -89,7 +64,6 @@ def search_preprints(
     - `from_date` maps to `filter[date_created][gte]`
     """
     try:
-        session = _mk_session()
         params: Dict[str, Any] = {
             "page[size]": max(1, min(results_per_page, 100)),
             "page[number]": max(1, page),
@@ -101,9 +75,7 @@ def search_preprints(
         if from_date:
             params["filter[date_created][gte]"] = from_date
 
-        r = session.get(BASE_URL, params=params, timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/json"}, timeout=20)
         items = [
             _normalize_item(it)
             for it in (data.get("data") or [])
@@ -116,16 +88,6 @@ def search_preprints(
             total = len(items)
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"OSF API Request Error: {str(e)}"
         return None, 0, f"OSF error: {str(e)}"
 
 
@@ -160,35 +122,27 @@ def get_preprint_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[st
     try:
         if not doi or not doi.strip():
             return None, "DOI cannot be empty"
-        session = _mk_session()
         # Try exact filter on doi and article_doi
         for field in ("doi", "article_doi"):
             params = {"page[size]": 1, f"filter[{field}]": doi}
-            r = session.get(BASE_URL, params=params, timeout=20)
+            r = fetch(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/json"}, timeout=20)
             if r.status_code == 200:
                 data = r.json() or {}
                 items = data.get("data") or []
                 if items:
                     return _normalize_item(items[0]), None
         # Fallback free-text search
-        r = session.get(BASE_URL, params={"q": doi, "page[size]": 1}, timeout=20)
-        r.raise_for_status()
-        data2 = r.json() or {}
+        r2 = fetch(method="GET", url=BASE_URL, params={"q": doi, "page[size]": 1}, headers={"Accept": "application/json"}, timeout=20)
+        if r2.status_code == 404:
+            return None, None
+        if r2.status_code >= 400:
+            return None, f"OSF HTTP error: {r2.status_code}"
+        data2 = r2.json() or {}
         items2 = data2.get("data") or []
         if items2:
             return _normalize_item(items2[0]), None
         return None, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"OSF API Request Error: {str(e)}"
         return None, f"OSF error: {str(e)}"
 
 
@@ -198,17 +152,14 @@ def get_primary_file_download_url(osf_id: str) -> Tuple[Optional[str], Optional[
     Returns (download_url, error).
     """
     try:
-        session = _mk_session()
         # 1) Fetch preprint with primary_file relationship link
-        r = session.get(f"{BASE_URL}{osf_id}", timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=f"{BASE_URL}{osf_id}", headers={"Accept": "application/json"}, timeout=20)
         rel = ((data.get("data") or {}).get("relationships") or {}).get("primary_file") or {}
         rel_links = (rel.get("links") or {}).get("related") or {}
         href = rel_links.get("href")
         if not href:
             # try embeds via include
-            r2 = session.get(f"{BASE_URL}{osf_id}?include=primary_file", timeout=20)
+            r2 = fetch(method="GET", url=f"{BASE_URL}{osf_id}?include=primary_file", headers={"Accept": "application/json"}, timeout=20)
             if r2.status_code == 200:
                 d2 = r2.json() or {}
                 included = d2.get("included") or []
@@ -220,23 +171,11 @@ def get_primary_file_download_url(osf_id: str) -> Tuple[Optional[str], Optional[
                             return dl, None
             return None, None
         # 2) Follow file endpoint to get download link
-        rf = session.get(href, timeout=20)
-        rf.raise_for_status()
-        fdata = rf.json() or {}
+        fdata = fetch_json(method="GET", url=href, headers={"Accept": "application/json"}, timeout=20)
         links = (fdata.get("data") or {}).get("links") or {}
         dl_url = links.get("download") or links.get("meta", {}).get("download")
         return (dl_url or None), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, f"Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"OSF API Request Error: {str(e)}"
         return None, f"OSF error: {str(e)}"
 
 
@@ -247,44 +186,24 @@ def raw_preprints(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str
     Returns (content, media_type, error).
     """
     try:
-        s = _mk_session()
-        r = s.get(BASE_URL, params=params, timeout=25)
-        r.raise_for_status()
+        r = fetch(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/json"}, timeout=25)
+        if r.status_code >= 400:
+            return None, None, f"OSF HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/json"
         return r.content, ct.split(";")[0], None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"OSF API Request Error: {str(e)}"
         return None, None, f"OSF error: {str(e)}"
 
 
 def raw_by_id(osf_id: str) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """Raw passthrough for a single OSF preprint by id."""
     try:
-        s = _mk_session()
-        r = s.get(f"{BASE_URL}{osf_id}", timeout=25)
+        r = fetch(method="GET", url=f"{BASE_URL}{osf_id}", headers={"Accept": "application/json"}, timeout=25)
         if r.status_code == 404:
             return None, "application/json", None
-        r.raise_for_status()
+        if r.status_code >= 400:
+            return None, None, f"OSF HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/json"
         return r.content, ct.split(";")[0], None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"OSF API Request Error: {str(e)}"
         return None, None, f"OSF error: {str(e)}"

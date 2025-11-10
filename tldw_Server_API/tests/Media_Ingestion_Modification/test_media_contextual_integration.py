@@ -248,7 +248,7 @@ class TestMediaEndpointContextualIntegration:
             ]),
             "perform_chunking": True,
             "enable_contextual_chunking": True,
-            "contextual_llm_model": "claude-3-opus"
+            "contextual_llm_model": "claude-opus-4.1"
         }
 
         with patch('tldw_Server_API.app.api.v1.endpoints.media.process_document_content') as mock_process:
@@ -274,7 +274,7 @@ class TestMediaEndpointContextualIntegration:
             for call in mock_process.call_args_list:
                 chunk_options = call[1].get('chunk_options', {})
                 assert chunk_options.get('enable_contextual_chunking') == True
-                assert chunk_options.get('contextual_llm_model') == "claude-3-opus"
+                assert chunk_options.get('contextual_llm_model') == "claude-opus-4.1"
 
     def test_contextual_options_validation(self, test_client, mock_dependencies, auth_headers):
         """Test validation of contextual chunking options."""

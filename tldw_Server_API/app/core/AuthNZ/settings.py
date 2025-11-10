@@ -708,9 +708,9 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "In production (tldw_production=true) with AUTH_MODE=multi_user, SQLite is not supported.\n"
                     "Please configure PostgreSQL via DATABASE_URL. Examples:\n"
-                    "  export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@localhost:5432/tldw_users\n"
+                    "  export DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users\n"
                     "  # With docker-compose service name:\n"
-                    "  export DATABASE_URL=postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users\n"
+                    "  export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users\n"
                     "See Multi-User Deployment Guide for details."
                 )
             else:

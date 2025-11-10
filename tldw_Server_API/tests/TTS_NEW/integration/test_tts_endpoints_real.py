@@ -9,17 +9,18 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_user():
+def client_with_user(bypass_api_limits):
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
-    with TestClient(app) as client:
+    with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
 

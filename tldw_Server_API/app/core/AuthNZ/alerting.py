@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-import httpx
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from tldw_Server_API.app.core.exceptions import (
+    SecurityAlertWebhookError,
+    SecurityAlertEmailError,
+    SecurityAlertFileError,
+)
 import smtplib
 from loguru import logger
 
@@ -354,13 +359,31 @@ class SecurityAlertDispatcher:
             with open(self.file_path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as exc:
-            raise RuntimeError(f"File sink failed: {exc}") from exc
+            raise SecurityAlertFileError(
+                f"File sink failed for path {self.file_path}: {exc}"
+            ) from exc
 
     async def _send_webhook(self, record: Dict[str, Any]) -> None:
-        timeout = httpx.Timeout(5.0, connect=3.0)
         headers = {"Content-Type": "application/json", **self.webhook_headers}
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            await client.post(self.webhook_url, json=record, headers=headers)
+        resp = await afetch(
+            method="POST",
+            url=str(self.webhook_url),
+            json=record,
+            headers=headers,
+            timeout=5.0,
+            retry=RetryPolicy(attempts=1),
+        )
+        # Propagate errors with a concise, informative message that includes status and response body
+        if resp.status_code >= 400:
+            try:
+                body = (resp.text or "").strip()
+            except Exception:
+                body = "<unavailable>"
+            if len(body) > 512:
+                body = body[:512] + "... (truncated)"
+            raise SecurityAlertWebhookError(
+                f"Security alert webhook failed with HTTP {resp.status_code}: {body}"
+            )
 
     async def _send_email(self, record: Dict[str, Any]) -> None:
         await asyncio.to_thread(self._send_email_sync, record)
@@ -390,17 +413,29 @@ class SecurityAlertDispatcher:
 
         message.set_content("\n".join(body_lines))
 
-        with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=self.smtp_timeout) as smtp:
-            smtp.ehlo()
-            if self.smtp_starttls:
-                try:
-                    smtp.starttls()
-                except smtplib.SMTPException as exc:
-                    raise RuntimeError(f"SMTP STARTTLS failed: {exc}") from exc
+        try:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=self.smtp_timeout) as smtp:
                 smtp.ehlo()
-            if self.smtp_user:
-                smtp.login(self.smtp_user, self.smtp_password or "")
-            smtp.send_message(message)
+                if self.smtp_starttls:
+                    try:
+                        smtp.starttls()
+                    except smtplib.SMTPException as exc:
+                        raise SecurityAlertEmailError(f"SMTP STARTTLS failed: {exc}") from exc
+                    smtp.ehlo()
+                if self.smtp_user:
+                    try:
+                        smtp.login(self.smtp_user, self.smtp_password or "")
+                    except smtplib.SMTPException as exc:
+                        raise SecurityAlertEmailError(f"SMTP login failed: {exc}") from exc
+                try:
+                    smtp.send_message(message)
+                except smtplib.SMTPException as exc:
+                    raise SecurityAlertEmailError(f"SMTP send_message failed: {exc}") from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            # Wrap any connection/transport errors
+            raise SecurityAlertEmailError(
+                f"SMTP delivery failed to {self.email_recipients} via {self.smtp_host}:{self.smtp_port}: {exc}"
+            ) from exc
 
     def get_status(self) -> Dict[str, Any]:
         """Return current dispatcher configuration and dispatch metadata."""

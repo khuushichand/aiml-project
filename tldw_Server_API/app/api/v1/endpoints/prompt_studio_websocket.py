@@ -36,6 +36,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster, EventType
 )
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 ########################################################################################################################
 # Error Handling Utilities
@@ -221,11 +222,71 @@ async def sse_endpoint(
     """
     Server-Sent Events endpoint as fallback for WebSocket.
 
+    Uses unified SSEStream when STREAMS_UNIFIED is on; otherwise falls back
+    to a simple generator that emits JSON `data:` frames.
+
     Args:
         client_id: Client identifier
         project_id: Optional project to subscribe to
         db: Database instance
     """
+    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+    use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+
+    if use_unified:
+        stream = SSEStream(
+            heartbeat_interval_s=None,  # env-driven
+            heartbeat_mode=None,
+            labels={"component": "prompt_studio", "endpoint": "ps_sse"},
+        )
+
+        async def _produce() -> None:
+            try:
+                # Initial connection event
+                await stream.send_json({"type": "connection", "status": "connected", "client_id": client_id})
+                # Optional initial state
+                if project_id:
+                    job_manager = JobManager(db)
+                    jobs = job_manager.list_jobs(limit=10)
+                    await stream.send_json({"type": "initial_state", "project_id": project_id, "jobs": jobs})
+                # Periodic heartbeats are handled by SSEStream; also emit a data heartbeat for clients that expect it
+                # (SSEStream will emit comment/data heartbeats per configuration.)
+            except Exception as e:
+                safe_error_msg = sanitize_error_message(e, "SSE streaming")
+                await stream.error("internal_error", safe_error_msg)
+
+        async def _gen():
+            prod = asyncio.create_task(_produce())
+            try:
+                async for ln in stream.iter_sse():
+                    yield ln
+            except asyncio.CancelledError:
+                # Cancel producer promptly on client disconnect
+                if not prod.done():
+                    try:
+                        prod.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await prod
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                raise
+            else:
+                # Ensure producer completes cleanly on normal shutdown
+                if not prod.done():
+                    try:
+                        await prod
+                    except Exception:
+                        pass
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+        return StreamingResponse(_gen(), media_type="text/event-stream", headers=headers)
+
+    # Legacy path: simple generator without unified metrics/heartbeats
     async def event_generator():
         """Generate SSE events."""
         # Send initial connection event
@@ -302,12 +363,26 @@ async def websocket_endpoint_base(websocket: WebSocket):
     Args:
         websocket: WebSocket connection
     """
+    # Wrap socket for lifecycle metrics; keep domain payloads unchanged
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,  # disable WS ping; domain heartbeats only
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "prompt_studio", "endpoint": "ps_ws_base"},
+    )
+    # Accept via manager first to avoid double-accept issues
     await connection_manager.connect(websocket, "global")
+    await stream.start()
 
     try:
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_json()
+            try:
+                stream.mark_activity()
+            except Exception:
+                pass
 
             # Handle subscription requests
             if data.get("type") == "subscribe":
@@ -318,7 +393,7 @@ async def websocket_endpoint_base(websocket: WebSocket):
                         connection_manager.active_connections["global"] = set()
                     connection_manager.active_connections["global"].add(websocket)
 
-                    await websocket.send_json({
+                    await stream.send_json({
                         "type": "subscribed",
                         "project_id": project_id
                     })
@@ -327,7 +402,7 @@ async def websocket_endpoint_base(websocket: WebSocket):
                 pass
             elif data.get("type") == "job_update":
                 # Echo job update (test harness expects a direct update message back)
-                await websocket.send_json(data)
+                await stream.send_json(data)
 
     except WebSocketDisconnect:
         # Pass the actual websocket to ensure proper cleanup
@@ -347,16 +422,28 @@ async def websocket_endpoint(
         project_id: Project ID to subscribe to
         db: Database instance
     """
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=0.0,
+        idle_timeout_s=None,
+        close_on_done=False,
+        labels={"component": "prompt_studio", "endpoint": "ps_ws_project"},
+    )
     await connection_manager.connect(websocket, str(project_id))
+    await stream.start()
 
     try:
         while True:
             # Keep connection alive and handle incoming messages
             data = await websocket.receive_text()
+            try:
+                stream.mark_activity()
+            except Exception:
+                pass
 
             # Handle ping/pong for keepalive
             if data == "ping":
-                await websocket.send_text("pong")
+                await stream.ws.send_text("pong")
             else:
                 # Process other messages if needed
                 logger.debug(f"Received WebSocket message for project {project_id}: {data}")

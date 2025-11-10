@@ -567,15 +567,26 @@ def _install_nemo_canary() -> None:
 def _install_kokoro(variants: List[str]) -> None:
     targets = set(variants or ['onnx'])
     config = _load_config()
-    model_path = Path(config.get('TTS-Settings', {}).get('kokoro_model_path', 'models/kokoro/kokoro-v0_19.onnx'))
-    if model_path.is_dir():
-        model_path = model_path / 'kokoro-v0_19.onnx'
-    voices_path = Path(config.get('TTS-Settings', {}).get('kokoro_voices_json', model_path.with_name('voices.json')))
+    # Default to v1.0 ONNX layout
+    default_model_path = Path('models/kokoro/onnx/model.onnx')
+    model_path = Path(config.get('TTS-Settings', {}).get('kokoro_model_path', str(default_model_path)))
+    # Destination for voices directory (used by v1.0 ONNX and PyTorch variant)
+    default_voices_dir = model_path.parent.parent / 'voices'
+    voices_dir = Path(config.get('TTS-Settings', {}).get('kokoro_voices_json', str(default_voices_dir)))
+
+    # Ensure destination directories exist
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    voices_dir.mkdir(parents=True, exist_ok=True)
+
+    # Source repo for v1.0 ONNX
+    onnx_repo = 'onnx-community/Kokoro-82M-v1.0-ONNX-timestamped'
 
     if 'onnx' in targets:
-        _download_hf_file('kokoro-82m', 'kokoro-v0_19.onnx', model_path)
+        # Download main ONNX model (user may replace with fp16/quantized variant later)
+        _download_hf_file(onnx_repo, 'onnx/model.onnx', model_path)
     if 'voices' in targets:
-        _download_hf_file('kokoro-82m', 'voices.json', voices_path)
+        # Download the voices directory
+        _download_hf_dir(onnx_repo, 'voices', voices_dir)
 
 
 def _install_dia() -> None:
@@ -595,7 +606,11 @@ def _install_vibevoice(variants: List[str]) -> None:
     if '1.5B' in selected:
         _snapshot_repo('microsoft/VibeVoice-1.5B')
     if '7B' in selected:
-        _snapshot_repo('WestZhang/VibeVoice-Large-pt')
+        # Official 7B repository
+        _snapshot_repo('vibevoice/VibeVoice-7B')
+    if '7B-Q8' in selected:
+        # Community 8-bit quantized 7B variant (reduced VRAM usage)
+        _snapshot_repo('FabioSarracino/VibeVoice-Large-Q8')
 
 
 def _download_huggingface_models(models: List[str]) -> None:
@@ -636,14 +651,19 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
 
+    force = _force_downloads()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and not force:
+        logger.info('Skip existing file %s', destination)
+        return
     try:
-        hf_hub_download(
+        # Download into cache, then copy to the exact destination path
+        src_fp = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
-            local_dir=str(destination.parent),
-            local_dir_use_symlinks=False,
+            force_download=force,
         )
+        shutil.copy2(src_fp, destination)
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
     except Exception as exc:  # noqa: BLE001
@@ -651,6 +671,56 @@ def _download_hf_file(repo_id: str, filename: str, destination: Path) -> None:
             raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{filename}.') from exc
         raise
 
+
+def _download_hf_dir(repo_id: str, subdir: str, destination: Path) -> None:
+    """Download a directory from a HuggingFace repo via snapshot and copy the subdir to destination."""
+    _ensure_downloads_allowed(f'{repo_id}/{subdir} directory')
+    try:
+        from huggingface_hub import snapshot_download
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
+
+    force = _force_downloads()
+    if destination.exists() and any(destination.iterdir()) and not force:
+        logger.info('Skip existing directory %s', destination)
+        return
+
+    try:
+        # Download snapshot into a temporary folder then copy requested subdir
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="tldw_hf_") as _td:
+            snapshot_path = Path(snapshot_download(
+                repo_id=repo_id,
+                local_dir=str(_td),
+                allow_patterns=[f"{subdir}", f"{subdir}/*", f"{subdir}/**"],
+                force_download=force,
+            ))
+            src = snapshot_path / subdir
+            if not src.exists():
+                raise FileNotFoundError(f'Subdirectory {subdir!r} not found in snapshot of {repo_id}')
+            # Prepare destination directory
+            if destination.exists() and force:
+                if destination.is_dir():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # Copy directory tree while tempdir is alive
+            shutil.copytree(src, destination, dirs_exist_ok=True)
+    except requests_exceptions.RequestException as exc:  # noqa: PERF203
+        raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
+    except Exception as exc:  # noqa: BLE001
+        if _is_httpx_network_error(exc):
+            raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}/{subdir}.') from exc
+        raise
+
+def _force_downloads() -> bool:
+    """Whether to force re-download/overwrite. Controlled via env flags."""
+    for key in ('TLDW_SETUP_FORCE_DOWNLOADS', 'TLDW_SETUP_FORCE', 'TLDW_FORCE'):
+        v = os.getenv(key)
+        if v and v not in ('0', 'false', 'False', 'no', 'NO'):
+            return True
+    return False
 
 def _snapshot_repo(repo_id: str) -> None:
     _ensure_downloads_allowed(f'{repo_id} snapshot')
@@ -660,7 +730,8 @@ def _snapshot_repo(repo_id: str) -> None:
         raise RuntimeError('huggingface_hub package is required for model downloads.') from exc
 
     try:
-        snapshot_download(repo_id=repo_id, local_dir_use_symlinks=False)
+        # Prefetch into cache; no local_dir required and no symlink flag
+        snapshot_download(repo_id=repo_id, force_download=_force_downloads())
     except requests_exceptions.RequestException as exc:  # noqa: PERF203
         raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
     except Exception as exc:  # noqa: BLE001

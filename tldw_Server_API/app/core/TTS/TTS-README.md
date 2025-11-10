@@ -61,6 +61,43 @@ providers:
 
 > **Manual GPU smoke test**: See `TTS-DEPLOYMENT.md` for a short checklist covering environment validation and end-to-end streaming playback on real hardware.
 
+## One-Command Installers
+Run these from the project root to install a single TTS backend (deps + models where applicable):
+
+```bash
+# Kokoro (v1.0 ONNX + voices)
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+# Overwrite existing assets: add --force
+# python Helper_Scripts/TTS_Installers/install_tts_kokoro.py --force
+
+# Dia / Higgs / VibeVoice
+python Helper_Scripts/TTS_Installers/install_tts_dia.py
+python Helper_Scripts/TTS_Installers/install_tts_higgs.py
+python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py --variant 1.5B
+
+# NeuTTS (deps; optional prefetch)
+python Helper_Scripts/TTS_Installers/install_tts_neutts.py --prefetch
+
+# IndexTTS2 (deps + checkpoints folder)
+python Helper_Scripts/TTS_Installers/install_tts_index_tts2.py
+
+# Chatterbox (deps only)
+python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py [--with-lang]
+```
+
+Flags:
+- `TLDW_SETUP_SKIP_PIP=1` to skip pip installs
+- `TLDW_SETUP_SKIP_DOWNLOADS=1` to skip HF downloads
+- `TLDW_SETUP_FORCE_DOWNLOADS=1` to overwrite existing assets
+
+Alternative helper (assets only):
+```bash
+python Helper_Scripts/download_kokoro_assets.py \
+  --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+  --model-path models/kokoro/onnx/model.onnx \
+  --voices-dir models/kokoro/voices
+```
+
 ### Voice Management & Cloning
 
 - `voice_manager.py` validates uploads (extensions, duration, sample rate, size) and enforces quotas (`VOICE_RATE_LIMITS`).
@@ -163,7 +200,9 @@ providers:
 
   kokoro:
     enabled: true
-    model_path: ./models/kokoro-v0_19.onnx
+    use_onnx: true
+    model_path: ./models/kokoro/onnx/model.onnx
+    voices_json: ./models/kokoro/voices
 ```
 
 3. **Start the Server**
@@ -266,17 +305,21 @@ Notes
 
 ### Bootstrap Kokoro Assets
 
-Use the helper script to download Kokoro ONNX model and voices.json to your configured paths.
+Recommended: run the installer from the repo root (downloads v1.0 ONNX + voices and checks eSpeak):
 
 ```bash
-python Helper_Scripts/download_kokoro_assets.py \
-  --onnx-url <KOKORO_ONNX_URL> \
-  --voices-url <VOICES_JSON_URL> \
-  --model-path tldw_Server_API/app/core/TTS/models/kokoro-v0_19.onnx \
-  --voices-json tldw_Server_API/app/core/TTS/models/voices.json
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
 ```
 
-Update `tts_providers_config.yaml` to point to your downloaded files. For GPU support, set `providers.kokoro.use_onnx: false` and provide a `.pth` model path (PyTorch backend requires a compatible Kokoro PyTorch implementation).
+Manual alternative using `huggingface-cli`:
+```bash
+pip install huggingface-hub
+mkdir -p models/kokoro
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+```
+
+Update `tts_providers_config.yaml` if you use custom paths. For the PyTorch variant, set `use_onnx: false`, provide a `.pth` path, and point `voice_dir` to the `voices/` directory.
 
 ### Transcription (Speech-to-Text)
 
@@ -301,6 +344,15 @@ print(response.json()["text"])
 
 ### Provider Configuration (tts_providers_config.yaml)
 
+Location resolution:
+- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`
+- `./tts_providers_config.yaml` (working directory)
+- `~/.config/tldw/tts_providers_config.yaml`
+
+Notes:
+- Local providers will not download models unless `auto_download: true` (or `TTS_AUTO_DOWNLOAD=1`).
+- VibeVoice 7B official repo: `vibevoice/VibeVoice-7B`; optional quantized 7B: `FabioSarracino/VibeVoice-Large-Q8`.
+
 ```yaml
 # Provider priority (fallback order)
 provider_priority:
@@ -318,7 +370,9 @@ providers:
 
   kokoro:
     enabled: true
-    model_path: ./models/kokoro-v0_19.onnx
+    use_onnx: true
+    model_path: ./models/kokoro/onnx/model.onnx
+    voices_json: ./models/kokoro/voices
     device: cpu  # or cuda
 
   higgs:
@@ -334,7 +388,9 @@ providers:
 
   vibevoice:
     enabled: true
-    variant: 1.5B  # or 7B
+    auto_download: false        # Explicit opt-in to avoid unsolicited network fetches
+    variant: 1.5B               # or 7B, 7B-Q8
+    model_path: microsoft/VibeVoice-1.5B  # or vibevoice/VibeVoice-7B, FabioSarracino/VibeVoice-Large-Q8
     device: cuda
 
 # Fallback configuration

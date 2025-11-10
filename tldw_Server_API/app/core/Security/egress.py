@@ -97,12 +97,43 @@ def _host_matches_allowlist(host: str, allowlist: Sequence[str]) -> bool:
 
 
 def _resolve_host_ips(host: str) -> list[str]:
+    """Resolve the host to all A/AAAA addresses with a short timeout.
+
+    Returns a de-duplicated list of IP strings. Any resolution error results
+    in an empty list which callers must treat as unsafe.
+    """
     try:
-        infos = socket.getaddrinfo(host, None)
-        addrs = []
-        for _, _, _, _, sockaddr in infos:
-            ip = sockaddr[0]
-            addrs.append(ip)
+        prev_timeout = None
+        try:
+            prev_timeout = socket.getdefaulttimeout()
+            # Short timeout to avoid long blocks during DNS resolution
+            socket.setdefaulttimeout(2.0)
+        except Exception:
+            prev_timeout = None
+
+        try:
+            infos = socket.getaddrinfo(
+                host,
+                None,
+                family=socket.AF_UNSPEC,  # both IPv4 and IPv6
+                type=socket.SOCK_STREAM,
+            )
+        except Exception:
+            return []
+        finally:
+            try:
+                socket.setdefaulttimeout(prev_timeout)
+            except Exception:
+                pass
+
+        addrs: list[str] = []
+        for family, _stype, _proto, _canon, sockaddr in infos:
+            try:
+                # sockaddr[0] is the IP for both AF_INET and AF_INET6
+                ip = sockaddr[0]
+                addrs.append(ip)
+            except Exception:
+                continue
         # Preserve order but deduplicate
         return list(dict.fromkeys(addrs))
     except Exception:

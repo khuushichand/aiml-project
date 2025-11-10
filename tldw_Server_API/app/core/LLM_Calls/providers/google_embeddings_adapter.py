@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Union
+
+from loguru import logger
+
+from tldw_Server_API.app.core.http_client import create_client, RetryPolicy
+from .base import EmbeddingsProvider
+
+
+class GoogleEmbeddingsAdapter(EmbeddingsProvider):
+    name = "google-embeddings"
+
+    def capabilities(self) -> Dict[str, Any]:
+        return {
+            "dimensions_default": None,
+            "max_batch_size": 128,
+            "default_timeout_seconds": 60,
+        }
+
+    def _use_native_http(self) -> bool:
+        import os
+        v = os.getenv("LLM_EMBEDDINGS_NATIVE_HTTP_GOOGLE")
+        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+
+    def _base_url(self) -> str:
+        import os
+        return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1").rstrip("/")
+
+    def _normalize(self, raw: Dict[str, Any], *, multi: bool) -> Dict[str, Any]:
+        # Google embedContent returns {embedding: {values: [...]}}
+        # batchEmbedContents returns {embeddings: [{values: [...]}, ...]}
+        if not multi:
+            vec = []
+            try:
+                vec = raw.get("embedding", {}).get("values", [])
+            except Exception:
+                vec = []
+            return {"data": [{"index": 0, "embedding": vec}], "object": "list", "model": None}
+        data: List[Dict[str, Any]] = []
+        try:
+            items = raw.get("embeddings", [])
+            for i, it in enumerate(items):
+                data.append({"index": i, "embedding": (it.get("values") or [])})
+        except Exception:
+            pass
+        return {"data": data, "object": "list", "model": None}
+
+    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        inputs = request.get("input")
+        model = request.get("model")
+        api_key = request.get("api_key")
+        if inputs is None or not model:
+            raise ValueError("Embeddings: 'input' and 'model' are required")
+
+        if self._use_native_http():
+            # Use single embedContent for 1 input; loop for multiple
+            base = self._base_url()
+            try:
+                with create_client(timeout=timeout or 60.0) as client:
+                    if isinstance(inputs, list):
+                        out: List[Dict[str, Any]] = []
+                        for idx, text in enumerate(inputs):
+                            url = f"{base}/models/{model}:embedContent"
+                            params = {"key": api_key} if api_key else None
+                            payload = {"content": {"parts": [{"text": text}]}}
+                            resp = client.post(url, params=params, json=payload)
+                            if hasattr(resp, "raise_for_status"):
+                                resp.raise_for_status()
+                            data = resp.json()
+                            out.append({"index": idx, "embedding": data.get("embedding", {}).get("values", [])})
+                        return {"data": out, "object": "list", "model": model}
+                    else:
+                        url = f"{base}/models/{model}:embedContent"
+                        params = {"key": api_key} if api_key else None
+                        payload = {"content": {"parts": [{"text": inputs}]}}
+                        resp = client.post(url, params=params, json=payload)
+                        if hasattr(resp, "raise_for_status"):
+                            resp.raise_for_status()
+                        data = resp.json()
+                        return self._normalize(data, multi=False)
+            except Exception as e:
+                from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+                raise ChatProviderError(provider=self.name, message=str(e))
+
+        logger.debug("GoogleEmbeddingsAdapter: native HTTP disabled and no legacy fallback; returning empty result")
+        return {"data": [], "object": "list", "model": model}

@@ -24,6 +24,32 @@ ELEVENLABS_API_KEY=your-api-key-here
 
 ## Local Model Providers
 
+### One-Command Installers (Recommended)
+Use these helpers from the repo root to install a specific backend in isolation:
+
+```bash
+# Kokoro (v1.0 ONNX + voices)
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+
+# Dia / Higgs / VibeVoice
+python Helper_Scripts/TTS_Installers/install_tts_dia.py
+python Helper_Scripts/TTS_Installers/install_tts_higgs.py
+python Helper_Scripts/TTS_Installers/install_tts_vibevoice.py --variant 1.5B
+
+# NeuTTS (deps; optional prefetch)
+python Helper_Scripts/TTS_Installers/install_tts_neutts.py --prefetch
+
+# IndexTTS2 (deps + checkpoints folder scaffold)
+python Helper_Scripts/TTS_Installers/install_tts_index_tts2.py
+
+# Chatterbox (deps only)
+python Helper_Scripts/TTS_Installers/install_tts_chatterbox.py [--with-lang]
+```
+
+Flags:
+- `TLDW_SETUP_SKIP_PIP=1` to skip pip installs
+- `TLDW_SETUP_SKIP_DOWNLOADS=1` to skip HF downloads
+
 ### Model Auto-Download Controls
 
 Local providers (Kokoro, Higgs, Dia, Chatterbox, VibeVoice) can auto-download models the first time you use them. You can control this behavior globally or per provider.
@@ -79,29 +105,33 @@ Tip (CI/Dev): The test suite sets `TTS_AUTO_DOWNLOAD=0` to avoid network during 
 
 ### Kokoro Setup
 
-Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX runtime.
+Kokoro is a lightweight, high-quality TTS model that runs locally using ONNX Runtime or PyTorch. We recommend the v1.0 ONNX artifacts for most users.
 
 #### Installation
+Preferred:
 ```bash
-# Install dependencies
-pip install onnxruntime kokoro-onnx phonemizer
-
-# For GPU acceleration (optional)
-pip install onnxruntime-gpu
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+```
+Manual alternative:
+```bash
+pip install onnxruntime kokoro-onnx phonemizer espeak-phonemizer
+# Optional GPU: pip install onnxruntime-gpu
+# Install eSpeak NG: brew install espeak-ng  |  sudo apt-get install -y espeak-ng
+# Env var only if needed: export PHONEMIZER_ESPEAK_LIBRARY=/path/to/libespeak-ng
 ```
 
-#### Download Models
+#### Download Models (v1.0 ONNX)
 ```bash
 # Create model directory
 mkdir -p models/kokoro
 
-# Download ONNX model (Method 1: Using huggingface-cli)
+# Use huggingface-cli to fetch the model and voices
 pip install huggingface-hub
-huggingface-cli download kokoro-82m kokoro-v0_19.onnx --local-dir models/kokoro/
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 
-# Method 2: Direct download
-wget https://huggingface.co/kokoro-82m/resolve/main/kokoro-v0_19.onnx -O models/kokoro/kokoro-v0_19.onnx
-wget https://huggingface.co/kokoro-82m/resolve/main/voices.json -O models/kokoro/voices.json
+# Optional: choose an alternate ONNX (fp16/quantized) by replacing onnx/model.onnx
+# e.g., onnx/model_fp16.onnx or onnx/model_quantized.onnx
 ```
 
 #### Configuration
@@ -110,16 +140,31 @@ wget https://huggingface.co/kokoro-82m/resolve/main/voices.json -O models/kokoro
 kokoro:
   enabled: true
   use_onnx: true
-  model_path: ./models/kokoro/kokoro-v0_19.onnx
-  voices_json: ./models/kokoro/voices.json
-  device: cpu  # or cuda for GPU
-  phonemizer_backend: espeak  # requires espeak-ng installed
+  model_path: ./models/kokoro/onnx/model.onnx
+  voices_json: ./models/kokoro/voices   # path to voices directory for v1.0 ONNX
+  device: cpu  # or cuda for GPU (onnxruntime-gpu)
+```
+
+#### PyTorch Variant (optional)
+```bash
+# Download from hexgrad/Kokoro-82M
+huggingface-cli download hexgrad/Kokoro-82M kokoro-v1_0.pth --local-dir models/kokoro/
+huggingface-cli download hexgrad/Kokoro-82M config.json     --local-dir models/kokoro/
+huggingface-cli download hexgrad/Kokoro-82M voices          --local-dir models/kokoro/
+
+# YAML
+kokoro:
+  enabled: true
+  use_onnx: false
+  model_path: ./models/kokoro/kokoro-v1_0.pth
+  voice_dir:  ./models/kokoro/voices
+  device: cuda  # or mps/cpu
 ```
 
 #### System Requirements
-- **Disk Space**: ~800MB for model
+- **Disk Space**: ~300–330MB for `model.onnx`, plus voices directory
 - **RAM**: 2GB minimum
-- **Optional**: espeak-ng for phonemizer (`sudo apt-get install espeak-ng` on Ubuntu)
+- **eSpeak NG**: install system package; env var only for non-standard library paths
 
 ### Higgs Audio V2 Setup
 
@@ -292,8 +337,8 @@ Models will auto-download from HuggingFace on first use.
 # Run Gradio demo for 1.5B model
 python demo/gradio_demo.py --model_path microsoft/VibeVoice-1.5B --share
 
-# Run Gradio demo for 7B model
-python demo/gradio_demo.py --model_path WestZhang/VibeVoice-Large-pt --share
+# Run Gradio demo for 7B model (official)
+python demo/gradio_demo.py --model_path vibevoice/VibeVoice-7B --share
 
 # File-based inference (single speaker)
 python demo/inference_from_file.py \
@@ -338,8 +383,9 @@ At runtime, a request can still override the defaults by passing `extra_params["
 # In tts_providers_config.yaml
 vibevoice:
   enabled: true
-  vibevoice_variant: "1.5B"  # or "7B"
-  model_path: microsoft/VibeVoice-1.5B  # or WestZhang/VibeVoice-Large-pt
+  auto_download: true
+  vibevoice_variant: "1.5B"  # or "7B", "7B-Q8"
+  model_path: microsoft/VibeVoice-1.5B  # or vibevoice/VibeVoice-7B (official), FabioSarracino/VibeVoice-Large-Q8 (7B-Q8)
   device: cuda  # GPU strongly recommended
   use_fp16: true
   enable_music: true  # Spontaneous background music

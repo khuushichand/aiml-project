@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
@@ -21,7 +21,9 @@ class DummyResponse:
 
 @pytest.mark.unit
 @pytest.mark.strict_mode
-def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming():
+def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming(monkeypatch):
+    # Ensure helper takes the test codepath (raw httpx.Client) instead of central client
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "1")
     fake_settings = {
         "aphrodite_api": {
             "api_ip": "http://localhost:8082/v1/chat/completions",
@@ -32,7 +34,7 @@ def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming():
 
     captured_payload = {}
 
-    def fake_post(url, headers=None, json=None, timeout=None):
+    def fake_post(url, headers=None, json=None, timeout=None):  # mirror httpx.Client.post signature
         captured_payload.clear()
         if json:
             captured_payload.update(json)
@@ -44,6 +46,7 @@ def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming():
     ), patch(
         "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.httpx.Client"
     ) as mock_client_cls:
+
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post
         mock_client.close.return_value = None

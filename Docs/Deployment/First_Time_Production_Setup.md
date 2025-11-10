@@ -52,7 +52,7 @@ cp .env.example .env
 # Required values (examples)
 export AUTH_MODE=multi_user
 export JWT_SECRET_KEY="$(openssl rand -base64 64)"
-export DATABASE_URL="postgresql://tldw_user:ChangeMeStrong123!@postgres:5432/tldw_users"
+export DATABASE_URL="postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users"
 
 # Strong single-user key if you use single_user mode instead
 export SINGLE_USER_API_KEY="$(python -c "import secrets;print(secrets.token_urlsafe(32))")"

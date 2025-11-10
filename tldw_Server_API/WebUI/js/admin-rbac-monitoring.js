@@ -53,27 +53,27 @@ async function monListWatchlists() {
     listEl.innerHTML = html;
   } catch (e) {
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to list watchlists');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list watchlists');
   }
 }
 
 async function monApplyDefaultsToScope(scopeType, scopeId) {
   try {
-    if (!scopeType || !scopeId) { Toast.error('Missing scope'); return; }
+    if (!scopeType || !scopeId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Missing scope'); return; }
     const listed = await window.apiClient.get('/api/v1/monitoring/watchlists');
     const wls = (listed && listed.watchlists) || [];
     const defaults = wls.filter(w => (w.scope_type === 'global' || w.scope_type === 'all') && ((w.name || '').startsWith('Kid-Safe Defaults')));
-    if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
+    if (defaults.length === 0) { if (typeof Toast !== 'undefined' && Toast) Toast.error('No default watchlists found'); return; }
     let created = 0;
     for (const wl of defaults) {
       const payload = { id: null, name: `${wl.name} [${scopeType}:${scopeId}]`, description: wl.description || '', enabled: true, scope_type: scopeType, scope_id: scopeId, rules: wl.rules || [] };
       try { await window.apiClient.post('/api/v1/monitoring/watchlists', payload); created += 1; } catch (_) {}
     }
-    Toast.success(`Applied ${created} default watchlists to ${scopeType}:${scopeId}`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Applied ${created} default watchlists to ${scopeType}:${scopeId}`);
     await monListWatchlists();
   } catch (e) {
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to apply defaults');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to apply defaults');
   }
 }
 
@@ -84,7 +84,7 @@ async function monReloadWatchlists() {
     await monListWatchlists();
   } catch (e) {
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to reload');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to reload');
   }
 }
 
@@ -98,36 +98,36 @@ async function monUpsertWatchlist() {
     const scope_id = (document.getElementById('monWl_scope_id')?.value || '') || null;
     const rules_raw = document.getElementById('monWl_rules')?.value || '[]';
     let rules;
-    try { rules = JSON.parse(rules_raw); } catch (e) { Toast.error('Rules must be JSON'); return; }
+    try { rules = JSON.parse(rules_raw); } catch (e) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Rules must be JSON'); return; }
     const body = { id, name, description, enabled, scope_type, scope_id, rules };
     const res = await window.apiClient.post('/api/v1/monitoring/watchlists', body);
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Saved');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Saved');
     await monListWatchlists();
   } catch (e) {
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to save watchlist');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to save watchlist');
   }
 }
 
 async function monDeleteWatchlist() {
   try {
     const id = (document.getElementById('monWl_id')?.value || '').trim();
-    if (!id) { Toast.error('Enter watchlist ID to delete'); return; }
+    if (!id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter watchlist ID to delete'); return; }
     if (!confirm('Delete watchlist ' + id + '?')) return;
     const res = await window.apiClient.delete(`/api/v1/monitoring/watchlists/${encodeURIComponent(id)}`);
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Deleted');
     await monListWatchlists();
   } catch (e) {
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to delete watchlist');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to delete watchlist');
   }
 }
 
 async function monQuickApplyDefaults(scopeType) {
   const id = (scopeType === 'team') ? (document.getElementById('monQuick_team')?.value || '').trim() : (document.getElementById('monQuick_org')?.value || '').trim();
-  if (!id) { Toast.error(`Enter a ${scopeType} id`); return; }
+  if (!id) { if (typeof Toast !== 'undefined' && Toast) Toast.error(`Enter a ${scopeType} id`); return; }
   await monApplyDefaultsToScope(scopeType, id);
 }
 
@@ -135,13 +135,13 @@ async function monBulkApplyDefaults() {
   try {
     const scopeType = document.getElementById('monBulk_scope')?.value || 'team';
     const raw = (document.getElementById('monBulk_ids')?.value || '').trim();
-    if (!raw) { Toast.error('Enter at least one ID'); return; }
+    if (!raw) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter at least one ID'); return; }
     const parts = raw.split(/\n|,/).map(s => s.trim()).filter(Boolean);
-    if (parts.length === 0) { Toast.error('No valid IDs found'); return; }
+    if (parts.length === 0) { if (typeof Toast !== 'undefined' && Toast) Toast.error('No valid IDs found'); return; }
     const listed = await window.apiClient.get('/api/v1/monitoring/watchlists');
     const wls = (listed && listed.watchlists) || [];
     const defaults = wls.filter(w => (w.scope_type === 'global' || w.scope_type === 'all') && ((w.name || '').startsWith('Kid-Safe Defaults')));
-    if (defaults.length === 0) { Toast.error('No default watchlists found'); return; }
+    if (defaults.length === 0) { if (typeof Toast !== 'undefined' && Toast) Toast.error('No default watchlists found'); return; }
     let totalCreated = 0;
     for (const sid of parts) {
       for (const wl of defaults) {
@@ -149,10 +149,10 @@ async function monBulkApplyDefaults() {
         try { await window.apiClient.post('/api/v1/monitoring/watchlists', payload); totalCreated += 1; } catch (_) {}
       }
     }
-    Toast.success(`Applied ${totalCreated} watchlists to ${parts.length} ${scopeType} id(s)`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Applied ${totalCreated} watchlists to ${parts.length} ${scopeType} id(s)`);
   } catch (e) {
     document.getElementById('monitoringWatchlists_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Bulk apply failed');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Bulk apply failed');
   }
 }
 
@@ -189,7 +189,7 @@ async function monListAlerts() {
     box.innerHTML = html;
   } catch (e) {
     document.getElementById('monitoringAlerts_list').innerHTML = `<pre>${esc(JSON.stringify(e.response || e, null, 2))}</pre>`;
-    Toast.error('Failed to list alerts');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list alerts');
   }
 }
 
@@ -198,9 +198,9 @@ async function monMarkAlertRead(id) {
     if (!id) return;
     const safeId = encodeURIComponent(id);
     await window.apiClient.post(`/api/v1/monitoring/alerts/${safeId}/read`, {});
-    Toast.success('Marked read');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Marked read');
     await monListAlerts();
-  } catch (e) { Toast.error('Mark read failed'); }
+  } catch (e) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Mark read failed'); }
 }
 
 async function monLoadRecentAlerts() {
@@ -256,8 +256,8 @@ async function monSaveNotifSettings() {
     };
     const res = await window.apiClient.put('/api/v1/monitoring/notifications/settings', body);
     document.getElementById('monitoringNotif_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Saved');
-  } catch (e) { document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Failed to save settings'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Saved');
+  } catch (e) { document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to save settings'); }
 }
 
 function monClearNotifDrafts() {
@@ -278,12 +278,12 @@ function monClearNotifDrafts() {
     setVal('monNotif_smtp_user', '');
     setVal('monNotif_smtp_pass', '');
   } catch (_) { /* ignore */ }
-  Toast.success('Drafts cleared');
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Drafts cleared');
 }
 
 async function monRestoreNotifDefaults() {
   await monLoadNotifSettings();
-  Toast.success('Defaults loaded');
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Defaults loaded');
 }
 
 async function monSendNotifTest() {
@@ -292,8 +292,8 @@ async function monSendNotifTest() {
     const message = document.getElementById('monNotif_test_msg')?.value || 'Test notification';
     const res = await window.apiClient.post('/api/v1/monitoring/notifications/test', { severity, message });
     document.getElementById('monitoringNotif_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Sent test');
-  } catch (e) { document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Test failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Sent test');
+  } catch (e) { document.getElementById('monitoringNotif_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Test failed'); }
 }
 
 async function monLoadRecentNotifications() {
@@ -334,7 +334,7 @@ function monResetAllMonitoringUI() {
   document.getElementById('monitoringAlerts_list')?.replaceChildren();
   document.getElementById('monitoringAlerts_recent')?.replaceChildren();
   document.getElementById('monitoringNotif_recent')?.replaceChildren();
-  Toast.success('Monitoring UI reset');
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Monitoring UI reset');
 }
 
 // -------- RBAC: Bindings (call inline impl if present) --------

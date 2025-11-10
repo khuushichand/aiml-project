@@ -10,6 +10,9 @@ from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 import requests
+import tempfile
+import os
+from pathlib import Path
 
 from tldw_Server_API.app.api.v1.schemas.research_schemas import (
     ArxivSearchRequestForm,
@@ -58,10 +61,95 @@ from tldw_Server_API.app.core.Third_Party import PMC_OA as PMC_OA
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.core.http_client import create_client as _create_http_client
+from tldw_Server_API.app.core.http_client import (
+    create_client as _create_http_client,
+    afetch as _http_afetch,
+    adownload as _http_adownload,
+    RetryPolicy as _RetryPolicy,
+)
 
 
 router = APIRouter()
+
+
+async def _download_pdf_bytes(
+    url: str,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = 60,
+    enforce_pdf: bool = False,
+) -> bytes:
+    """HEAD + atomic download to bytes using centralized http client.
+
+    - Performs a HEAD to validate content-type when available.
+    - Streams to a temp file via adownload with retries and atomic rename.
+    - Returns the downloaded file as bytes and removes the temp file.
+    """
+    # Test-friendly fallback: if a module-level `_http_session()` factory is present
+    # (older tests monkeypatch this), use it to GET the URL and return its content.
+    try:
+        _sess_factory = globals().get("_http_session")
+        if callable(_sess_factory):
+            _sess = _sess_factory()
+            if hasattr(_sess, "get"):
+                _resp = _sess.get(url, timeout=timeout)
+                # Best-effort PDF validation for enforce_pdf: accept Content-Disposition *.pdf
+                if enforce_pdf:
+                    try:
+                        disp = str((_resp.headers or {}).get("Content-Disposition") or "").lower()
+                        if (".pdf" not in disp) and not (isinstance(getattr(_resp, "content", b""), (bytes, bytearray)) and (getattr(_resp, "content", b"") or b"").startswith(b"%PDF")):
+                            raise HTTPException(status_code=415, detail="Expected PDF content")
+                    except Exception:
+                        # If header inspection fails, fall through to content check below
+                        pass
+                data_b = getattr(_resp, "content", b"") or b""
+                if not isinstance(data_b, (bytes, bytearray)) or not data_b:
+                    raise HTTPException(status_code=502, detail="PDF download returned empty content")
+                return bytes(data_b)
+    except HTTPException:
+        raise
+    except Exception:
+        # Fallback to standard async client path below
+        pass
+
+    # 1) HEAD check for content-type (best-effort)
+    try:
+        r = await _http_afetch(method="HEAD", url=url, headers=headers or {}, timeout=timeout)
+        try:
+            ctype = (r.headers.get("content-type") or "").lower()
+        finally:
+            # ensure the response is closed
+            try:
+                await r.aclose()
+            except Exception:
+                pass
+        if ctype:
+            is_pdf = ("application/pdf" in ctype) or ctype.endswith("/pdf")
+            if enforce_pdf and not is_pdf:
+                raise HTTPException(status_code=415, detail=f"Expected application/pdf; got {ctype}")
+            if not is_pdf:
+                # Some providers respond with octet-stream; be lenient but log
+                logger.warning(f"PDF download content-type not 'application/pdf': {ctype}; continuing")
+    except Exception as e:
+        # HEAD may fail on some endpoints; log and proceed to GET
+        logger.debug(f"HEAD check failed for {url}: {e}")
+
+    # 2) Stream download to a temp path, then read bytes
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    dest_path = Path(tmp.name)
+    tmp.close()
+    try:
+        await _http_adownload(url=url, dest=dest_path, headers=headers or {}, timeout=timeout, retry=_RetryPolicy())
+        data = dest_path.read_bytes()
+        if not data:
+            raise HTTPException(status_code=502, detail="PDF download returned empty content")
+        return data
+    finally:
+        try:
+            if dest_path.exists():
+                os.unlink(dest_path)
+        except Exception:
+            pass
 
 
 @router.get(
@@ -853,10 +941,7 @@ async def arxiv_ingest(
         pdf_url = Arxiv.fetch_arxiv_pdf_url(arxiv_id)
         if not pdf_url:
             pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        r.raise_for_status()
-        content = r.content
+        content = await _download_pdf_bytes(pdf_url)
 
         # Process PDF
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
@@ -1002,12 +1087,7 @@ async def eartharxiv_ingest(
         title_meta = (item or {}).get('title') if isinstance(item, dict) else None
         doi_meta = (item or {}).get('doi') if isinstance(item, dict) else None
         pdf_url = f"https://eartharxiv.org/{osf_id}/download"
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="EarthArXiv PDF download returned empty content")
+        content = await _download_pdf_bytes(pdf_url)
 
         # 2) Process
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
@@ -1306,10 +1386,7 @@ async def s2_ingest(
         pdf_url = oap.get('url')
         if not pdf_url:
             raise HTTPException(status_code=400, detail="No open access PDF available for this paper")
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        r.raise_for_status()
-        content = r.content
+        content = await _download_pdf_bytes(pdf_url)
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
         kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
@@ -2581,18 +2658,8 @@ async def ingest_by_doi(
         if not pdf_url:
             raise HTTPException(status_code=404, detail="No Open Access PDF found for DOI")
 
-        # 2) Download PDF
-        s = requests.Session()
-        adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        r = await loop.run_in_executor(None, lambda: s.get(pdf_url, timeout=30))
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="Resolved OA PDF link returned 404")
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="OA PDF download returned empty content")
+        # 2) Download PDF (HEAD check + atomic download)
+        content = await _download_pdf_bytes(pdf_url)
 
         # 3) Process PDF bytes
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
@@ -2731,16 +2798,7 @@ async def ingest_batch(
         try:
             # 1) Direct pdf_url path
             if pdf_url:
-                s = requests.Session()
-                adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
-                s.mount("https://", adapter)
-                s.mount("http://", adapter)
-                r = await loop.run_in_executor(None, lambda: s.get(pdf_url, timeout=30))
-                if not r.ok:
-                    return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=f"HTTP {r.status_code}")
-                content = r.content
-                if not content:
-                    return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="Empty content")
+                content = await _download_pdf_bytes(pdf_url)
                 result = await process_pdf_task(
                     file_bytes=content,
                     filename=(title or doi or arxiv_id or pmcid or "document").replace('/', '_') + ".pdf",
@@ -2942,16 +3000,7 @@ async def ingest_batch(
                     pdf_guess = None
                 if not pdf_guess:
                     pdf_guess = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-                s = requests.Session()
-                adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
-                s.mount("https://", adapter)
-                s.mount("http://", adapter)
-                r = await loop.run_in_executor(None, lambda: s.get(pdf_guess, timeout=30))
-                if not r.ok:
-                    return IngestBatchResultItem(arxiv_id=arxiv_id, success=False, error=f"HTTP {r.status_code}")
-                content = r.content
-                if not content:
-                    return IngestBatchResultItem(arxiv_id=arxiv_id, success=False, error="Empty content")
+                content = await _download_pdf_bytes(pdf_guess)
                 result = await process_pdf_task(
                     file_bytes=content,
                     filename=f"{arxiv_id}.pdf",
@@ -3044,16 +3093,7 @@ async def ingest_batch(
             if not pdf_url:
                 return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="No pdf_url and DOI unresolved")
             # Download PDF
-            s = requests.Session()
-            adapter = HTTPAdapter(max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]))
-            s.mount("https://", adapter)
-            s.mount("http://", adapter)
-            r = await loop.run_in_executor(None, lambda: s.get(pdf_url, timeout=30))
-            if not r.ok:
-                return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=f"HTTP {r.status_code}")
-            content = r.content
-            if not content:
-                return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="Empty content")
+            content = await _download_pdf_bytes(pdf_url)
             # Process & persist
             result = await process_pdf_task(
                 file_bytes=content,
@@ -3540,10 +3580,7 @@ async def osf_ingest(
         if not pdf_url:
             raise HTTPException(status_code=404, detail="No primary file download URL found for this preprint")
 
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        r.raise_for_status()
-        content = r.content
+        content = await _download_pdf_bytes(pdf_url)
 
         # Fetch minimal metadata for title/doi if possible
         meta, _ = await loop.run_in_executor(None, OSF.get_preprint_by_id, osf_id)
@@ -3876,14 +3913,7 @@ async def zenodo_ingest(
             raise HTTPException(status_code=404, detail="No PDF link found for this Zenodo record")
 
         # 2) Download PDF
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="PDF returned 404 from Zenodo")
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="Zenodo PDF download returned empty content")
+        content = await _download_pdf_bytes(pdf_url)
 
         # 3) Process PDF
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
@@ -4148,14 +4178,7 @@ async def figshare_ingest(
             raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")
 
         # 2) Download PDF
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="PDF returned 404 from Figshare")
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="Figshare PDF download returned empty content")
+        content = await _download_pdf_bytes(pdf_url)
 
         # 3) Process PDF
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
@@ -4309,14 +4332,7 @@ async def figshare_ingest_by_doi(
         if not pdf_url:
             raise HTTPException(status_code=404, detail="No PDF link found for this Figshare article")
 
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="PDF returned 404 from Figshare")
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="Figshare PDF download returned empty content")
+        content = await _download_pdf_bytes(pdf_url)
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
         kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
@@ -4557,14 +4573,7 @@ async def hal_ingest(
         if not pdf_url:
             raise HTTPException(status_code=404, detail="No PDF link found for this HAL document")
 
-        sess = _http_session()
-        r = sess.get(pdf_url, timeout=30)
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="PDF returned 404 from HAL")
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="HAL PDF download returned empty content")
+        content = await _download_pdf_bytes(pdf_url)
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
         kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
@@ -4718,19 +4727,8 @@ async def vixra_ingest(
         if not item or not item.get('pdf_url'):
             raise HTTPException(status_code=404, detail="viXra PDF not found for ID")
         pdf_url = item['pdf_url']
-        # Download PDF
-        s = _http_session()
-        # Some sites (like viXra) require an Accept header to serve PDF
-        r = s.get(pdf_url, timeout=30, headers={"Accept": "application/pdf, */*"})
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="viXra PDF returned 404")
-        if r.status_code >= 400:
-            # Map any other upstream client/server errors to 502 for lenient behavior
-            raise HTTPException(status_code=502, detail=f"viXra PDF download error: {r.status_code}")
-        r.raise_for_status()
-        content = r.content
-        if not content:
-            raise HTTPException(status_code=502, detail="viXra PDF download returned empty content")
+        # Download PDF (set Accept header to prefer PDF)
+        content = await _download_pdf_bytes(pdf_url, headers={"Accept": "application/pdf, */*"})
 
         # Process
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task

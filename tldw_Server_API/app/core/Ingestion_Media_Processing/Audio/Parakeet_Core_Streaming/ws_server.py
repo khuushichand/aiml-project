@@ -299,6 +299,24 @@ async def websocket_parakeet_core(
                                 "audio_path": audio_path,
                                 "speakers": speakers,
                             })
+                        # Emit a status frame reflecting persistence state
+                        try:
+                            if getattr(diarizer, "store_audio", False):
+                                method = getattr(diarizer, "persistence_method", None)
+                                if audio_path and method and method != "soundfile":
+                                    await websocket.send_json({
+                                        "type": "status",
+                                        "state": "diarization_persist_degraded",
+                                        "persistence_method": method,
+                                    })
+                                elif (not audio_path) or (method is None):
+                                    await websocket.send_json({
+                                        "type": "status",
+                                        "state": "diarization_persist_disabled",
+                                        "persistence_method": method,
+                                    })
+                        except Exception:
+                            pass
                 except Exception as _diar_err:
                     logger.debug(f"Diarization finalize failed: {_diar_err}")
                 transcriber.reset()

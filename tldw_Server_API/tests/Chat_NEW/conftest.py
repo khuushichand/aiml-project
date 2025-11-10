@@ -347,7 +347,7 @@ def provider_specific_request() -> Dict[str, Any]:
     """Request with specific provider."""
     return {
         "api_provider": "anthropic",
-        "model": "claude-3-sonnet",
+        "model": "claude-sonnet-4.5",
         "messages": [
             {"role": "user", "content": "Explain quantum computing."}
         ],
@@ -429,7 +429,7 @@ def provider_configs():
         "anthropic": {
             "api_key": "test-anthropic-key",
             "base_url": "https://api.anthropic.com",
-            "models": ["claude-3-sonnet", "claude-3-opus"]
+            "models": ["claude-sonnet-4.5", "claude-opus-4.1"]
         },
         "local": {
             "base_url": "http://localhost:8080",

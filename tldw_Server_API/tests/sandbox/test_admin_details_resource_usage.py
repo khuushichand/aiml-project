@@ -6,19 +6,19 @@ from typing import Any, Dict
 from fastapi.testclient import TestClient
 
 
-def _client() -> TestClient:
+def _client(monkeypatch) -> TestClient:
     # Speed up and stabilize sandbox WS behavior in tests
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ.setdefault("MINIMAL_TEST_APP", "1")
-    os.environ.setdefault("SANDBOX_ENABLE_EXECUTION", "true")
-    os.environ.setdefault("SANDBOX_BACKGROUND_EXECUTION", "false")
-    os.environ.setdefault("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
     # Ensure sandbox routes are enabled
     existing_enable = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing_enable.split(",") if p.strip()]
     if "sandbox" not in parts:
         parts.append("sandbox")
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    monkeypatch.setenv("ROUTES_ENABLE", ",".join(parts))
     from tldw_Server_API.app.main import app  # import after env is set
     return TestClient(app)
 
@@ -28,11 +28,11 @@ def _admin_user_dep():
     return User(id=1, username="admin", roles=["admin"], is_admin=True)
 
 
-def test_admin_details_includes_resource_usage() -> None:
+def test_admin_details_includes_resource_usage(monkeypatch) -> None:
     # Override dependency for admin route using the app from TestClient
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         body: Dict[str, Any] = {
             "spec_version": "1.0",

@@ -645,23 +645,69 @@ async def stream_job_events(
         _set_pg_rls_for_user(user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
 
-    async def event_gen():
-        nonlocal after_id
-        poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
-        # Send an initial ping so streaming clients receive a first chunk promptly
-        try:
-            yield "event: ping\ndata: {}\n\n"
-        except Exception:
-            # Ignore early send issues; continue into polling loop
-            pass
+    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+    from tldw_Server_API.app.core.Metrics.metrics_manager import (
+        get_metrics_registry,
+        MetricDefinition,
+        MetricType,
+    )
+    import time as _time
 
+    nonlocal_after_id = after_id  # keep compatibility with inner mutation
+    poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
+
+    # Register a lightweight gauge for the last event time (epoch seconds)
+    try:
+        _reg = get_metrics_registry()
+        _reg.register_metric(
+            MetricDefinition(
+                name="jobs_events_last_ts_seconds",
+                type=MetricType.GAUGE,
+                description="Epoch seconds of the last emitted job event",
+                unit="s",
+                labels=["component", "endpoint"],
+            )
+        )
+    except Exception:
+        _reg = get_metrics_registry()
+
+    # In test mode, bound the stream duration to avoid teardown hangs in CI/sandbox
+    try:
+        _test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        _test_mode = False
+    try:
+        _max_s = float(os.getenv("JOBS_SSE_TEST_MAX_SECONDS", "1.0")) if _test_mode else None
+    except Exception:
+        _max_s = 1.0 if _test_mode else None
+
+    stream = SSEStream(
+        heartbeat_interval_s=poll_interval,
+        heartbeat_mode="data",
+        max_duration_s=_max_s,
+        labels={"component": "jobs", "endpoint": "jobs_events_sse"},
+    )
+
+    async def _producer() -> None:
+        nonlocal nonlocal_after_id
+        # Initial small event to prompt client streaming
+        try:
+            await stream.send_event("ping", {})
+        except Exception:
+            pass
         while True:
+            # Terminate promptly if the stream has been closed (e.g., max_duration or client done)
+            try:
+                if getattr(stream, "_closed", False):
+                    break
+            except Exception:
+                pass
             conn = jm._connect()
             try:
                 if jm.backend == "postgres":
                     with jm._pg_cursor(conn) as cur:
                         query = "SELECT id, event_type, attrs_json FROM job_events WHERE id > %s"
-                        params: list[Any] = [int(after_id)]
+                        params: list[Any] = [int(nonlocal_after_id)]
                         if domain:
                             query += " AND domain = %s"
                             params.append(domain)
@@ -676,7 +722,7 @@ async def stream_job_events(
                         rows = cur.fetchall() or []
                 else:
                     query = "SELECT id, event_type, attrs_json FROM job_events WHERE id > ?"
-                    params2: list[Any] = [int(after_id)]
+                    params2: list[Any] = [int(nonlocal_after_id)]
                     if domain:
                         query += " AND domain = ?"
                         params2.append(domain)
@@ -699,25 +745,27 @@ async def stream_job_events(
                             et = str(r[1])
                             attrs = r[2]
                         try:
-                            payload = _json.dumps({"event": et, "attrs": (_json.loads(attrs) if isinstance(attrs, str) else (attrs or {}))})
+                            attrs_obj = _json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
                         except Exception:
-                            payload = _json.dumps({"event": et, "attrs": {}})
-                        yield f"id: {eid}\nevent: job\ndata: {payload}\n\n"
-                        after_id = eid
-                else:
-                    # Heartbeat to keep clients unblocked while waiting for events
-                    # Use a data line (not just a comment) so httpx/requests iter_lines() yields promptly
-                    yield "event: ping\ndata: {\"event\": \"keep-alive\"}\n\n"
+                            attrs_obj = {}
+                        # Preserve SSE id line for clients using Last-Event-ID
+                        await stream.send_raw_sse_line(f"id: {eid}")
+                        await stream.send_event("job", {"event": et, "attrs": attrs_obj})
+                        try:
+                            _reg.set_gauge(
+                                "jobs_events_last_ts_seconds",
+                                float(_time.time()),
+                                {"component": "jobs", "endpoint": "jobs_events_sse"},
+                            )
+                        except Exception:
+                            pass
+                        nonlocal_after_id = eid
+                # If no rows, rely on heartbeat to keep connection alive
                 await asyncio.sleep(poll_interval)
             except (asyncio.CancelledError, GeneratorExit):
-                # Client disconnected; stop the generator
                 break
             except Exception:
-                # Yield a heartbeat even on errors so clients don't block indefinitely
-                try:
-                    yield "event: ping\ndata: {\"event\": \"keep-alive\", \"error\": true}\n\n"
-                except Exception:
-                    pass
+                # Swallow transient errors and continue after a short delay; heartbeat covers liveness
                 await asyncio.sleep(poll_interval)
             finally:
                 try:
@@ -725,9 +773,48 @@ async def stream_job_events(
                 except Exception:
                     pass
 
+    async def _gen():
+        prod_task = asyncio.create_task(_producer())
+        try:
+            async for ln in stream.iter_sse():
+                yield ln
+        except asyncio.CancelledError:
+            # Client cancelled: cancel producer promptly and re-raise
+            if not prod_task.done():
+                try:
+                    prod_task.cancel()
+                except Exception:
+                    pass
+                try:
+                    await prod_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise
+        else:
+            # Normal shutdown: ensure producer completes without forced cancel
+            if not prod_task.done():
+                try:
+                    await prod_task
+                except Exception:
+                    pass
+        finally:
+            # Ensure producer task never leaks on unexpected exceptions
+            if not prod_task.done():
+                try:
+                    prod_task.cancel()
+                except Exception:
+                    pass
+                try:
+                    await prod_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    # Swallow any cleanup-time errors to avoid propagating
+                    pass
+
     # Advise proxies/servers not to buffer SSE
     sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=sse_headers)
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers=sse_headers)
 
 
 
@@ -777,6 +864,10 @@ async def ttl_sweep_endpoint(
     user=Depends(require_admin),
 ) -> TTLSweepResponse:
     try:
+        # Correlation IDs and diagnostics
+        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        rid = ensure_request_id(request)
+        tp = ensure_traceparent(request)
         # Pre-parse raw to enforce RBAC and confirm header before validation
         try:
             raw = await request.json()
@@ -805,6 +896,20 @@ async def ttl_sweep_endpoint(
         jm = JobManager(backend=backend, db_url=db_url)
         # Now validate the request model
         req = TTLSweepRequest(**(raw or {}))
+        # Capture a single reference time to avoid boundary drift between age/runtime calculations
+        try:
+            from datetime import datetime, timezone as _tz
+            ref_now = datetime.now(tz=_tz.utc)
+        except Exception:
+            ref_now = None
+        # Diagnostics before executing
+        try:
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
+                "TTL sweep request: action=%s domain=%s queue=%s job_type=%s age=%s runtime=%s backend=%s ref_now=%s",
+                req.action, req.domain, req.queue, req.job_type, req.age_seconds, req.runtime_seconds, (backend or "sqlite"), str(ref_now) if ref_now else ""
+            )
+        except Exception:
+            pass
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
             runtime_seconds=req.runtime_seconds,
@@ -812,11 +917,20 @@ async def ttl_sweep_endpoint(
             domain=req.domain,
             queue=req.queue,
             job_type=req.job_type,
+            reference_time=ref_now,
         )
         # Refresh gauges when fully scoped to avoid stale metrics
         try:
             if req.domain and req.queue and req.job_type:
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
+        except Exception:
+            pass
+        # Diagnostics after executing
+        try:
+            get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
+                "TTL sweep result: affected=%s action=%s domain=%s queue=%s job_type=%s",
+                int(affected), req.action, req.domain, req.queue, req.job_type
+            )
         except Exception:
             pass
         return TTLSweepResponse(affected=int(affected))

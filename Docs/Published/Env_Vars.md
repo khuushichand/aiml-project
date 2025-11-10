@@ -39,6 +39,13 @@ WebUI Access Guard (remote access controls)
 - `TLDW_WEBUI_DENYLIST`: Comma-separated IPs/CIDRs denied from `/webui`.
 - `TLDW_TRUSTED_PROXIES`: Comma-separated proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP.
 
+WebUI CSP (Content Security Policy)
+- `TLDW_WEBUI_NO_EVAL`: When set, controls whether `'unsafe-eval'` is allowed for `/webui` scripts.
+  - Precedence: if present, its truthiness decides the policy; otherwise a production-aware default applies.
+  - Truthy values (case-insensitive): `1`, `true`, `yes`, `on`, `y` → DISABLE eval (no `'unsafe-eval'`).
+  - Falsy values (e.g., `0`, `false`) → ENABLE eval.
+  - If unset: default is `False` (no eval) in production (`ENVIRONMENT|APP_ENV|ENV in {prod, production}`), and `True` (allow eval) in non-production.
+
 ## AuthNZ (Authentication)
 - `AUTH_MODE`: `single_user` | `multi_user`.
 - `DATABASE_URL`: AuthNZ database URL. For production multi-user, use Postgres.

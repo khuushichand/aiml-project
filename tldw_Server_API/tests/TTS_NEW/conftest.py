@@ -19,6 +19,7 @@ import uuid
 import pytest
 import numpy as np
 from fastapi.testclient import TestClient
+from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
 # Import actual TTS components for integration tests
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
@@ -363,7 +364,7 @@ def invalid_requests():
 # =====================================================================
 
 @pytest.fixture
-def test_client(test_env_vars):
+def test_client(test_env_vars, bypass_api_limits):
     """Create a test client for the FastAPI app with auth override."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -373,7 +374,7 @@ def test_client(test_env_vars):
 
     app.dependency_overrides[get_request_user] = _override_user
     try:
-        with TestClient(app) as client:
+        with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_request_user, None)

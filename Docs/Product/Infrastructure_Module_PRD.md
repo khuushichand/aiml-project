@@ -24,7 +24,7 @@
 ## 4. Current Scope
 | Capability | Details |
 | --- | --- |
-| Redis URL resolution | Reads `EMBEDDINGS_REDIS_URL` → `REDIS_URL` → default `redis://localhost:6379`. Settings layer overrides Env when available. |
+| Redis URL resolution | Reads `EMBEDDINGS_REDIS_URL` → `REDIS_URL` → default `redis://127.0.0.1:6379`. Settings layer overrides Env when available. |
 | Async + sync clients | `create_async_redis_client` and `create_sync_redis_client` return redis-py instances or the stub. Both accept `preferred_url`, `decode_responses`, `fallback_to_fake`, `context`, and `redis_kwargs`. |
 | In-memory stub | `InMemoryAsyncRedis` / `InMemorySyncRedis` share `_InMemoryRedisCore`. Supported commands: `ping`, `close`, strings (`get`, `set`, `delete`, expiry), sets (`sadd`, `srem`, `smembers`), sorted sets (`zadd`, `zrange`, `zrem`, `zscore`, `zincrby`), hashes (`hset`, `hget`, `hgetall`, `hincrby`), basic stream usage (`xadd`, `xlen`, `xrange`, `xreadgroup`, consumer groups), Lua script caching (`script_load`, `evalsha`, fallback to `eval`), simple pattern matching for `scan`. Expiry logic is time-based. |
 | Observability | Metrics registered in `MetricsRegistry`: `infra_redis_connection_attempts_total`, `infra_redis_connection_duration_seconds`, `infra_redis_connection_errors_total`, and `infra_redis_fallback_total`. Labels capture `mode`, `context`, outcomes, and error reasons for dashboards/alerts. |

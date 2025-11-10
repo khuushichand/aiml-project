@@ -3,7 +3,8 @@
 // ---- Global Presets (apply to Simple & Complex) ----
 async function refreshGlobalRagPresets() {
   try {
-    const resp = await apiClient.makeRequest('GET', '/api/v1/evaluations/rag/pipeline/presets');
+    const ep = (apiClient.endpoint('evaluations','rag_presets') || '/api/v1/evaluations/rag/pipeline/presets');
+    const resp = await apiClient.makeRequest('GET', ep);
     const sel = document.getElementById('ragGlobalPreset_select');
     if (!sel) return;
     sel.innerHTML = '';
@@ -13,9 +14,9 @@ async function refreshGlobalRagPresets() {
       opt.value = item.name; opt.textContent = item.name;
       sel.appendChild(opt);
     });
-    Toast.success(`Loaded ${items.length} presets`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${items.length} presets`);
   } catch (e) {
-    Toast.error('Failed to list presets: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list presets: ' + (e?.message || e));
   }
 }
 
@@ -24,7 +25,8 @@ async function applyGlobalRagPreset() {
     const sel = document.getElementById('ragGlobalPreset_select');
     const name = sel && sel.value ? sel.value : null;
     if (!name) { alert('Select a preset first'); return; }
-    const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+    const ep = (apiClient.endpoint('evaluations','rag_preset', { name }) || `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
+    const resp = await apiClient.makeRequest('GET', ep);
     if (!(resp && resp.config)) { alert('Preset not found'); return; }
     const cfg = resp.config;
     // Apply to Simple controls
@@ -77,7 +79,7 @@ async function applyGlobalRagPreset() {
       obj.reranking.enabled = true;
     }
     ta.value = JSON.stringify(obj, null, 2);
-    Toast.success('Preset applied to both Simple & Complex forms.');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Preset applied to both Simple & Complex forms.');
   } catch (e) {
     alert('Failed to apply preset: ' + (e?.message || e));
   }
@@ -96,7 +98,7 @@ async function ragSelInitSources() {
   ];
   opts.forEach(o => { const opt = document.createElement('option'); opt.value = o.value; opt.textContent = o.label; sel.appendChild(opt); });
   ragSelToggleKeywordInput();
-  Toast.success('Sources loaded');
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Sources loaded');
 }
 
 function ragSelToggleKeywordInput() {
@@ -111,7 +113,8 @@ async function ragSelLoadKeywords() {
   const cat = document.getElementById('ragSel_category')?.value || 'notes';
   if (cat !== 'notes') { ragSelToggleKeywordInput(); return; }
   try {
-    const resp = await apiClient.makeRequest('GET', `/api/v1/notes/keywords/?limit=500&offset=0`);
+    const ep = (apiClient.endpoint('notes','keywords') || '/api/v1/notes/keywords/');
+    const resp = await apiClient.get(ep, { limit: 500, offset: 0 });
     const sel = document.getElementById('ragSel_keywords');
     if (!sel) return;
     sel.innerHTML = '';
@@ -119,9 +122,9 @@ async function ragSelLoadKeywords() {
       const opt = document.createElement('option');
       opt.value = k.id; opt.textContent = k.keyword; sel.appendChild(opt);
     });
-    Toast.success(`Loaded ${ (resp||[]).length } keywords`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${ (resp||[]).length } keywords`);
   } catch (e) {
-    Toast.error('Failed to load keywords: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load keywords: ' + (e?.message || e));
   }
 }
 
@@ -145,7 +148,7 @@ function ragSelAddSelected() {
     if (src === 'media_db') { ragSelState.media_ids.add(parseInt(id, 10)); added++; }
     else if (src === 'notes') { ragSelState.note_ids.add(String(id)); added++; }
   });
-  if (added) Toast.success(`Added ${added} item(s)`);
+  if (added) { if (typeof Toast !== 'undefined' && Toast) Toast.success(`Added ${added} item(s)`); }
   ragSelRenderSelected();
 }
 
@@ -166,9 +169,9 @@ function ragSelApplyToComplex() {
     if (media.length) obj.include_media_ids = media;
     if (notes.length) obj.include_note_ids = notes;
     ta.value = JSON.stringify(obj, null, 2);
-    Toast.success('Selected items applied to payload');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Selected items applied to payload');
   } catch (e) {
-    Toast.error('Failed to apply items: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to apply items: ' + (e?.message || e));
   }
 }
 
@@ -181,7 +184,8 @@ async function ragSelLoadItems2() {
     if (cat === 'notes') {
       const kid = document.getElementById('ragSel_keywords')?.value;
       if (!kid) { alert('Select a keyword'); return; }
-      const resp = await apiClient.makeRequest('GET', `/api/v1/notes/keywords/${kid}/notes/?limit=50&offset=0`);
+      const ep = (apiClient.endpoint('notes','keywords_notes', { keyword_id: kid }) || `/api/v1/notes/keywords/${kid}/notes/`);
+      const resp = await apiClient.get(ep, { limit: 50, offset: 0 });
       const items = (resp?.notes || []).map(n => ({ source: 'notes', id: n.id, title: n.title }));
       items.forEach(item => {
         const div = document.createElement('div');
@@ -196,7 +200,7 @@ async function ragSelLoadItems2() {
         div.appendChild(label);
         cont.appendChild(div);
       });
-      Toast.success(`Loaded ${items.length} notes items`);
+      if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${items.length} notes items`);
     } else {
       const kw = (document.getElementById('ragSel_keyword_text')?.value || '').trim();
       if (!kw) { alert('Enter a keyword for media'); return; }
@@ -216,10 +220,10 @@ async function ragSelLoadItems2() {
         div.appendChild(label);
         cont.appendChild(div);
       });
-      Toast.success(`Loaded ${items.length} media items for '${kw}'`);
+      if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${items.length} media items for '${kw}'`);
     }
   } catch (e) {
-    Toast.error('Failed to load items: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load items: ' + (e?.message || e));
   }
 }
 
@@ -273,7 +277,7 @@ function ragSimpleApplyAndSend() {
     if (hidden) hidden.value = JSON.stringify(payload, null, 2);
     makeRequest('ragSimpleSearch', 'POST', '/api/v1/rag/search', 'json');
   } catch (e) {
-    Toast.error('Failed to build request: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to build request: ' + (e?.message || e));
   }
 }
 
@@ -407,9 +411,9 @@ function ragApplyCorpusToPayload() {
     if (name) { obj.corpus = name; obj.index_namespace = name; }
     else { delete obj.corpus; delete obj.index_namespace; }
     ta.value = JSON.stringify(obj, null, 2);
-    Toast.success('Corpus applied to payload');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Corpus applied to payload');
   } catch (e) {
-    Toast.error('Failed to apply corpus: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to apply corpus: ' + (e?.message || e));
   }
 }
 
@@ -424,7 +428,7 @@ async function refreshRagServerPresets() {
       const opt = document.createElement('option');
       opt.value = item.name; opt.textContent = item.name; sel.appendChild(opt);
     });
-    Toast.success(`Loaded ${items.length} presets`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${items.length} presets`);
   } catch (e) {
     alert('Failed to list presets: ' + (e?.message || e));
   }
@@ -473,7 +477,7 @@ async function applyRagServerPreset() {
       obj.reranking.enabled = true;
     }
     ta.value = JSON.stringify(obj, null, 2);
-    Toast.success('Preset applied to RAG search payload.');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Preset applied to RAG search payload.');
   } catch (e) {
     alert('Failed to apply server preset: ' + (e?.message || e));
   }
@@ -488,7 +492,7 @@ async function refreshSimpleRagPresets() {
     sel.innerHTML = '';
     const items = (resp && resp.items) ? resp.items : [];
     items.forEach(item => { const opt = document.createElement('option'); opt.value = item.name; opt.textContent = item.name; sel.appendChild(opt); });
-    Toast.success(`Loaded ${items.length} presets`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${items.length} presets`);
   } catch (e) { alert('Failed to list presets: ' + (e?.message || e)); }
 }
 
@@ -512,7 +516,7 @@ async function applySimpleRagPreset() {
         if (lim) lim.value = cfg.retriever.top_k;
       }
     }
-    Toast.success('Preset applied to simple search controls.');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Preset applied to simple search controls.');
   } catch (e) { alert('Failed to apply preset: ' + (e?.message || e)); }
 }
 
@@ -581,7 +585,7 @@ function buildResultList(containerId, responsePreId, corpusInputId) {
       const body = document.createElement('div'); body.className = 'card-body'; body.style.display = 'none';
       const content = document.createElement('pre'); content.textContent = (d.content || '').slice(0, 1200);
       const copyBtn = document.createElement('button'); copyBtn.className = 'btn btn-sm'; copyBtn.textContent = 'Copy snippet';
-      copyBtn.addEventListener('click', async (ev) => { ev.stopPropagation(); const ok = await Utils.copyToClipboard(d.content || ''); if (ok) Toast.success('Copied snippet'); else Toast.error('Copy failed'); sendImplicitRagFeedback('copy', d.id, i+1, impression, query, corpus); });
+      copyBtn.addEventListener('click', async (ev) => { ev.stopPropagation(); const ok = await Utils.copyToClipboard(d.content || ''); if (ok) { if (typeof Toast !== 'undefined' && Toast) Toast.success('Copied snippet'); } else { if (typeof Toast !== 'undefined' && Toast) Toast.error('Copy failed'); } sendImplicitRagFeedback('copy', d.id, i+1, impression, query, corpus); });
       body.appendChild(content); body.appendChild(copyBtn);
       header.addEventListener('click', () => { const show = body.style.display === 'none'; body.style.display = show ? 'block' : 'none'; sendImplicitRagFeedback('expand', d.id, i+1, impression, query, corpus); });
       card.appendChild(header); card.appendChild(body);
@@ -631,10 +635,10 @@ function buildResultList(containerId, responsePreId, corpusInputId) {
   byId('ragStream_stop')?.addEventListener('click', stopRagStreaming);
   byId('ragStream_clear')?.addEventListener('click', clearRagStreamingPanels);
   byId('ragStream_copyWhy')?.addEventListener('click', async () => {
-    try { const pre = document.getElementById('ragStream_why'); const t = pre?.textContent || ''; const ok = await Utils.copyToClipboard(t); if (ok) Toast.success('Copied Why'); else Toast.error('Copy failed'); } catch (_) {}
+    try { const pre = document.getElementById('ragStream_why'); const t = pre?.textContent || ''; const ok = await Utils.copyToClipboard(t); if (ok) { if (typeof Toast !== 'undefined' && Toast) Toast.success('Copied Why'); } else { if (typeof Toast !== 'undefined' && Toast) Toast.error('Copy failed'); } } catch (_) {}
   });
   byId('ragStream_copyAnswer')?.addEventListener('click', async () => {
-    try { const pre = document.getElementById('ragStream_answer'); const t = pre?.textContent || ''; const ok = await Utils.copyToClipboard(t); if (ok) Toast.success('Copied Answer'); else Toast.error('Copy failed'); } catch (_) {}
+    try { const pre = document.getElementById('ragStream_answer'); const t = pre?.textContent || ''; const ok = await Utils.copyToClipboard(t); if (ok) { if (typeof Toast !== 'undefined' && Toast) Toast.success('Copied Answer'); } else { if (typeof Toast !== 'undefined' && Toast) Toast.error('Copy failed'); } } catch (_) {}
   });
   byId('ragStream_autoClear')?.addEventListener('change', (e) => {
     try { const prefs = Utils.getFromStorage('rag-stream-prefs') || {}; prefs.autoClear = !!e.target.checked; Utils.saveToStorage('rag-stream-prefs', prefs); } catch (_) {}
@@ -727,8 +731,8 @@ async function ragEmbRefreshPresets() {
     if (!sel) return; sel.innerHTML = '';
     const items = (resp && resp.items) ? resp.items : [];
     items.forEach(item => { const opt = document.createElement('option'); opt.value = item.name; opt.textContent = item.name; sel.appendChild(opt); });
-    Toast.success(`Loaded ${items.length} presets`);
-  } catch (e) { Toast.error('Failed to list presets: ' + (e?.message || e)); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`Loaded ${items.length} presets`);
+  } catch (e) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list presets: ' + (e?.message || e)); }
 }
 async function ragEmbLoadPreset() {
   try {
@@ -736,9 +740,9 @@ async function ragEmbLoadPreset() {
     if (!name) { alert('Select a preset first'); return; }
     const resp = await apiClient.makeRequest('GET', `/api/v1/evaluations/rag/pipeline/presets/${encodeURIComponent(name)}`);
     const pre = document.getElementById('ragEmbPreset_view');
-    if (resp && resp.config) { pre.textContent = JSON.stringify(resp.config, null, 2); Toast.success('Preset loaded'); }
+    if (resp && resp.config) { pre.textContent = JSON.stringify(resp.config, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.success('Preset loaded'); }
     else { pre.textContent = '(not found)'; }
-  } catch (e) { Toast.error('Failed to load preset: ' + (e?.message || e)); }
+  } catch (e) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load preset: ' + (e?.message || e)); }
 }
 
 // ---- VLM backends discovery ----
@@ -747,7 +751,7 @@ async function ragFetchVlmBackends() {
     const epSpan = document.getElementById('ragVlmBackends_ep');
     const listEl = document.getElementById('ragVlmBackends_list');
     const pre = document.getElementById('ragVlmBackends_json');
-    if (listEl) listEl.innerHTML = 'Loading...';
+  if (listEl) listEl.innerHTML = 'Loading...';
     if (pre) pre.textContent = '(loading)';
 
     const caps = await apiClient.makeRequest('GET', '/api/v1/rag/capabilities');
@@ -823,7 +827,7 @@ async function ragLoadVlmControlsFromCapabilities() {
     if (defaults.vlm_max_pages && mp) mp.value = String(defaults.vlm_max_pages);
     ragComplexApplyVlmControls();
   } catch (e) {
-    Toast.error('Failed to load VLM defaults: ' + (e?.message || e));
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load VLM defaults: ' + (e?.message || e));
   }
 }
 

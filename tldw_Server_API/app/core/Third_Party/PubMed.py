@@ -23,36 +23,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover - optional
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch_json, fetch
 
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
 
-def _mk_session():
-    # Centralized client (trust_env=False, timeouts)
-    try:
-        return create_client(timeout=15)
-    except Exception:
-        # Fallback to requests if httpx not available
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[429, 500, 502, 503, 504],
-            backoff_factor=1,
-            allowed_methods=["HEAD", "GET", "OPTIONS"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
 
 
 def _build_term(query: str, free_full_text: bool) -> str:
@@ -137,8 +113,6 @@ def search_pubmed(
         if not query or not query.strip():
             return [], 0, None
 
-        session = _mk_session()
-
         # 1) ESearch: find PMIDs
         term = _build_term(query, free_full_text)
         esearch_params: Dict[str, Any] = {
@@ -161,9 +135,7 @@ def search_pubmed(
             })
 
         esearch_url = f"{EUTILS_BASE}/esearch.fcgi"
-        r = session.get(esearch_url, params=esearch_params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = fetch_json(method="GET", url=esearch_url, params=esearch_params, timeout=15)
         esr = data.get("esearchresult") or {}
         idlist: List[str] = esr.get("idlist") or []
         total = int(esr.get("count") or 0)
@@ -174,9 +146,7 @@ def search_pubmed(
         ids = ",".join(idlist)
         esum_params = {"db": "pubmed", "id": ids, "retmode": "json"}
         esum_url = f"{EUTILS_BASE}/esummary.fcgi"
-        rs = session.get(esum_url, params=esum_params, timeout=15)
-        rs.raise_for_status()
-        j = rs.json()
+        j = fetch_json(method="GET", url=esum_url, params=esum_params, timeout=15)
         result = j.get("result") or {}
         # UIDs list in j['result']['uids'] may be present
         uids = result.get("uids") or idlist
@@ -189,18 +159,6 @@ def search_pubmed(
 
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to PubMed API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            code = getattr(e.response, "status_code", None)
-            return None, 0, f"PubMed API HTTP Error: {code if code is not None else '?'}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to PubMed API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            code = getattr(getattr(e, 'response', None), "status_code", None)
-            return None, 0, f"PubMed API HTTP Error: {code if code is not None else '?'}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"PubMed API Request Error: {str(e)}"
         return None, 0, f"Unexpected error during PubMed search: {str(e)}"
     except Exception as e:
         return None, 0, f"Unexpected error during PubMed search: {str(e)}"
@@ -214,15 +172,12 @@ def get_pubmed_by_id(pmid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
     try:
         if not pmid or not str(pmid).strip():
             return None, "PMID cannot be empty"
-        session = _mk_session()
         pmid_str = str(pmid).strip()
 
         # Summary first (JSON) for structured metadata
         esum_url = f"{EUTILS_BASE}/esummary.fcgi"
         esum_params = {"db": "pubmed", "id": pmid_str, "retmode": "json"}
-        rs = session.get(esum_url, params=esum_params, timeout=15)
-        rs.raise_for_status()
-        j = rs.json()
+        j = fetch_json(method="GET", url=esum_url, params=esum_params, timeout=15)
         result = j.get("result") or {}
         rec = result.get(pmid_str)
         if not isinstance(rec, dict):
@@ -232,9 +187,14 @@ def get_pubmed_by_id(pmid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
         # EFetch for abstract (XML)
         efetch_url = f"{EUTILS_BASE}/efetch.fcgi"
         efetch_params = {"db": "pubmed", "id": pmid_str, "retmode": "xml"}
-        rf = session.get(efetch_url, params=efetch_params, timeout=15)
-        rf.raise_for_status()
-        xml_text = rf.text
+        rf = fetch(method="GET", url=efetch_url, params=efetch_params, timeout=15)
+        try:
+            xml_text = rf.text
+        finally:
+            try:
+                rf.close()
+            except Exception:
+                pass
         # Simple XML parsing for AbstractText nodes
         abstract_text = None
         try:
@@ -255,16 +215,4 @@ def get_pubmed_by_id(pmid: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
             base["abstract"] = abstract_text
         return base, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to PubMed API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            code = getattr(e.response, "status_code", None)
-            return None, f"PubMed API HTTP Error: {code if code is not None else '?'}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to PubMed API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            code = getattr(getattr(e, 'response', None), "status_code", None)
-            return None, f"PubMed API HTTP Error: {code if code is not None else '?'}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"PubMed API Request Error: {str(e)}"
         return None, f"Unexpected error during PubMed by-id lookup: {str(e)}"

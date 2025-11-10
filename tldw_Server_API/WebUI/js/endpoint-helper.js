@@ -51,23 +51,60 @@ class EndpointHelper {
             html += this.createFormField(field, id);
         });
 
-        // Add request button
+        // Add request + cURL buttons (no inline handlers)
         const buttonClass = method === 'DELETE' ? 'btn-danger' : '';
-        const confirmDelete = method === 'DELETE' ? `if(confirm('Are you sure?')) ` : '';
-
         html += `
             <button class="api-button ${buttonClass}"
-                    onclick="${confirmDelete}endpointHelper.executeRequest('${id}', '${method}', '${path}', '${bodyType}', '${timeout}')">
+                    data-action="exec" data-id="${id}" data-method="${method}" data-path="${path}" data-body="${bodyType}" data-timeout="${timeout}">
                 ${this.getButtonText(method)}
             </button>
-            <button class="btn btn-secondary" onclick="endpointHelper.showCurl('${id}', '${method}', '${path}', '${bodyType}')" style="margin-left: 10px;">
+            <button class="btn btn-secondary" data-action="curl" data-id="${id}" data-method="${method}" data-path="${path}" data-body="${bodyType}" style="margin-left: 10px;">
                 Show cURL
             </button>
             <pre id="${id}_response"></pre>
+            <div id="${id}_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
             <pre id="${id}_curl" style="display: none;"></pre>
         `;
 
-        section.innerHTML = html;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(section, html);
+        } else {
+            section.innerHTML = html;
+        }
+        // Bind actions
+        try {
+            const execBtn = section.querySelector('button[data-action="exec"]');
+            if (execBtn && !execBtn._bound) {
+                execBtn._bound = true;
+                execBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const m = execBtn.getAttribute('data-method');
+                    if (m === 'DELETE') {
+                        if (!confirm('Are you sure?')) return;
+                    }
+                    this.executeRequest(
+                        execBtn.getAttribute('data-id'),
+                        m,
+                        execBtn.getAttribute('data-path'),
+                        execBtn.getAttribute('data-body'),
+                        execBtn.getAttribute('data-timeout') || 'default'
+                    );
+                });
+            }
+            const curlBtn = section.querySelector('button[data-action="curl"]');
+            if (curlBtn && !curlBtn._bound) {
+                curlBtn._bound = true;
+                curlBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.showCurl(
+                        curlBtn.getAttribute('data-id'),
+                        curlBtn.getAttribute('data-method'),
+                        curlBtn.getAttribute('data-path'),
+                        curlBtn.getAttribute('data-body')
+                    );
+                });
+            }
+        } catch (_) {}
         return section;
     }
 
@@ -393,6 +430,11 @@ class EndpointHelper {
 
         // Add success/error styling
         element.className = success ? 'response-success' : 'response-error';
+
+        // Update correlation snippet if present
+        try {
+            this.updateCorrelationSnippet(element);
+        } catch (e) { /* ignore */ }
     }
 
     /**
@@ -417,6 +459,54 @@ class EndpointHelper {
         }
 
         this.displayResponse(element, errorInfo, false);
+    }
+
+    /**
+     * Update correlation snippet next to the given response element.
+     */
+    updateCorrelationSnippet(responseEl) {
+        if (!responseEl) return;
+        // Derive endpoint id from responseEl.id if possible
+        const id = (responseEl.id || '').replace(/_response$/, '');
+        const corrId = id ? `${id}_correlation` : '';
+        let box = (corrId && document.getElementById(corrId)) || null;
+        if (!box) {
+            // Create after response element if not found
+            box = document.createElement('div');
+            box.className = 'correlation-snippet';
+            box.style.marginTop = '6px';
+            box.style.color = 'var(--color-text-muted)';
+            box.style.fontSize = '0.85em';
+            try { box.setAttribute('aria-live', 'polite'); } catch(_){}
+            responseEl.parentNode.insertBefore(box, responseEl.nextSibling);
+        }
+        const meta = (window.apiClient && window.apiClient.lastCorrelation) || {};
+        const reqId = meta.requestId || '-';
+        const trace = meta.traceparent || meta.traceId || '-';
+        const shortReq = String(reqId).length > 12 ? `${String(reqId).slice(0, 12)}…` : reqId;
+        const shortTr = String(trace).length > 24 ? `${String(trace).slice(0, 24)}…` : trace;
+        box.textContent = `Correlation: X-Request-ID=${shortReq}  trace=${shortTr}`;
+        box.title = `X-Request-ID=${reqId}  traceparent/X-Trace-Id=${trace}`;
+
+        // Tiny help hint explaining how to use curl -I with X-Request-ID
+        const section = responseEl.closest('.endpoint-section');
+        const pathEl = section ? section.querySelector('.endpoint-path') : null;
+        const path = pathEl ? (pathEl.textContent || '').trim() : '';
+        const base = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
+        const exampleRid = reqId && reqId !== '-' ? reqId : 'YOUR-RID';
+        const exampleUrl = `${base}${path || ''}`;
+        const hintId = id ? `${id}_correlation_help` : '';
+        let hint = (hintId && document.getElementById(hintId)) || null;
+        if (!hint) {
+            hint = document.createElement('div');
+            if (hintId) hint.id = hintId;
+            hint.className = 'correlation-help';
+            hint.style.marginTop = '4px';
+            hint.style.color = 'var(--color-text-muted)';
+            hint.style.fontSize = '0.8em';
+            box.parentNode.insertBefore(hint, box.nextSibling);
+        }
+        hint.textContent = `Tip: copy X-Request-ID and correlate in server logs; you can also echo headers using: curl -s -I -H 'X-Request-ID: ${exampleRid}' '${exampleUrl}'`;
     }
 
     /**
@@ -564,6 +654,7 @@ class EndpointHelper {
 
 // Create global instance
 const endpointHelper = new EndpointHelper();
+try { window.endpointHelper = endpointHelper; } catch (_) {}
 
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {

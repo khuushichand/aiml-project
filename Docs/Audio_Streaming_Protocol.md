@@ -9,6 +9,31 @@ WebSocket Endpoint
 - Unified endpoint: `/api/v1/audio/stream/transcribe` (primary; includes auth/quotas/fallback)
 - Core demo endpoint: `/core/parakeet/stream` (portable router; no auth/quotas)
 
+Server-side handler (observability-enabled)
+```python
+from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+
+async def handle_audio_ws(websocket):
+    # Use labels to tag metrics with low-cardinality identifiers
+    stream = WebSocketStream(
+        websocket,
+        heartbeat_interval_s=10,
+        idle_timeout_s=120,
+        compat_error_type=True,  # transitional alias for clients expecting error_type
+        close_on_done=True,
+        labels={"component": "audio", "endpoint": "audio_ws"},
+    )
+    await stream.start()
+    try:
+        # domain payloads are sent as-is (no event frames)
+        await stream.send_json({"type": "status", "state": "ready"})
+        # ... process messages, emit partial/final results ...
+    except Exception as e:
+        await stream.error("internal_error", str(e))
+    finally:
+        await stream.stop()
+```
+
 Config Frame
 - Send this JSON as the first message to configure the session. All fields are optional unless noted.
 

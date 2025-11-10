@@ -6,7 +6,7 @@
     'YOUR_API_KEY_HERE',
     'default-secret-key-for-single-user',
     'CHANGE_ME_TO_SECURE_API_KEY',
-    'ChangeMeStrong123!',
+    'TestPassword123!',
     'change-me-in-production',
   ]);
   const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;
@@ -152,12 +152,12 @@
     options: [
       {
         id: 'kokoro',
-        label: 'Kokoro ONNX',
-        hint: 'Lightweight expressive voices. Downloads kokoro-v0_19.onnx and voices.json.',
+        label: 'Kokoro (v1.0 ONNX)',
+        hint: 'Lightweight expressive voices. Downloads onnx/model.onnx and voices/ (requires espeak-ng; set PHONEMIZER_ESPEAK_LIBRARY if needed).',
         variantsLabel: 'Assets',
         variants: [
           { id: 'onnx', label: 'ONNX runtime assets', default: true },
-          { id: 'voices', label: 'Sample voice pack' },
+          { id: 'voices', label: 'Voice embeddings' },
         ],
       },
       {
@@ -1497,6 +1497,8 @@
   }
 
   function renderWizardStep() {
+    // Clean up any per-step intervals before re-rendering
+    try { stopKokoroEspeakAutoRefresh(); } catch (_) {}
     const step = WIZARD_STEPS[state.wizard.currentStep];
     if (!step || !elements.wizardContent) {
       return;
@@ -1685,11 +1687,79 @@ function renderInstallOptionCard(category, option) {
     card.appendChild(hint);
   }
 
+  // Kokoro: show eSpeak detection badge using the audio health endpoint
+  try {
+    if (category === 'tts' && option && option.id === 'kokoro') {
+      const badge = document.createElement('span');
+      badge.id = 'kokoro-espeak-badge';
+      badge.className = 'status-badge badge-info';
+      badge.textContent = 'eSpeak: …';
+      badge.style.marginLeft = '8px';
+      header.appendChild(badge);
+      // Async update
+      updateKokoroEspeakBadge(badge).catch(() => {});
+      // Start auto-refresh every ~10s while this step is visible
+      startKokoroEspeakAutoRefresh(badge, 10000);
+      // Manual refresh button
+      const rbtn = document.createElement('button');
+      rbtn.type = 'button';
+      rbtn.className = 'btn btn-sm btn-secondary';
+      rbtn.title = 'Refresh eSpeak status';
+      rbtn.style.marginLeft = '6px';
+      rbtn.innerHTML = '<i class="icon-refresh"></i>';
+      rbtn.addEventListener('click', (ev) => { ev.preventDefault(); updateKokoroEspeakBadge(badge).catch(() => {}); });
+      header.appendChild(rbtn);
+    }
+  } catch (_) { /* ignore */ }
+
   if (checkbox.checked && Array.isArray(option.variants) && option.variants.length) {
     card.appendChild(renderVariantGroup(category, option));
   }
 
   return card;
+}
+
+async function updateKokoroEspeakBadge(badgeEl) {
+  if (!badgeEl) return;
+  try {
+    // Cache to avoid hammering the endpoint if re-rendered rapidly
+    const now = Date.now();
+    const cacheMs = 8000;
+    if (!state._audioHealthCache) state._audioHealthCache = { t: 0, data: null };
+    let health = state._audioHealthCache.data;
+    if (!health || (now - state._audioHealthCache.t) > cacheMs) {
+      health = await fetchJson('/api/v1/audio/health', { cache: 'no-store', timeoutMs: 6000 });
+      state._audioHealthCache = { t: now, data: health };
+    }
+    const kok = (health && health.providers && (health.providers.details || {}).kokoro) || {};
+    const ok = !!kok.espeak_lib_exists;
+    const path = kok.espeak_lib_env || '';
+    badgeEl.classList.remove('badge-info', 'badge-success', 'badge-alert');
+    badgeEl.classList.add(ok ? 'badge-success' : 'badge-alert');
+    badgeEl.textContent = ok ? 'eSpeak detected' : 'eSpeak not found';
+    badgeEl.title = ok ? (path ? `PHONEMIZER_ESPEAK_LIBRARY=${path}` : 'Detected via system library search') : 'Install espeak-ng. Env var only needed for non-standard paths.';
+  } catch (e) {
+    try { badgeEl.classList.remove('badge-success', 'badge-alert'); badgeEl.classList.add('badge-warning'); } catch (_) {}
+    try { badgeEl.textContent = 'eSpeak status: unknown'; } catch (_) {}
+  }
+}
+
+function startKokoroEspeakAutoRefresh(badgeEl, intervalMs = 10000) {
+  try { stopKokoroEspeakAutoRefresh(); } catch (_) {}
+  try {
+    state._kokoroEspeakTimer = setInterval(() => {
+      updateKokoroEspeakBadge(badgeEl).catch(() => {});
+    }, Math.max(4000, intervalMs|0));
+  } catch (_) {}
+}
+
+function stopKokoroEspeakAutoRefresh() {
+  try {
+    if (state._kokoroEspeakTimer) {
+      clearInterval(state._kokoroEspeakTimer);
+      state._kokoroEspeakTimer = null;
+    }
+  } catch (_) {}
 }
 
 function renderVariantGroup(category, option) {
@@ -2108,6 +2178,7 @@ function renderWizardSummary() {
   }
 
   function hideWizard() {
+    try { stopKokoroEspeakAutoRefresh(); } catch (_) {}
     if (elements.wizardSection) {
       elements.wizardSection.hidden = true;
     }

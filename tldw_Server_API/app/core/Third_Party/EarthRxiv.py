@@ -11,36 +11,14 @@ enable ingest-by-pdf.
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BASE_URL = "https://api.osf.io/v2/preprints/"
 PROVIDER = "eartharxiv"
 
 
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({"Accept": "application/json"})
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
+
 
 
 def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -79,7 +57,6 @@ def search_items(
     from_date: Optional[str] = None,
 ) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
     try:
-        session = _mk_session()
         params: Dict[str, Any] = {
             "filter[provider]": PROVIDER,
             "page[size]": max(1, min(results_per_page, 100)),
@@ -90,9 +67,7 @@ def search_items(
             params["q"] = term
         if from_date:
             params["filter[date_created][gte]"] = from_date
-        r = session.get(BASE_URL, params=params, timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/json"}, timeout=20)
         items = [
             _normalize_item(it)
             for it in (data.get("data") or [])
@@ -105,75 +80,45 @@ def search_items(
             total = len(items)
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"OSF API Request Error: {str(e)}"
         return None, 0, f"EarthArXiv error: {str(e)}"
 
 
 def get_item_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
         url = f"{BASE_URL}{osf_id}"
-        r = session.get(url, timeout=20)
-        r.raise_for_status()
-        data = r.json() or {}
+        data = fetch_json(method="GET", url=url, headers={"Accept": "application/json"}, timeout=20)
         if isinstance(data.get("data"), dict):
             return _normalize_item(data["data"]), None
         return None, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"OSF API Request Error: {str(e)}"
         return None, f"EarthArXiv error: {str(e)}"
 
 
 def get_item_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
         # Attempt direct DOI filter; fallback to search query
         params: Dict[str, Any] = {
             "filter[provider]": PROVIDER,
             "filter[doi]": doi,
             "page[size]": 1,
         }
-        r = session.get(BASE_URL, params=params, timeout=20)
+        r = fetch(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/json"}, timeout=20)
         if r.status_code == 200:
             data = r.json() or {}
             items = data.get("data") or []
             if items:
                 return _normalize_item(items[0]), None
         # Fallback: query by DOI string
-        r = session.get(BASE_URL, params={"filter[provider]": PROVIDER, "q": doi, "page[size]": 1}, timeout=20)
-        r.raise_for_status()
-        data2 = r.json() or {}
+        data2 = fetch_json(
+            method="GET",
+            url=BASE_URL,
+            params={"filter[provider]": PROVIDER, "q": doi, "page[size]": 1},
+            headers={"Accept": "application/json"},
+            timeout=20,
+        )
         items2 = data2.get("data") or []
         if items2:
             return _normalize_item(items2[0]), None
         return None, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"OSF API Request Error: {str(e)}"
         return None, f"EarthArXiv error: {str(e)}"

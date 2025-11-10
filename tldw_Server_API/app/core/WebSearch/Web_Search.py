@@ -11,15 +11,13 @@ import time
 from typing import Optional, Dict, Any, List, TypedDict
 from urllib.parse import urlparse, urlencode, unquote
 #
-# 3rd-Party Imports
 import requests
+# 3rd-Party Imports
 from lxml.etree import _Element
 from lxml.html import document_fromstring
-from requests import RequestException
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.http_client import fetch, fetch_json, RetryPolicy
 #
 # Local Imports
 from tldw_Server_API.app.core.config import loaded_config_data
@@ -1205,9 +1203,7 @@ def search_web_bing(search_query, bing_lang, bing_country, result_count=None, bi
 
     # Call the API
     try:
-        response = requests.get(search_url, headers=headers, params=params)
-        response.raise_for_status()
-
+        response = fetch(method="GET", url=search_url, headers=headers, params=params)
         logging.debug("Headers:  ")
         logging.debug(response.headers)
 
@@ -1348,8 +1344,8 @@ def search_web_brave(
     # Drop None values to keep the request clean
     filtered_params = {key: value for key, value in params.items() if value is not None}
 
-    response = requests.get(search_url, headers=headers, params=filtered_params)
-    response.raise_for_status()
+    # Use wrapper seam to allow clean monkeypatching in tests while using central client in production
+    response = brave_http_get(search_url, headers=headers, params=filtered_params)
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     brave_search_results = response.json()
     return brave_search_results
@@ -1418,11 +1414,9 @@ def parse_brave_results(raw_results: Dict, output_dict: Dict) -> None:
 #
 # https://github.com/deedy5/duckduckgo_search
 # Copied request format/structure from https://github.com/deedy5/duckduckgo_search/blob/main/duckduckgo_search/duckduckgo_search.py
-def create_session() -> requests.Session:
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=0.1, status_forcelist=[429, 500, 502, 503, 504])
-    session.mount('https://', HTTPAdapter(max_retries=retries))
-    return session
+def create_session():
+    """Deprecated: kept for legacy compatibility; unused."""
+    return None
 
 
 def search_web_duckduckgo(
@@ -1459,7 +1453,7 @@ def search_web_duckduckgo(
     results: list[dict[str, str]] = []
 
     for _ in range(5):
-        response = requests.post("https://html.duckduckgo.com/html", data=payload)
+        response = fetch(method="POST", url="https://html.duckduckgo.com/html", data=payload)
         resp_content = response.content
         if b"No  results." in resp_content:
             return results
@@ -1693,8 +1687,7 @@ def search_web_google(
         logging.info(f"Prepared parameters for Google Search: {params}")
 
         # Make the API call
-        response = requests.get(search_url, params=params)
-        response.raise_for_status()
+        response = fetch(method="GET", url=search_url, params=params)
         google_search_results = response.json()
 
         logging.info(
@@ -1706,7 +1699,7 @@ def search_web_google(
         logging.error(f"Configuration error: {str(ve)}")
         raise
 
-    except RequestException as re:
+    except Exception as re:
         logging.error(f"Error during API request: {str(re)}")
         raise
 
@@ -1834,8 +1827,7 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
     endpoint = f"{search_url}/search"
     params = {"q": query, "limit": limit}
 
-    response = requests.get(endpoint, headers=headers, params=params)
-    response.raise_for_status()
+    response = fetch(method="GET", url=endpoint, headers=headers, params=params)
     logging.debug(response.json())
     return response.json()
 
@@ -1902,21 +1894,9 @@ def parse_kagi_results(raw_results: Dict, output_dict: Dict) -> None:
 #
 # https://searx.space
 # https://searx.github.io/searx/dev/search_api.html
-def searx_create_session() -> requests.Session:
-    """
-    Create a requests session with retry logic.
-    """
-    session = requests.Session()
-    retries = Retry(
-        total=3,  # Maximum number of retries
-        backoff_factor=1,  # Exponential backoff factor
-        status_forcelist=[429, 500, 502, 503, 504],  # Retry on these status codes
-        allowed_methods=["GET"]  # Only retry on GET requests
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+def searx_create_session():
+    """Deprecated: kept for legacy compatibility; unused."""
+    return None
 
 
 def search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general',
@@ -1975,9 +1955,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
         time.sleep(delay)
 
-        session = searx_create_session()
-        response = session.get(search_url, headers=headers)
-        response.raise_for_status()
+        response = fetch(method="GET", url=search_url, headers=headers)
 
         # Check if the response is JSON
         content_type = response.headers.get('Content-Type', '')
@@ -2004,7 +1982,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
         return json.dumps(data)
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logging.error(f"Error searching for content: {str(e)}")
         return json.dumps({"error": f"There was an error searching for content. {str(e)}"})
 
@@ -2060,10 +2038,9 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'
         }
 
-        response = requests.post(tavily_api_url, headers=headers, data=json.dumps(payload))
-        response.raise_for_status()
+        response = fetch(method="POST", url=tavily_api_url, headers=headers, data=json.dumps(payload))
         return response.json()
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         return f"There was an error searching for content. {str(e)}"
 
 
@@ -2092,3 +2069,11 @@ def parse_yandex_results(yandex_search_results, web_search_results_dict):
 #
 # End of Web_Search.py
 #######################################################################################################################
+def brave_http_get(url: str, *, headers: Dict[str, str], params: Dict[str, Any]):
+    """Wrapper seam for Brave HTTP GET used by tests to monkeypatch easily.
+
+    Production path routes through centralized http client with retries and egress checks.
+    Tests can patch this symbol to inject a fake response without relying on requests.get.
+    """
+    policy = RetryPolicy()
+    return fetch(method="GET", url=url, headers=headers, params=params, retry=policy)

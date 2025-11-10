@@ -37,6 +37,10 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import (
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
+    STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
+)
 from tldw_Server_API.app.core.Chat.request_queue import (
     get_request_queue,
     RequestPriority,
@@ -127,7 +131,7 @@ def parse_provider_model_for_metrics(
 ) -> Tuple[str, str]:
     """Parse provider and model for metrics logging without mutating request_data.
 
-    Accepts model strings like "anthropic/claude-3-opus" and an optional
+    Accepts model strings like "anthropic/claude-opus-4.1" and an optional
     api_provider on the request, falling back to the server default.
 
     Returns (provider, model_for_metrics).
@@ -685,6 +689,7 @@ async def execute_streaming_call(
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
     moderation_getter: Optional[Callable[[], Any]] = None,
+    rg_commit_cb: Optional[Callable[[int], Any]] = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -813,7 +818,28 @@ async def execute_streaming_call(
             success=False,
             error_type=type(he).__name__,
         )
-        raise
+        # For streaming endpoint semantics, emit SSE error + DONE instead of HTTP error
+        # Bind error strings outside the generator to avoid Python 3.11+ exception scoping
+        _err_msg = str(getattr(he, "detail", he))
+        _err_type = type(he).__name__
+
+        async def _err_gen(msg: str = _err_msg, typ: str = _err_type):
+            try:
+                import json as _json
+                payload = {"error": {"message": msg, "type": typ}}
+                yield f"data: {_json.dumps(payload)}\n\n"
+            except Exception:
+                # Fallback string serialization
+                yield f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}}}}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(
+            _err_gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as e:
         metrics.track_llm_call(
             selected_provider,
@@ -868,11 +894,37 @@ async def execute_streaming_call(
                         provider_manager.record_failure(fallback_provider, fallback_error)
                         raise fallback_error
                 else:
-                    raise
+                    # No fallback available: stream SSE error (200) instead of raising
+                    pass
             else:
-                raise
+                # Client/config errors in streaming mode: stream SSE error (200)
+                pass
         else:
-            raise
+            # Queue path: stream SSE error as well
+            pass
+
+        # Safely capture exception details for streaming outside the closure
+        _err_message = str(e)
+        _err_type = type(e).__name__
+
+        # New safe variant that does not reference the except-scope variable directly
+        async def _safe_err_stream():
+            try:
+                import json as _json
+                payload = {"error": {"message": _err_message, "type": _err_type}}
+                yield f"data: {_json.dumps(payload)}\n\n"
+            except Exception:
+                yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            _safe_err_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
@@ -927,6 +979,7 @@ async def execute_streaming_call(
             except Exception:
                 pass
             latency_ms = int((time.time() - llm_start_time) * 1000)
+            total_est = int(pt_est + ct_est)
             await log_llm_usage(
                 user_id=user_id,
                 key_id=api_key_id,
@@ -938,10 +991,19 @@ async def execute_streaming_call(
                 latency_ms=latency_ms,
                 prompt_tokens=int(pt_est),
                 completion_tokens=int(ct_est),
-                total_tokens=int(pt_est + ct_est),
+                total_tokens=total_est,
                 request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
                 estimated=True,
             )
+        except Exception:
+            pass
+        # Commit reserved tokens to Resource Governor, if provided
+        try:
+            if callable(rg_commit_cb):
+                # rg_commit_cb may be async or sync; call accordingly
+                res = rg_commit_cb(total_est)
+                if hasattr(res, "__await__"):
+                    await res  # type: ignore[misc]
         except Exception:
             pass
         # Audit success
@@ -1102,8 +1164,8 @@ async def execute_streaming_call(
                 conversation_id=final_conversation_id,
                 model_name=model,
                 save_callback=save_callback,
-                idle_timeout=300,
-                heartbeat_interval=30,
+                idle_timeout=CHAT_IDLE_TIMEOUT,
+                heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None,
             )
             try:
@@ -1118,6 +1180,75 @@ async def execute_streaming_call(
                     await asyncio.gather(*pending_audit_tasks, return_exceptions=True)
 
     streaming_generator = tracked_streaming_generator()
+
+    # Feature-flagged: route through unified SSE abstraction for pilot
+    try:
+        use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        use_unified = False
+
+    if use_unified:
+        # Use SSEStream to standardize lifecycle + metrics; forward lines from the
+        # existing tracked generator, filtering provider [DONE] and emitting our own.
+        from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+        sse_stream = SSEStream(labels={"component": "chat", "endpoint": "chat_completions_stream"})
+        done_seen = False
+
+        async def _produce():
+            nonlocal done_seen
+            try:
+                async for ln in streaming_generator:
+                    if not ln:
+                        continue
+                    if ln.strip().lower() == "data: [done]":
+                        # Suppress provider DONE; emit unified DONE immediately and stop producing
+                        if not done_seen:
+                            await sse_stream.done()
+                            done_seen = True
+                        break
+                    await sse_stream.send_raw_sse_line(ln)
+                if not done_seen:
+                    await sse_stream.done()
+            except Exception as e:
+                # As a safeguard; tracked_streaming_generator typically yields error frames itself
+                await sse_stream.error("internal_error", f"{e}")
+
+        async def _gen():
+            prod = asyncio.create_task(_produce())
+            try:
+                async for line in sse_stream.iter_sse():
+                    yield line
+            except asyncio.CancelledError:
+                # Cancel producer promptly on client disconnect
+                if not prod.done():
+                    try:
+                        prod.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await prod
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                raise
+            else:
+                # Normal shutdown: ensure producer completes cleanly
+                if not prod.done():
+                    try:
+                        await prod
+                    except Exception:
+                        pass
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Legacy path: return the tracked generator directly
     return StreamingResponse(
         streaming_generator,
         media_type="text/event-stream",

@@ -10,11 +10,36 @@ from typing import Dict, Any, Callable
 #
 # Local Imports - Import the actual handler functions
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
-    chat_with_openai, chat_with_anthropic, chat_with_cohere,
+    chat_with_cohere,
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
     chat_with_mistral, chat_with_huggingface, chat_with_google,
     chat_with_qwen, chat_with_bedrock, chat_with_moonshot, chat_with_zai,
-    chat_with_openai_async, chat_with_groq_async, chat_with_anthropic_async, chat_with_openrouter_async,
+)
+from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
+    openai_chat_handler,
+    anthropic_chat_handler,
+    groq_chat_handler,
+    openrouter_chat_handler,
+    google_chat_handler,
+    mistral_chat_handler,
+    qwen_chat_handler,
+    deepseek_chat_handler,
+    huggingface_chat_handler,
+    bedrock_chat_handler,
+    custom_openai_chat_handler,
+    custom_openai_2_chat_handler,
+    openai_chat_handler_async,
+    anthropic_chat_handler_async,
+    groq_chat_handler_async,
+    openrouter_chat_handler_async,
+    qwen_chat_handler_async,
+    deepseek_chat_handler_async,
+    huggingface_chat_handler_async,
+    bedrock_chat_handler_async,
+    custom_openai_chat_handler_async,
+    custom_openai_2_chat_handler_async,
+    google_chat_handler_async,
+    mistral_chat_handler_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -30,17 +55,17 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
 
 # 1. Dispatch table for handler functions
 API_CALL_HANDLERS: Dict[str, Callable] = {
-    'openai': chat_with_openai,
-    'bedrock': chat_with_bedrock,
-    'anthropic': chat_with_anthropic,
+    'openai': openai_chat_handler,
+    'bedrock': bedrock_chat_handler,
+    'anthropic': anthropic_chat_handler,
     'cohere': chat_with_cohere,
-    'groq': chat_with_groq,
-    'qwen': chat_with_qwen,
-    'openrouter': chat_with_openrouter,
-    'deepseek': chat_with_deepseek,
-    'mistral': chat_with_mistral,
-    'google': chat_with_google,
-    'huggingface': chat_with_huggingface,
+    'groq': groq_chat_handler,
+    'qwen': qwen_chat_handler,
+    'openrouter': openrouter_chat_handler,
+    'deepseek': deepseek_chat_handler,
+    'mistral': mistral_chat_handler,
+    'google': google_chat_handler,
+    'huggingface': huggingface_chat_handler,
     'moonshot': chat_with_moonshot,
     'zai': chat_with_zai,
     'llama.cpp': chat_with_llama,
@@ -51,8 +76,8 @@ API_CALL_HANDLERS: Dict[str, Callable] = {
     'local-llm': chat_with_local_llm,
     'ollama': chat_with_ollama,
     'aphrodite': chat_with_aphrodite,
-    'custom-openai-api': chat_with_custom_openai,
-    'custom-openai-api-2': chat_with_custom_openai_2,
+    'custom-openai-api': custom_openai_chat_handler,
+    'custom-openai-api-2': custom_openai_2_chat_handler,
 }
 """
 A dispatch table mapping API endpoint names (e.g., 'openai') to their
@@ -62,10 +87,19 @@ corresponding handler functions (e.g., `chat_with_openai`). This is used by
 
 # Optional async handlers. When present, the orchestrator can invoke these without blocking threads.
 ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
-    'openai': chat_with_openai_async,
-    'groq': chat_with_groq_async,
-    'anthropic': chat_with_anthropic_async,
-    'openrouter': chat_with_openrouter_async,
+    # Adapter-backed async shims with feature-flag fallback to legacy async handlers
+    'openai': openai_chat_handler_async,
+    'groq': groq_chat_handler_async,
+    'anthropic': anthropic_chat_handler_async,
+    'openrouter': openrouter_chat_handler_async,
+    'qwen': qwen_chat_handler_async,
+    'deepseek': deepseek_chat_handler_async,
+    'huggingface': huggingface_chat_handler_async,
+    'bedrock': bedrock_chat_handler_async,
+    'custom-openai-api': custom_openai_chat_handler_async,
+    'custom-openai-api-2': custom_openai_2_chat_handler_async,
+    'google': google_chat_handler_async,
+    'mistral': mistral_chat_handler_async,
 }
 
 # 2. Parameter mapping for each provider
@@ -153,7 +187,9 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'topp': 'topp',
         'topk': 'topk',
         'tools': 'tools',
-        'tool_choice': 'tool_choice',
+        # Cohere's legacy /v1/chat handler signature does not accept tool_choice
+        # and passing it causes a TypeError. Only apply when a dedicated adapter
+        # path supports it.
         'max_tokens': 'max_tokens',
         'seed': 'seed',
         'stop': 'stop_sequences',
@@ -183,6 +219,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'top_logprobs': 'top_logprobs',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'qwen': {
         'app_config': 'app_config',
@@ -358,6 +396,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'n': 'n',
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'kobold': {
         'app_config': 'app_config',
@@ -396,6 +436,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'logit_bias': 'logit_bias',
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'tabbyapi': {
         'app_config': 'app_config',
@@ -412,6 +454,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'max_tokens': 'max_tokens',
         'seed': 'seed',
         'stop': 'stop',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'vllm': { # vllm_api_url consideration
                 'app_config': 'app_config',
@@ -431,6 +475,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'tools': 'tools',
         'tool_choice': 'tool_choice',
         'user_identifier': 'user',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     # Note: Local OpenAI-compatible providers support a strict filtering mode enabled via
     # `strict_openai_compat` in their config sections. When enabled, the request payload is
@@ -461,6 +507,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'top_logprobs': 'top_logprobs',
         'tools': 'tools',
         'tool_choice': 'tool_choice',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'ollama': { # api_url consideration
         'app_config': 'app_config',
@@ -479,6 +527,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'response_format': 'format', # 'json' string
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'aphrodite': {
         'app_config': 'app_config',
@@ -502,6 +552,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'user_identifier': 'user',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'custom-openai-api': {
         'app_config': 'app_config',
@@ -526,6 +578,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'frequency_penalty': 'frequency_penalty',
         'logprobs': 'logprobs',
         'top_logprobs': 'top_logprobs',
+        'http_client_factory': 'http_client_factory',
+        'http_fetcher': 'http_fetcher',
     },
     'custom-openai-api-2': {
         'app_config': 'app_config',

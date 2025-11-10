@@ -32,13 +32,15 @@ pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not 
 
 
 def _postgres_config() -> DatabaseConfig:
+    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+    _pg = get_pg_env()
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
-        pg_host=os.getenv("POSTGRES_TEST_HOST", "127.0.0.1"),
-        pg_port=int(os.getenv("POSTGRES_TEST_PORT", "5432")),
-        pg_database=os.getenv("POSTGRES_TEST_DB", "tldw_users"),
-        pg_user=os.getenv("POSTGRES_TEST_USER", "tldw_user"),
-        pg_password=os.getenv("POSTGRES_TEST_PASSWORD", "TestPassword123!"),
+        pg_host=_pg.host,
+        pg_port=int(_pg.port),
+        pg_database=_pg.database,
+        pg_user=_pg.user,
+        pg_password=_pg.password,
     )
 
 

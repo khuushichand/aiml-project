@@ -9,11 +9,12 @@
 
     try {
       // Show cURL (auth-aware and masked by default)
-      const curl = apiClient.generateCurlV2('POST', '/api/v1/prompts/keywords/', { body: { keyword_text: keywordText } });
+      const ep = (apiClient.endpoint('prompts','keywords') || '/api/v1/prompts/keywords/');
+      const curl = apiClient.generateCurlV2('POST', ep, { body: { keyword_text: keywordText } });
       const curlEl = document.getElementById('keywordAdd_curl');
       if (curlEl) curlEl.textContent = curl;
 
-      const response = await apiClient.post('/api/v1/prompts/keywords/', { keyword_text: keywordText });
+      const response = await apiClient.post((apiClient.endpoint('prompts','keywords') || '/api/v1/prompts/keywords/'), { keyword_text: keywordText });
       const respEl = document.getElementById('keywordAdd_response');
       if (respEl) respEl.textContent = JSON.stringify(response, null, 2);
       if (input) input.value = '';
@@ -26,11 +27,11 @@
 
   async function listKeywords() {
     try {
-      const curl = apiClient.generateCurlV2('GET', '/api/v1/prompts/keywords/');
+      const curl = apiClient.generateCurlV2('GET', (apiClient.endpoint('prompts','keywords') || '/api/v1/prompts/keywords/'));
       const curlEl = document.getElementById('keywordsList_curl');
       if (curlEl) curlEl.textContent = curl;
 
-      const keywords = await apiClient.get('/api/v1/prompts/keywords/');
+      const keywords = await apiClient.get((apiClient.endpoint('prompts','keywords') || '/api/v1/prompts/keywords/'));
       const respEl = document.getElementById('keywordsList_response');
       if (respEl) respEl.textContent = JSON.stringify(keywords, null, 2);
     } catch (error) {
@@ -45,7 +46,7 @@
     if (!keywordText) { alert('Please enter a keyword to delete'); return; }
 
     try {
-      const path = `/api/v1/prompts/keywords/${encodeURIComponent(keywordText)}`;
+      const path = (apiClient.endpoint('prompts','keyword_delete', { keyword: keywordText }) || `/api/v1/prompts/keywords/${encodeURIComponent(keywordText)}`);
       const curl = apiClient.generateCurlV2('DELETE', path);
       const curlEl = document.getElementById('keywordDelete_curl');
       if (curlEl) curlEl.textContent = curl;
@@ -66,7 +67,7 @@
     const container = document.getElementById('keywords-list');
     if (!container) return;
     try {
-      const keywords = await apiClient.get('/api/v1/prompts/keywords/');
+      const keywords = await apiClient.get((apiClient.endpoint('prompts','keywords') || '/api/v1/prompts/keywords/'));
       container.innerHTML = '';
       if (!Array.isArray(keywords) || keywords.length === 0) {
         const p = document.createElement('p');
@@ -107,7 +108,8 @@
 
   async function deleteKeywordFromList(keyword) {
     if (!confirm(`Delete keyword "${keyword}"?`)) return;
-    await apiClient.delete(`/api/v1/prompts/keywords/${encodeURIComponent(keyword)}`);
+    const path = (apiClient.endpoint('prompts','keyword_delete', { keyword }) || `/api/v1/prompts/keywords/${encodeURIComponent(keyword)}`);
+    await apiClient.delete(path);
     loadAllKeywords();
   }
 

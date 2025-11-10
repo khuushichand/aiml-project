@@ -7,6 +7,15 @@
         </h2>
         <p>Stream audio from your microphone for real-time transcription using Nemo STT models.</p>
 
+        <!-- Setup Wizard Note (Streaming STT) -->
+        <div class="info-box" style="margin-top:10px;">
+            <i class="icon-info"></i>
+            <span>
+                Need STT backends? Open the <a href="/setup" target="_blank">Setup Wizard</a> to install/enable Parakeet/Canary (NeMo), Whisper, or Qwen2Audio.
+                See: <a href="/docs-static/Getting-Started-STT_and_TTS.md" target="_blank">Getting Started — STT/TTS</a>.
+            </span>
+        </div>
+
         <!-- Connection Status -->
         <div class="status-bar" id="streamingStatus">
             <div class="status-indicator disconnected" id="streamingStatusIndicator"></div>
@@ -24,7 +33,7 @@
                 <div class="column">
                     <div class="form-group">
                         <label for="streamingModel">Model:</label>
-                        <select id="streamingModel" onchange="updateModelOptions()">
+                        <select id="streamingModel">
                             <option value="parakeet">Parakeet (Fast)</option>
                             <option value="canary">Canary (Multilingual)</option>
                             <option value="whisper">Whisper (Accurate)</option>
@@ -119,16 +128,16 @@
 
         <!-- Control Buttons -->
         <div class="button-group">
-            <button id="connectStreamingBtn" class="api-button" onclick="toggleStreamingConnection()">
+            <button id="connectStreamingBtn" class="api-button" data-action="as-connect">
                 Connect to Server
             </button>
-            <button id="startStreamingBtn" class="api-button secondary" onclick="startStreamingRecording()" disabled>
+            <button id="startStreamingBtn" class="api-button secondary" data-action="as-start" disabled>
                 Start Recording
             </button>
-            <button id="stopStreamingBtn" class="api-button danger" onclick="stopStreamingRecording()" disabled>
+            <button id="stopStreamingBtn" class="api-button danger" data-action="as-stop" disabled>
                 Stop Recording
             </button>
-            <button class="api-button" onclick="clearStreamingTranscript()">
+            <button class="api-button" data-action="as-clear">
                 Clear Transcript
             </button>
         </div>
@@ -330,16 +339,4 @@ button:disabled, .api-button:disabled {
 }
 </style>
 
-<script>
-// Handle VAD checkbox toggle
-document.addEventListener('DOMContentLoaded', () => {
-    const vadCheckbox = document.getElementById('streamingEnableVAD');
-    const vadThresholdGroup = document.getElementById('vadThresholdGroup');
-
-    if (vadCheckbox && vadThresholdGroup) {
-        vadCheckbox.addEventListener('change', () => {
-            vadThresholdGroup.style.display = vadCheckbox.checked ? 'block' : 'none';
-        });
-    }
-});
-</script>
+<!-- Handlers are bound in streaming-transcription.js initializer -->

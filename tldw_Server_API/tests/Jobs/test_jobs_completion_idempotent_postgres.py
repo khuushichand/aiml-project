@@ -4,22 +4,15 @@ psycopg = pytest.importorskip("psycopg")
 pytestmark = pytest.mark.pg_jobs
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 
 
-pytestmark = pytest.mark.skipif(
-    not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"
-)
+@pytest.fixture(autouse=True)
+def _setup(jobs_pg_dsn):
+    return
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
-
-
-def test_completion_idempotent_postgres(monkeypatch):
-    monkeypatch.setenv("JOBS_DB_URL", pg_dsn)
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+def test_completion_idempotent_postgres(monkeypatch, jobs_pg_dsn):
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u")
     acq = jm.acquire_next_job(domain="test", queue="default", lease_seconds=10, worker_id="w1")
     assert acq and acq.get("id") == j["id"]

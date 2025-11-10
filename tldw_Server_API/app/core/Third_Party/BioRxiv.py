@@ -9,14 +9,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover - optional
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from urllib.parse import quote as urlquote
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BIO_RXIV_API_BASE = "https://api.biorxiv.org"
@@ -36,22 +30,8 @@ def _default_date_range() -> Tuple[str, str]:
     start = end - timedelta(days=30)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
-
-def _mk_session():
-    try:
-        return create_client(timeout=15)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            status_forcelist=[429, 500, 502, 503, 504],
-            backoff_factor=1,
-            allowed_methods=["HEAD", "GET", "OPTIONS"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
+def _get_json(url: str, params: Optional[Dict[str, Any]] = None, timeout: int = 15) -> Dict[str, Any]:
+    return fetch_json(method="GET", url=url, params=params, headers={"Accept": "application/json"}, timeout=timeout)
 
 
 def _media_type_for_format(fmt: str) -> str:
@@ -70,25 +50,14 @@ def _media_type_for_format(fmt: str) -> str:
 def _raw_get(path: str, fmt: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """Low-level fetch for passthrough endpoints. Returns (content, media_type, error)."""
     try:
-        session = _mk_session()
         url = f"{BIO_RXIV_API_BASE}{path}{('/' + fmt) if fmt else ''}"
-        resp = session.get(url, params=params, timeout=20)
-        resp.raise_for_status()
-        # Prefer declared format for media type to satisfy caller expectations (CSV/XML/HTML)
+        r = fetch(method="GET", url=url, params=params, headers={"Accept": _media_type_for_format(fmt or 'json')}, timeout=20)
+        if r.status_code >= 400:
+            return None, None, f"BioRxiv HTTP error: {r.status_code}"
         media_type = _media_type_for_format(fmt or "json")
-        return resp.content, media_type, None
+        return r.content, media_type, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to BioRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to BioRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"BioRxiv API Request Error: {str(e)}"
-        return None, None, f"Unexpected error during BioRxiv raw fetch: {str(e)}"
+        return None, None, f"BioRxiv error: {str(e)}"
 
 
 def _normalize_item(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -177,7 +146,6 @@ def search_biorxiv(
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
 
-        session = _mk_session()
 
         def _details_path(cursor: int) -> str:
             # Support date range or numeric intervals (N or Nd)
@@ -199,9 +167,7 @@ def search_biorxiv(
                 # BioRxiv accepts underscore instead of spaces
                 cat_value = category.strip().replace(" ", "_")
                 params = {"category": cat_value}
-            resp = session.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json() if resp.headers.get("content-type", "").lower().startswith("application/json") else resp.json()
+            data = _get_json(url, params=params, timeout=15)
 
             # API returns messages list with a dict containing count
             total = 0
@@ -261,17 +227,7 @@ def search_biorxiv(
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if query or category else total), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to BioRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to BioRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"BioRxiv API Request Error: {str(e)}"
-        return None, 0, f"Unexpected error during BioRxiv search: {str(e)}"
+        return None, 0, f"BioRxiv error: {str(e)}"
 
 
 def get_biorxiv_by_doi(
@@ -288,26 +244,17 @@ def get_biorxiv_by_doi(
         server_norm = server.lower().strip() if server else "biorxiv"
         if server_norm not in {"biorxiv", "medrxiv"}:
             server_norm = "biorxiv"
-        session = _mk_session()
-        doi_enc = requests.utils.quote(doi.strip(), safe="/")  # keep slashes within DOI
+        doi_enc = urlquote(doi.strip(), safe="/")  # keep slashes within DOI
         url = f"{BIO_RXIV_API_BASE}/details/{server_norm}/{doi_enc}/na"
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _get_json(url, timeout=15)
         coll = data.get("collection") or []
         if not coll:
             return None, None
         # Take the first item
         item = _normalize_item(coll[0])
         return item, None
-    except requests.exceptions.Timeout:
-        return None, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
-        return None, f"Unexpected error during BioRxiv DOI lookup: {str(e)}"
+        return None, f"BioRxiv error: {str(e)}"
 
 
 
@@ -338,7 +285,7 @@ def search_biorxiv_pubs(
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
 
-        session = _mk_session()
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -351,9 +298,7 @@ def search_biorxiv_pubs(
 
         def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
-            resp = session.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            data = _get_json(url, timeout=15)
             cnt = 0
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
@@ -385,14 +330,8 @@ def search_biorxiv_pubs(
 
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, (len(collected) if q else total_count), None
-    except requests.exceptions.Timeout:
-        return None, 0, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, 0, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
-        return None, 0, f"Unexpected error during BioRxiv pubs search: {str(e)}"
+        return None, 0, f"BioRxiv error: {str(e)}"
 
 
 def get_biorxiv_published_by_doi(
@@ -406,28 +345,15 @@ def get_biorxiv_published_by_doi(
         server_norm = server.lower().strip() if server else "biorxiv"
         if server_norm not in {"biorxiv", "medrxiv"}:
             server_norm = "biorxiv"
-        session = _mk_session()
-        doi_enc = requests.utils.quote(doi.strip(), safe="/")
+        doi_enc = urlquote(doi.strip(), safe="/")
         url = f"{BIO_RXIV_API_BASE}/pubs/{server_norm}/{doi_enc}/na"
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _get_json(url, timeout=15)
         coll = data.get("collection") or []
         if not coll:
             return None, None
         return _normalize_published_item(coll[0]), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to BioRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to BioRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"BioRxiv API Request Error: {str(e)}"
-        return None, f"Unexpected error during BioRxiv published DOI lookup: {str(e)}"
+        return None, f"BioRxiv error: {str(e)}"
 
 
 # ---------------- Additional Reports Endpoints ----------------
@@ -454,7 +380,7 @@ def search_biorxiv_publisher(
         BATCH = 100
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
-        session = _mk_session()
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -467,9 +393,7 @@ def search_biorxiv_publisher(
 
         def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
-            resp = session.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            data = _get_json(url, timeout=15)
             cnt = 0
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
@@ -499,17 +423,7 @@ def search_biorxiv_publisher(
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to BioRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to BioRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"BioRxiv API Request Error: {str(e)}"
-        return None, 0, f"Unexpected error during BioRxiv publisher search: {str(e)}"
+        return None, 0, f"BioRxiv error: {str(e)}"
 
 
 def search_biorxiv_pub(
@@ -531,7 +445,7 @@ def search_biorxiv_pub(
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
 
-        session = _mk_session()
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -542,9 +456,7 @@ def search_biorxiv_pub(
 
         def _fetch(cursor: int) -> Tuple[List[Dict[str, Any]], int]:
             url = f"{BIO_RXIV_API_BASE}{_interval_path(cursor)}"
-            resp = session.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            data = _get_json(url, timeout=15)
             cnt = 0
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
@@ -574,17 +486,7 @@ def search_biorxiv_pub(
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to BioRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to BioRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"BioRxiv API Request Error: {str(e)}"
-        return None, 0, f"Unexpected error during BioRxiv pub search: {str(e)}"
+        return None, 0, f"BioRxiv error: {str(e)}"
 
 
 def _normalize_funder_item(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -621,7 +523,7 @@ def search_biorxiv_funder(
         BATCH = 100
         first_cursor = (offset // BATCH) * BATCH
         within_batch_offset = offset - first_cursor
-        session = _mk_session()
+
 
         def _interval_path(cursor: int) -> str:
             if recent_days and recent_days > 0:
@@ -636,9 +538,7 @@ def search_biorxiv_funder(
             if category and category.strip():
                 cat_value = category.strip().replace(" ", "_")
                 params = {"category": cat_value}
-            resp = session.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            data = _get_json(url, params=params, timeout=15)
             cnt = 0
             msgs = data.get("messages") or []
             if isinstance(msgs, list) and msgs:
@@ -668,17 +568,7 @@ def search_biorxiv_funder(
         page_items = collected[within_batch_offset:within_batch_offset + limit]
         return page_items, total_count, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to BioRxiv API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to BioRxiv API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"BioRxiv API HTTP Error: {getattr(getattr(e, 'response', None), 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"BioRxiv API Request Error: {str(e)}"
-        return None, 0, f"Unexpected error during BioRxiv funder search: {str(e)}"
+        return None, 0, f"BioRxiv error: {str(e)}"
 
 
 def get_biorxiv_summary(interval: str = "m") -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
@@ -687,11 +577,8 @@ def get_biorxiv_summary(interval: str = "m") -> Tuple[Optional[List[Dict[str, An
         iv = interval.lower().strip()
         if iv not in {"m", "y"}:
             iv = "m"
-        session = _mk_session()
         url = f"{BIO_RXIV_API_BASE}/sum/{iv}"
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json() or {}
+        data = _get_json(url, timeout=15) or {}
         # Response contains keys like 'month', 'new_papers', etc. Usually wrapped inside 'summary' or direct list.
         # Standardize to list under 'items'
         if isinstance(data, dict) and "summary" in data:
@@ -699,14 +586,8 @@ def get_biorxiv_summary(interval: str = "m") -> Tuple[Optional[List[Dict[str, An
         else:
             items = data if isinstance(data, list) else []
         return items, None
-    except requests.exceptions.Timeout:
-        return None, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
-        return None, f"Unexpected error during BioRxiv summary fetch: {str(e)}"
+        return None, f"BioRxiv error: {str(e)}"
 
 
 def get_biorxiv_usage(interval: str = "m") -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
@@ -715,24 +596,15 @@ def get_biorxiv_usage(interval: str = "m") -> Tuple[Optional[List[Dict[str, Any]
         iv = interval.lower().strip()
         if iv not in {"m", "y"}:
             iv = "m"
-        session = _mk_session()
         url = f"{BIO_RXIV_API_BASE}/usage/{iv}"
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json() or {}
+        data = _get_json(url, timeout=15) or {}
         if isinstance(data, dict) and "usage" in data:
             items = data.get("usage") or []
         else:
             items = data if isinstance(data, list) else []
         return items, None
-    except requests.exceptions.Timeout:
-        return None, "Request to BioRxiv API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"BioRxiv API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"BioRxiv API Request Error: {str(e)}"
     except Exception as e:
-        return None, f"Unexpected error during BioRxiv usage fetch: {str(e)}"
+        return None, f"BioRxiv error: {str(e)}"
 
 
 # ---------------- Raw passthrough helpers ----------------
@@ -750,7 +622,7 @@ def raw_details(
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     server_norm = (server or "biorxiv").lower()
     if doi and doi.strip():
-        doi_enc = requests.utils.quote(doi.strip(), safe="/")
+        doi_enc = urlquote(doi.strip(), safe="/")
         path = f"/details/{server_norm}/{doi_enc}/na"
         return _raw_get(path, fmt)
     f = _validate_date(from_date)
@@ -782,7 +654,7 @@ def raw_pubs(
 ) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     server_norm = (server or "biorxiv").lower()
     if doi and doi.strip():
-        doi_enc = requests.utils.quote(doi.strip(), safe="/")
+        doi_enc = urlquote(doi.strip(), safe="/")
         path = f"/pubs/{server_norm}/{doi_enc}/na"
         return _raw_get(path, fmt)
     f = _validate_date(from_date)

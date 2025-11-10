@@ -75,6 +75,8 @@ pip install \
     onnxruntime \
     kokoro-onnx \
     phonemizer \
+    espeak-phonemizer \
+    huggingface-hub \
     "index-tts @ git+https://github.com/index-tts/index-tts.git"
 
 # For GPU acceleration
@@ -82,7 +84,7 @@ pip install onnxruntime-gpu  # For ONNX models
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118  # For PyTorch
 
 # For voice cloning support
-pip install huggingface-hub transformers accelerate
+pip install transformers accelerate
 
 # For transcription
 pip install faster-whisper openai-whisper
@@ -171,8 +173,8 @@ providers:
   kokoro:
     enabled: true
     use_onnx: true
-    model_path: ./models/kokoro/kokoro-v0_19.onnx
-    voices_json: ./models/kokoro/voices.json
+    model_path: ./models/kokoro/onnx/model.onnx
+    voices_json: ./models/kokoro/voices
     device: cpu  # or cuda
     phonemizer_backend: espeak
 
@@ -223,8 +225,8 @@ providers:
 
   vibevoice:
     enabled: true
-    variant: 1.5B  # or 7B
-    model_path: microsoft/VibeVoice-1.5B  # or WestZhang/VibeVoice-Large-pt for 7B
+    variant: 1.5B  # or 7B, 7B-Q8
+    model_path: microsoft/VibeVoice-1.5B  # or vibevoice/VibeVoice-7B (official), FabioSarracino/VibeVoice-Large-Q8 (7B-Q8)
     device: cuda
     use_fp16: true
     enable_music: true
@@ -408,11 +410,11 @@ RUN pip install \
 COPY tldw_Server_API/ ./tldw_Server_API/
 COPY config.txt .
 
-# Create model directory
-RUN mkdir -p models
+# Create Kokoro model directories (v1.0 layout)
+RUN mkdir -p models/kokoro/onnx models/kokoro/voices
 
-# Set environment variables
-ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+# Set environment variables (only needed if auto-detect fails)
+# ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
 ENV PYTHONPATH=/app
 ENV TRANSFORMERS_CACHE=/app/models
 
@@ -579,16 +581,32 @@ spec:
 
 ### Downloading Local Models
 
-#### Kokoro (ONNX)
+#### Kokoro (ONNX v1.0)
+Recommended installer:
 ```bash
-# Create directory
+python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
+# Overwrite existing assets:
+# python Helper_Scripts/TTS_Installers/install_tts_kokoro.py --force
+```
+Alternative helper (assets only):
+```bash
+python Helper_Scripts/download_kokoro_assets.py \
+  --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
+  --model-path models/kokoro/onnx/model.onnx \
+  --voices-dir models/kokoro/voices
+```
+Manual (huggingface-cli):
+```bash
+pip install huggingface-hub
 mkdir -p models/kokoro
-
-# Download model
-wget https://huggingface.co/kokoro-82m/resolve/main/kokoro-v0_19.onnx \
-     -O models/kokoro/kokoro-v0_19.onnx
-wget https://huggingface.co/kokoro-82m/resolve/main/voices.json \
-     -O models/kokoro/voices.json
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+```
+Resulting layout:
+```
+models/kokoro/
+  onnx/model.onnx
+  voices/
 ```
 
 #### Higgs Audio V2
@@ -619,8 +637,12 @@ huggingface-cli download microsoft/VibeVoice-1.5B \
     --local-dir models/vibevoice-1.5b
 
 # 7B model (larger, better quality)
-huggingface-cli download WestZhang/VibeVoice-Large-pt \
+huggingface-cli download vibevoice/VibeVoice-7B \
     --local-dir models/vibevoice-7b
+
+# Optional: Community 8-bit quantized 7B variant (reduced VRAM)
+huggingface-cli download FabioSarracino/VibeVoice-Large-Q8 \
+    --local-dir models/vibevoice-7b-q8
 ```
 
 ## Voice Cloning Setup

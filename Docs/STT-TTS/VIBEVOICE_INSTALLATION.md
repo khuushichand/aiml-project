@@ -10,8 +10,8 @@ This guide covers the installation of the enhanced VibeVoice TTS adapter with al
 # Install VibeVoice TTS dependencies
 pip install -e ".[TTS_vibevoice]"
 
-# Clone and install VibeVoice library
-git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
+# Clone and install VibeVoice library (official)
+git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 cd ../..
 ```
@@ -55,7 +55,7 @@ pip install bitsandbytes
 pip install flash-attn --no-build-isolation
 
 # Clone VibeVoice
-git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
+git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 ```
 
@@ -69,7 +69,7 @@ pip install -e ".[TTS_vibevoice]"
 # Bitsandbytes has limited MPS support
 
 # Clone VibeVoice
-git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
+git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 ```
 
@@ -80,7 +80,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install -e ".[TTS_vibevoice]"
 
 # Clone VibeVoice
-git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
+git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 ```
 
@@ -232,8 +232,11 @@ vibevoice_use_quantization = False
 # Download 1.5B model
 huggingface-cli download microsoft/VibeVoice-1.5B --local-dir ./models/vibevoice
 
-# Or download 7B model
-huggingface-cli download WestZhang/VibeVoice-Large-pt --local-dir ./models/vibevoice
+# Or download 7B model (official)
+huggingface-cli download vibevoice/VibeVoice-7B --local-dir ./models/vibevoice
+
+# Optional: Community 8-bit quantized 7B variant
+huggingface-cli download FabioSarracino/VibeVoice-Large-Q8 --local-dir ./models/vibevoice-q8
 ```
 
 ## Voice Cloning Setup

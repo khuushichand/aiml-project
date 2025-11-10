@@ -1,5 +1,63 @@
 **Chatbooks Module**
 
+Note: This README is aligned to the project’s 3-section template. The original content is preserved below under section 3 to avoid any loss of information.
+
+## 1. Descriptive of Current Feature Set
+
+- Purpose: Export, import, preview, and manage user content as portable chatbooks (ZIP + manifest), with multi-user isolation, quotas, and async job processing.
+- Capabilities:
+  - Sync/async export and import with robust validation and sanitization
+  - Signed download URLs (optional), per-user storage roots, job tracking
+  - Quotas (storage, daily ops, concurrency, file caps) and health checks
+- Inputs/Outputs:
+  - Input: JSON requests for export/import/preview; file upload for import
+  - Output: Job metadata, manifest preview, and downloadable ZIPs
+- Related Endpoints (selected):
+  - Router: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:52 (prefix `/api/v1/chatbooks`)
+  - GET `/health`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:67
+  - POST `/export`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:119
+  - POST `/import`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:303
+  - POST `/preview`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:513
+  - GET `/export/jobs`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:686
+  - GET `/import/jobs`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:794
+  - GET `/download/{job_id}`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:896
+  - POST `/cleanup`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:1067
+  - DELETE `/export/jobs/{job_id}`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:1114
+  - DELETE `/import/jobs/{job_id}`: tldw_Server_API/app/api/v1/endpoints/chatbooks.py:1156
+- Related Schemas:
+  - tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py:70 (`CreateChatbookRequest`), :242 (`CreateChatbookResponse`)
+  - tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py:108 (`ImportChatbookRequest`), :251 (`ImportChatbookResponse`)
+  - tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py:262 (`PreviewChatbookResponse`)
+  - tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py:268 (`ListExportJobsResponse`), :274 (`ListImportJobsResponse`)
+  - tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py:193 (`ExportJobResponse`), :211 (`ImportJobResponse`)
+
+## 2. Technical Details of Features
+
+- Architecture & Flow:
+  - API → Service (`chatbook_service.py`) → Validators/Quota → ZIP/manifest I/O → Jobs backend (core or Prompt Studio)
+  - Per-user directories under `TLDW_USER_DATA_PATH` (or defaults) with strict path sanitization and safe file handling
+- Key Components:
+  - `chatbook_service.py` (export/import/preview, job state, signed URLs)
+  - `chatbook_validators.py` (file/ZIP/manifest validation), `quota_manager.py` (tier limits)
+  - Optional `ps_job_adapter.py` for Prompt Studio JobManager integration
+  - `chatbook_models.py` (content types, job models)
+- Configuration:
+  - `CHATBOOKS_JOBS_BACKEND` (`core` default) or legacy `TLDW_USE_PROMPT_STUDIO_QUEUE`
+  - `TLDW_USER_DATA_PATH`, `CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`, `CHATBOOKS_URL_TTL_SECONDS`, `CHATBOOKS_ENFORCE_EXPIRY`
+  - Core jobs tuning: `JOBS_POLL_INTERVAL_SECONDS`, `JOBS_LEASE_SECONDS`, `JOBS_LEASE_RENEW_SECONDS`, `JOBS_LEASE_RENEW_JITTER_SECONDS`
+- Concurrency & Performance:
+  - BackgroundTasks for async paths; worker-based job execution; quotas prevent abuse
+- Error Handling & Security:
+  - Path traversal prevention, symlink rejection, per-file size caps, unsafe extension filters
+  - Ownership checks on download; avoid logging secrets; structured errors
+- Tests (examples):
+  - tldw_Server_API/tests/Chatbooks/test_chatbooks_export_sync.py
+  - tldw_Server_API/tests/Chatbooks/test_chatbooks_signed_urls.py
+  - tldw_Server_API/tests/Chatbooks/test_chatbook_service.py
+  - tldw_Server_API/tests/integration/test_chatbook_integration.py
+
+## 3. Developer-Related/Relevant Information for Contributors
+
 - Path: `tldw_Server_API/app/core/Chatbooks`
 - Purpose: Backup, export, import, and preview of user content (conversations, notes, characters, world books, dictionaries, media, embeddings, generated docs) as a portable “chatbook” ZIP with a JSON manifest. Supports multi-user isolation, quotas, and async job processing.
 

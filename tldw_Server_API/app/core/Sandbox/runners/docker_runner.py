@@ -9,11 +9,18 @@ from loguru import logger
 from ..models import RunSpec, RunStatus, RunPhase
 from ..streams import get_hub
 from tldw_Server_API.app.core.config import settings as app_settings
+from ..network_policy import (
+    expand_allowlist_to_targets,
+    apply_egress_rules_atomic,
+    delete_rules_by_label,
+)
 import tempfile
 import subprocess
 from datetime import datetime, timedelta
 import threading
 import time
+import socket
+import json
 
 
 def docker_available() -> bool:
@@ -37,14 +44,39 @@ class DockerRunner:
     def _truthy(self, v: Optional[str]) -> bool:
         return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
+    @staticmethod
+    def _docker_version() -> Optional[str]:
+        try:
+            out = subprocess.check_output(["docker", "version", "--format", "{{.Server.Version}}"], text=True, timeout=2).strip()
+            if out:
+                return out
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(["docker", "--version"], text=True, timeout=2).strip()
+            # e.g., Docker version 24.0.6, build ed223bc
+            parts = out.split()
+            for i, tok in enumerate(parts):
+                if tok.lower() == "version" and i + 1 < len(parts):
+                    return parts[i + 1].rstrip(",")
+            return out
+        except Exception:
+            return None
+
     # Track active containers per run for cancellation
     _active_lock = threading.RLock()
+    _egress_lock = threading.RLock()
     _active_cid: dict[str, str] = {}
+    _egress_net: dict[str, Optional[str]] = {}
+    _egress_label: dict[str, str] = {}
 
     @classmethod
     def cancel_run(cls, run_id: str) -> bool:
         with cls._active_lock:
             cid = cls._active_cid.get(run_id)
+        with cls._egress_lock:
+            net = cls._egress_net.get(run_id)
+            label = cls._egress_label.get(run_id, f"tldw-run-{run_id[:12]}")
         if not cid:
             return False
         # TERM -> grace -> KILL semantics
@@ -82,6 +114,23 @@ class DockerRunner:
         finally:
             with cls._active_lock:
                 cls._active_cid.pop(run_id, None)
+            with cls._egress_lock:
+                cls._egress_net.pop(run_id, None)
+                cls._egress_label.pop(run_id, None)
+        # Cleanup egress rules and network if present
+        try:
+            try:
+                # Use centralized helper to remove iptables rules by label
+                delete_rules_by_label(label)
+            except Exception:
+                pass
+            if net:
+                try:
+                    subprocess.run(["docker", "network", "rm", net], check=False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Do not publish WS end here; service layer will publish to avoid duplicates
         return True
 
@@ -122,6 +171,7 @@ class DockerRunner:
                 finished_at=now,
                 exit_code=0,
                 message="Docker fake execution",
+                runtime_version=self._docker_version(),
                 resource_usage=usage,
             )
 
@@ -165,9 +215,35 @@ class DockerRunner:
 
         # Step 1: docker create
         cmd: List[str] = ["docker", "create"]
-        # Network policy
-        if (spec.network_policy or "deny_all").lower() == "deny_all":
+        # Keep STDIN open for interactive runs
+        try:
+            interactive = bool(getattr(spec, "interactive", None))
+        except Exception:
+            interactive = False
+        if interactive:
+            cmd += ["-i"]
+        # Network policy and (optional) granular allowlist enforcement
+        egress_net_name: Optional[str] = None
+        egress_label = f"tldw-run-{run_id[:12]}"
+        net_policy = (spec.network_policy or "deny_all").lower()
+        granular = self._truthy(os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT") or str(getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "false")))
+        enforced = self._truthy(os.getenv("SANDBOX_EGRESS_ENFORCEMENT") or str(getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "false")))
+        if net_policy == "deny_all":
             cmd += ["--network", "none"]
+        elif net_policy == "allowlist":
+            if enforced and granular:
+                # Create a per-run user network (best-effort) to improve isolation
+                try:
+                    egress_net_name = f"tldw_sbx_{run_id[:12]}"
+                    subprocess.run(["docker", "network", "create", egress_net_name], check=False)
+                    cmd += ["--network", egress_net_name]
+                except Exception as e:
+                    logger.debug(f"egress allowlist: network create failed, falling back to default bridge: {e}")
+            elif enforced and not granular:
+                logger.info("Sandbox Docker egress allowlist (coarse): applying network=none")
+                cmd += ["--network", "none"]
+            else:
+                logger.info("Sandbox Docker egress allowlist requested but enforcement disabled; using default bridge network")
         # Resources
         try:
             pids_limit = int(getattr(app_settings, "SANDBOX_PIDS_LIMIT", 256))
@@ -247,7 +323,9 @@ class DockerRunner:
         # Run in shell to ensure environment and path; safely quote user command
         import shlex
         user_cmd = " ".join(shlex.quote(x) for x in list(spec.command))
-        shell_str = f"mkdir -p /workspace && exec {user_cmd}"
+        # In granular enforcement mode, add a short delay to allow host iptables to be applied
+        delay_prefix = "sleep 1 && " if (net_policy == "allowlist" and enforced and granular) else ""
+        shell_str = f"mkdir -p /workspace && {delay_prefix}exec {user_cmd}"
         cmd += ["sh", "-lc", shell_str]
 
         logger.info(f"Starting docker run: {' '.join(cmd)}")
@@ -282,6 +360,7 @@ class DockerRunner:
                 finished_at=finished,
                 exit_code=None,
                 message="startup_timeout",
+                runtime_version=self._docker_version(),
                 resource_usage=usage,
             )
         except subprocess.CalledProcessError as e:
@@ -300,6 +379,9 @@ class DockerRunner:
         try:
             with DockerRunner._active_lock:
                 DockerRunner._active_cid[run_id] = cid
+            with DockerRunner._egress_lock:
+                DockerRunner._egress_net[run_id] = egress_net_name
+                DockerRunner._egress_label[run_id] = egress_label
         except Exception:
             pass
 
@@ -403,6 +485,36 @@ class DockerRunner:
                 pass
             raise RuntimeError(f"docker start failed: {e}")
 
+        # If granular egress allowlist is enabled, inspect container IP and apply host iptables rules
+        container_ip: Optional[str] = None
+        if net_policy == "allowlist" and enforced and granular:
+            try:
+                info = subprocess.check_output(["docker", "inspect", cid, "--format", "{{json .NetworkSettings.Networks}}"], text=True, timeout=3)
+                networks = json.loads(info or "{}")
+                if egress_net_name and egress_net_name in networks:
+                    container_ip = (networks.get(egress_net_name) or {}).get("IPAddress")
+                if not container_ip:
+                    # fallback: any network IP
+                    for v in (networks or {}).values():
+                        if v and v.get("IPAddress"):
+                            container_ip = v.get("IPAddress")
+                            break
+            except Exception as e:
+                logger.debug(f"egress allowlist: docker inspect for IP failed: {e}")
+            # Resolve allowlist with wildcard/suffix support and apply atomically
+            try:
+                raw = os.getenv("SANDBOX_EGRESS_ALLOWLIST") or getattr(app_settings, "SANDBOX_EGRESS_ALLOWLIST", "")
+            except Exception:
+                raw = ""
+            allow_targets: List[str] = expand_allowlist_to_targets(raw)
+            try:
+                if container_ip:
+                    apply_egress_rules_atomic(container_ip, allow_targets, egress_label)
+                else:
+                    logger.debug("egress allowlist: no container IP found; skipping iptables application")
+            except Exception as e:
+                logger.debug(f"egress allowlist: iptables apply failed: {e}")
+
         # Publish start event
         try:
             hub.publish_event(run_id, "start", {"ts": started.isoformat()})
@@ -446,6 +558,75 @@ class DockerRunner:
 
         tlog = threading.Thread(target=_pump_logs, daemon=True)
         tlog.start()
+
+        # If interactive, start stdin pump using docker exec to forward bytes to PID 1 stdin
+        stdin_thread = None
+        if interactive:
+            def _pump_stdin():
+                from tldw_Server_API.app.core.Sandbox.streams import get_hub as _get_hub
+                import queue as _queue
+                q = _get_hub().get_stdin_queue(run_id)
+                proc = None
+                try:
+                    # Use sh -lc to write to /proc/1/fd/0 continuously until stdin closes
+                    proc = subprocess.Popen([
+                        "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
+                    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    while True:
+                        try:
+                            # Periodically check if container is still running
+                            try:
+                                chunk = q.get(timeout=0.25)
+                            except _queue.Empty:
+                                if not DockerRunner._is_container_running(cid):
+                                    break
+                                continue
+                            if not chunk:
+                                continue
+                            if proc.poll() is not None:
+                                # Restart exec if it exited unexpectedly while container runs
+                                if DockerRunner._is_container_running(cid):
+                                    proc = subprocess.Popen([
+                                        "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
+                                    ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                else:
+                                    break
+                            try:
+                                if proc.stdin is not None:
+                                    proc.stdin.write(chunk)
+                                    proc.stdin.flush()
+                            except BrokenPipeError:
+                                # Attempt to reopen if container is alive
+                                if DockerRunner._is_container_running(cid):
+                                    try:
+                                        proc = subprocess.Popen([
+                                            "docker", "exec", "-i", cid, "sh", "-lc", "cat - > /proc/1/fd/0"
+                                        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    except Exception:
+                                        break
+                                else:
+                                    break
+                        except Exception:
+                            # On any unexpected error, exit the pump loop
+                            break
+                finally:
+                    try:
+                        if proc is not None:
+                            try:
+                                if proc.stdin:
+                                    proc.stdin.close()
+                            except Exception:
+                                pass
+                            # Best-effort terminate; proc should exit when stdin closes
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+            stdin_thread = threading.Thread(target=_pump_stdin, daemon=True)
+            stdin_thread.start()
 
         # Wait for container to finish
         timeout_sec = spec.timeout_sec or 300
@@ -514,6 +695,12 @@ class DockerRunner:
             tlog.join(timeout=1)
         except Exception:
             pass
+        # Ensure stdin thread is finished as well
+        if stdin_thread is not None:
+            try:
+                stdin_thread.join(timeout=0.5)
+            except Exception:
+                pass
 
         finished = datetime.utcnow()
         # Resolve image digest (best-effort)
@@ -579,10 +766,14 @@ class DockerRunner:
             cpu_time = max(0, int(final_cpu2 - baseline_cpu_sec))
         else:
             cpu_time = self._get_cpu_time_sec(cid, started, finished)
+        # Memory: prefer cgroup peak/current when available; fallback to docker stats
+        mem_mb = self._read_cgroup_mem_peak_mb_by_cid(cid)
+        if mem_mb is None:
+            mem_mb = self._get_mem_usage_mb(cid)
         usage = {
             "cpu_time_sec": int(max(0, cpu_time)),
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
-            "peak_rss_mb": self._get_mem_usage_mb(cid),
+            "peak_rss_mb": int(mem_mb or 0),
             "log_bytes": int(total_log),
             "artifact_bytes": int(art_bytes),
         }
@@ -590,6 +781,23 @@ class DockerRunner:
         try:
             subprocess.check_call(["docker", "rm", "-f", cid])
         except Exception:
+            pass
+        # Cleanup per-run network and iptables rules
+        try:
+            if net_policy == "allowlist" and enforced and granular:
+                # Delete iptables rules matching our label
+                try:
+                    delete_rules_by_label(egress_label)
+                except Exception:
+                    pass
+                # Remove dedicated network if we created one
+                if egress_net_name:
+                    try:
+                        subprocess.run(["docker", "network", "rm", egress_net_name], check=False)
+                    except Exception:
+                        pass
+        except Exception:
+            # Best-effort cleanup; ignore failures
             pass
         return RunStatus(
             id="",
@@ -600,6 +808,7 @@ class DockerRunner:
             message=msg,
             image_digest=image_digest,
             artifacts=artifacts_map or None,
+            runtime_version=self._docker_version(),
             resource_usage=usage,
         )
 
@@ -665,6 +874,63 @@ class DockerRunner:
                             return int(usec / 1_000_000)
             except Exception:
                 pass
+        return None
+
+    @staticmethod
+    def _read_cgroup_mem_peak_mb_by_cid(cid: str) -> Optional[int]:
+        try:
+            pid_out = subprocess.check_output(["docker", "inspect", cid, "--format", "{{.State.Pid}}"], text=True, timeout=3).strip()
+            pid = int(pid_out)
+            return DockerRunner._read_cgroup_mem_peak_mb_by_pid(pid)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_cgroup_mem_peak_mb_by_pid(pid: int) -> Optional[int]:
+        """Read memory peak/current from cgroup and convert to MB.
+
+        Prefer cgroup v2 memory.peak; fallback to memory.current. For v1, prefer
+        memory.max_usage_in_bytes; fallback to memory.usage_in_bytes.
+        Returns None if unavailable.
+        """
+        try:
+            with open(f"/proc/{pid}/cgroup", "r") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            return None
+        subs: Dict[str, str] = {}
+        for ln in lines:
+            parts = ln.split(":")
+            if len(parts) == 3:
+                subs[parts[1]] = parts[2]
+        # Try v2 unified
+        v2_path = subs.get("") or subs.get("0")
+        if v2_path:
+            base = os.path.join("/sys/fs/cgroup", v2_path.lstrip("/"))
+            for name in ("memory.peak", "memory.current"):
+                fp = os.path.join(base, name)
+                try:
+                    with open(fp, "r") as f:
+                        val = int(f.read().strip())
+                        return int(val / (1024 * 1024))
+                except Exception:
+                    continue
+        # Try v1 memory cgroup
+        mem_key = None
+        for key in subs.keys():
+            if "memory" in key:
+                mem_key = key
+                break
+        if mem_key:
+            base = os.path.join("/sys/fs/cgroup", "memory", subs[mem_key].lstrip("/"))
+            for name in ("memory.max_usage_in_bytes", "memory.usage_in_bytes"):
+                fp = os.path.join(base, name)
+                try:
+                    with open(fp, "r") as f:
+                        val = int(f.read().strip())
+                        return int(val / (1024 * 1024))
+                except Exception:
+                    continue
         return None
 
     @staticmethod

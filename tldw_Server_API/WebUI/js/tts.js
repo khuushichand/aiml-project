@@ -1216,8 +1216,8 @@ const TTS = {
         const apiToken = this.getApiToken();
         const headers = {};
         if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
-        const url = provider ? `/api/v1/audio/voices/catalog?provider=${encodeURIComponent(provider)}`
-                             : '/api/v1/audio/voices/catalog';
+        const base = (window.apiClient && window.apiClient.endpoint('audio','voices_catalog')) || '/api/v1/audio/voices/catalog';
+        const url = provider ? `${base}?provider=${encodeURIComponent(provider)}` : base;
         const res = await fetch(url, { headers });
         if (!res.ok) throw new Error(`Failed to fetch voice catalog (${res.status})`);
         const body = await res.json();
@@ -1256,13 +1256,13 @@ const TTS = {
                     <p class="text-muted">${provider}</p>
                     <small>${description || 'No description'}</small>
                     <div class="voice-actions">
-                        <button class="btn btn-sm btn-primary" onclick="TTS.useCustomVoiceFromEl(this)">
+                        <button class="btn btn-sm btn-primary" data-action="use-custom-voice">
                             <i class="fas fa-check"></i> Use Voice
                         </button>
-                        <button class="btn btn-sm btn-secondary" onclick="TTS.previewVoice('${id}')">
+                        <button class="btn btn-sm btn-secondary" data-action="preview-voice" data-voice-id="${id}">
                             <i class="fas fa-play"></i> Preview
                         </button>
-                        <button class="btn btn-sm btn-danger" onclick="TTS.deleteVoice('${id}')">
+                        <button class="btn btn-sm btn-danger" data-action="delete-voice" data-voice-id="${id}">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -1270,6 +1270,18 @@ const TTS = {
             }).join('');
         };
 
+        // Utility: escape HTML entities
+        function escapeHTML(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/\//g, '&#x2F;')
+                .replace(/`/g, '&#96;');
+        }
         const renderCatalog = () => {
             if (!this.catalogVoices.length) {
                 return '<p class="text-muted">No catalog voices available</p>';
@@ -1281,12 +1293,15 @@ const TTS = {
                 const description = v.description || 'Catalog voice';
                 const meta = [v.language, v.gender].filter(Boolean).join(' · ');
                 return `
-                <div class="voice-item" data-voice-id="${id}" data-provider="${provider}" data-voice-name="${name}">
-                    <h5>${name} <span class="badge">Catalog</span></h5>
-                    <p class="text-muted">${provider}${meta ? ` • ${meta}` : ''}</p>
-                    <small>${description}</small>
+                <div class="voice-item"
+                     data-voice-id="${escapeHTML(id)}"
+                     data-provider="${escapeHTML(provider)}"
+                     data-voice-name="${escapeHTML(name)}">
+                    <h5>${escapeHTML(name)} <span class="badge">Catalog</span></h5>
+                    <p class="text-muted">${escapeHTML(provider)}${meta ? ` • ${escapeHTML(meta)}` : ''}</p>
+                    <small>${escapeHTML(description)}</small>
                     <div class="voice-actions">
-                        <button class="btn btn-sm btn-primary" onclick="TTS.useCatalogVoiceFromEl(this)">
+                        <button class="btn btn-sm btn-primary" data-action="use-catalog-voice">
                             <i class="fas fa-check"></i> Use Voice
                         </button>
                     </div>
@@ -1295,7 +1310,7 @@ const TTS = {
         };
 
         // Two sections side-by-side (if space allows)
-        voiceList.innerHTML = `
+        const __voicesMarkup = `
             <div class="voice-sections" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
                 <div class="voice-section">
                     <h5>Your Custom Voices</h5>
@@ -1307,6 +1322,34 @@ const TTS = {
                 </div>
             </div>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(voiceList, __voicesMarkup);
+        } else {
+            voiceList.innerHTML = __voicesMarkup;
+        }
+
+        // Delegate voice list actions without inline handlers
+        try {
+            if (!voiceList._bound) {
+                voiceList._bound = true;
+                voiceList.addEventListener('click', function (ev) {
+                    const btn = ev.target && ev.target.closest('button[data-action]');
+                    if (!btn) return;
+                    const action = btn.getAttribute('data-action');
+                    if (action === 'use-custom-voice') {
+                        try { TTS.useCustomVoiceFromEl.call(TTS, btn); } catch (_) {}
+                    } else if (action === 'use-catalog-voice') {
+                        try { TTS.useCatalogVoiceFromEl.call(TTS, btn); } catch (_) {}
+                    } else if (action === 'preview-voice') {
+                        const id = btn.getAttribute('data-voice-id');
+                        try { TTS.previewVoice(id); } catch (_) {}
+                    } else if (action === 'delete-voice') {
+                        const id = btn.getAttribute('data-voice-id');
+                        try { TTS.deleteVoice(id); } catch (_) {}
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
     },
 
     // Internal helper: switch UI to provider and select a voice in the correct control
@@ -1560,11 +1603,24 @@ const TTS = {
                     <small>${item.text}</small><br>
                     <small class="text-muted">${new Date(item.timestamp).toLocaleString()}</small>
                 </div>
-                <button class="btn btn-sm btn-secondary" onclick="TTS.replayHistory(${index})">
+                <button class="btn btn-sm btn-secondary" data-action="replay" data-index="${index}">
                     <i class="fas fa-redo"></i> Replay
                 </button>
             </div>
         `).join('');
+
+        // Bind replay events without inline handlers
+        try {
+            if (!historyList._bound) {
+                historyList._bound = true;
+                historyList.addEventListener('click', (ev) => {
+                    const btn = ev.target && ev.target.closest('button[data-action="replay"]');
+                    if (!btn) return;
+                    const idx = parseInt(btn.getAttribute('data-index') || '0', 10);
+                    try { TTS.replayHistory(idx); } catch (_) {}
+                });
+            }
+        } catch (_) { /* ignore */ }
     },
 
     // Replay from history

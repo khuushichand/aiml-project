@@ -335,6 +335,26 @@ logger.info("Logging configured (Loguru + stdlib interception)")
 # Auth Endpoint (NEW)
 #
 # Auth Endpoint (NEW)
+"""
+Initialize feature flags up-front so later references in route inclusion do not
+raise NameError when running under ULTRA/MINIMAL test modes or when optional
+routers fail to import.
+"""
+_HAS_HEALTH = False
+_HAS_AUDIO = False
+_HAS_AUDIO_JOBS = False
+_HAS_MEDIA = False
+_HAS_SANDBOX = False
+_HAS_OUTPUT_TEMPLATES = False
+_HAS_OUTPUTS = False
+_HAS_PROMPT_STUDIO = False
+_HAS_WORKFLOWS = False
+_HAS_UNIFIED_EVALUATIONS = False
+_HAS_SCHEDULER_WF = False
+_HAS_JOBS_ADMIN = False
+_HAS_AUTH_ENHANCED = False
+_HAS_CHUNKING = False
+
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 try:
     from tldw_Server_API.app.api.v1.endpoints.auth_enhanced import router as auth_enhanced_router
@@ -367,7 +387,7 @@ if _ULTRA_MINIMAL_APP:
     except Exception as _h_e:  # noqa: BLE001
         logger.warning(f"Health endpoints unavailable; skipping import: {_h_e}")
         _HAS_HEALTH = False
-elif not _MINIMAL_TEST_APP:
+else:
     # Audio Endpoint (includes WebSocket streaming transcription)
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
@@ -397,9 +417,17 @@ elif not _MINIMAL_TEST_APP:
     except Exception as _sandbox_err:  # noqa: BLE001
         logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sandbox_err}")
         _HAS_SANDBOX = False
-    # Chunking Endpoints
-    from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
-    from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+    # Chunking Endpoints (guard to avoid failures from optional summarization deps)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chunking import chunking_router as chunking_router
+        _HAS_CHUNKING = True
+    except Exception as _chunk_err:  # noqa: BLE001
+        logger.warning(f"Chunking endpoints unavailable; skipping import: {_chunk_err}")
+        _HAS_CHUNKING = False
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+    except Exception as _chunk_tpl_err:  # noqa: BLE001
+        logger.warning(f"Chunking templates endpoints unavailable; skipping import: {_chunk_tpl_err}")
     # Embeddings / Vector stores / Claims
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
     from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
@@ -468,12 +496,19 @@ elif not _MINIMAL_TEST_APP:
 #
 # Research/Paper Search and heavy routers/imports
 # In minimal test-app mode, import only what is needed for lightweight tests.
-if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
+if False and _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # Research Endpoint (lightweight subset for tests)
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
+    # Admin endpoints are used by several pytest modules; import for minimal app
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+        _HAS_ADMIN_MIN = True
+    except Exception as _admin_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping admin router import in minimal test app: {_admin_min_err}")
+        _HAS_ADMIN_MIN = False
     _HAS_UNIFIED_EVALUATIONS = False
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
@@ -488,20 +523,17 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     except Exception as _sb_err:  # noqa: BLE001
         logger.warning(f"Sandbox endpoints unavailable; skipping import: {_sb_err}")
         _HAS_SANDBOX = False
+    # MCP Unified Endpoint (safe to import for tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
+    except Exception as _mcp_imp_err:  # noqa: BLE001
+        logger.debug(f"Skipping MCP unified import in minimal test app: {_mcp_imp_err}")
 else:
     # Research Endpoint
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
     from tldw_Server_API.app.api.v1.endpoints.paper_search import router as paper_search_router
-    # Unified Evaluation endpoint (guarded; can be heavy and optional in some test contexts)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as unified_evaluation_router
-        _HAS_UNIFIED_EVALUATIONS = True
-    except Exception as _evals_import_err:  # noqa: BLE001 - log and continue for deterministic startup
-        logger.warning(f"Unified Evaluation endpoints unavailable; skipping import: {_evals_import_err}")
-        _HAS_UNIFIED_EVALUATIONS = False
-    from tldw_Server_API.app.api.v1.endpoints.ocr import router as ocr_router
-    from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
+    # Note: Evaluations, OCR, and VLM are imported later inside route-enabled gates
     # Benchmark Endpoint
     from tldw_Server_API.app.api.v1.endpoints.benchmark_api import router as benchmark_router
     # Sync Endpoint
@@ -708,37 +740,140 @@ async def lifespan(app: FastAPI):
         db_pool = await get_db_pool()
         logger.info("App Startup: Database pool initialized")
 
-        # Ensure AuthNZ schema/migrations
+        # Ensure AuthNZ schema/migrations (centralized helper for SQLite; PG extras as before)
         try:
-            if getattr(db_pool, 'pool', None) is None and getattr(db_pool, 'db_path', None):
-                # SQLite path: run migration manager
-                from pathlib import Path as _Path
-                from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz
-                _ensure_authnz(_Path(db_pool.db_path))
-                logger.info("App Startup: Ensured AuthNZ migrations (SQLite)")
-            else:
-                # Postgres path: ensure additive extras (tool catalogs) exist
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
-                        ensure_tool_catalogs_tables_pg,
-                        ensure_privilege_snapshots_table_pg,
-                    )
-                    ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
-                    if ok_catalogs:
-                        logger.info("App Startup: Ensured PG tool catalogs tables")
-                    ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
-                    if ok_priv_snapshots:
-                        logger.info("App Startup: Ensured PG privilege_snapshots table")
-                except Exception as _pg_e:
-                    logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
+            from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+            await ensure_authnz_schema_ready_once()
         except Exception as _e:
-            logger.debug(f"App Startup: Skipped AuthNZ migration ensure: {_e}")
+            logger.debug(f"App Startup: Skipped AuthNZ SQLite migration ensure: {_e}")
+        # Postgres-only: ensure additive extras (tool catalogs, privilege snapshots)
+        try:
+            if getattr(db_pool, 'pool', None):
+                from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                    ensure_tool_catalogs_tables_pg,
+                    ensure_privilege_snapshots_table_pg,
+                )
+                ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
+                if ok_catalogs:
+                    logger.info("App Startup: Ensured PG tool catalogs tables")
+                ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
+                if ok_priv_snapshots:
+                    logger.info("App Startup: Ensured PG privilege_snapshots table")
+        except Exception as _pg_e:
+            logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
         try:
             await ensure_single_user_rbac_seed_if_needed()
             logger.info("App Startup: Ensured single-user RBAC seed (baseline roles/permissions)")
         except Exception as _e:
             logger.debug(f"App Startup: RBAC single-user seed ensure skipped: {_e}")
+
+        # Initialize ResourceGovernor policy loader (file or DB store)
+        try:
+            from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                default_policy_loader as _rg_default_loader,
+                db_policy_loader as _rg_db_loader,
+                PolicyReloadConfig as _RGReloadCfg,
+                PolicyLoader as _RGPolicyLoader,
+            )
+            from tldw_Server_API.app.core.Resource_Governance import MemoryResourceGovernor, RedisResourceGovernor
+            from tldw_Server_API.app.core.config import (
+                rg_policy_store as _rg_store_sel,
+                rg_policy_reload_interval_sec as _rg_reload_interval,
+                rg_policy_reload_enabled as _rg_reload_enabled,
+                rg_policy_path as _rg_policy_path,
+                rg_backend as _rg_backend_sel,
+            )
+            _store_mode = _rg_store_sel()
+            if _store_mode == "db":
+                try:
+                    from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import AuthNZPolicyStore as _RGDBStore
+                    _store = _RGDBStore()
+                    _interval = _rg_reload_interval()
+                    rg_loader = _rg_db_loader(_store, _RGReloadCfg(enabled=True, interval_sec=_interval))
+                    logger.info("ResourceGovernor policy loader configured for AuthNZ DB store")
+                except Exception as _rg_db_err:
+                    logger.warning(f"Failed to configure DB-backed policy store, falling back to file: {_rg_db_err}")
+                    rg_loader = _rg_default_loader()
+                    _store_mode = "file"
+            else:
+                # File-based policy store: use config-driven path and reload settings
+                _enabled = _rg_reload_enabled()
+                _interval = _rg_reload_interval()
+                _path = _rg_policy_path()
+                rg_loader = _RGPolicyLoader(_path, _RGReloadCfg(enabled=_enabled, interval_sec=_interval))
+                _store_mode = "file"
+
+            await rg_loader.load_once()
+            try:
+                if _rg_reload_enabled():
+                    await rg_loader.start_auto_reload()
+            except Exception as _rg_reload_err:
+                logger.debug(f"Policy auto-reload not started: {_rg_reload_err}")
+            app.state.rg_policy_loader = rg_loader
+            app.state.rg_policy_store = _store_mode
+            try:
+                _backend = _rg_backend_sel()
+                if _backend == "redis":
+                    # Boot-time health guard: when Redis backend is selected and
+                    # fail mode is fail_closed, require a real Redis connection
+                    # and refuse to start if unreachable (no stub fallback).
+                    try:
+                        from tldw_Server_API.app.core.config import rg_redis_fail_mode as _rg_fail_mode
+                        if str(_rg_fail_mode() or "").strip().lower() == "fail_closed":
+                            from tldw_Server_API.app.core.Infrastructure.redis_factory import (
+                                create_async_redis_client as _create_async_redis_client,
+                                ensure_async_client_closed as _ensure_async_client_closed,
+                            )
+                            _start = logger.bind(component="rg_boot_health")
+                            try:
+                                _start.info("RG boot health: verifying Redis connectivity (fail_closed mode)")
+                            except Exception:
+                                pass
+                            _rc = await _create_async_redis_client(fallback_to_fake=False, context="rg_boot_health")
+                            try:
+                                # Extra sanity ping; factory already pings
+                                res = getattr(_rc, "ping", None)
+                                if res:
+                                    pr = res()
+                                    if hasattr(pr, "__await__"):
+                                        await pr
+                            finally:
+                                try:
+                                    await _ensure_async_client_closed(_rc)
+                                except Exception:
+                                    pass
+                    except Exception as _rg_boot_err:
+                        logger.error(f"ResourceGovernor boot health failed (Redis unreachable, fail_closed): {_rg_boot_err}")
+                        raise RuntimeError("Redis backend selected with fail_closed, but Redis is unreachable; refusing to start") from _rg_boot_err
+                    app.state.rg_governor = RedisResourceGovernor(policy_loader=rg_loader)
+                    logger.info("ResourceGovernor initialized (redis backend)")
+                else:
+                    app.state.rg_governor = MemoryResourceGovernor(policy_loader=rg_loader)
+                    logger.info("ResourceGovernor initialized (memory backend)")
+            except Exception as _rg_gov_err:
+                logger.warning(f"ResourceGovernor initialization failed/skipped: {_rg_gov_err}")
+            try:
+                snap = rg_loader.get_snapshot()
+                app.state.rg_policy_version = int(getattr(snap, "version", 0) or 0)
+                app.state.rg_policy_count = len(getattr(snap, "policies", {}) or {})
+            except Exception:
+                app.state.rg_policy_version = 0
+                app.state.rg_policy_count = 0
+
+            # Keep version fresh on reloads
+            try:
+                def _on_rg_change(snap):
+                    try:
+                        app.state.rg_policy_version = int(getattr(snap, "version", 0) or 0)
+                        app.state.rg_policy_count = len(getattr(snap, "policies", {}) or {})
+                    except Exception:
+                        pass
+                rg_loader.add_on_change(_on_rg_change)
+            except Exception:
+                pass
+        except Exception as _rg_err:
+            logger.warning(f"ResourceGovernor policy loader initialization skipped: {_rg_err}")
 
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
@@ -1873,15 +2008,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error stopping request queue: {e}")
 
-    # Shutdown Evaluations connection manager (stops maintenance thread for tests)
+    # Shutdown Evaluations pool via lazy helper (no-op if never initialized)
     try:
-        from tldw_Server_API.app.core.Evaluations.connection_pool import connection_manager
-
-        if connection_manager is not None:
-            connection_manager.shutdown()
-            logger.info("App Shutdown: Evaluations connection manager shutdown")
+        from tldw_Server_API.app.core.Evaluations.connection_pool import shutdown_evaluations_pool_if_initialized as _shutdown_evals
+        _shutdown_evals()
+        logger.info("App Shutdown: Evaluations connection manager shutdown (lazy)")
     except Exception as e:
-        logger.error(f"App Shutdown: Error shutting down evaluations connection manager: {e}")
+        logger.debug(f"App Shutdown: Evaluations pool shutdown skipped/failed: {e}")
+
+    # Shutdown Evaluations webhook manager (no-op if never initialized)
+    try:
+        from tldw_Server_API.app.core.Evaluations.webhook_manager import shutdown_webhook_manager_if_initialized as _shutdown_webhooks
+        _shutdown_webhooks()
+        logger.info("App Shutdown: Evaluations webhook manager shutdown (lazy)")
+    except Exception as e:
+        logger.debug(f"App Shutdown: Evaluations webhook manager shutdown skipped/failed: {e}")
 
     # Shutdown Unified Audit Services (via DI cache)
     try:
@@ -2148,6 +2289,24 @@ _startup_trace("FastAPI app created")
 
 # Early middleware to guard workflow templates path traversal attempts
 from starlette.responses import JSONResponse  # noqa: E402
+import os as _os  # noqa: E402
+try:
+    _rg_env_enabled = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
+    # Only enable RGSimpleMiddleware when explicitly requested via env, or when running the
+    # minimal test app mode. Do not enable solely due to pytest detection to avoid unintended
+    # 429 responses in tests that don't expect global rate limiting.
+    if _rg_env_enabled or _MINIMAL_TEST_APP:
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware as _RGMw  # noqa: E402
+        # Avoid double-adding
+        try:
+            already = any(getattr(m, "cls", None) is _RGMw for m in getattr(app, "user_middleware", []))
+        except Exception:
+            already = False
+        if not already:
+            app.add_middleware(_RGMw)
+            logger.info("RGSimpleMiddleware enabled (env/minimal mode)")
+except Exception as _rg_mw_err:  # pragma: no cover - best effort
+    logger.debug(f"RGSimpleMiddleware not enabled: {_rg_mw_err}")
 
 @app.middleware("http")
 async def _guard_workflow_templates_traversal(request, call_next):
@@ -2371,6 +2530,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"], # Must include OPTIONS, GET, POST, DELETE etc.
         allow_headers=["*"],
+        expose_headers=["X-Request-ID", "traceparent", "X-Trace-Id"],
     )
 
     # Ensure OpenAPI schema is consumable across common local origins (helpful when docs are
@@ -2389,6 +2549,7 @@ else:
                     response.headers.setdefault("Access-Control-Allow-Origin", "*")
                 response.headers.setdefault("Access-Control-Allow-Methods", "GET, OPTIONS")
                 response.headers.setdefault("Access-Control-Allow-Headers", "*")
+                response.headers.setdefault("Access-Control-Expose-Headers", "X-Request-ID, traceparent, X-Trace-Id")
         except Exception:
             pass
         return response
@@ -2417,6 +2578,7 @@ from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMid
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
+from tldw_Server_API.app.core.Sandbox.middleware import SandboxArtifactTraversalGuardMiddleware
 
 _TEST_MODE = (
     _env_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
@@ -2437,6 +2599,12 @@ if _TEST_MODE:
         app.add_middleware(WebUIAccessGuardMiddleware)
     except Exception as _e:
         logger.debug(f"Skipping WebUIAccessGuardMiddleware in tests: {_e}")
+
+    # Sandbox artifact traversal guard (pre-routing)
+    try:
+        app.add_middleware(SandboxArtifactTraversalGuardMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping SandboxArtifactTraversalGuardMiddleware in tests: {_e}")
 
     @app.middleware("http")
     async def _trace_headers_middleware(request: Request, call_next):
@@ -2505,11 +2673,24 @@ else:
     # HTTP request metrics middleware (records count and latency per route)
     app.add_middleware(HTTPMetricsMiddleware)
 
-    # Per-request usage logging (guarded by settings flag)
-    app.add_middleware(UsageLoggingMiddleware)
-
     # Request ID propagation (adds X-Request-ID header)
     app.add_middleware(RequestIDMiddleware)
+
+    # Structured access logs (request_id, method, host, status, duration)
+    try:
+        from tldw_Server_API.app.core.Logging.access_log_middleware import AccessLogMiddleware
+        app.add_middleware(AccessLogMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping AccessLogMiddleware: {_e}")
+
+    # Sandbox artifact traversal guard (pre-routing)
+    try:
+        app.add_middleware(SandboxArtifactTraversalGuardMiddleware)
+    except Exception as _e:
+        logger.debug(f"Skipping SandboxArtifactTraversalGuardMiddleware: {_e}")
+
+    # Per-request usage logging (guarded by settings flag)
+    app.add_middleware(UsageLoggingMiddleware)
 
     # Add trace headers middleware: propagate trace context to HTTP responses
     @app.middleware("http")
@@ -2619,6 +2800,27 @@ if WEBUI_DIR.exists():
             logger.warning(f"Failed to get LLM providers for config: {e}")
             config["llm_providers"] = {"providers": [], "default_provider": "openai", "total_configured": 0}
 
+        # Add Embeddings providers information (lightweight; no secrets)
+        try:
+            from tldw_Server_API.app.core.Embeddings.simplified_config import get_config as _get_emb_cfg
+            _emb_cfg = _get_emb_cfg()
+            config["embeddings"] = {
+                "default_provider": getattr(_emb_cfg, "default_provider", None),
+                "default_model": getattr(_emb_cfg, "default_model", None),
+                "providers": [
+                    {
+                        "name": getattr(p, "name", None),
+                        "enabled": bool(getattr(p, "enabled", False)),
+                        # Expose API URL for local/self-hosted providers only; never include keys
+                        "api_url": getattr(p, "api_url", None),
+                        "models": list(getattr(p, "models", []) or []),
+                    }
+                    for p in (getattr(_emb_cfg, "providers", []) or [])
+                ],
+            }
+        except Exception as e:
+            logger.warning(f"Failed to include embeddings providers in WebUI config: {e}")
+
         # Add chat defaults (e.g., default save_to_db)
         try:
             cfg = load_comprehensive_config()
@@ -2649,7 +2851,124 @@ if WEBUI_DIR.exists():
         except Exception as e:
             logger.warning(f"Failed to compute chat defaults for WebUI config: {e}")
 
+        # Add a compact catalog of commonly used API endpoints for the WebUI
+        try:
+            config["api_endpoints"] = {
+                "llm": {
+                    "health": "/api/v1/llm/health",
+                    "providers": "/api/v1/llm/providers",
+                    "provider": "/api/v1/llm/providers/{provider}",
+                    "models": "/api/v1/llm/models",
+                    "models_metadata": "/api/v1/llm/models/metadata",
+                },
+                "embeddings": {
+                    "models": "/api/v1/embeddings/models",
+                    "providers_config": "/api/v1/embeddings/providers-config",
+                    "warmup": "/api/v1/embeddings/models/warmup",
+                    "download": "/api/v1/embeddings/models/download",
+                },
+                "audio": {
+                    "providers": "/api/v1/audio/providers",
+                    "voices_catalog": "/api/v1/audio/voices/catalog",
+                    "speech": "/api/v1/audio/speech",
+                    "transcriptions": "/api/v1/audio/transcriptions",
+                    "stream_transcribe": "/api/v1/audio/stream/transcribe",
+                    "stream_status": "/api/v1/audio/stream/status",
+                },
+                "ocr": {
+                    "backends": "/api/v1/ocr/backends",
+                    "points_preload": "/api/v1/ocr/points/preload",
+                },
+                "media": {
+                    "add": "/api/v1/media/add",
+                    "search": "/api/v1/media/search",
+                    "ingest_web": "/api/v1/media/ingest-web-content",
+                    "metadata_search": "/api/v1/media/metadata-search",
+                    "list": "/api/v1/media",
+                    "by_id": "/api/v1/media/{media_id}",
+                    "versions": "/api/v1/media/{media_id}/versions",
+                },
+                "rag": {
+                    "search": "/api/v1/rag/search",
+                },
+                "chat": {
+                    "completions": "/api/v1/chat/completions",
+                },
+                "research": {
+                    "websearch": "/api/v1/research/websearch",
+                    "arxiv": "/api/v1/paper-search/arxiv",
+                    "semantic_scholar": "/api/v1/paper-search/semantic-scholar",
+                },
+                "prompts": {
+                    "health": "/api/v1/prompts/health",
+                    "list": "/api/v1/prompts",
+                    "create": "/api/v1/prompts",
+                    "search": "/api/v1/prompts/search",
+                    "get": "/api/v1/prompts/{prompt_identifier}",
+                    "export": "/api/v1/prompts/export",
+                    "update": "/api/v1/prompts/{prompt_identifier}",
+                    "delete": "/api/v1/prompts/{prompt_identifier}",
+                    "keywords": "/api/v1/prompts/keywords/",
+                    "keyword_delete": "/api/v1/prompts/keywords/{keyword}",
+                },
+                "notes": {
+                    "health": "/api/v1/notes/health",
+                    "list": "/api/v1/notes/",
+                    "get": "/api/v1/notes/{note_id}",
+                    "search": "/api/v1/notes/search",
+                    "export": "/api/v1/notes/export",
+                    "create": "/api/v1/notes/",
+                    "keywords": "/api/v1/notes/keywords/",
+                    "keywords_notes": "/api/v1/notes/keywords/{keyword_id}/notes/",
+                },
+                "mcp": {
+                    "health": "/api/v1/mcp/health",
+                    "prompts": "/api/v1/mcp/prompts",
+                    "resources": "/api/v1/mcp/resources",
+                    "auth_token": "/api/v1/mcp/auth/token",
+                },
+                "workflows": {
+                    "config": "/api/v1/workflows/config",
+                    "run": "/api/v1/workflows/run",
+                    "auth_check": "/api/v1/workflows/auth/check",
+                },
+                "health": {
+                    "aggregate": "/api/v1/health",
+                    "live": "/api/v1/health/live",
+                    "ready": "/api/v1/health/ready",
+                },
+                "evaluations": {
+                    "rag_presets": "/api/v1/evaluations/rag/pipeline/presets",
+                    "rag_preset": "/api/v1/evaluations/rag/pipeline/presets/{name}",
+                },
+            }
+        except Exception:
+            # Best-effort: omit if anything goes wrong
+            pass
+
         return JSONResponse(content=config)
+
+    # Explicit handlers for /webui and /webui/ before static mount to avoid shadowing
+    async def _serve_webui_index():
+        idx = WEBUI_DIR / "index.html"
+        try:
+            if idx.exists():
+                return FileResponse(idx, media_type="text/html")
+        except Exception:
+            pass
+        try:
+            from fastapi.responses import JSONResponse  # local import to avoid top-level churn
+            return JSONResponse({"detail": "WebUI index not found"}, status_code=404)
+        except Exception:
+            raise HTTPException(status_code=404, detail="WebUI index not found")
+
+    try:
+        # Redirect bare /webui to /webui/
+        app.add_api_route("/webui", lambda: RedirectResponse(url="/webui/", status_code=307), include_in_schema=False)
+        # Explicitly serve the main index at /webui/
+        app.add_api_route("/webui/", _serve_webui_index, include_in_schema=False)
+    except Exception as _webui_idx_err:
+        logger.debug(f"Could not register explicit /webui handlers: {_webui_idx_err}")
 
     # Gate WebUI static mount and config endpoint
     try:
@@ -2668,7 +2987,9 @@ if WEBUI_DIR.exists():
 else:
     logger.warning(f"WebUI directory not found at {WEBUI_DIR}")
 
-SETUP_PAGE_PATH = WEBUI_DIR / "setup.html"
+# Keep Setup UI HTML outside the /webui static mount to avoid bypassing the
+# /setup gating via direct file access.
+SETUP_PAGE_PATH = BASE_DIR / "Setup_UI" / "setup.html"
 
 
 async def serve_setup_page():
@@ -2757,7 +3078,7 @@ async def api_metrics():
     return registry.get_all_metrics()
 
 # Router for health monitoring endpoints (NEW)
-if _MINIMAL_TEST_APP:
+if _MINIMAL_TEST_APP and False:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
@@ -2766,12 +3087,139 @@ if _MINIMAL_TEST_APP:
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     app.include_router(character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    # Include audio endpoints (REST + WebSocket) for e2e middleware/header tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router, ws_router as audio_ws_router
+        # Mount under /api/v1/audio to match test expectations and non-minimal routing
+        app.include_router(audio_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio"])
+        app.include_router(audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-ws"])
+    except Exception as _audio_min_err:
+        logger.debug(f"Skipping audio routers in minimal test app: {_audio_min_err}")
+    # Health endpoints (required by AuthNZ integration tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])  # /api/v1/health*, /api/v1/healthz, /api/v1/readyz
+    except Exception as _health_min_err:
+        logger.debug(f"Skipping health router in minimal test app: {_health_min_err}")
+    # Media endpoints (permission enforcement tests call /api/v1/media/add)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+        app.include_router(media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
+    except Exception as _media_min_err:
+        logger.debug(f"Skipping media router in minimal test app: {_media_min_err}")
+    # Chat (OpenAI-compatible) endpoints for quota enforcement tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+        app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat", tags=["chat"])
+    except Exception as _chat_min_err:
+        logger.debug(f"Skipping chat router in minimal test app: {_chat_min_err}")
+    # LLM Providers endpoints (used by Chat_NEW unit tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
+        app.include_router(llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])  # /api/v1/llm/providers
+    except Exception as _llm_min_err:
+        logger.debug(f"Skipping llm providers router in minimal test app: {_llm_min_err}")
+    # Vector Stores (OpenAI-compatible admin + stores API)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vector_stores_router
+        app.include_router(vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    except Exception as _vs_min_err:
+        logger.debug(f"Skipping vector-stores router in minimal test app: {_vs_min_err}")
+    # Embeddings (OpenAI-compatible) endpoints for policy/budget tests and OpenAPI presence
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import router as embeddings_router
+        app.include_router(embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+    except Exception as _emb_min_err:
+        logger.debug(f"Skipping embeddings router in minimal test app: {_emb_min_err}")
+    # Media Embeddings endpoints (/api/v1/media/*/embeddings and jobs listing)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.media_embeddings import router as media_embeddings_router
+        app.include_router(media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
+    except Exception as _me_min_err:
+        logger.debug(f"Skipping media_embeddings router in minimal test app: {_me_min_err}")
+    # Chunking Templates endpoints (CRUD + apply)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chunking_templates import router as chunking_templates_router
+        app.include_router(chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
+    except Exception as _chunk_tpl_min_err:
+        logger.debug(f"Skipping chunking templates router in minimal test app: {_chunk_tpl_min_err}")
+    # Prompts endpoints (includes collections subpaths)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
+        app.include_router(prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
+    except Exception as _prompts_min_err:
+        logger.debug(f"Skipping prompts router in minimal test app: {_prompts_min_err}")
+    # Claims endpoints (status, list, rebuild)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.claims import router as claims_router
+        app.include_router(claims_router, prefix=f"{API_V1_PREFIX}", tags=["claims"])
+    except Exception as _claims_min_err:
+        logger.debug(f"Skipping claims router in minimal test app: {_claims_min_err}")
+    # RAG unified endpoints (router has its own /api/v1/rag prefix)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router
+        app.include_router(rag_unified_router, tags=["rag-unified"])
+    except Exception as _rag_min_err:
+        logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Chatbooks endpoints (export/import, jobs, download)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+        app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    except Exception as _chatbooks_min_err:
+        logger.debug(f"Skipping chatbooks router in minimal test app: {_chatbooks_min_err}")
+    # Auth endpoints (login/register/refresh/logout/me)
+    try:
+        app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    except Exception as _auth_min_err:
+        logger.debug(f"Skipping auth router in minimal test app: {_auth_min_err}")
+    # Enhanced auth endpoints (MFA, password reset) when available
+    try:
+        if _HAS_AUTH_ENHANCED:
+            app.include_router(auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
+    except Exception as _auth_enh_min_err:
+        logger.debug(f"Skipping enhanced auth router in minimal test app: {_auth_enh_min_err}")
+    # Users endpoints (sessions, change-password, storage, me)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+        app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    except Exception as _users_min_err:
+        logger.debug(f"Skipping users router in minimal test app: {_users_min_err}")
     # Include Jobs admin endpoints for tests that exercise jobs stats/counters
     try:
         from tldw_Server_API.app.api.v1.endpoints.jobs_admin import router as jobs_admin_router
         app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
     except Exception as _e:
         logger.debug(f"Skipping jobs_admin router in minimal test app: {_e}")
+    # Include Audio Jobs (admin + listing) for tests under minimal mode
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audio_jobs import router as audio_jobs_router
+        app.include_router(audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
+    except Exception as _audio_jobs_min_err:
+        logger.debug(f"Skipping audio_jobs router in minimal test app: {_audio_jobs_min_err}")
+    # Include Audit endpoints in minimal test app so tests relying on /api/v1/audit/* don't 404
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.audit import router as audit_router
+        app.include_router(audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
+    except Exception as _audit_min_err:
+        logger.debug(f"Skipping audit router in minimal test app: {_audit_min_err}")
+    # Config info endpoints (includes /api/v1/config/jobs used by OpenAPI tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
+        app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    except Exception as _config_min_err:
+        logger.debug(f"Skipping config_info router in minimal test app: {_config_min_err}")
+    # Flashcards endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+        app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
+    except Exception as _flash_min_err:
+        logger.debug(f"Skipping flashcards router in minimal test app: {_flash_min_err}")
+    # Metrics endpoints (/api/v1/metrics/text)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
+        app.include_router(metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
+    except Exception as _metrics_min_err:
+        logger.debug(f"Skipping metrics router in minimal test app: {_metrics_min_err}")
     # AuthNZ debug routes for tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.authnz_debug import router as authnz_debug_router
@@ -2785,6 +3233,39 @@ if _MINIMAL_TEST_APP:
     except Exception as _sandbox_err:
         # Never let optional sandbox break startup in tests
         logger.debug(f"Skipping sandbox router in minimal test app: {_sandbox_err}")
+    # Include MCP Unified WS/HTTP endpoints for tests (auth typically disabled via env/fixtures)
+    try:
+        # mcp_unified_router may already be imported above; if not, import here guarded
+        if 'mcp_unified_router' not in locals():
+            from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
+        app.include_router(mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
+        # MCP tool catalogs admin (lightweight) for unit tests
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.mcp_catalogs_manage import router as mcp_catalogs_manage_router
+            app.include_router(mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-catalogs"])
+        except Exception as _mcp_cat_err:  # noqa: BLE001
+            logger.debug(f"Skipping MCP catalogs router in minimal test app: {_mcp_cat_err}")
+        # Privileges endpoints used by tests that introspect RBAC snapshots
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
+            app.include_router(privileges_router, prefix=f"{API_V1_PREFIX}", tags=["privileges"])
+        except Exception as _priv_min_err:  # noqa: BLE001
+            logger.debug(f"Skipping privileges router in minimal test app: {_priv_min_err}")
+    except Exception as _mcp_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping MCP unified router in minimal test app: {_mcp_min_err}")
+    # Include admin router in minimal mode if available (ensure not gated by MCP import)
+    try:
+        if 'admin_router' not in locals():
+            from tldw_Server_API.app.api.v1.endpoints.admin import router as admin_router
+        app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    except Exception as _adm_inc_err:  # noqa: BLE001
+        logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
+    # Resource Governor admin/diag endpoints are required for RG tests in minimal app
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router
+        app.include_router(resource_governor_router, prefix=f"{API_V1_PREFIX}", tags=["resource-governor"])
+    except Exception as _rg_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping resource_governor router in minimal test app: {_rg_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:
@@ -2850,7 +3331,8 @@ else:
     _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
     _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
     _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
-    _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
+    if _HAS_CHUNKING and 'chunking_router' in locals():
+        _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
     _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
     if _HAS_OUTPUT_TEMPLATES:
         _include_if_enabled("outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
@@ -2919,10 +3401,33 @@ else:
         _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
     _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     _include_if_enabled("paper-search", paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
-    if _HAS_UNIFIED_EVALUATIONS:
-        _include_if_enabled("evaluations", unified_evaluation_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-    _include_if_enabled("ocr", ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
-    _include_if_enabled("vlm", vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+    # Heavy routers: import only when enabled to avoid import-time side effects
+    try:
+        if route_enabled("evaluations"):
+            from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+        else:
+            logger.info("Route disabled by policy: evaluations")
+    except Exception as _evals_rt_err:  # noqa: BLE001
+        logger.warning(f"Route gating error for evaluations; skipping import. Error: {_evals_rt_err}")
+
+    try:
+        if route_enabled("ocr"):
+            from tldw_Server_API.app.api.v1.endpoints.ocr import router as _ocr_router
+            app.include_router(_ocr_router, prefix=f"{API_V1_PREFIX}", tags=["ocr"])
+        else:
+            logger.info("Route disabled by policy: ocr")
+    except Exception as _ocr_rt_err:  # noqa: BLE001
+        logger.warning(f"Route gating error for ocr; skipping import. Error: {_ocr_rt_err}")
+
+    try:
+        if route_enabled("vlm"):
+            from tldw_Server_API.app.api.v1.endpoints.vlm import router as _vlm_router
+            app.include_router(_vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+        else:
+            logger.info("Route disabled by policy: vlm")
+    except Exception as _vlm_rt_err:  # noqa: BLE001
+        logger.warning(f"Route gating error for vlm; skipping import. Error: {_vlm_rt_err}")
     _include_if_enabled("benchmarks", benchmark_router, prefix=f"{API_V1_PREFIX}", tags=["benchmarks"], default_stable=False)
     from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
     try:
@@ -2937,19 +3442,20 @@ else:
             pass
     _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    # Resource Governor policy snapshot endpoint
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router
+        _include_if_enabled("resource-governor", resource_governor_router, prefix=f"{API_V1_PREFIX}", tags=["resource-governor"])
+    except Exception as _rg_ep_err:
+        logger.warning(f"Resource Governor endpoint unavailable; skipping import: {_rg_ep_err}")
     if _HAS_JOBS_ADMIN:
-        if _TEST_MODE:
-            # In tests, include Jobs admin endpoints unconditionally to avoid
-            # config-based gating interfering with unit tests that rely on them.
-            app.include_router(jobs_admin_router, prefix=f"{API_V1_PREFIX}", tags=["jobs"])
-        else:
-            _include_if_enabled(
-                "jobs",
-                jobs_admin_router,
-                prefix=f"{API_V1_PREFIX}",
-                tags=["jobs"],
-                default_stable=False,
-            )
+        _include_if_enabled(
+            "jobs",
+            jobs_admin_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["jobs"],
+            default_stable=False,
+        )
     _include_if_enabled("sync", sync_router, prefix=f"{API_V1_PREFIX}/sync", tags=["sync"])
     # Tools router included above with prefix f"{API_V1_PREFIX}"; avoid duplicate nested path
     # Sandbox (scaffold)
@@ -2964,7 +3470,11 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.personalization import (router as personalization_router,)
     from tldw_Server_API.app.api.v1.endpoints.persona import (router as persona_router,)
     _include_if_enabled("personalization", personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"], default_stable=False)
-    _include_if_enabled("persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=False)
+    # In tests, force-include persona endpoints regardless of route policy for WS/unit coverage
+    if _TEST_MODE:
+        app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
+    else:
+        _include_if_enabled("persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=False)
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
@@ -2994,7 +3504,32 @@ except Exception as _metrics_rt_err:
 
 # Health check (registered conditionally below)
 async def health_check():
-    return {"status": "healthy"}
+    body = {"status": "healthy"}
+    # Always attempt to include RG policy snapshot: prefer app.state, fallback to configured file
+    try:
+        rgv = getattr(app.state, "rg_policy_version", None)
+        if rgv is not None:
+            body["rg_policy_version"] = int(rgv)
+            body["rg_policy_store"] = getattr(app.state, "rg_policy_store", None)
+            body["rg_policy_count"] = getattr(app.state, "rg_policy_count", None)
+        else:
+            # Fallback to RG_POLICY_PATH (file-based) when loader not initialized
+            from pathlib import Path as _Path
+            import os as _os
+            import yaml as _yaml
+            p = _os.getenv("RG_POLICY_PATH")
+            if p and _Path(p).exists():
+                try:
+                    with _Path(p).open('r', encoding='utf-8') as _f:
+                        _data = _yaml.safe_load(_f) or {}
+                    body["rg_policy_version"] = int(_data.get("version") or 1)
+                    body["rg_policy_store"] = _os.getenv("RG_POLICY_STORE", "file")
+                    body["rg_policy_count"] = len((_data.get("policies") or {}).keys())
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return body
 
 # Readiness check (verifies critical dependencies) - registered conditionally below
 async def readiness_check():
@@ -3065,6 +3600,33 @@ async def readiness_check():
             "provider_health": provider_health,
             "otel_available": bool(OTEL_AVAILABLE),
         }
+        # Include Resource Governor policy metadata; prefer app.state and fallback to RG_POLICY_PATH
+        try:
+            rgv = getattr(app.state, "rg_policy_version", None)
+            if rgv is not None:
+                body["rg_policy"] = {
+                    "version": int(rgv),
+                    "store": getattr(app.state, "rg_policy_store", None),
+                    "policies": getattr(app.state, "rg_policy_count", None),
+                }
+            else:
+                from pathlib import Path as _Path
+                import os as _os
+                import yaml as _yaml
+                p = _os.getenv("RG_POLICY_PATH")
+                if p and _Path(p).exists():
+                    try:
+                        with _Path(p).open('r', encoding='utf-8') as _f:
+                            _data = _yaml.safe_load(_f) or {}
+                        body["rg_policy"] = {
+                            "version": int(_data.get("version") or 1),
+                            "store": _os.getenv("RG_POLICY_STORE", "file"),
+                            "policies": len((_data.get("policies") or {}).keys()),
+                        }
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         from fastapi.responses import JSONResponse as _JR
         return _JR(body, status_code=(200 if ready else 503))
     except Exception as e:

@@ -5,6 +5,10 @@ import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from loguru import logger
+from tldw_Server_API.app.core.Logging.log_context import (
+    log_context,
+    new_request_id,
+)
 
 from .job_manager import JobManager, JobType, JobStatus
 from .test_case_manager import TestCaseManager

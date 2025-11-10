@@ -11,6 +11,8 @@ from tldw_Server_API.app.core.Chat.provider_config import (
     PROVIDER_CAPABILITIES,
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
+import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
 
 #######################################################################################################################
 #
@@ -76,9 +78,45 @@ MODEL_METADATA: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "anthropic": {
+        "claude-sonnet-4.5": {
+            "context_window": 200_000,
+            "max_output_tokens": 64_000,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False
+            },
+            "modalities": {"input": ["text", "image", "file"], "output": ["text"]},
+            "notes": "Claude Sonnet 4.5; fast near-frontier model with tools and vision.",
+            "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+            "last_verified": None
+        },
+        "claude-haiku-4.5": {
+            "context_window": 200_000,
+            "max_output_tokens": 64_000,
+            "capabilities": {
+                "vision": True,
+                "audio_input": False,
+                "audio_output": False,
+                "tool_use": True,
+                "json_mode": False,
+                "function_calling": True,
+                "streaming": True,
+                "thinking": False
+            },
+            "modalities": {"input": ["text", "image", "file"], "output": ["text"]},
+            "notes": "Claude Haiku 4.5; fastest model with near-frontier intelligence.",
+            "source_url": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
+            "last_verified": None
+        },
         "claude-opus-4.1": {
             "context_window": 200_000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 32_000,
             "capabilities": {
                 "vision": True,
                 "audio_input": False,
@@ -619,6 +657,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'type': 'commercial',
                 'section': 'API'
             },
+            'minimax': {
+                'display_name': 'MiniMax',
+                'api_key_field': 'minimax_api_key',
+                'model_field': 'minimax_model',
+                'type': 'commercial',
+                'section': 'API'
+            },
             # Local APIs (from Local-API section)
             'llama': {
                 'display_name': 'Llama.cpp',
@@ -723,13 +768,21 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
 
-            # If no models found in config, inject safe, current defaults only for Anthropic
-            # per project direction to use 4.0/4.1 and avoid deprecated 3.5.
-            if not models:
-                if provider_name == 'anthropic':
-                    models = ['claude-opus-4.1', 'claude-sonnet-4']
-                else:
-                    models = []
+            # Augment or seed with models from the pricing catalog for commercial providers.
+            # This makes model_pricing.json the primary reference for available models,
+            # while still honoring any explicit config.txt entries.
+            if provider_info['type'] == 'commercial':
+                try:
+                    pricing_models = list_provider_models(provider_name)
+                    # Heuristic: exclude obvious embedding model ids from chat model lists
+                    pricing_models = [m for m in pricing_models if 'embed' not in m.lower() and 'embedding' not in m.lower()]
+                except Exception:
+                    pricing_models = []
+                if pricing_models:
+                    # Preserve order: config models first, then pricing extras
+                    seen = set(m.strip() for m in models)
+                    extras = [m for m in pricing_models if m not in seen]
+                    models = models + extras
 
             # Build models and metadata
             models_info = [get_model_metadata(provider_name, m) for m in models]
@@ -772,7 +825,16 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             # Centralized capability diagnostics
             try:
                 provider_data['requires_api_key'] = bool(PROVIDER_REQUIRES_KEY.get(provider_name, provider_info['type'] == 'commercial'))
+                # Start with defaults from static map
                 capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
+                # Merge adapter-reported capabilities if available
+                try:
+                    reg = llm_adapter_registry.get_registry()
+                    reg_caps = reg.get_all_capabilities()
+                    if provider_name in reg_caps:
+                        capabilities.update(reg_caps[provider_name])
+                except Exception:
+                    pass
                 # Merge config-indicated streaming support as an override if provided
                 if 'supports_streaming' not in capabilities and 'supports_streaming' in provider_data:
                     capabilities['supports_streaming'] = provider_data['supports_streaming']
@@ -794,15 +856,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
         if config_parser.has_section('API') and config_parser.has_option('API', 'default_api'):
             default_api = config_parser.get('API', 'default_api', fallback='openai')
 
-        # Also check for additional models that might be listed elsewhere
-        # For example, in the RAG or Embeddings sections
-        if config_parser.has_section('Embeddings') and config_parser.has_option('Embeddings', 'contextual_llm_model'):
-            contextual_model = config_parser.get('Embeddings', 'contextual_llm_model', fallback='')
-            # Try to determine which provider this model belongs to
-            if contextual_model and 'gpt' in contextual_model.lower():
-                for p in providers:
-                    if p['name'] == 'openai' and contextual_model not in p['models']:
-                        p['models'].append(contextual_model)
+        # Strict policy: do not pull models from other sections.
 
         return {
             'providers': providers,

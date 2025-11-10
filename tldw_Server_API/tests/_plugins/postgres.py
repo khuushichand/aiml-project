@@ -1,0 +1,290 @@
+"""Unified Postgres fixtures for tests.
+
+Goals:
+- Single source of truth for resolving Postgres connection settings.
+- Best‑effort reachability check and optional Docker auto‑start for localhost.
+- Function‑scoped temporary database creation and cleanup.
+
+Usage patterns:
+- Request `pg_temp_db` for a per‑test scratch DB. Returns a dict with
+  host/port/user/password/database and a `dsn` field. Skips if Postgres is
+  unreachable and not required.
+- Request `pg_eval_params` for compatibility with existing tests that expect
+  a dict of connection params (host/port/user/password/database).
+- Request `pg_database_config` to get a DatabaseConfig ready for backend
+  creation via DatabaseBackendFactory.
+
+Environment knobs:
+- TEST_DATABASE_URL / DATABASE_URL / POSTGRES_TEST_DSN / POSTGRES_TEST_*
+- TLDW_TEST_POSTGRES_REQUIRED=1 to fail instead of skip when unavailable
+- TLDW_TEST_NO_DOCKER=1 to disable Docker auto‑start
+- TLDW_TEST_PG_IMAGE (default: postgres:18)
+- TLDW_TEST_PG_CONTAINER_NAME (default: tldw_postgres_test)
+"""
+from __future__ import annotations
+
+import os
+import time
+import uuid
+import socket
+import shutil
+import subprocess
+from typing import Dict, Generator
+
+import pytest
+
+try:  # Prefer psycopg v3
+    import psycopg  # type: ignore
+    _PG_DRIVER = "psycopg"
+except Exception:  # pragma: no cover - optional dependency
+    try:
+        import psycopg2  # type: ignore
+        _PG_DRIVER = "psycopg2"
+    except Exception:  # pragma: no cover - optional dependency
+        psycopg = None  # type: ignore
+        psycopg2 = None  # type: ignore
+        _PG_DRIVER = None
+
+
+def _tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _ensure_postgres_available(host: str, port: int, user: str, password: str, *, require_pg: bool) -> bool:
+    """Try to connect; if not available and local, attempt to start docker, then retry.
+
+    Returns True if Postgres becomes reachable; otherwise False (caller may skip tests).
+    """
+    # Quick TCP probe first
+    if _tcp_reachable(host, port):
+        return True
+
+    # Only attempt Docker on local hostnames
+    if str(host) not in {"localhost", "127.0.0.1", "::1"}:
+        return False
+
+    if os.getenv("TLDW_TEST_NO_DOCKER", "").lower() in ("1", "true", "yes"):
+        return False
+
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return False
+
+    image = os.getenv("TLDW_TEST_PG_IMAGE", "postgres:18")
+    container = os.getenv("TLDW_TEST_PG_CONTAINER_NAME", "tldw_postgres_test")
+
+    # Stop and remove an existing container with same name (best‑effort)
+    try:
+        subprocess.run([docker_bin, "rm", "-f", container], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    envs = [
+        "-e", f"POSTGRES_USER={user}",
+        "-e", f"POSTGRES_PASSWORD={password}",
+        "-e", "POSTGRES_DB=postgres",
+    ]
+    ports = ["-p", f"{port}:5432"]
+
+    run_cmd = [docker_bin, "run", "-d", "--name", container, *envs, *ports, image]
+    try:
+        subprocess.run(run_cmd, check=False, capture_output=True, text=True)
+    except Exception:
+        return False
+
+    # Wait up to ~30 seconds for readiness
+    for _ in range(30):
+        if _tcp_reachable(host, port):
+            return True
+        time.sleep(1)
+    return False
+
+
+def _connect_admin(host: str, port: int, user: str, password: str):
+    """Return a connection to the 'postgres' DB using whichever driver is available.
+
+    Retries briefly to tolerate startup races after Docker auto-start.
+    """
+    if _PG_DRIVER is None:
+        raise RuntimeError("psycopg (or psycopg2) is required for Postgres‑backed tests")
+
+    last_err = None
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    for _ in range(10):
+        try:
+            if _PG_DRIVER == "psycopg":  # pragma: no cover - env dependent
+                conn = psycopg.connect(host=host, port=int(port), dbname="postgres", user=user, password=password or None, autocommit=True)  # type: ignore[name-defined]
+            else:  # psycopg2
+                conn = psycopg2.connect(host=host, port=int(port), database="postgres", user=user, password=password or None)  # type: ignore[name-defined]
+                conn.autocommit = True
+            return conn
+        except Exception as e:  # pragma: no cover - env/timing dependent
+            last_err = e
+            if debug:
+                try:
+                    print(f"[pg-fixture] admin connect failed: host={host} port={port} user={user} err={e}")
+                except Exception:
+                    pass
+            time.sleep(0.5)
+    raise last_err  # type: ignore[misc]
+
+
+def _create_database(host: str, port: int, user: str, password: str, db_name: str) -> None:
+    conn = _connect_admin(host, port, user, password)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s", (db_name,))
+            cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
+            cur.execute(f"CREATE DATABASE {db_name} OWNER {user}")
+    finally:
+        conn.close()
+
+
+def _drop_database(host: str, port: int, user: str, password: str, db_name: str) -> None:
+    try:
+        conn = _connect_admin(host, port, user, password)
+    except Exception:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s", (db_name,))
+            cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@pytest.fixture(scope="session")
+def pg_server() -> Dict[str, str | int]:
+    """Resolve base Postgres params and ensure server reachability.
+
+    Does not create a specific database; use `pg_temp_db` for per‑test DBs.
+    Skips tests if Postgres is unreachable and not required.
+    """
+    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+
+    env = get_pg_env()
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+
+    ok = _ensure_postgres_available(env.host, env.port, env.user, env.password, require_pg=require_pg)
+    if not ok:
+        if require_pg:
+            pytest.fail("Postgres required (TLDW_TEST_POSTGRES_REQUIRED=1) but not reachable")
+        pytest.skip("Postgres not reachable; skipping Postgres‑backed tests")
+    if debug:
+        try:
+            masked = "***" if env.password else ""
+            print(
+                "[pg-fixture] resolved server:",
+                f"host={env.host} port={env.port} user={env.user} password={masked} database={env.database} dsn={env.dsn}"
+            )
+        except Exception:
+            pass
+
+    return {"host": env.host, "port": int(env.port), "user": env.user, "password": env.password}
+
+
+@pytest.fixture(scope="function")
+def pg_temp_db(pg_server) -> Generator[Dict[str, object], None, None]:
+    """Create a temporary database for the current test and drop it afterwards.
+
+    Returns a dict with: host, port, user, password, database, dsn.
+    """
+    host = str(pg_server["host"])  # type: ignore[index]
+    port = int(pg_server["port"])  # type: ignore[index]
+    user = str(pg_server["user"])  # type: ignore[index]
+    password = str(pg_server.get("password") or "")  # type: ignore[index]
+    db_name = f"tldw_test_{uuid.uuid4().hex[:8]}"
+
+    if _PG_DRIVER is None:  # pragma: no cover - env dependent
+        pytest.skip("psycopg not installed; skipping Postgres‑backed tests")
+
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+
+    try:
+        _create_database(host, port, user, password, db_name)
+    except Exception as e:
+        # First try a local Docker fallback on an alternate port if we're on localhost
+        alt_port_env = os.getenv("TLDW_TEST_PG_ALT_PORT", "5434")
+        alt_port = int(alt_port_env) if alt_port_env.isdigit() else 5434
+        can_attempt_docker = str(host) in {"127.0.0.1", "localhost", "::1"} and os.getenv("TLDW_TEST_NO_DOCKER", "").lower() not in ("1", "true", "yes", "on")
+        tried_docker = False
+        if can_attempt_docker and alt_port != int(port):
+            tried_docker = True
+            if debug:
+                try:
+                    print(f"[pg-fixture] attempting Docker fallback on 127.0.0.1:{alt_port} for user={user}")
+                except Exception:
+                    pass
+            ok2 = _ensure_postgres_available("127.0.0.1", alt_port, user, password, require_pg=require_pg)
+            if ok2:
+                # Switch to alternate local container and retry create
+                host = "127.0.0.1"
+                port = alt_port
+                try:
+                    _create_database(host, port, user, password, db_name)
+                except Exception as e2:
+                    # Fall through to final skip/fail
+                    e = e2
+
+        msg = (
+            f"Unable to create temporary Postgres database as user '{user}' on {host}:{port}. "
+            f"This usually means the resolved credentials lack CREATEDB privileges or are incorrect.\n"
+            f"Hint: set POSTGRES_TEST_DSN (or JOBS_DB_URL/TEST_DATABASE_URL) to a superuser DSN, e.g. postgresql://tldw_user:TestPassword123!@127.0.0.1:{port}/postgres (or postgres:postgres).\n"
+            + ("Tried Docker fallback on alternate port and still failed.\n" if tried_docker else "")
+            + f"Error: {e}"
+        )
+        if debug:
+            try:
+                print("[pg-fixture] " + msg)
+            except Exception:
+                pass
+        if require_pg:
+            pytest.fail(msg)
+        else:
+            pytest.skip(msg)
+    dsn = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+    params: Dict[str, object] = {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "database": db_name,
+        "dsn": dsn,
+    }
+    try:
+        yield params
+    finally:
+        _drop_database(host, port, user, password, db_name)
+
+
+@pytest.fixture(scope="function")
+def pg_eval_params(pg_temp_db) -> Dict[str, object]:
+    """Compatibility fixture returning connection params for a live temp DB.
+
+    Matches the signature expected by existing tests that use
+    cfg = {"host", "port", "user", "password", "database"}.
+    """
+    return {k: v for k, v in pg_temp_db.items() if k in {"host", "port", "user", "password", "database"}}
+
+
+@pytest.fixture(scope="function")
+def pg_database_config(pg_temp_db):
+    """Return a DatabaseConfig prepopulated with a temporary Postgres database."""
+    from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+    return DatabaseConfig(
+        backend_type=BackendType.POSTGRESQL,
+        pg_host=str(pg_temp_db["host"]),
+        pg_port=int(pg_temp_db["port"]),
+        pg_database=str(pg_temp_db["database"]),
+        pg_user=str(pg_temp_db["user"]),
+        pg_password=str(pg_temp_db.get("password") or ""),
+    )

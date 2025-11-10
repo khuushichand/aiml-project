@@ -7,7 +7,8 @@ This guide walks you through installing, configuring, and using the VibeVoice te
 - Python 3.10+
 - ffmpeg installed and on `PATH`
 - GPU optional (CUDA recommended for performance).
-- Sufficient disk space to cache models under `./models/vibevoice` (auto-download by default).
+- Sufficient disk space to cache models under `./models/vibevoice`.
+  - Note: In tldw_server, auto-download is disabled by default. Enable per-provider in YAML via `auto_download: true` or set `VIBEVOICE_AUTO_DOWNLOAD=1`.
 
 ## 2) Install Dependencies
 
@@ -17,10 +18,10 @@ This guide walks you through installing, configuring, and using the VibeVoice te
 pip install -e ".[TTS_vibevoice]"
 ```
 
-- Install the community VibeVoice package from source:
+- Install the official VibeVoice package from source:
 
 ```bash
-git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice
+git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice
 cd libs/VibeVoice && pip install -e .
 cd ../..
 ```
@@ -65,14 +66,14 @@ vibevoice_speakers_to_voices = {"1":"en-Alice_woman"}
 vibevoice_enable_warmup_forward = false
 ```
 
-YAML alternative (`tts_providers_config.yaml`):
+YAML alternative (`tldw_Server_API/app/core/TTS/tts_providers_config.yaml`):
 
 ```yaml
 providers:
   vibevoice:
     enabled: true
-    model_path: vibevoice/VibeVoice-1.5B
     auto_download: true
+    model_path: microsoft/VibeVoice-1.5B  # or vibevoice/VibeVoice-7B, FabioSarracino/VibeVoice-Large-Q8
     device: auto
     use_quantization: true
     voices_dir: ./voices

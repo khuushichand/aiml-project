@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Callable, Tuple
 from loguru import logger
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 #######################################################################################################################
 #
@@ -113,7 +114,7 @@ class RequestQueue:
         except Exception:
             pass
 
-        logger.info(f"Started {num_workers} queue workers")
+        logger.info("Started {} queue workers", num_workers)
 
     async def stop(self):
         """Stop the queue workers."""
@@ -157,7 +158,7 @@ class RequestQueue:
         Args:
             worker_id: Worker identifier
         """
-        logger.debug(f"Worker {worker_id} started")
+        logger.debug("Worker {} started", worker_id)
 
         while self._running:
             try:
@@ -198,7 +199,7 @@ class RequestQueue:
                 logger.error(f"Worker {worker_id} error: {e}")
                 await asyncio.sleep(1)
 
-        logger.debug(f"Worker {worker_id} stopped")
+        logger.debug("Worker {} stopped", worker_id)
 
     async def _get_next_request(self) -> Optional[QueuedRequest]:
         """Get the next request from the priority queue."""
@@ -224,7 +225,10 @@ class RequestQueue:
         # If a processor is provided, execute it; otherwise perform placeholder work
         start_ts = time.time()
         if request.processor is None:
-            logger.debug(f"Processing request {request.request_id} (no processor; admission-only)")
+            logger.debug(
+                "Processing request {} (no processor; admission-only)",
+                request.request_id,
+            )
             duration = time.time() - start_ts
             # record activity
             self._recent_activity.append({
@@ -238,16 +242,22 @@ class RequestQueue:
             })
             return {"status": "completed", "request_id": request.request_id}
 
-        logger.debug(f"Processing request {request.request_id} with processor; streaming={request.streaming}")
+        logger.debug(
+            "Processing request {} with processor; streaming={}",
+            request.request_id,
+            request.streaming,
+        )
         loop = asyncio.get_running_loop()
 
         # Non-streaming: run processor in dedicated thread executor to avoid blocking loop
         if not request.streaming:
             try:
-                result = await loop.run_in_executor(
-                    self._executor,
-                    lambda: request.processor(*request.processor_args, **request.processor_kwargs)
+                fn = partial(
+                    request.processor,
+                    *request.processor_args,
+                    **request.processor_kwargs,
                 )
+                result = await loop.run_in_executor(self._executor, fn)
                 duration = time.time() - start_ts
                 self._recent_activity.append({
                     "request_id": request.request_id,
@@ -309,9 +319,12 @@ class RequestQueue:
 
         # Run the processor to obtain the stream (potentially blocking)
         try:
-            stream = await loop.run_in_executor(
-                self._executor, lambda: request.processor(*request.processor_args, **request.processor_kwargs)
+            fn = partial(
+                request.processor,
+                *request.processor_args,
+                **request.processor_kwargs,
             )
+            stream = await loop.run_in_executor(self._executor, fn)
         except Exception as e:
             # Emit SSE-style error payload to channel to gracefully end downstream streaming
             sanitized = str(e).replace("\\", " ").replace("\n", " ")
@@ -438,7 +451,11 @@ class RequestQueue:
             # Signal workers that items are available
             self._has_items.set()
 
-            logger.debug(f"Enqueued request {request_id} with priority {priority.name}")
+            logger.debug(
+                "Enqueued request {} with priority {}",
+                request_id,
+                priority.name,
+            )
 
         return future
 

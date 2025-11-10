@@ -74,14 +74,8 @@ class FakePGCursor:
             return
         # Update completed with result jsonb
         if s.startswith("UPDATE jobs SET status='completed', result="):
-            # extract job id from params; different patterns for enforce vs not
-            # We always take the 3rd positional from the end being job_id for both branches
-            # enforce: (... result, ctok, job_id, worker_id, lease_id, ctok)
-            # not enforce: (... result, ctok, job_id, ctok)
-            if len(params) >= 4:
-                job_id = int(params[-3])
-            else:
-                job_id = int(params[2])
+            # job_id is always the third argument in the psycopg parameter sequence.
+            job_id = int(params[2])
             res_json = params[0]
             try:
                 obj = json.loads(res_json) if isinstance(res_json, str) else None
@@ -118,8 +112,22 @@ class FakePGConn:
     def __init__(self):
         pass
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
     def close(self):
         pass
+
+
+@pytest.fixture(autouse=True)
+def _stub_pg_bootstrap(monkeypatch):
+    import tldw_Server_API.app.core.Jobs.manager as mgr
+
+    monkeypatch.setattr(mgr, "ensure_jobs_tables_pg", lambda dsn: dsn)
+    monkeypatch.setattr(mgr, "ensure_job_counters_pg", lambda dsn: dsn, raising=False)
 
 
 @pytest.mark.unit

@@ -10,12 +10,12 @@ def test_priority_fairness_in_acquire(tmp_path):
     jm = JobManager(db_path)
     # Two jobs, different priorities
     j_low = jm.create_job(
-        domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=1
+        domain="test", queue="default", job_type="export", payload={}, owner_user_id="1", priority=1
     )
     j_high = jm.create_job(
-        domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1", priority=9
+        domain="test", queue="default", job_type="export", payload={}, owner_user_id="1", priority=9
     )
-    first = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w1")
+    first = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="w1")
     assert first is not None
     # Lower number means higher priority (ASC): 1 before 9
     assert int(first["id"]) == int(j_low["id"])  # priority 1 before 9
@@ -29,9 +29,9 @@ def test_renew_prevents_reclaim(monkeypatch, tmp_path):
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     j = jm.create_job(
-        domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1"
+        domain="test", queue="default", job_type="export", payload={}, owner_user_id="1"
     )
-    acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="wA")
+    acq = jm.acquire_next_job(domain="test", queue="default", lease_seconds=1, worker_id="wA")
     assert acq is not None
     # Renew before expiry
     # Provide worker_id/lease_id to exercise enforced path as well
@@ -39,9 +39,9 @@ def test_renew_prevents_reclaim(monkeypatch, tmp_path):
     assert ok
     # Wait well under renewed lease; should still be leased
     time.sleep(1.5)
-    acq2 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="wB")
+    acq2 = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="wB")
     assert acq2 is None
     # Wait remaining time to expire
     time.sleep(2.0)
-    acq3 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="wB")
+    acq3 = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="wB")
     assert (acq3 is None) or (int(acq3["id"]) == int(j["id"]))

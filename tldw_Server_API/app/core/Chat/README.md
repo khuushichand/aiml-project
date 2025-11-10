@@ -187,3 +187,85 @@ result = await future
 ```
 
 With this guide, you should be able to navigate the Chat module quickly, identify where a behaviour lives, and implement changes without breaking the larger orchestration. Keep the provider abstraction, rate limiting, and streaming guarantees front of mind when extending functionality.
+# Chat Module
+
+Note: This README is aligned to the project’s 3-section template. The original developer guide follows unchanged below to preserve all prior details and diagrams.
+
+## 1. Descriptive of Current Feature Set
+
+The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating request validation, prompt templating, provider routing, streaming, auditing, and persistence.
+
+- Capabilities
+  - Normalize chat requests (character context, conversations, prompt templates, moderation)
+  - Apply rate limits, request queuing, and usage tracking before provider calls
+  - Dispatch to 15+ commercial and local providers (sync + async)
+  - Stream results via SSE and/or return JSON; optional persistence of conversations/messages
+  - Metrics, auditing hooks, and document generation utilities
+
+- Inputs/Outputs
+  - Input: OpenAI-compatible chat payload (messages; optional tools/images; `stream` flag)
+  - Output: JSON completion or SSE stream; `tldw_conversation_id` when persisted
+
+- Related Endpoints (examples)
+  - POST `/api/v1/chat/completions` — tldw_Server_API/app/api/v1/endpoints/chat.py:590
+  - Chat dictionaries CRUD (examples):
+    - POST `/api/v1/chat/dictionaries` — tldw_Server_API/app/api/v1/endpoints/chat.py:1688
+    - GET  `/api/v1/chat/dictionaries` — tldw_Server_API/app/api/v1/endpoints/chat.py:1723
+    - POST `/api/v1/chat/dictionaries/{dictionary_id}/entries` — tldw_Server_API/app/api/v1/endpoints/chat.py:1870
+  - Document generation (examples):
+    - POST `/api/v1/chat/documents/generate` — tldw_Server_API/app/api/v1/endpoints/chat.py:2354
+    - POST `/api/v1/chat/documents/bulk` — tldw_Server_API/app/api/v1/endpoints/chat.py:2930
+    - GET  `/api/v1/chat/documents/statistics` — tldw_Server_API/app/api/v1/endpoints/chat.py:2978
+  - Queue diagnostics:
+    - GET  `/api/v1/chat/queue/status` — tldw_Server_API/app/api/v1/endpoints/chat.py:3056
+    - GET  `/api/v1/chat/queue/activity` — tldw_Server_API/app/api/v1/endpoints/chat.py:3096
+
+- Related Schemas
+  - Chat request models — tldw_Server_API/app/api/v1/schemas/chat_request_schemas.py:274 (`ChatCompletionRequest`)
+  - Chat validators — tldw_Server_API/app/api/v1/schemas/chat_validators.py:1
+  - Chat dictionary schemas — tldw_Server_API/app/api/v1/schemas/chat_dictionary_schemas.py:53, :66, :86
+  - Document generator schemas — tldw_Server_API/app/api/v1/schemas/document_generator_schemas.py:45, :146, :158
+
+## 2. Technical Details of Features
+
+- Architecture & Flow
+  - Endpoint orchestrates: validation → normalization → rate limit/queue → character/history → templating → moderation → provider call → streaming/response → persistence/usage/audit/metrics
+  - Provider abstraction translates neutral params to provider-specific SDKs; supports sync/async
+
+- Key Components
+  - `chat_orchestrator.py` (provider dispatch), `chat_service.py` (endpoint helpers), `chat_helpers.py` (validation/context/history)
+  - `prompt_template_manager.py` (Jinja2 templates), `streaming_utils.py` (SSE), `provider_manager.py` (circuit breaker)
+  - `rate_limiter.py`, `request_queue.py`, `chat_metrics.py`, `chat_exceptions.py`/`Chat_Deps.py`
+
+- Configuration
+  - Default provider via `DEFAULT_LLM_PROVIDER` (env); request-size/image limits via config/env; queued execution via `CHAT_QUEUED_EXECUTION`
+  - LLM budget enforcement via AuthNZ dependency
+
+- Concurrency & Performance
+  - Async orchestration; optional queued workers; SSE normalization tolerant of upstream quirks
+
+- Error Handling & Security
+  - Custom exceptions; circuit breakers; RBAC rate limits and budget guard; strict validators for IDs/tools/images
+
+## 3. Developer-Related/Relevant Information for Contributors
+
+- Tests
+  - Run: `python -m pytest tldw_Server_API/tests/Chat -v`
+  - Additional: character dictionary unit tests and integration suites targeting `/chat/completions`
+
+- Extension Points
+  - Add providers in `LLM_Calls/` and register in `provider_config` + param map
+  - Extend rate limiting in `rate_limiter.py` and DI layer; update metrics
+  - Add/adjust templates in `prompt_templates/`
+
+- Local Dev Tips
+  - `TEST_MODE=1` disables background loops; prefer `local-llm` in tests
+  - Enable queue with `CHAT_QUEUED_EXECUTION=true` to exercise worker path
+
+- Pitfalls & Gotchas
+  - Provider fallback is disabled by default; enable only with care
+  - Budget guard and RBAC may block before the handler; check scopes/limits
+
+---
+
+# Chat Module (Developer Guide)

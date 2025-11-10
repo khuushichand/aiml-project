@@ -1,6 +1,19 @@
 /**
  * Main JavaScript file for API WebUI
+ * NOTE: Sanitization and inline-handler migration are delegated to WebUISanitizer (js/sanitizer.js)
+ * to keep a single source of truth. Avoid duplicating sanitizer logic here.
  */
+
+// Ensure sanitizer.js is present (loaded before this file in index.html).
+// For tests/CommonJS, attempt a soft require so sanitizer becomes a hard dependency.
+let WebUISanitizerRef = (typeof window !== 'undefined' && window.WebUISanitizer) || null;
+try {
+    if (!WebUISanitizerRef && typeof require !== 'undefined') {
+        // Attempt to load in non-browser test environments
+        require('./sanitizer.js');
+        WebUISanitizerRef = (typeof window !== 'undefined' && window.WebUISanitizer) || (typeof globalThis !== 'undefined' ? globalThis.WebUISanitizer : null);
+    }
+} catch (_) { /* ignore; browser script tags handle this path */ }
 
 class WebUI {
     constructor() {
@@ -11,6 +24,8 @@ class WebUI {
         this.searchPreloaded = false;
         this.theme = 'light';
         this.apiStatusCheckInterval = null;
+        // Prevent the startup fallback from overriding a user selection race
+        this._defaultTabSettled = false;
         this.init();
     }
 
@@ -43,6 +58,19 @@ class WebUI {
         // Apply capability-based visibility (hide experimental tabs dynamically)
         this.applyFeatureVisibilityFromServer();
 
+        // Initialize Simple/Advanced mode toggle and default visibility
+        this.initSimpleAdvancedToggle();
+
+        // Force-hide correlation badges unless user has explicitly enabled them
+        try {
+            if (String(localStorage.getItem('WEBUI_SHOW_CORRELATION')||'') !== '1') {
+                const ridEl0 = document.getElementById('reqid-badge');
+                const trEl0 = document.getElementById('trace-badge');
+                if (ridEl0) ridEl0.style.display = 'none';
+                if (trEl0) trEl0.style.display = 'none';
+            }
+        } catch(_){}
+
         // If opened via file://, show guidance banner
         if (window.location.protocol === 'file:') {
             try {
@@ -54,7 +82,193 @@ class WebUI {
             } catch (e) { /* ignore */ }
         }
 
+        // Proactively migrate any inline handlers present in base HTML
+        try { this.migrateInlineHandlers(document.body || document); } catch (_) {}
+        // Install CSP guard to sanitize/migrate inline handlers for any dynamic insertions
+        try { this.installCSPGuard(); } catch (_) {}
+
+        // Bind generic endpoint exec buttons across the app (no inline handlers)
+        try {
+            document.addEventListener('click', async (e) => {
+                const btn = e.target && e.target.closest('button[data-action="exec-endpoint"]');
+                if (!btn) return;
+                e.preventDefault();
+                const id = btn.getAttribute('data-id');
+                const method = btn.getAttribute('data-method') || 'GET';
+                const path = btn.getAttribute('data-path') || '';
+                const bodyType = btn.getAttribute('data-body') || 'none';
+                const confirmMsg = btn.getAttribute('data-confirm') || '';
+                if (confirmMsg && !confirm(confirmMsg)) return;
+                const responseEl = document.getElementById(`${id}_response`);
+                try {
+                    if (responseEl) responseEl.textContent = '';
+                    // Try global endpointHelper instance if available
+                    if (window.endpointHelper && typeof window.endpointHelper.executeRequest === 'function') {
+                        await window.endpointHelper.executeRequest(id, method, path, bodyType);
+                        return;
+                    }
+                    const body = (bodyType === 'json') ? (function(){ const ta = document.getElementById(`${id}_payload`); try { return ta && ta.value ? JSON.parse(ta.value) : {}; } catch(_) { return {}; } })() : null;
+                    const res = await apiClient.makeRequest(method, path, { body });
+                    if (responseEl) responseEl.textContent = (typeof res === 'string') ? res : JSON.stringify(res, null, 2);
+                } catch(err) {
+                    if (responseEl) responseEl.textContent = `Error: ${err.message}`;
+                }
+            }, true);
+        } catch(_) {}
+
         console.log('WebUI initialized successfully');
+    }
+
+    updateCorrelationBadge(meta) {
+        try {
+            // Respect user pref to show/hide correlation badges; default: hidden
+            let show = false;
+            try { show = String(localStorage.getItem('WEBUI_SHOW_CORRELATION')||'') === '1'; } catch(_) {}
+            if (!show) return;
+            const rid = (meta && meta.requestId) ? String(meta.requestId) : '';
+            const trace = (meta && (meta.traceparent || meta.traceId)) ? String(meta.traceparent || meta.traceId) : '';
+            const ridEl = document.getElementById('reqid-badge');
+            const trEl = document.getElementById('trace-badge');
+            if (ridEl) {
+                if (rid) {
+                    const short = rid.length > 8 ? rid.slice(0, 8) : rid;
+                    ridEl.textContent = `RID: ${short}`;
+                    ridEl.title = `Last X-Request-ID: ${rid}`;
+                    ridEl.style.display = '';
+                } else {
+                    ridEl.style.display = 'none';
+                }
+            }
+            if (trEl) {
+                if (trace) {
+                    const shortT = trace.length > 12 ? trace.slice(0, 12) + '…' : trace;
+                    trEl.textContent = `Trace: ${shortT}`;
+                    trEl.title = `Last traceparent/X-Trace-Id: ${trace}`;
+                    trEl.style.display = '';
+                } else {
+                    trEl.style.display = 'none';
+                }
+            }
+            // Also update correlation snippets in endpoint sections
+            try {
+                const preEls = document.querySelectorAll('.endpoint-section pre[id$="_response"]');
+                preEls.forEach((pre) => {
+                    let box = pre.nextElementSibling;
+                    if (!(box && box.classList && box.classList.contains('correlation-snippet'))) {
+                        box = document.createElement('div');
+                        box.className = 'correlation-snippet';
+                        box.style.marginTop = '6px';
+                        box.style.color = 'var(--color-text-muted)';
+                        box.style.fontSize = '0.85em';
+                        try { box.setAttribute('aria-live', 'polite'); } catch(_){}
+                        const textSpan = document.createElement('span');
+                        textSpan.className = 'corr-text';
+                        const copyRidBtn = document.createElement('button');
+                        copyRidBtn.type = 'button';
+                        copyRidBtn.className = 'btn btn-compact corr-copy-btn';
+                        copyRidBtn.textContent = 'Copy RID';
+                        copyRidBtn.style.marginLeft = '8px';
+                        copyRidBtn.addEventListener('click', async (e) => {
+                            e.preventDefault();
+                            try {
+                                const ok = await Utils.copyToClipboard(String(rid || ''));
+                                if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied X-Request-ID');
+                            } catch (_) {}
+                        });
+                        const copyTraceBtn = document.createElement('button');
+                        copyTraceBtn.type = 'button';
+                        copyTraceBtn.className = 'btn btn-compact corr-copy-btn';
+                        copyTraceBtn.textContent = 'Copy Trace';
+                        copyTraceBtn.style.marginLeft = '6px';
+                        copyTraceBtn.addEventListener('click', async (e) => {
+                            e.preventDefault();
+                            try {
+                                const ok = await Utils.copyToClipboard(String(trace || ''));
+                                if (ok && typeof Toast !== 'undefined' && Toast) Toast.success('Copied trace');
+                            } catch (_) {}
+                        });
+                        box.appendChild(textSpan);
+                        box.appendChild(copyRidBtn);
+                        box.appendChild(copyTraceBtn);
+                        pre.parentNode.insertBefore(box, pre.nextSibling);
+                    }
+                    const shortReq = rid && rid.length > 12 ? rid.slice(0, 12) + '…' : (rid || '-');
+                    const shortTr = trace && trace.length > 24 ? trace.slice(0, 24) + '…' : (trace || '-');
+                    // Update text span if present; else fallback to textContent
+                    const textNode = box.querySelector('.corr-text');
+                    const content = `Correlation: X-Request-ID=${shortReq}  trace=${shortTr}`;
+                    if (textNode) textNode.textContent = content; else box.textContent = content;
+                    box.title = `X-Request-ID=${rid || '-'}  traceparent/X-Trace-Id=${trace || '-'}`;
+                });
+            } catch (_) { /* ignore */ }
+        } catch (e) { /* ignore */ }
+    }
+
+    // Observe DOM insertions and migrate inline handlers quickly to avoid CSP blocks
+    installCSPGuard() {
+        // Track already-migrated elements to avoid repeated work
+        const migratedElements = new WeakSet();
+
+        const migrateNode = (node, force = false) => {
+            try {
+                if (!node || node.nodeType !== 1) return;
+                if (!force && migratedElements.has(node)) return;
+                if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
+                    window.WebUISanitizer.migrateInlineHandlers(node);
+                } else {
+                    this.migrateInlineHandlers(node);
+                }
+                migratedElements.add(node);
+            } catch (_) {}
+        };
+        try {
+            const target = document.querySelector('.content-container') || document.getElementById('main-content-area') || document.body;
+            if (!target) return;
+            const mo = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    if (m.type === 'childList') {
+                        m.addedNodes && m.addedNodes.forEach((n) => { if (n && n.nodeType === 1) migrateNode(n); });
+                    } else if (m.type === 'attributes') {
+                        if (m.attributeName && m.attributeName.startsWith('on')) {
+                            // Force re-migration when inline handlers change
+                            migrateNode(m.target, true);
+                        }
+                    }
+                }
+            });
+            mo.observe(target, { subtree: true, childList: true, attributes: true, attributeFilter: ['onclick','onchange','oninput','onsubmit','onkeydown','onkeyup','onload','onerror'] });
+            this._cspGuardObserver = mo;
+        } catch (_) {}
+        // Bubble-phase guard for essential interactions only
+        const essentialEvents = ['click', 'change', 'submit', 'input', 'keydown', 'keyup'];
+
+        const handleEvent = (e) => {
+            const path = (e.composedPath && e.composedPath()) || [];
+            for (const el of path) {
+                if (el && el.nodeType === 1) migrateNode(el);
+            }
+        };
+
+        // Simple debounce for high-frequency events (typing/input)
+        const makeDebounced = (fn, wait = 60) => {
+            let t;
+            return (e) => {
+                if (t) clearTimeout(t);
+                t = setTimeout(() => fn(e), wait);
+            };
+        };
+        const debouncedInput = makeDebounced(handleEvent, 60);
+        const debouncedKeydown = makeDebounced(handleEvent, 60);
+
+        essentialEvents.forEach((evt) => {
+            try {
+                const handler = (evt === 'input') ? debouncedInput
+                              : (evt === 'keydown') ? debouncedKeydown
+                              : handleEvent;
+                // Use bubble phase to reduce overhead vs capture
+                document.addEventListener(evt, handler, false);
+            } catch (_) {}
+        });
     }
 
     async applyFeatureVisibilityFromServer() {
@@ -77,15 +291,96 @@ class WebUI {
                 ],
             };
 
-            const hide = (selector) => { const el = document.querySelector(selector); if (el) el.style.display = 'none'; };
+            const applyHiddenState = (selector, hidden) => {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach((el) => {
+                    if (!el) return;
+                    if (hidden) {
+                        try { el.dataset.capabilityHidden = 'true'; } catch (_) { el.setAttribute('data-capability-hidden', 'true'); }
+                        el.style.display = 'none';
+                    } else {
+                        if (el.dataset) {
+                            delete el.dataset.capabilityHidden;
+                        }
+                        el.removeAttribute('data-capability-hidden');
+                        el.style.display = '';
+                    }
+                });
+            };
             Object.entries(capabilityToSelectors).forEach(([cap, selectors]) => {
                 const enabled = !!caps[cap];
-                if (!enabled) selectors.forEach(hide);
+                selectors.forEach((selector) => applyHiddenState(selector, !enabled));
             });
         } catch (e) {
             // Non-fatal
             console.debug('Capability visibility fetch failed:', e);
         }
+    }
+
+    initSimpleAdvancedToggle() {
+        try {
+            const toggle = document.getElementById('toggle-advanced');
+            const label = document.getElementById('advanced-toggle-label');
+            if (!toggle || !label) return;
+
+            // Determine default visibility: single-user -> hide advanced by default
+            let saved = Utils.getFromStorage('show-advanced-panels');
+            let defaultShow = true;
+            try {
+                if (window.apiClient && (window.apiClient.authMode === 'single-user')) {
+                    defaultShow = false;
+                }
+            } catch (_) {}
+            const show = (typeof saved === 'boolean') ? saved : defaultShow;
+            toggle.checked = !!show;
+
+            const apply = () => {
+                const wantShow = !!toggle.checked;
+                this.setAdvancedPanelsVisible(wantShow);
+                Utils.saveToStorage('show-advanced-panels', wantShow);
+                if (!wantShow) {
+                    const allowed = new Set(['simple', 'general']);
+                    const current = this.activeTopTabButton ? this.activeTopTabButton.dataset.toptab : '';
+                    if (!allowed.has(current || '')) {
+                        const btn = document.getElementById('top-tab-simple');
+                        if (btn) this.activateTopTab(btn);
+                    }
+                }
+            };
+
+            toggle.addEventListener('change', apply);
+            apply();
+        } catch (e) { /* ignore */ }
+    }
+
+    setAdvancedPanelsVisible(visible) {
+        try {
+            const allowed = new Set(['simple', 'general']);
+            document.querySelectorAll('.top-tab-button').forEach((btn) => {
+                const t = btn.dataset.toptab;
+                if (!t) return;
+                if (allowed.has(t)) { btn.style.display = ''; return; }
+                if (btn.getAttribute('data-capability-hidden') === 'true') {
+                    btn.style.display = 'none';
+                    return;
+                }
+                btn.style.display = visible ? '' : 'none';
+            });
+            // Hide corresponding subtab rows when advanced hidden
+            const rows = document.querySelectorAll('.sub-tab-row');
+            const advancedTargets = new Set(['chat', 'media', 'rag', 'workflows', 'prompts', 'notes', 'watchlists', 'persona', 'personalization', 'evaluations', 'keywords', 'embeddings', 'research', 'chatbooks', 'audio', 'admin', 'mcp']);
+            rows.forEach((row) => {
+                const id = row.id || '';
+                if (!id) return;
+                const t = id.endsWith('-subtabs') ? id.slice(0, -8) : id;
+                if (!advancedTargets.has(t)) return;
+                if (row.getAttribute('data-capability-hidden') === 'true') {
+                    row.style.display = 'none';
+                    return;
+                }
+                row.style.display = visible ? '' : 'none';
+            });
+        } catch (e) { /* ignore */ }
     }
 
     loadTheme() {
@@ -157,8 +452,29 @@ class WebUI {
                     await this.activateSubTab(firstSubTab);
                 }
             } else {
-                // Handle tabs without sub-tabs (like Global Settings)
-                this.showContent(topTabName);
+                // Handle tabs without sub-tabs
+                // Map known top-level tabs to their content IDs
+                let contentId = topTabName;
+                if (topTabName === 'simple') {
+                    // The Simple page uses 'tabSimpleLanding' as its content container
+                    contentId = 'tabSimpleLanding';
+                    // Ensure Simple group scripts are loaded so its initializer is available
+                    try {
+                        if (window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
+                            await window.ModuleLoader.ensureGroupScriptsLoaded('simple');
+                        }
+                    } catch (e) {
+                        console.debug('ModuleLoader failed to load simple group scripts', e);
+                    }
+                }
+
+                this.showContent(contentId);
+
+                // When showing Simple landing directly, run its initializer and mount shared chat
+                if (contentId === 'tabSimpleLanding') {
+                    try { if (typeof window.initializeSimpleLanding === 'function') window.initializeSimpleLanding(); } catch (_) {}
+                    try { if (window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') window.SharedChatPortal.mount('simple'); } catch (_) {}
+                }
             }
 
             // Save active tab to storage
@@ -192,6 +508,21 @@ class WebUI {
         // Get content ID and load group
         const contentId = tabButton.dataset.contentId;
         const loadGroup = tabButton.dataset.loadGroup;
+        // Infer group for loader when tabs have no explicit loadGroup
+        let loaderGroup = loadGroup;
+        if (!loaderGroup && contentId) {
+            if (contentId.startsWith('tabSimple')) loaderGroup = 'simple';
+            else if (contentId.startsWith('tabChat')) loaderGroup = 'chat';
+            else if (contentId.startsWith('tabAudio')) loaderGroup = 'audio';
+            else if (contentId.startsWith('tabPrompts')) loaderGroup = 'prompts';
+            else if (contentId.startsWith('tabRAG')) loaderGroup = 'rag';
+            else if (contentId.startsWith('tabEvals') || contentId.startsWith('tabEvaluations')) loaderGroup = 'evaluations';
+            else if (contentId.startsWith('tabKeywords')) loaderGroup = 'keywords';
+            else if (contentId.startsWith('tabJobs')) loaderGroup = 'jobs';
+            else if (contentId.startsWith('tabMedia')) loaderGroup = 'media';
+            else if (contentId.startsWith('tabMaintenance')) loaderGroup = 'maintenance';
+            else if (contentId.startsWith('tabAuth')) loaderGroup = 'auth';
+        }
         try { if (contentId) this.activeSubTabButton.setAttribute('aria-controls', contentId); } catch (e) { /* ignore */ }
 
         // Load content if not already loaded
@@ -217,8 +548,25 @@ class WebUI {
             }
         }
 
+        // Ensure per-group scripts are loaded on demand (keeps initial bundle small)
+        try {
+            if (loaderGroup && window.ModuleLoader && typeof window.ModuleLoader.ensureGroupScriptsLoaded === 'function') {
+                await window.ModuleLoader.ensureGroupScriptsLoaded(loaderGroup);
+            }
+        } catch (e) {
+            console.debug('ModuleLoader ensureGroupScriptsLoaded failed for', loaderGroup, e);
+            try {
+                if (typeof Toast !== 'undefined' && Toast) {
+                    Toast.warning(`Some features may be unavailable for ${loaderGroup} (script load failed)`);
+                }
+            } catch (_) {}
+        }
+
         // Show the content
         this.showContent(contentId);
+
+        // Re-initialize form handlers for any newly injected content (e.g., file inputs)
+        try { this.initFormHandlers(); } catch (_) {}
 
         // Save active sub-tab to storage
         Utils.saveToStorage('active-sub-tab', contentId);
@@ -230,6 +578,15 @@ class WebUI {
 
         if (contentId === 'tabChatCompletions' && typeof initializeChatCompletionsTab === 'function') {
             initializeChatCompletionsTab();
+        }
+        if (contentId === 'tabSimpleLanding' && typeof window.initializeSimpleLanding === 'function') {
+            window.initializeSimpleLanding();
+        }
+        if (contentId === 'tabChatCompletions' && window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') {
+            window.SharedChatPortal.mount('advanced');
+        }
+        if (contentId === 'tabSimpleLanding' && window.SharedChatPortal && typeof window.SharedChatPortal.mount === 'function') {
+            window.SharedChatPortal.mount('simple');
         }
         if (contentId === 'tabWebScrapingIngest' && typeof initializeWebScrapingIngestTab === 'function') {
             initializeWebScrapingIngestTab();
@@ -248,13 +605,52 @@ class WebUI {
             initializeDictionariesTab();
         }
 
+        if (contentId && (contentId.startsWith('tabAudio') || contentId === 'tabTranscriptSeg') && typeof bindAudioTabHandlers === 'function') {
+            bindAudioTabHandlers();
+        }
+        if (contentId === 'tabAudioStreaming' && window.initializeAudioStreamingTab) {
+            try { window.initializeAudioStreamingTab(); } catch (_) {}
+        }
+
+        // Metrics tab(s)
+        if (contentId && contentId.startsWith('tabMetrics') && typeof window.initializeMetricsTab === 'function') {
+            try { window.initializeMetricsTab(contentId); } catch (_) {}
+        }
+
+        // Flashcards tab
+        if (contentId && contentId.startsWith('tabFlashcards') && typeof initializeFlashcardsTab === 'function') {
+            initializeFlashcardsTab(contentId);
+        }
+        if (contentId && contentId.startsWith('tabMedia') && typeof bindMediaCommonHandlers === 'function') {
+            bindMediaCommonHandlers();
+        }
+
+        // Vector Stores tab
+        if (contentId === 'tabVectorStores' && window.initializeVectorStoresTab) {
+            try { window.initializeVectorStoresTab(); } catch (_) {}
+        }
+
+        // Personalization tab
+        if (contentId === 'tabPersonalization' && typeof window.initializePersonalizationTab === 'function') {
+            window.initializePersonalizationTab();
+        }
+
+        // Workflows tab(s)
+        if (contentId && contentId.startsWith('tabWorkflows') && typeof window.initializeWorkflowsTab === 'function') {
+            try { window.initializeWorkflowsTab(contentId); } catch (_) {}
+        }
+
         // Initialize model dropdowns for tabs that have LLM selection
         // This includes chat, media processing, and evaluation tabs
         const tabsWithModelSelection = [
             'tabChatCompletions', 'tabCharacterChat', 'tabConversations',
             'tabMediaIngestion', 'tabMediaProcessingNoDB',
             'tabEvalsOpenAI', 'tabEvalsGEval',
-            'tabWebScrapingIngest', 'tabMultiItemAnalysis'
+            'tabWebScrapingIngest', 'tabMultiItemAnalysis',
+            // Flashcards Import panel includes a model selector for generation
+            'tabFlashcardsImport',
+            // Simple landing has model selects
+            'tabSimpleLanding'
         ];
 
         if (tabsWithModelSelection.includes(contentId)) {
@@ -277,46 +673,33 @@ class WebUI {
     }
 
     async loadContentGroup(groupName, targetContentId) {
-        const response = await fetch(`tabs/${groupName}_content.html`);
+        // Resolve relative to current page to avoid base-path issues
+        const url = new URL(`tabs/${groupName}_content.html`, window.location.href).toString();
+        const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status} for tabs/${groupName}_content.html`);
         }
 
         const html = await response.text();
         const mainContentArea = document.getElementById('main-content-area');
-        // Ensure inline scripts inside tab HTML are executed
+        // Sanitize string first so the browser never sees inline handler attributes
+        // during parsing (avoids CSP script-src-attr violations).
+        const sanitizedHtml = this.sanitizeInlineHandlersAndScripts(html);
         const temp = document.createElement('div');
-        temp.innerHTML = html;
-        const scripts = Array.from(temp.querySelectorAll('script'));
-        scripts.forEach(s => s.parentNode && s.parentNode.removeChild(s));
-        mainContentArea.insertAdjacentHTML('beforeend', temp.innerHTML);
-        // For migrated groups, skip executing inline scripts (no eval) and only load external src scripts.
-        const MIGRATED_GROUPS = new Set(['keywords', 'jobs', 'rag', 'evaluations', 'admin']);
-        for (const s of scripts) {
-            try {
-                if (s.src) {
-                    const newScript = document.createElement('script');
-                    if (s.type) newScript.type = s.type;
-                    newScript.src = s.src;
-                    document.body.appendChild(newScript);
-                    document.body.removeChild(newScript);
-                } else {
-                    // Inline script: only execute for non-migrated groups
-                    if (!MIGRATED_GROUPS.has(groupName)) {
-                        const code = s.textContent || '';
-                        (0, eval)(code);
-                    } else {
-                        console.debug(`Skipped inline script eval for migrated group: ${groupName}`);
-                    }
-                }
-            } catch (e) {
-                console.error('Failed to execute inline script for group', groupName, e);
-            }
-        }
+        temp.innerHTML = sanitizedHtml;
+        // Convert preserved handler markers to listeners BEFORE insertion
         try {
-            window.__groupScriptEval = window.__groupScriptEval || {};
-            window.__groupScriptEval[groupName] = (window.__groupScriptEval[groupName] || 0) + scripts.length;
-        } catch (e) { /* ignore */ }
+            if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
+                window.WebUISanitizer.migrateInlineHandlers(temp);
+            } else {
+                this.migrateInlineHandlers(temp);
+            }
+        } catch (_) {}
+        // Move the sanitized nodes into the live DOM to preserve bound listeners
+        while (temp.firstChild) {
+            mainContentArea.appendChild(temp.firstChild);
+        }
+        // Group-specific scripts are loaded via ModuleLoader when the tab is activated.
 
         // Re-initialize form handlers for newly loaded content
         this.initFormHandlers();
@@ -337,6 +720,33 @@ class WebUI {
                 }
             }, 100);
         }
+    }
+
+    // Remove all <script> tags and migrate inline on* handlers using shared sanitizer
+    // Fail-safe: never return unsanitized HTML. If sanitizer is unavailable or
+    // throws, drop content and optionally log.
+    sanitizeInlineHandlersAndScripts(html) {
+        try {
+            if (WebUISanitizerRef && typeof WebUISanitizerRef.sanitizeInlineHandlersAndScripts === 'function') {
+                return WebUISanitizerRef.sanitizeInlineHandlersAndScripts(html);
+            }
+            // Sanitizer missing; fail safe by returning empty string
+            console.error('WebUISanitizerRef.sanitizeInlineHandlersAndScripts unavailable; dropping potentially unsafe HTML.');
+            return '';
+        } catch (e) {
+            // Sanitization failed; fail safe by returning empty string
+            console.error('sanitizeInlineHandlersAndScripts failed; dropping potentially unsafe HTML.', e);
+            return '';
+        }
+    }
+
+    // Convert inline event attributes (onclick, onchange, etc.) to proper listeners
+    migrateInlineHandlers(root) {
+        // Delegate to the shared sanitizer as the single source of truth.
+        try { if (WebUISanitizerRef && typeof WebUISanitizerRef.migrateInlineHandlers === 'function') {
+            return WebUISanitizerRef.migrateInlineHandlers(root);
+        } } catch (_) {}
+        // No-op fallback if sanitizer unavailable (tests load sanitizer.js before this file).
     }
 
     // --------------------------
@@ -396,6 +806,8 @@ class WebUI {
         if (content) {
             content.classList.add('active');
             console.log(`Showing tab: ${contentId}`);
+            // Mark that a concrete content has been shown to avoid fallback forcing
+            this._defaultTabSettled = true;
         } else {
             console.warn(`Tab content not found: ${contentId}`);
         }
@@ -414,6 +826,16 @@ class WebUI {
         // Try to restore previously active tab
         const savedTopTab = Utils.getFromStorage('active-top-tab');
         const savedSubTab = Utils.getFromStorage('active-sub-tab');
+
+        // Prefer Simple when advanced panels are hidden
+        try {
+            const showAdv = Utils.getFromStorage('show-advanced-panels');
+            const advVisible = (typeof showAdv === 'boolean') ? showAdv : (window.apiClient?.authMode !== 'single-user');
+            if (!advVisible) {
+                const btn = document.getElementById('top-tab-simple');
+                if (btn) { this.activateTopTab(btn); return; }
+            }
+        } catch (_) {}
 
         if (savedTopTab) {
             const tabButton = document.querySelector(`.top-tab-button[data-toptab="${savedTopTab}"]`);
@@ -437,6 +859,8 @@ class WebUI {
 
         // Ensure at least one content tab is visible
         setTimeout(() => {
+            // If a tab was selected/activated since load, do not force anything
+            if (this._defaultTabSettled) return;
             const activeTabs = document.querySelectorAll('.tab-content.active');
             if (activeTabs.length === 0) {
                 // Force show Global Settings as fallback
@@ -444,6 +868,7 @@ class WebUI {
                 if (globalSettings) {
                     globalSettings.classList.add('active');
                     console.log('Forced Global Settings tab to be visible');
+                    this._defaultTabSettled = true;
                 }
             }
         }, 100);
@@ -747,6 +1172,8 @@ class WebUI {
                 this.loadedContentGroups.add(g);
             }
         }
+        // Ensure any newly inserted file inputs get wrapped/styled
+        try { this.initFormHandlers(); } catch (_) {}
     }
 
     filterEndpoints(query) {
@@ -787,7 +1214,7 @@ class WebUI {
 
         if (history.length === 0) {
             if (typeof Toast !== 'undefined' && Toast) {
-                Toast.info('No request history available');
+                if (typeof Toast !== 'undefined' && Toast) Toast.info('No request history available');
             } else {
                 alert('No request history available');
             }
@@ -797,7 +1224,7 @@ class WebUI {
         let historyHtml = `
             <div class="history-list">
                 <div class="history-controls mb-3">
-                    <button class="btn btn-sm btn-danger" onclick="webUI.clearHistory()">Clear History</button>
+                    <button class="btn btn-sm btn-danger" id="clear-history-btn">Clear History</button>
                 </div>
                 <div class="history-items">
         `;
@@ -838,12 +1265,24 @@ class WebUI {
             size: 'large'
         });
         modal.show();
+
+        // Bind Clear History button without inline handlers
+        try {
+            const btn = modal.modal && modal.modal.querySelector('#clear-history-btn');
+            if (btn && !btn._bound) {
+                btn._bound = true;
+                btn.addEventListener('click', (e) => {
+                    try { e.preventDefault(); } catch (_) {}
+                    try { this.clearHistory(); } catch (_) {}
+                });
+            }
+        } catch (_) { /* ignore */ }
     }
 
     clearHistory() {
         apiClient.clearHistory();
         if (typeof Toast !== 'undefined' && Toast) {
-            Toast.success('Request history cleared');
+            if (typeof Toast !== 'undefined' && Toast) Toast.success('Request history cleared');
         }
         // Close any open modals
         document.querySelectorAll('.modal').forEach(modal => {
@@ -933,6 +1372,9 @@ class WebUI {
 let webUI;
 document.addEventListener('DOMContentLoaded', () => {
     webUI = new WebUI();
+    // Expose instance on window so other modules can reliably detect readiness
+    try { window.webUI = webUI; } catch (_) {}
+    try { document.dispatchEvent(new Event('webui-ready')); } catch (_) {}
 });
 
 // Export for use in other modules

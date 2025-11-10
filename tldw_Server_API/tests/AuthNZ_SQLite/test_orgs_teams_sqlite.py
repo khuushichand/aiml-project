@@ -5,7 +5,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_orgs_teams_crud_sqlite(tmp_path):
+async def test_orgs_teams_crud_sqlite(tmp_path, authnz_schema_ready):
     # Configure SQLite for AuthNZ
     os.environ['AUTH_MODE'] = 'single_user'
     db_path = tmp_path / 'users.db'
@@ -14,13 +14,11 @@ async def test_orgs_teams_crud_sqlite(tmp_path):
     # Reset singletons
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     reset_settings()
     await reset_db_pool()
 
-    # Initialize DB and run migrations
+    # Schema ensured by authnz_schema_ready; acquire pool for ops
     pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
 
     # Create a dummy user for membership FKs
     async with pool.transaction() as conn:

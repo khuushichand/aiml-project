@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
+from fastapi import Request
 import datetime
 from httpx import AsyncClient
 
@@ -41,11 +42,15 @@ if not _ORIG_OPENAI_API_BASE and _SET_MOCK_OPENAI_KEY:
     os.environ["OPENAI_API_BASE"] = "http://localhost:8080/v1"
     _SET_MOCK_OPENAI_BASE = True
 
+
 # IMPORTANT: Ensure API_BEARER is not set - it causes wrong authentication path in single-user mode
 if "API_BEARER" in os.environ:
     del os.environ["API_BEARER"]
 
-from tldw_Server_API.app.main import app
+def _get_app():
+    # Lazy import to avoid heavy app imports during collection for tests that don't need Chat fixtures
+    from tldw_Server_API.app.main import app as _app
+    return _app
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -149,11 +154,13 @@ def preserve_app_state():
     global _original_dependency_overrides
 
     # Store the original state at the beginning of the test session
+    app = _get_app()
     _original_dependency_overrides = app.dependency_overrides.copy()
 
     yield
 
     # Restore the original state at the end of the test session
+    app = _get_app()
     app.dependency_overrides = _original_dependency_overrides.copy()
 
     # Restore OpenAI environment variables if we set test defaults
@@ -175,6 +182,7 @@ def reset_app_overrides():
     global _original_dependency_overrides
 
     # Reset to original state before each test
+    app = _get_app()
     if _original_dependency_overrides is not None:
         app.dependency_overrides = _original_dependency_overrides.copy()
     else:
@@ -186,6 +194,7 @@ def reset_app_overrides():
     yield
 
     # Clean up after each test
+    app = _get_app()
     if _original_dependency_overrides is not None:
         app.dependency_overrides = _original_dependency_overrides.copy()
     else:
@@ -395,13 +404,13 @@ def mock_media_db(test_user):
 def setup_dependencies(test_user, mock_user_db, mock_chacha_db, mock_media_db):
     """Override all dependencies for testing."""
     settings = get_settings()
+    app = _get_app()
 
-    # Override authentication
-    if settings.AUTH_MODE == "multi_user":
-        # For multi-user mode, override to return test user
-        async def mock_get_request_user(api_key=None, token=None):
-            return test_user
-        app.dependency_overrides[get_request_user] = mock_get_request_user
+    # Override authentication for tests in both modes
+    async def mock_get_request_user(request: Request):
+        # Match FastAPI dependency signature to avoid 422 from varargs
+        return test_user
+    app.dependency_overrides[get_request_user] = mock_get_request_user
 
     # Override databases
     app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
@@ -465,6 +474,7 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
     # Base methods we will wrap
     original_post = client.post
     original_get = client.get
+    original_stream = getattr(client, "stream", None)
 
     def _apply_auth_and_overrides(headers: dict) -> dict:
         # Include CSRF token if available on the client
@@ -481,7 +491,8 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
         # Re-apply the DB override defensively to ensure the API uses the same DB
         # instance the test created data in, even if other tests reset overrides.
         try:
-            app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
+            _app = _get_app()
+            _app.dependency_overrides[get_chacha_db_for_user] = lambda: mock_chacha_db
         except Exception:
             pass
         return headers
@@ -496,8 +507,17 @@ def authenticated_client(client, auth_token, setup_dependencies, mock_chacha_db)
         headers = _apply_auth_and_overrides(headers)
         return original_get(url, headers=headers, **kwargs)
 
+    def authenticated_stream(method, url, **kwargs):
+        headers = kwargs.pop("headers", {}) or {}
+        headers = _apply_auth_and_overrides(headers)
+        if callable(original_stream):
+            return original_stream(method, url, headers=headers, **kwargs)
+        raise RuntimeError("Test client does not support streaming in this environment")
+
     client.post = authenticated_post
     client.get = authenticated_get
+    if callable(original_stream):
+        client.stream = authenticated_stream
     return client
 
 
@@ -529,6 +549,8 @@ def auth_headers(auth_token):
 @pytest.fixture
 async def async_client():
     """Yield an AsyncClient bound to the FastAPI app for ASGI tests."""
+    # Lazily resolve the FastAPI app for this plugin
+    app = _get_app()
     transport = ASGITransport(app=app) if ASGITransport else None
     kwargs = {"base_url": "http://test"}
     if transport is not None:

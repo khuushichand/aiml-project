@@ -343,3 +343,6 @@ def test_detect_speech_fallback_when_hub_disabled(monkeypatch):
     assert len(segments) == 1
     assert segments[0]["start"] == 0.0
     assert pytest.approx(segments[0]["end"], rel=1e-6) == 1.0
+
+
+

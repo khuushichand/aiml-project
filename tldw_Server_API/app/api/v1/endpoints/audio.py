@@ -71,6 +71,7 @@ except ImportError as e:
     # Optional helpers may be unavailable in some environments; log at debug level
     logger.debug(f"audio_quota job helpers not available: {e}")
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 # Optional DB/Redis drivers (for precise exception handling without hard dependencies)
 try:  # asyncpg is optional; used when PostgreSQL is configured
@@ -121,12 +122,25 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 
 # Initialize rate limiter
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
+    limiter,
+    get_test_aware_remote_address as _test_mode_key_func,
+)
+
+
 def _rate_limit_key(request: _FastAPIRequest) -> str:
     """Rate limit key that prefers authenticated user id over IP.
 
     - Multi-user: per-user limits (fairness across users)
     - Single-user or unauthenticated: fall back to client IP
     """
+    # In TEST_MODE, align with global limiter behavior by delegating to the
+    # test-aware key resolver (which returns None to bypass limits).
+    try:
+        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            return _test_mode_key_func(request)
+    except Exception:
+        pass
     try:
         uid = getattr(request.state, "user_id", None)
         if uid is not None:
@@ -136,7 +150,6 @@ def _rate_limit_key(request: _FastAPIRequest) -> str:
     return get_remote_address(request)
 
 # Use central limiter instance; override key_func per-route where needed
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 
 
 router = APIRouter(
@@ -238,6 +251,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSQuotaExceededError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
+from uuid import uuid4
 
 async def get_tts_service() -> TTSServiceV2:
     """Get the V2 TTS service instance."""
@@ -303,7 +317,14 @@ async def create_speech(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    logger.info(f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}")
+    # Correlate via request id (header or generated)
+    try:
+        request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id") or str(uuid4())
+    except Exception:
+        request_id = str(uuid4())
+    logger.info(
+        f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
+    )
     try:
         usage_log.log_event(
             "audio.tts",
@@ -419,6 +440,7 @@ async def create_speech(
                 "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
                 "X-Accel-Buffering": "no", # Useful for Nginx
                 "Cache-Control": "no-cache",
+                "X-Request-Id": request_id,
             },
         )
     # Non-streaming mode: accumulate chunks and return a single response
@@ -451,6 +473,7 @@ async def create_speech(
         headers={
             "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
             "Cache-Control": "no-cache",
+            "X-Request-Id": request_id,
         },
     )
 
@@ -1088,6 +1111,16 @@ async def get_tts_health(
                     'model_path': getattr(adapter, 'model_path', None),
                     'voices_json': getattr(adapter, 'voices_json', None)
                 }
+                # Espeak library hint for phonemizer-backed flows
+                try:
+                    es_env = os.getenv('PHONEMIZER_ESPEAK_LIBRARY')
+                    kokoro_info['espeak_lib_env'] = es_env
+                    if es_env:
+                        kokoro_info['espeak_lib_exists'] = bool(os.path.exists(es_env))
+                    else:
+                        kokoro_info['espeak_lib_exists'] = False
+                except Exception:
+                    pass
                 health['providers']['kokoro'] = kokoro_info
         except Exception as e:
             logger.debug(f"Kokoro health enrichment failed: {e}")
@@ -1206,7 +1239,7 @@ async def websocket_transcribe(
     - Single-user: API key via header, query token, or an initial auth message; an IP allowlist may be enforced.
     Supported incoming message types: "auth" (for token-based auth), "config" (streaming configuration), "audio" (base64-encoded audio chunks), and "commit" (finalize current utterance).
     Outgoing message types include partial updates ("partial"), interim/final transcriptions ("transcription"), the final transcript ("full_transcript"), and structured error frames ("error").
-    Per-user limits are enforced (concurrent streams and daily minute quotas); when a quota is exceeded the server sends an "error" with "error_type": "quota_exceeded" and closes the connection with code 4003.
+    Per-user limits are enforced (concurrent streams and daily minute quotas); when a quota is exceeded the server sends an "error" with "error_type": "quota_exceeded" and closes the connection with code 4003 (or 1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`).
     A server-side default streaming configuration is used if the client does not provide one before audio arrives.
     Parameters:
         websocket (WebSocket): The active WebSocket connection.
@@ -1214,6 +1247,39 @@ async def websocket_transcribe(
     """
     # Accept the WebSocket connection first
     await websocket.accept()
+
+    # Create a lightweight WebSocketStream for uniform metrics on outer error paths
+    _outer_stream = None
+    try:
+        from tldw_Server_API.app.core.Streaming.streams import WebSocketStream as _WSStream
+        _outer_stream = _WSStream(
+            websocket,
+            heartbeat_interval_s=0,
+            idle_timeout_s=0,
+            compat_error_type=True,
+            labels={"component": "audio", "endpoint": "audio_unified_ws"},
+        )
+        await _outer_stream.start()
+    except Exception:
+        _outer_stream = None
+
+    # Correlate via request id (header or generated)
+    try:
+        _hdrs = websocket.headers or {}
+        request_id = _hdrs.get("x-request-id") or _hdrs.get("X-Request-Id") or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None) or str(uuid4())
+    except Exception:
+        request_id = str(uuid4())
+    try:
+        logger.info(f"Audio WS connected: request_id={request_id}")
+    except Exception:
+        pass
+
+    # Ops toggle for standardized close code on quota/rate limits (4003 → 1008)
+    import os as _os
+
+    def _policy_close_code() -> int:
+        flag = str(_os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
+        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
 
     # Authentication
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -1238,7 +1304,8 @@ async def websocket_transcribe(
                 client_ip = getattr(websocket.client, "host", None)
                 info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
                 if not info:
-                    await websocket.send_json({"type": "error", "message": "Invalid API key"})
+                    if _outer_stream:
+                        await _outer_stream.send_json({"type": "error", "message": "Invalid API key"})
                     await websocket.close(code=4401)
                     return
                 # Admin bypass
@@ -1254,7 +1321,8 @@ async def websocket_transcribe(
                     endpoint_id = "audio.stream.transcribe"
                     if isinstance(allowed_eps, list) and allowed_eps:
                         if endpoint_id not in [str(x) for x in allowed_eps]:
-                            await websocket.send_json({"type": "error", "message": "Endpoint not permitted for API key"})
+                            if _outer_stream:
+                                await _outer_stream.send_json({"type": "error", "message": "Endpoint not permitted for API key"})
                             await websocket.close(code=4403)
                             return
                     # Path allowlist via metadata
@@ -1271,7 +1339,8 @@ async def websocket_transcribe(
                             # WebSocket path is fixed under /api/v1/audio/stream/transcribe once mounted
                             ws_path = "/api/v1/audio/stream/transcribe"
                             if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
-                                await websocket.send_json({"type": "error", "message": "Path not permitted for API key"})
+                                if _outer_stream:
+                                    await _outer_stream.send_json({"type": "error", "message": "Path not permitted for API key"})
                                 await websocket.close(code=4403)
                                 return
                         # Quota enforcement (DB-backed)
@@ -1294,7 +1363,8 @@ async def websocket_transcribe(
                                 bucket=bucket,
                             )
                             if not ok:
-                                await websocket.send_json({"type": "error", "message": "API key quota exceeded"})
+                                if _outer_stream:
+                                    await _outer_stream.send_json({"type": "error", "message": "API key quota exceeded"})
                                 await websocket.close(code=4403)
                                 return
                 authenticated = True
@@ -1309,7 +1379,8 @@ async def websocket_transcribe(
                 bearer = None
             except Exception as _api_key_e:
                 logger.warning(f"WS API key auth failed: {_api_key_e}")
-                await websocket.send_json({"type": "error", "message": "API key authentication failed"})
+                if _outer_stream:
+                    await _outer_stream.send_json({"type": "error", "message": "API key authentication failed"})
                 await websocket.close(code=4401)
                 return
         # Prefer Authorization: Bearer <JWT>
@@ -1477,13 +1548,15 @@ async def websocket_transcribe(
 
         if (header_api_key and header_api_key == expected_key) or (header_bearer and header_bearer == expected_key) or (token and token == expected_key):
             if not _ip_allowed_single_user(client_ip):
-                await websocket.send_json({"type": "error", "message": "IP not allowed"})
+                if _outer_stream:
+                    await _outer_stream.send_json({"type": "error", "message": "IP not allowed"})
                 await websocket.close(code=1008)
                 return
             authenticated = True
         elif token and token != expected_key:
             logger.warning("WebSocket: invalid query token")
-            await websocket.send_json({"type": "error", "message": "Invalid authentication token"})
+            if _outer_stream:
+                await _outer_stream.send_json({"type": "error", "message": "Invalid authentication token"})
             await websocket.close()
             return
         else:
@@ -1491,26 +1564,30 @@ async def websocket_transcribe(
                 first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
                 auth_data = json.loads(first_message)
                 if auth_data.get("type") != "auth" or auth_data.get("token") != expected_key:
-                    await websocket.send_json({
+                    if _outer_stream:
+                        await _outer_stream.send_json({
                         "type": "error",
                         "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
                     })
                     await websocket.close()
                     return
                 if not _ip_allowed_single_user(client_ip):
-                    await websocket.send_json({"type": "error", "message": "IP not allowed"})
+                    if _outer_stream:
+                        await _outer_stream.send_json({"type": "error", "message": "IP not allowed"})
                     await websocket.close(code=1008)
                     return
                 authenticated = True
             except asyncio.TimeoutError:
-                await websocket.send_json({
+                if _outer_stream:
+                    await _outer_stream.send_json({
                     "type": "error",
                     "message": "Authentication timeout. Send auth message within 5 seconds."
                 })
                 await websocket.close()
                 return
             except json.JSONDecodeError:
-                await websocket.send_json({
+                if _outer_stream:
+                    await _outer_stream.send_json({
                     "type": "error",
                     "message": "Invalid JSON in authentication message"
                 })
@@ -1518,7 +1595,8 @@ async def websocket_transcribe(
                 return
 
     if not authenticated:
-        await websocket.send_json({"type": "error", "message": "Authentication required"})
+        if _outer_stream:
+            await _outer_stream.send_json({"type": "error", "message": "Authentication required"})
         await websocket.close(code=4401)
         return
 
@@ -1560,9 +1638,66 @@ async def websocket_transcribe(
 
         ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
         if not ok_stream:
-            await websocket.send_json({"type": "error", "message": msg_stream})
+            if _outer_stream:
+                await _outer_stream.send_json({"type": "error", "message": msg_stream})
             await websocket.close()
             return
+
+        # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
+        _rg_handle_id = None
+        try:
+            gov = getattr(websocket.app.state, "rg_governor", None)
+            loader = getattr(websocket.app.state, "rg_policy_loader", None)
+            if gov is not None and loader is not None:
+                snap = loader.get_snapshot()
+                route_map = dict(getattr(snap, "route_map", {}) or {})
+                by_path = dict(route_map.get("by_path") or {})
+                ws_path = "/api/v1/audio/stream/transcribe"
+                policy_id = None
+                # Simple wildcard resolution similar to middleware
+                for pat, pol in by_path.items():
+                    s = str(pat)
+                    if s.endswith("*"):
+                        if ws_path.startswith(s[:-1]):
+                            policy_id = str(pol)
+                            break
+                    elif ws_path == s:
+                        policy_id = str(pol)
+                        break
+                if not policy_id:
+                    # Fallback to audio.default when mapping absent
+                    policy_id = "audio.default"
+                # Prefer user scope; fallback to IP
+                if user_id_for_usage is not None:
+                    entity = f"user:{int(user_id_for_usage)}"
+                else:
+                    ip = getattr(websocket.client, "host", None) or "unknown"
+                    entity = f"ip:{ip}"
+                dec, hid = await gov.reserve(
+                    RGRequest(entity=entity, categories={"streams": {"units": 1}}, tags={"policy_id": policy_id, "endpoint": ws_path}),
+                    op_id=f"audio-ws:{entity}:{ws_path}"
+                )
+                if not dec.allowed:
+                    try:
+                        if _outer_stream:
+                            await _outer_stream.send_json({
+                                "type": "error",
+                                "error_type": "rate_limited",
+                                "quota": "streams",
+                                "retry_after": int(dec.retry_after or 0),
+                                "message": "Too many concurrent streams"
+                            })
+                    except Exception:
+                        pass
+                    try:
+                        await websocket.close(code=_policy_close_code(), reason="rate_limited")
+                    except Exception:
+                        pass
+                    return
+                _rg_handle_id = hid
+        except Exception as _rg_err:
+            # Do not break streaming on RG errors; continue without RG enforcement
+            logger.debug(f"RG streams reserve skipped/failed: {_rg_err}")
 
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
@@ -1665,6 +1800,27 @@ async def websocket_transcribe(
                         await heartbeat_stream(user_id_for_usage)
                     except EXPECTED_REDIS_EXC as _hb_e:
                         logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
+                    # Also renew RG lease if active
+                    try:
+                        gov = getattr(websocket.app.state, "rg_governor", None)
+                        loader = getattr(websocket.app.state, "rg_policy_loader", None)
+                        hid = _rg_handle_id
+                        if gov is not None and loader is not None and hid:
+                            # Determine TTL from policy if available
+                            ttl = 60
+                            try:
+                                snap = loader.get_snapshot()
+                                pol = (snap.policies or {}).get("audio.default")
+                                if isinstance(pol, dict):
+                                    st = pol.get("streams") or {}
+                                    v = int(st.get("ttl_sec") or 60)
+                                    if v > 0:
+                                        ttl = v
+                            except Exception:
+                                ttl = 60
+                            await gov.renew(hid, ttl_s=int(ttl))
+                    except Exception as _rg_renew_err:
+                        logger.debug(f"RG renew on WS heartbeat failed: {_rg_renew_err}")
 
                 await handle_unified_websocket(
                     websocket,
@@ -1675,19 +1831,27 @@ async def websocket_transcribe(
             except _QuotaExceeded as qe:
                 # Send structured error and close with application-defined code
                 try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "error_type": "quota_exceeded",
-                        "quota": qe.quota,
-                        "message": "Streaming transcription quota exceeded (daily minutes)"
-                    })
+                    if _outer_stream:
+                        await _outer_stream.send_json({
+                            "type": "error",
+                            "error_type": "quota_exceeded",
+                            "quota": qe.quota,
+                            "message": "Streaming transcription quota exceeded (daily minutes)"
+                        })
                 except Exception as e:
                     logger.debug(f"WebSocket send_json quota error failed: error={e}")
                 try:
-                    await websocket.close(code=4003, reason="quota_exceeded")
+                    await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
                 except Exception as e:
                     logger.debug(f"WebSocket close (quota case) failed: error={e}")
         finally:
+            # Release any RG concurrency lease if held
+            try:
+                gov = getattr(websocket.app.state, "rg_governor", None)
+                if gov is not None and _rg_handle_id:
+                    await gov.release(_rg_handle_id)
+            except Exception as _rg_rel_err:
+                logger.debug(f"RG release on WS close failed: {_rg_rel_err}")
             await finish_stream(user_id_for_usage)
 
     except WebSocketDisconnect:
@@ -1702,15 +1866,16 @@ async def websocket_transcribe(
                 quota_name = "daily_minutes" if "daily_minutes" in txt else "concurrent_streams"
             if quota_name:
                 try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "error_type": "quota_exceeded",
-                        "quota": quota_name,
-                        "message": "Streaming transcription quota exceeded"
-                    })
+                    if _outer_stream:
+                        await _outer_stream.send_json({
+                            "type": "error",
+                            "error_type": "quota_exceeded",
+                            "quota": quota_name,
+                            "message": "Streaming transcription quota exceeded"
+                        })
                 finally:
                     try:
-                        await websocket.close(code=4003, reason="quota_exceeded")
+                        await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
                     except Exception as e:
                         logger.warning(f"WebSocket close after quota exceeded failed: error={e}")
                         try:
@@ -1799,12 +1964,13 @@ async def streaming_status():
         })
 
     except Exception as e:
-        logger.error(f"Error checking streaming status: {e}")
+        import traceback
+        logger.error(f"Error checking streaming status: {e}\n{traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={
                 "status": "error",
-                "message": str(e)
+                "message": "An internal error occurred. Please try again later."
             }
         )
 

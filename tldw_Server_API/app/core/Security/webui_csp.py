@@ -91,10 +91,28 @@ class WebUICSPMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         try:
-            # Allow inline scripts only for /setup pages; drop for /webui.
-            allow_inline_scripts = path.startswith("/setup")
-            # Eval allowed unless TLDW_WEBUI_NO_EVAL=1
-            allow_eval = os.getenv("TLDW_WEBUI_NO_EVAL", "0") not in ("1", "true", "TRUE")
+            # Web UI CSP policy
+            # - /setup: keep permissive (inline + eval) as gating protects access
+            # - /webui: by default in production, DISALLOW inline handlers; allow eval based on env
+            if path.startswith("/setup"):
+                allow_inline_scripts = True
+                allow_eval = True
+            else:
+                # /webui: always disallow inline script handlers in script-src
+                # Tests assert that /webui never includes 'unsafe-inline' in script-src
+                allow_inline_scripts = False
+
+                # Eval policy precedence (simplified and explicit):
+                # 1) Compute production flag once from env.
+                env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
+                prod_flag = env in {"prod", "production"}
+                # 2) Respect TLDW_WEBUI_NO_EVAL first if present; otherwise default by prod flag.
+                no_eval_env = os.getenv("TLDW_WEBUI_NO_EVAL")
+                if no_eval_env is not None:
+                    truthy = no_eval_env.strip().lower() in {"1", "true", "yes", "on", "y"}
+                    allow_eval = not truthy
+                else:
+                    allow_eval = False if prod_flag else True
             response.headers.setdefault(
                 "Content-Security-Policy",
                 _build_webui_csp(nonce, allow_inline_scripts=allow_inline_scripts, allow_eval=allow_eval),

@@ -77,23 +77,12 @@ class TestAuthEndpointsIntegration:
         from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 
         # Connect to test database
-        _dsn = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
-        _host=_port=_user=_password=None
-        if _dsn:
-            try:
-                from urllib.parse import urlparse
-                _p = urlparse(_dsn)
-                if _p.scheme.startswith("postgres"):
-                    _host = _p.hostname or None
-                    _port = int(_p.port) if _p.port else None
-                    _user = _p.username or None
-                    _password = _p.password or None
-            except Exception:
-                pass
-        test_host = _host or os.getenv("TEST_DB_HOST", "localhost")
-        test_port = int(_port or int(os.getenv("TEST_DB_PORT", "5432")))
-        test_user = _user or os.getenv("TEST_DB_USER", "tldw_user")
-        test_password = _password or os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
+        from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+        _pg = get_pg_env()
+        test_host = _pg.host
+        test_port = _pg.port
+        test_user = _pg.user
+        test_password = _pg.password
 
         conn = await asyncpg.connect(
             host=test_host,

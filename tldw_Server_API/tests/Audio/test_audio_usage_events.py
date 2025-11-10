@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.endpoints.audio import get_tts_service
+from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 
 
@@ -24,7 +25,7 @@ class _FakeTTSService:
 
 
 @pytest.fixture()
-def client_with_overrides():
+def client_with_overrides(bypass_api_limits):
     dummy = _DummyLogger()
 
     async def override_user():
@@ -41,7 +42,7 @@ def client_with_overrides():
     fastapi_app.dependency_overrides[get_usage_event_logger] = override_logger
     fastapi_app.dependency_overrides[get_tts_service] = override_tts
 
-    with TestClient(fastapi_app) as client:
+    with bypass_api_limits(fastapi_app, limiters=(audio_endpoints.limiter,)), TestClient(fastapi_app) as client:
         yield client, dummy
 
     fastapi_app.dependency_overrides.clear()

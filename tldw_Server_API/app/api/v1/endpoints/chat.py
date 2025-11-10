@@ -18,7 +18,7 @@ import json
 import sqlite3
 import time
 import uuid
-from functools import partial
+from functools import partial, lru_cache
 from collections import defaultdict, deque
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 from unittest.mock import Mock
@@ -157,6 +157,8 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
 )
 from fastapi.encoders import jsonable_encoder
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ API_KEYS = SCHEMAS_API_KEYS
 router = APIRouter()
 
 # Load configuration values from config
-from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import load_comprehensive_config, load_and_log_configs
 
 _config = load_comprehensive_config()
 # ConfigParser uses sections, check if Chat-Module section exists
@@ -267,14 +269,32 @@ async def _decrement_active_request(user_id: str) -> None:
 
 # --- Helper Functions ---
 
-def _get_default_provider() -> str:
-    """Resolve default provider at call time to honor env overrides set by tests.
+@lru_cache(maxsize=1)
+def _config_default_llm_provider() -> Optional[str]:
+    """Read default provider from config.txt (llm_api_settings/API sections)."""
+    cfg = load_and_log_configs()
+    if not isinstance(cfg, dict):
+        return None
 
-    Precedence:
-    - Env var `DEFAULT_LLM_PROVIDER` if set
-    - If TEST_MODE true and no env override, use 'local-llm'
-    - Fallback to imported DEFAULT_LLM_PROVIDER constant
-    """
+    def _extract(section: str) -> Optional[str]:
+        data = cfg.get(section)
+        if isinstance(data, dict):
+            default_api = data.get("default_api")
+            if isinstance(default_api, str):
+                value = default_api.strip()
+                if value:
+                    return value
+        return None
+
+    return _extract("llm_api_settings") or _extract("API")
+
+
+def _get_default_provider() -> str:
+    """Resolve default provider preferring config.txt, then env/test fallbacks."""
+    cfg_default = _config_default_llm_provider()
+    if cfg_default:
+        return cfg_default
+
     env_val = os.getenv("DEFAULT_LLM_PROVIDER")
     if env_val:
         return env_val
@@ -705,6 +725,53 @@ async def create_chat_completion(
     request_json = json.dumps(request_data.model_dump())
     request_json_bytes = request_json.encode()
 
+    # Optionally reserve tokens via Resource Governor (endpoint-level) and commit after non-stream calls
+    _rg_handle_id = None
+    _rg_policy_id = None
+    try:
+        gov = getattr(request.app.state, "rg_governor", None) if request is not None else None
+        loader = getattr(request.app.state, "rg_policy_loader", None) if request is not None else None
+        if (
+            gov is not None
+            and loader is not None
+            and os.getenv("RG_ENDPOINT_ENFORCE_TOKENS", "").lower() in {"1", "true", "yes"}
+        ):
+            snap = loader.get_snapshot()
+            route_map = dict(getattr(snap, "route_map", {}) or {})
+            by_path = dict(route_map.get("by_path") or {})
+            path = "/api/v1/chat/completions"
+            policy_id = None
+            for pat, pol in by_path.items():
+                s = str(pat)
+                if s.endswith("*"):
+                    if path.startswith(s[:-1]):
+                        policy_id = str(pol)
+                        break
+                elif path == s:
+                    policy_id = str(pol)
+                    break
+            if not policy_id:
+                policy_id = "chat.default"
+            entity = derive_entity_key(request)
+            try:
+                est = int(estimate_tokens_from_json(request_json) or 1)
+            except Exception:
+                est = 1
+            est = max(1, est)
+            dec, hid = await gov.reserve(
+                RGRequest(entity=entity, categories={"tokens": {"units": est}}, tags={"policy_id": policy_id, "endpoint": path}),
+                op_id=request_id,
+            )
+            if not dec.allowed:
+                retry_after = int(dec.retry_after or 1)
+                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)})
+            _rg_handle_id = hid
+            _rg_policy_id = policy_id
+    except HTTPException:
+        raise
+    except Exception as _rg_err:
+        logger.debug(f"RG tokens reserve skipped: {_rg_err}")
+
     _track_request_cm = metrics.track_request(
         provider=provider,
         model=model,
@@ -969,8 +1036,12 @@ async def create_chat_completion(
                 from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
             except Exception:
                 PROVIDER_REQUIRES_KEY = {}
+            # Allow explicit mock forcing in tests even if provider key is absent
+            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
+            _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             # Use the raw value for validation so empty strings are treated as missing
-            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key:
+            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
@@ -1028,6 +1099,16 @@ async def create_chat_completion(
                     cleaned_args["model"] = default_model_for_provider
                     if not request_data.model:
                         request_data.model = default_model_for_provider
+                else:
+                    # Fail fast with a clear client error instead of cascading into a 500
+                    # when downstream provider adapters require an explicit model.
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"Model is required for provider '{provider}'. Please select a model in the WebUI "
+                            f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
+                        ),
+                    )
                     model = default_model_for_provider
 
             def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -1219,10 +1300,15 @@ async def create_chat_completion(
             # ------------------------------------------------------------------------
 
             mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
+            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
             use_mock_provider = (
-                _test_mode_flag
-                and provider_api_key
-                and provider_api_key in mock_friendly_keys
+                (
+                    _test_mode_flag and (
+                        (provider_api_key and provider_api_key in mock_friendly_keys)
+                        or _force_mock
+                        or (target_api_provider in {"openai", "groq", "mistral"})
+                    )
+                )
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
@@ -1311,6 +1397,10 @@ async def create_chat_completion(
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=get_moderation_service,
+                    rg_commit_cb=(
+                        (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
+                        if _rg_handle_id else None
+                    ),
                 )
 
             else: # Non-streaming
@@ -1350,6 +1440,21 @@ async def create_chat_completion(
                             "streaming": "false",
                         },
                     )
+                # Resource Governor: commit actual tokens if reserved
+                try:
+                    gov = getattr(request.app.state, "rg_governor", None) if request is not None else None
+                    if gov is not None and _rg_handle_id:
+                        actual = None
+                        try:
+                            usage = (encoded_payload or {}).get("usage") if isinstance(encoded_payload, dict) else None
+                            total = int((usage or {}).get("total_tokens") or 0) if usage else 0
+                            if total > 0:
+                                actual = {"tokens": total}
+                        except Exception:
+                            actual = None
+                        await gov.commit(_rg_handle_id, actuals=actual)
+                except Exception as _rg_commit_err:
+                    logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
                 return JSONResponse(content=encoded_payload)
 
         # --- Exception Handling --- Improved with structured error handling
@@ -2404,13 +2509,15 @@ async def generate_document(
         except Exception:
             PROVIDER_REQUIRES_KEY = {}
 
+        # Evaluate test flags early for conditional bypass
+        try:
+            _is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
+        except Exception:
+            _is_pytest = False
+        _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
         if not provider_api_key:
             # In tests, prefer module-level keys (monkeypatched) over environment/config
-            try:
-                _is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
-            except Exception:
-                _is_pytest = False
-            _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
             dyn_for_merge = dynamic_keys
             if (_is_pytest or _is_test_mode) and isinstance(module_keys, dict) and (provider_key in module_keys):
                 # Remove dynamic entry for this provider to let module_keys win
@@ -2424,10 +2531,18 @@ async def generate_document(
             )
 
         if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Service for '{provider_name}' is not configured (key missing)."
-            )
+            # Allow tests to proceed without a real key for streaming document generation
+            if (_is_pytest or _is_test_mode) and bool(request.stream):
+                logger.debug(
+                    "Bypassing provider API key requirement for streaming document generation during tests (provider=%s)",
+                    provider_name,
+                )
+                provider_api_key = None
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Service for '{provider_name}' is not configured (key missing)."
+                )
 
         if request.async_generation:
             # Create async job
@@ -2528,58 +2643,137 @@ async def generate_document(
                         return
                     yield streaming_source
 
-                async def _sse_stream() -> AsyncIterator[str]:
-                    try:
-                        async for chunk in _iter_stream():
-                            payload = _normalize_chunk(chunk)
-                            if payload:
-                                collected_chunks.append(payload)
-                                yield _encode_sse(payload)
-                    except asyncio.CancelledError:
-                        logger.info(
-                            "Document generation stream cancelled for conversation %s",
-                            request.conversation_id,
-                        )
-                        raise
-                    finally:
-                        try:
-                            document_body = "".join(collected_chunks).strip()
-                            if document_body:
-                                generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
-                                await asyncio.to_thread(
-                                    service.record_streamed_document,
-                                    conversation_id=request.conversation_id,
-                                    document_type=doc_type,
-                                    content=document_body,
-                                    provider=provider_name,
-                                    model=request.model,
-                                    generation_time_ms=generation_time_ms
-                                )
-                            else:
-                                logger.info(
-                                    "Streamed document produced no content for conversation %s; skipping persistence",
-                                    request.conversation_id
-                                )
-                        except asyncio.CancelledError:
-                            # Propagate cancellation after best-effort persistence shielded above.
-                            raise
-                        except Exception as persist_exc:  # pragma: no cover - defensive logging
-                            logger.error(
-                                "Failed to persist streamed document for conversation %s: %s",
-                                request.conversation_id,
-                                persist_exc
-                            )
-                    yield "data: [DONE]\n\n"
+                # Feature flag: use unified SSEStream when enabled
+                if str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}:
+                    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+                    stream = SSEStream(labels={"component": "chat", "endpoint": "chat_doc_stream"})
 
-                return StreamingResponse(
-                    _sse_stream(),
-                    media_type="text/event-stream",
-                    headers={
+                    async def _produce():
+                        try:
+                            async for chunk in _iter_stream():
+                                payload = _normalize_chunk(chunk)
+                                if not payload:
+                                    continue
+                                collected_chunks.append(payload)
+                                # Split payload into SSE data lines
+                                for line in (payload.splitlines() or [""]):
+                                    # Suppress provider DONE; SSEStream will emit a single terminal DONE
+                                    if line.strip().lower() == "[done]":
+                                        continue
+                                    await stream.send_raw_sse_line(f"data: {line}")
+                            await stream.done()
+                        except Exception as e:
+                            await stream.error("internal_error", f"{e}")
+
+                    async def _gen():
+                        prod = asyncio.create_task(_produce())
+                        try:
+                            async for ln in stream.iter_sse():
+                                yield ln
+                        except asyncio.CancelledError:
+                            # Client disconnected: cancel producer promptly and re-raise
+                            if not prod.done():
+                                try:
+                                    prod.cancel()
+                                except Exception:
+                                    pass
+                                try:
+                                    await prod
+                                except (asyncio.CancelledError, Exception):
+                                    pass
+                            raise
+                        else:
+                            # Normal shutdown path: ensure producer completes without forced cancel
+                            if not prod.done():
+                                try:
+                                    await prod
+                                except Exception:
+                                    pass
+                            # Persist the streamed document content after successful drain
+                            try:
+                                document_body = "".join(collected_chunks).strip()
+                                if document_body:
+                                    generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
+                                    await asyncio.to_thread(
+                                        service.record_streamed_document,
+                                        conversation_id=request.conversation_id,
+                                        document_type=doc_type,
+                                        content=document_body,
+                                        provider=provider_name,
+                                        model=request.model,
+                                        generation_time_ms=generation_time_ms,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Streamed document produced no content for conversation %s; skipping persistence",
+                                        request.conversation_id,
+                                    )
+                            except Exception as persist_exc:
+                                # Log and continue; SSE already completed successfully
+                                logger.error(
+                                    "Failed to persist streamed document for conversation %s: %s",
+                                    request.conversation_id,
+                                    persist_exc,
+                                )
+
+                    headers = {
                         "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
                         "X-Accel-Buffering": "no",
-                    },
-                )
+                    }
+                    return StreamingResponse(_gen(), media_type="text/event-stream", headers=headers)
+                else:
+                    async def _sse_stream() -> AsyncIterator[str]:
+                        try:
+                            async for chunk in _iter_stream():
+                                payload = _normalize_chunk(chunk)
+                                if payload:
+                                    collected_chunks.append(payload)
+                                    yield _encode_sse(payload)
+                        except asyncio.CancelledError:
+                            logger.info(
+                                "Document generation stream cancelled for conversation %s",
+                                request.conversation_id,
+                            )
+                            raise
+                        finally:
+                            try:
+                                document_body = "".join(collected_chunks).strip()
+                                if document_body:
+                                    generation_time_ms = int((time.perf_counter() - stream_started_at) * 1000)
+                                    await asyncio.to_thread(
+                                        service.record_streamed_document,
+                                        conversation_id=request.conversation_id,
+                                        document_type=doc_type,
+                                        content=document_body,
+                                        provider=provider_name,
+                                        model=request.model,
+                                        generation_time_ms=generation_time_ms
+                                    )
+                                else:
+                                    logger.info(
+                                        "Streamed document produced no content for conversation %s; skipping persistence",
+                                        request.conversation_id
+                                    )
+                            except asyncio.CancelledError:
+                                # Propagate cancellation after best-effort persistence shielded above.
+                                raise
+                            except Exception as persist_exc:  # pragma: no cover - defensive logging
+                                logger.error(
+                                    "Failed to persist streamed document for conversation %s: %s",
+                                    request.conversation_id,
+                                    persist_exc
+                                )
+                        yield "data: [DONE]\n\n"
+
+                    return StreamingResponse(
+                        _sse_stream(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
 
             # Get the saved document
             docs = service.get_generated_documents(

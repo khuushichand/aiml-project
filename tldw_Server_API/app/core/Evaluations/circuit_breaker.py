@@ -69,6 +69,14 @@ class CircuitBreaker:
         self.stats = CircuitBreakerStats()
         self._state_changed_at = time.time()
         self._lock = asyncio.Lock()
+        # Concurrency coordination:
+        # Use a semaphore sized to failure_threshold to bound the number of
+        # simultaneous in-flight calls in CLOSED state. Calls exceeding this
+        # bound will queue (not reject). This ensures that under a burst of
+        # concurrent failures, at most `failure_threshold` failures slip
+        # through before the breaker opens, while healthy calls are not
+        # rejected (they simply run in batches).
+        self._closed_semaphore = asyncio.Semaphore(self.config.failure_threshold)
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """
@@ -87,13 +95,33 @@ class CircuitBreaker:
             TimeoutError: If call times out
         """
         async with self._lock:
-            # Check circuit state
+            # Check circuit state and gate entry under contention
             if self.state == CircuitState.OPEN:
                 if self._should_attempt_reset():
                     self._transition_to_half_open()
                 else:
                     self.stats.rejected_calls += 1
                     raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
+
+            state_snapshot = self.state
+
+        # In CLOSED state, acquire a permit to bound concurrent in-flight calls.
+        closed_permit_acquired = False
+        if state_snapshot == CircuitState.CLOSED:
+            await self._closed_semaphore.acquire()
+            closed_permit_acquired = True
+            # After acquiring, re-check if circuit opened while we waited.
+            async with self._lock:
+                if self.state == CircuitState.OPEN:
+                    self.stats.rejected_calls += 1
+                    if closed_permit_acquired:
+                        self._closed_semaphore.release()
+                        # Avoid double-release in finally block
+                        closed_permit_acquired = False
+                    raise CircuitOpenError(f"Circuit breaker {self.name} is OPEN")
+
+        # In HALF_OPEN we allow calls (no extra gating here); failures will
+        # immediately re-open the breaker in _on_failure.
 
         # Attempt the call
         self.stats.total_calls += 1
@@ -130,6 +158,11 @@ class CircuitBreaker:
             # Unexpected exception, don't count as circuit failure
             logger.warning(f"Unexpected exception in circuit breaker {self.name}: {e}")
             raise
+        finally:
+            # Release closed-state concurrency permit if held
+            if closed_permit_acquired:
+                self._closed_semaphore.release()
+            pass
 
     async def _on_success(self):
         """Handle successful call."""

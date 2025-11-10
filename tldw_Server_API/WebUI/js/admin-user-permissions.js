@@ -55,7 +55,7 @@ async function searchUsers() {
   } catch (e) {
     document.getElementById('userPermSearchResults').innerHTML = `<pre>${_esc(JSON.stringify(e.response || e, null, 2))}</pre>`;
     document.getElementById('userPermSearchResults').style.display = 'block';
-    Toast?.error && Toast.error('Failed to search users');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to search users');
   }
 }
 
@@ -173,9 +173,9 @@ async function _applyRoleToggle(roleId, checked) {
     if (checked) await _apiPost(`/api/v1/admin/users/${uid}/roles/${roleId}`, {});
     else await _apiDelete(`/api/v1/admin/users/${uid}/roles/${roleId}`);
     if (checked) UP_STATE.userRoles.add(roleId); else UP_STATE.userRoles.delete(roleId);
-    Toast?.success && Toast.success(checked ? 'Role assigned' : 'Role removed');
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success(checked ? 'Role assigned' : 'Role removed');
   } catch (e) {
-    Toast?.error && Toast.error('Failed to update role');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to update role');
   }
 }
 
@@ -199,9 +199,9 @@ async function _applyOverrideChange(pid, action, opts = {}) {
       renderOverridesTable();
       renderEffectiveOut();
     }
-    if (!opts.silent) Toast?.success && Toast.success('Override updated');
+    if (!opts.silent) { if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success('Override updated'); }
   } catch (e) {
-    Toast?.error && Toast.error('Failed to update override');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to update override');
   }
 }
 
@@ -210,7 +210,7 @@ async function bulkApplyOverrides(action, which = 'all') {
   const { tools, std } = _splitVisibleByTool();
   let all;
   if (which === 'tools') all = tools; else if (which === 'std') all = std; else all = [...tools, ...std];
-  if (!all.length) return Toast?.error && Toast.error('No filtered permissions to update');
+  if (!all.length) { if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('No filtered permissions to update'); return; }
   const actionLabel = action === 'allow' ? 'Allow' : action === 'deny' ? 'Deny' : 'Inherit';
   const sectionLabel = which === 'tools' ? 'tool permissions' : which === 'std' ? 'standard permissions' : 'filtered permissions';
   const confirmed = window.confirm(`${actionLabel} ${all.length} ${sectionLabel}?`);
@@ -240,10 +240,10 @@ async function bulkApplyOverrides(action, which = 'all') {
     UP_STATE.effective = new Set(Array.isArray(effRes?.permissions) ? effRes.permissions : []);
     renderOverridesTable();
     renderEffectiveOut();
-    Toast?.success && Toast.success(`Applied '${action}' to ${all.length} ${sectionLabel}`);
+    if (typeof Toast !== 'undefined' && Toast && Toast.success) Toast.success(`Applied '${action}' to ${all.length} ${sectionLabel}`);
     try { if (loaderId && container) Loading.hide(container); } catch (_) { /* ignore */ }
   } catch (e) {
-    Toast?.error && Toast.error('Bulk update failed');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Bulk update failed');
   }
 }
 
@@ -264,7 +264,7 @@ async function loadUserPermissionsEditor(user) {
     renderOverridesTable();
     renderEffectiveOut();
   } catch (e) {
-    Toast?.error && Toast.error('Failed to load user data');
+    if (typeof Toast !== 'undefined' && Toast && Toast.error) Toast.error('Failed to load user data');
   }
 }
 

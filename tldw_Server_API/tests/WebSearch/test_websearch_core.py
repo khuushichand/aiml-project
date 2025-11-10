@@ -125,7 +125,8 @@ def test_search_web_brave_builds_expected_request(monkeypatch: pytest.MonkeyPatc
         fake_get.last_request = {"url": url, "headers": headers, "params": params}  # type: ignore[attr-defined]
         return DummyResponse()
 
-    monkeypatch.setattr(web_search.requests, "get", fake_get)
+    # Patch the Brave wrapper seam instead of requests.get
+    monkeypatch.setattr(web_search, "brave_http_get", fake_get)
     monkeypatch.setattr(
         web_search,
         "loaded_config_data",

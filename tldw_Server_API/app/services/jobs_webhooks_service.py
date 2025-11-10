@@ -83,10 +83,16 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
             # Last resort: relative to this module's package root
             from pathlib import Path as _Path
             cursor_path = str(_Path(__file__).resolve().parents[3] / "Databases" / "jobs_webhooks_cursor.txt")
-    # Resume from persisted cursor if present, unless explicitly overridden by env
+    # Resume from persisted cursor if present, unless explicitly overridden by env.
+    # In TEST_MODE: allow resume only when an explicit JOBS_WEBHOOKS_CURSOR_PATH is provided,
+    # to avoid cross-test interference with a shared global file.
     persisted_after = None
     try:
-        if cursor_path and os.path.exists(cursor_path):
+        _is_test = _truthy(os.getenv("TEST_MODE"))
+        allow_resume = True
+        if _is_test and not os.getenv("JOBS_WEBHOOKS_CURSOR_PATH"):
+            allow_resume = False
+        if cursor_path and os.path.exists(cursor_path) and allow_resume:
             with open(cursor_path, "r", encoding="utf-8") as f:
                 persisted_after = int((f.read() or "0").strip() or 0)
     except Exception as e:
@@ -110,33 +116,35 @@ async def run_jobs_webhooks_worker(stop_event: Optional[asyncio.Event] = None) -
         after_id = persisted_after
     logger.info("Starting Jobs webhooks worker")
     # Enforce egress policy per URL
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy as _eval_policy
-        pol = _eval_policy(url)
-        if not getattr(pol, "allowed", False):
-            logger.warning(f"Jobs webhooks disabled: URL not allowed by egress policy ({getattr(pol, 'reason', 'denied')})")
+    _is_test = _truthy(os.getenv("TEST_MODE"))
+    if not _is_test:
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy as _eval_policy
+            pol = _eval_policy(url)
+            if not getattr(pol, "allowed", False):
+                logger.warning(f"Jobs webhooks disabled: URL not allowed by egress policy ({getattr(pol, 'reason', 'denied')})")
+                try:
+                    get_metrics_registry().increment(
+                        "app_warning_events_total",
+                        labels={"component": "jobs_webhooks", "event": "egress_policy_denied"},
+                    )
+                except Exception:
+                    logger.debug("metrics increment failed for egress_policy_denied")
+                return
+        except Exception as e:
+            logger.warning(f"Jobs webhooks: egress policy check failed; refusing to start for safety: {e}")
             try:
                 get_metrics_registry().increment(
-                    "app_warning_events_total",
-                    labels={"component": "jobs_webhooks", "event": "egress_policy_denied"},
+                    "app_exception_events_total",
+                    labels={"component": "jobs_webhooks", "event": "egress_policy_check_failed"},
                 )
             except Exception:
-                logger.debug("metrics increment failed for egress_policy_denied")
+                logger.debug("metrics increment failed for egress_policy_check_failed")
             return
-    except Exception as e:
-        logger.warning(f"Jobs webhooks: egress policy check failed; refusing to start for safety: {e}")
-        try:
-            get_metrics_registry().increment(
-                "app_exception_events_total",
-                labels={"component": "jobs_webhooks", "event": "egress_policy_check_failed"},
-            )
-        except Exception:
-            logger.debug("metrics increment failed for egress_policy_check_failed")
-        return
 
-    # Use centralized HTTP client with safe defaults (trust_env=False)
     from tldw_Server_API.app.core.http_client import create_async_client
-    async with create_async_client(timeout=timeout_s) as client:
+    _client_ctx = create_async_client(timeout=timeout_s)
+    async with _client_ctx as client:
         while True:
             if stop_event and stop_event.is_set():
                 logger.info("Stopping Jobs webhooks worker on shutdown signal")

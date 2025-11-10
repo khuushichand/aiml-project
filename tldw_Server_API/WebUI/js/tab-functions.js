@@ -9,6 +9,20 @@
 
 let _audioTTSAbort = null;
 
+// Central helper to insert HTML safely under CSP. Falls back to innerHTML.
+function setSafeHTML(el, html) {
+    try {
+        if (!el) return;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(el, html);
+        } else {
+            el.innerHTML = html;
+        }
+    } catch (_) {
+        try { el.innerHTML = html; } catch (_) {}
+    }
+}
+
 function updateTTSProviderOptions() {
     const provider = document.getElementById('audioTTS_provider').value;
     const modelSelect = document.getElementById('audioTTS_model');
@@ -247,6 +261,1120 @@ async function audioTTSGenerate() {
     }
 }
 
+// Helper wrappers for migrated buttons
+function _audioTTSGenerateBtnHandler() {
+    try {
+        if (typeof window.generateTTS === 'function') return window.generateTTS();
+    } catch (_) {}
+    return audioTTSGenerate();
+}
+
+function _audioTTSStopBtnHandler(e) {
+    try {
+        if (typeof window.stopTTS === 'function') return window.stopTTS();
+    } catch (_) {}
+    try { if (e) e.preventDefault(); } catch(_){}
+    try { if (_audioTTSAbort) _audioTTSAbort.abort(); } catch(_){}
+}
+
+function _audioTTSDownloadBtnHandler() {
+    try {
+        if (typeof window.downloadAudio === 'function') return window.downloadAudio();
+    } catch (_) {}
+    try {
+        const player = document.getElementById('audioTTS_player');
+        if (player && player.src) {
+            const a = document.createElement('a');
+            a.href = player.src;
+            let fmt = (document.getElementById('audioTTS_response_format')?.value || 'mp3');
+            try { fmt = String(fmt).replace(/[^a-z0-9]/gi, '').toLowerCase(); } catch (_) {}
+            if (!fmt) fmt = 'mp3';
+            a.download = `tts_output.${fmt}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    } catch (_) {}
+}
+
+function bindAudioTabHandlers() {
+    // TTS provider and status
+    const provSel = document.getElementById('audioTTS_provider');
+    if (provSel && !provSel._b) { provSel._b = true; provSel.addEventListener('change', () => { try { updateTTSProviderOptions(); } catch(_){} }); }
+    // Ensure initial options reflect current provider
+    try { if (provSel) updateTTSProviderOptions(); } catch(_){}
+    const provRefresh = document.getElementById('tts_provider_status_refresh');
+    if (provRefresh && !provRefresh._b) { provRefresh._b = true; provRefresh.addEventListener('click', () => { try { checkTTSProviderStatus(); } catch(_){} }); }
+    const voicesBtn = document.getElementById('audioTTS_voices_refresh');
+    if (voicesBtn && !voicesBtn._b) { voicesBtn._b = true; voicesBtn.addEventListener('click', () => { try { loadProviderVoices(); } catch(_){} }); }
+
+    // TTS actions
+    const genBtn = document.getElementById('audioTTS_generate_btn');
+    if (genBtn && !genBtn._b) { genBtn._b = true; genBtn.addEventListener('click', _audioTTSGenerateBtnHandler); }
+    const stopBtn = document.getElementById('stopButton');
+    if (stopBtn && !stopBtn._b) { stopBtn._b = true; stopBtn.addEventListener('click', _audioTTSStopBtnHandler); }
+    const dlBtn = document.getElementById('downloadButton');
+    if (dlBtn && !dlBtn._b) { dlBtn._b = true; dlBtn.addEventListener('click', _audioTTSDownloadBtnHandler); }
+    const clearRef = document.getElementById('audioTTS_voice_clear');
+    if (clearRef && !clearRef._b) { clearRef._b = true; clearRef.addEventListener('click', () => { try { clearVoiceReference(); } catch(_){} }); }
+
+    // TTS recording controls
+    const recStart = document.getElementById('audioTTS_rec_start');
+    const recStop = document.getElementById('audioTTS_rec_stop');
+    const recClear = document.getElementById('audioTTS_rec_clear');
+    if (recStart && !recStart._b) { recStart._b = true; recStart.addEventListener('click', () => { try { startAudioTTSRecording(); } catch(_){} }); }
+    if (recStop && !recStop._b) { recStop._b = true; recStop.addEventListener('click', () => { try { stopAudioTTSRecording(); } catch(_){} }); }
+    if (recClear && !recClear._b) { recClear._b = true; recClear.addEventListener('click', () => { try { clearAudioTTSRecording(); } catch(_){} }); }
+    const recTog = document.getElementById('audioTTS_rec_settings_toggle');
+    if (recTog && !recTog._b) { recTog._b = true; recTog.addEventListener('click', () => { try { toggleAudioTTSRecSettings(); } catch(_){} }); }
+    const recMax = document.getElementById('audioTTS_rec_max');
+    if (recMax && !recMax._b) { recMax._b = true; recMax.addEventListener('change', () => { try { window._audioRecMaxSec = Math.max(3, Math.min(60, parseInt(recMax.value||'15',10))); localStorage.setItem('audio_tts_rec_max_seconds', String(window._audioRecMaxSec)); } catch(_){} }); }
+    const recReset = document.getElementById('audioTTS_rec_max_reset');
+    if (recReset && !recReset._b) { recReset._b = true; recReset.addEventListener('click', (e) => { e.preventDefault(); try { resetAudioTTSRecMax(); } catch(_){} }); }
+
+    // File transcription recording
+    const fStart = document.getElementById('fileTrans_rec_start');
+    const fStop = document.getElementById('fileTrans_rec_stop');
+    const fClear = document.getElementById('fileTrans_rec_clear');
+    if (fStart && !fStart._b) { fStart._b = true; fStart.addEventListener('click', () => { try { startFileTransRecording(); } catch(_){} }); }
+    if (fStop && !fStop._b) { fStop._b = true; fStop.addEventListener('click', () => { try { stopFileTransRecording(); } catch(_){} }); }
+    if (fClear && !fClear._b) { fClear._b = true; fClear.addEventListener('click', () => { try { clearFileTransRecording(); } catch(_){} }); }
+    const fTog = document.getElementById('fileTrans_rec_settings_toggle');
+    if (fTog && !fTog._b) { fTog._b = true; fTog.addEventListener('click', () => { try { toggleFileTransRecSettings(); } catch(_){} }); }
+    const fMax = document.getElementById('fileTrans_rec_max');
+    if (fMax && !fMax._b) { fMax._b = true; fMax.addEventListener('change', () => { try { window._fileTransRecMaxSec = Math.max(3, Math.min(60, parseInt(fMax.value||'15',10))); localStorage.setItem('file_trans_rec_max_seconds', String(window._fileTransRecMaxSec)); } catch(_){} }); }
+    const fReset = document.getElementById('fileTrans_rec_max_reset');
+    if (fReset && !fReset._b) { fReset._b = true; fReset.addEventListener('click', (e) => { e.preventDefault(); try { resetFileTransRecMax(); } catch(_){} }); }
+
+    // File transcription actions
+    const segProvRefresh = document.getElementById('fileSegRefreshProviders');
+    if (segProvRefresh && !segProvRefresh._b) { segProvRefresh._b = true; segProvRefresh.addEventListener('click', () => { try { refreshEmbeddingProviders(); } catch(_){} }); }
+    const runBtn = document.getElementById('fileTrans_run_btn');
+    if (runBtn && !runBtn._b) { runBtn._b = true; runBtn.addEventListener('click', () => { try { audioFileTranscribeRun(); } catch(_){} }); }
+    const clrBtn = document.getElementById('fileTrans_clear_btn');
+    if (clrBtn && !clrBtn._b) { clrBtn._b = true; clrBtn.addEventListener('click', () => { try { audioFileTranscribeClear(); } catch(_){} }); }
+
+    // Streaming transcription binds
+    const apiSave = document.getElementById('streamingApiKeySave');
+    if (apiSave && !apiSave._b) { apiSave._b = true; apiSave.addEventListener('click', () => { try { saveStreamingApiKey(); } catch(_){} }); }
+    const apiToggle = document.getElementById('streamingApiKeyToggle');
+    if (apiToggle && !apiToggle._b) { apiToggle._b = true; apiToggle.addEventListener('click', () => { try { toggleApiKeyVisibility(); } catch(_){} }); }
+    const modelSel = document.getElementById('streamingModel');
+    if (modelSel && !modelSel._b) { modelSel._b = true; modelSel.addEventListener('change', () => { try { updateModelOptions(); } catch(_){} }); }
+    const connectBtn = document.getElementById('connectStreamingBtn');
+    if (connectBtn && !connectBtn._b) { connectBtn._b = true; connectBtn.addEventListener('click', () => { try { toggleStreamingConnection(); } catch(_){} }); }
+    const startBtn = document.getElementById('startStreamingBtn');
+    if (startBtn && !startBtn._b) { startBtn._b = true; startBtn.addEventListener('click', () => { try { startStreamingRecording(); } catch(_){} }); }
+    const stopBtnS = document.getElementById('stopStreamingBtn');
+    if (stopBtnS && !stopBtnS._b) { stopBtnS._b = true; stopBtnS.addEventListener('click', () => { try { stopStreamingRecording(); } catch(_){} }); }
+    const clrStream = document.getElementById('clearStreamingBtn');
+    if (clrStream && !clrStream._b) { clrStream._b = true; clrStream.addEventListener('click', () => { try { clearStreamingTranscript(); } catch(_){} }); }
+
+    // Streaming segmentation (TreeSeg) binds
+    const segRefresh = document.getElementById('segRefreshProviders');
+    if (segRefresh && !segRefresh._b) { segRefresh._b = true; segRefresh.addEventListener('click', () => { try { refreshEmbeddingProviders(); } catch(_){} }); }
+    const segRun = document.getElementById('segRunBtn');
+    if (segRun && !segRun._b) { segRun._b = true; segRun.addEventListener('click', () => { try { segmentTranscriptRun(); } catch(_){} }); }
+    const segClr = document.getElementById('segClearBtn');
+    if (segClr && !segClr._b) { segClr._b = true; segClr.addEventListener('click', () => { try { segClearOutput(); } catch(_){} }); }
+}
+
+// ============================================================================
+// Flashcards Tab Functions
+// ============================================================================
+
+// Persistent selection across pages
+let _fcSelection = new Set();
+let _fcSelectionAll = false;
+let _fcLastQueryCtx = null; // {deck_id, tag, due_status, q}
+let _fcLastTotal = 0;
+
+function initializeFlashcardsTab(contentId) {
+    try {
+        flashPopulateDecks();
+        // Clear any previous state
+        const res = document.getElementById('fc_manage_result');
+        if (res) res.textContent = '';
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.textContent = '';
+        const cf = document.getElementById('fc_card_front');
+        if (cf) cf.textContent = '';
+        const cb = document.getElementById('fc_card_back');
+        if (cb) { cb.textContent = ''; cb.style.display = 'none'; }
+        const rv = document.getElementById('fc_reveal_btn');
+        if (rv) rv.disabled = true;
+        const cu = document.getElementById('fc_current_uuid');
+        if (cu) cu.value = '';
+        // Populate model dropdown on Import subtab so generation is ready
+        try { if (typeof populateModelDropdowns === 'function') setTimeout(populateModelDropdowns, 50); } catch(_){}
+        // Debounced search inputs
+        const s1 = document.getElementById('fc_search_q');
+        const s2 = document.getElementById('fc_filter_q');
+        const debounced = Utils.debounce(() => {
+            const pg = document.getElementById('fc_page');
+            if (pg) pg.value = '1';
+            flashListCards();
+        }, 300);
+        [s1, s2].forEach(inp => {
+            if (inp && !inp._fcBound) {
+                inp._fcBound = true;
+                inp.addEventListener('input', debounced);
+            }
+        });
+
+        // Manage tab buttons (delegated to avoid inline handlers)
+        const bindBtn = (id, handler) => {
+            const el = document.getElementById(id);
+            if (el && !el._fcBound) { el._fcBound = true; el.addEventListener('click', handler); }
+        };
+        bindBtn('fc_list_decks_btn', () => flashListDecks());
+        bindBtn('fc_create_deck_btn', () => flashCreateDeck());
+        bindBtn('fc_list_cards_btn', () => flashListCards());
+        bindBtn('fc_prev_btn', () => flashPrevPage());
+        bindBtn('fc_next_btn', () => flashNextPage());
+        bindBtn('fc_select_page_btn', () => flashSelectPage(true));
+        bindBtn('fc_clear_page_btn', () => flashSelectPage(false));
+        bindBtn('fc_bulk_delete_btn', () => flashBulkDeleteSelected());
+        bindBtn('fc_bulk_set_deck_btn', () => flashBulkSetDeck());
+        bindBtn('fc_bulk_set_tags_btn', () => flashBulkSetTags());
+        bindBtn('fc_create_card_btn', () => flashCreateCard());
+
+        // Review tab buttons
+        bindBtn('fc_load_due_btn', () => flashLoadDueCard());
+        const reveal = document.getElementById('fc_reveal_btn');
+        if (reveal && !reveal._fcBound) { reveal._fcBound = true; reveal.addEventListener('click', () => flashRevealBack()); }
+        bindBtn('fc_rate_again', () => flashReviewRate(1));
+        bindBtn('fc_rate_hard', () => flashReviewRate(2));
+        bindBtn('fc_rate_good', () => flashReviewRate(3));
+        bindBtn('fc_rate_easy', () => flashReviewRate(4));
+
+        // Import/Export tab buttons
+        bindBtn('fc_import_tsv_btn', () => flashImportTSV());
+        bindBtn('fc_export_btn', () => flashExport());
+        bindBtn('fc_import_json_btn', () => flashImportJSONFile());
+        bindBtn('fc_gen_fetch_btn', () => flashGenFetchItems());
+        bindBtn('fc_gen_generate_btn', () => flashGenerateFromSelection());
+        bindBtn('fc_gen_import_btn', () => flashGenerateImportDraft());
+    } catch (e) {
+        console.debug('initializeFlashcardsTab failed:', e);
+    }
+}
+
+async function flashPopulateDecks() {
+    try {
+        const data = await window.apiClient.get('/api/v1/flashcards/decks');
+        const decks = Array.isArray(data) ? data : [];
+        const selects = ['fc_manage_deck_select', 'fc_review_deck', 'fc_export_deck', 'fc_gen_deck'];
+        selects.forEach(id => {
+            const sel = document.getElementById(id);
+            if (!sel) return;
+            const prev = sel.value;
+            sel.innerHTML = '';
+            const opt0 = document.createElement('option');
+            opt0.value = '';
+            opt0.textContent = 'All Decks';
+            sel.appendChild(opt0);
+            decks.forEach(d => {
+                const o = document.createElement('option');
+                o.value = String(d.id);
+                o.textContent = d.name || `Deck ${d.id}`;
+                sel.appendChild(o);
+            });
+            if (prev) sel.value = prev;
+        });
+    } catch (e) {
+        console.error('Failed to populate decks:', e);
+    }
+}
+
+async function flashListDecks() {
+    try {
+        const data = await window.apiClient.get('/api/v1/flashcards/decks');
+        const el = document.getElementById('fc_manage_result');
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || []));
+        flashPopulateDecks();
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashCreateDeck() {
+    const name = (document.getElementById('fc_new_deck_name')?.value || '').trim();
+    const description = (document.getElementById('fc_new_deck_desc')?.value || '').trim() || null;
+    if (!name) {
+        if (typeof Toast !== 'undefined') Toast.warning('Deck name is required');
+        return;
+    }
+    try {
+        const payload = { name, description };
+        const data = await window.apiClient.post('/api/v1/flashcards/decks', payload);
+        const el = document.getElementById('fc_manage_result');
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || {}));
+        flashPopulateDecks();
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashListCards() {
+    const deckId = (document.getElementById('fc_manage_deck_select')?.value || '').trim();
+    const tag = (document.getElementById('fc_filter_tag')?.value || '').trim();
+    const due = (document.getElementById('fc_filter_due')?.value || 'all').trim();
+    const q = (document.getElementById('fc_filter_q')?.value || document.getElementById('fc_search_q')?.value || '').trim();
+    const page = Math.max(1, parseInt(document.getElementById('fc_page')?.value || '1', 10));
+    const pageSize = Math.max(1, parseInt(document.getElementById('fc_page_size')?.value || '50', 10));
+    try {
+        const query = {};
+        if (deckId) query.deck_id = deckId;
+        if (tag) query.tag = tag;
+        if (due) query.due_status = due;
+        if (q) query.q = q;
+        query.limit = pageSize;
+        query.offset = (page - 1) * pageSize;
+        _fcLastQueryCtx = { deck_id: deckId || null, tag: tag || null, due_status: due || null, q: q || null };
+        const data = await window.apiClient.get('/api/v1/flashcards', query);
+        // update page info
+        try {
+            const total = Number(data?.total || 0);
+            _fcLastTotal = total;
+            const info = document.getElementById('fc_page_info');
+            if (info) info.textContent = total ? `Showing ${data.items?.length || 0} / ${total} (page ${page})` : `Showing ${data.items?.length || 0}`;
+        } catch(_){}
+        flashRenderCardsList(data);
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+function flashPrevPage() {
+    const pageInput = document.getElementById('fc_page');
+    const page = Math.max(1, (parseInt(pageInput?.value || '1', 10) - 1));
+    if (pageInput) pageInput.value = String(page);
+    flashListCards();
+}
+
+function flashNextPage() {
+    const pageInput = document.getElementById('fc_page');
+    const page = Math.max(1, (parseInt(pageInput?.value || '1', 10) + 1));
+    if (pageInput) pageInput.value = String(page);
+    flashListCards();
+}
+
+async function flashCreateCard() {
+    const deckId = (document.getElementById('fc_manage_deck_select')?.value || '').trim();
+    const front = (document.getElementById('fc_front')?.value || '').trim();
+    const back = (document.getElementById('fc_back')?.value || '').trim();
+    const model = (document.getElementById('fc_model_type')?.value || 'basic').trim();
+    const notes = (document.getElementById('fc_notes')?.value || '').trim();
+    const tagStr = (document.getElementById('fc_tags')?.value || '').trim();
+    if (!front) {
+        if (typeof Toast !== 'undefined') Toast.warning('Front is required');
+        return;
+    }
+    const tags = tagStr ? tagStr.split(',').map(s => s.trim()).filter(Boolean) : undefined;
+    const isCloze = model === 'cloze';
+    const reverse = model === 'basic_reverse';
+    const payload = {
+        deck_id: deckId ? Number(deckId) : undefined,
+        front,
+        back,
+        notes: notes || undefined,
+        tags,
+        model_type: model,
+        is_cloze: isCloze || undefined,
+        reverse: reverse || undefined,
+        source_ref_type: 'manual'
+    };
+    try {
+        const data = await window.apiClient.post('/api/v1/flashcards', payload);
+        const el = document.getElementById('fc_manage_result');
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || {}));
+        // clear inputs (keep deck)
+        try {
+            document.getElementById('fc_front').value = '';
+            document.getElementById('fc_back').value = '';
+            document.getElementById('fc_notes').value = '';
+            document.getElementById('fc_tags').value = '';
+        } catch(_){}
+    } catch (e) {
+        const el = document.getElementById('fc_manage_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+function _fcRowId(uuid) { return `fc_row_${uuid}`; }
+
+function flashRenderCardsList(resp) {
+    try {
+        const cont = document.getElementById('fc_cards_container');
+        const rawPre = document.getElementById('fc_manage_result');
+        if (rawPre) setSafeHTML(rawPre, Utils.syntaxHighlightJSON(resp || {}));
+        if (!cont) return;
+        const items = (resp && resp.items) ? resp.items : [];
+        if (!items.length) { cont.textContent = 'No cards found.'; return; }
+        let html = '';
+        html += '<table class="data-table" style="width:100%; border-collapse:collapse;">';
+        html += '<thead><tr>'+
+            '<th style="width:36px;"><input type="checkbox" class="fc-master-select" aria-label="Select all on page" /></th>'+
+            '<th style="min-width:140px;">Deck</th>'+
+            '<th>Front</th>'+
+            '<th>Back</th>'+
+            '<th style="min-width:120px;">Model</th>'+
+            '<th>Tags</th>'+
+            '<th style="min-width:120px;">Due</th>'+
+            '<th style="min-width:120px;">Actions</th>'+
+            '</tr></thead><tbody>';
+        for (const card of items) {
+            const uuid = card.uuid;
+            const deckId = card.deck_id || '';
+            const front = card.front || '';
+            const back = card.back || '';
+            const model = card.model_type || 'basic';
+            const due = card.due_at || '';
+            const tags = (() => {
+                try { if (card.tags_json) { const arr = JSON.parse(card.tags_json); if (Array.isArray(arr)) return arr; } } catch(_){}
+                return [];
+            })();
+            const version = card.version || 1;
+            const isSelected = _fcSelection.has(uuid) || _fcSelectionAll; // if selecting all results
+            html += `<tr id="${_fcRowId(uuid)}" data-uuid="${Utils.escapeHtml(uuid)}" data-version="${String(version)}">`+
+                `<td><input type="checkbox" class="fc-row-select" aria-label="Select" ${isSelected ? 'checked' : ''} /></td>`+
+                `<td><input data-field="deck_id" type="number" value="${Utils.escapeHtml(String(deckId))}" style="width:80px;" aria-label="Deck ID" /></td>`+
+                `<td><textarea data-field="front" rows="2" aria-label="Front">${Utils.escapeHtml(front)}</textarea></td>`+
+                `<td><textarea data-field="back" rows="2" aria-label="Back">${Utils.escapeHtml(back)}</textarea></td>`+
+                `<td><select data-field="model_type" aria-label="Model">
+                    <option value="basic" ${model==='basic'?'selected':''}>basic</option>
+                    <option value="basic_reverse" ${model==='basic_reverse'?'selected':''}>basic_reverse</option>
+                    <option value="cloze" ${model==='cloze'?'selected':''}>cloze</option>
+                </select></td>`+
+                `<td>${_fcRenderTagEditor(tags)}</td>`+
+                `<td>${Utils.escapeHtml(due || '')}</td>`+
+                `<td>
+                    <button class="btn btn-secondary btn-sm fc-update-btn" data-uuid="${Utils.escapeHtml(uuid)}">Update</button>
+                    <button class="btn btn-secondary btn-sm fc-delete-btn" data-uuid="${Utils.escapeHtml(uuid)}">Delete</button>
+                </td>`+
+                `</tr>`;
+        }
+        html += '</tbody></table>';
+        setSafeHTML(cont, html);
+        _fcBindTagEditors();
+        _fcBindRowActions();
+        // Bind master select
+        try {
+            const master = cont.querySelector('.fc-master-select');
+            if (master && !master._fcBound) {
+                master._fcBound = true;
+                master.addEventListener('change', () => flashSelectPage(master.checked));
+            }
+        } catch(_){}
+        // Bind row checkboxes and sync state
+        cont.querySelectorAll('.fc-row-select').forEach((cb) => {
+            if (!cb._fcBound) {
+                cb._fcBound = true;
+                cb.addEventListener('change', (e) => {
+                    const row = cb.closest('tr');
+                    const uuid = row?.getAttribute('data-uuid');
+                    if (!uuid) return;
+                    if (cb.checked) _fcSelection.add(uuid); else _fcSelection.delete(uuid);
+                    _fcSelectionAll = false; // manual change cancels select-all mode
+                    _fcUpdateMasterState();
+                    _fcUpdateSelectionBar();
+                });
+            }
+        });
+        _fcUpdateMasterState();
+        _fcUpdateSelectionBar();
+    } catch (e) {
+        const cont = document.getElementById('fc_cards_container');
+        if (cont) cont.textContent = `Render error: ${e.message || e}`;
+    }
+}
+
+async function flashUpdateCard(uuid) {
+    try {
+        const row = document.getElementById(_fcRowId(uuid));
+        if (!row) return;
+        const vals = {};
+        const deckEl = row.querySelector('[data-field="deck_id"]');
+        const frontEl = row.querySelector('[data-field="front"]');
+        const backEl = row.querySelector('[data-field="back"]');
+        const modelEl = row.querySelector('[data-field="model_type"]');
+        vals.deck_id = deckEl ? (parseInt(deckEl.value || '', 10) || undefined) : undefined;
+        vals.front = frontEl ? (frontEl.value || undefined) : undefined;
+        vals.back = backEl ? (backEl.value || undefined) : undefined;
+        vals.model_type = modelEl ? (modelEl.value || undefined) : undefined;
+        vals.tags = _fcCollectTagsFromRow(row);
+        if (vals.model_type === 'cloze') vals.is_cloze = true;
+        const expected = parseInt(row.dataset.version || '0', 10);
+        if (expected) vals.expected_version = expected;
+        const data = await window.apiClient.patch(`/api/v1/flashcards/${uuid}`, vals);
+        // Update version in row
+        if (data && typeof data.version === 'number') row.dataset.version = String(data.version);
+        if (typeof Toast !== 'undefined') Toast.success('Card updated');
+    } catch (e) {
+        if (typeof Toast !== 'undefined') Toast.error(`Update failed: ${e.message || e}`);
+    }
+}
+
+// --- Tag editor (chips) ---
+function _fcRenderTagEditor(tagsArr) {
+    const tags = Array.isArray(tagsArr) ? tagsArr : [];
+    const chips = tags.map(t => `<span class="fc-chip" data-tag="${Utils.escapeHtml(String(t))}">${Utils.escapeHtml(String(t))}<button type="button" class="fc-chip-x" aria-label="Remove">×</button></span>`).join(' ');
+    return `<div class="fc-tags" style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+        ${chips}
+        <input type="text" class="fc-tag-input" placeholder="add tag" style="min-width:80px; border:1px solid var(--color-border); padding:2px 6px;" />
+    </div>`;
+}
+
+// ============================================================================
+// Media Tab common bindings (migrated from inline scripts)
+// ============================================================================
+
+function bindMediaCommonHandlers() {
+    try {
+        // Provider/model selector normalization: extract provider from provider/model into hidden input
+        const ids = ['addMedia_model', 'processVideos_model', 'processAudios_model', 'processEbooks_model', 'processDocuments_model'];
+        ids.forEach((id) => {
+            const sel = document.getElementById(id);
+            if (!sel || sel._mediaBound) return;
+            sel._mediaBound = true;
+            const originalName = sel.getAttribute('name');
+            sel.addEventListener('change', function() {
+                try {
+                    if (this.value && this.value.includes('/')) {
+                        const provider = this.value.split('/')[0];
+                        let hidden = this.parentElement.querySelector(`input[type="hidden"][name="${originalName}"]`);
+                        if (!hidden) {
+                            hidden = document.createElement('input');
+                            hidden.type = 'hidden';
+                            hidden.name = originalName || 'model_provider';
+                            this.parentElement.appendChild(hidden);
+                        }
+                        hidden.value = provider;
+                        this.removeAttribute('name');
+                    } else {
+                        if (originalName) this.setAttribute('name', originalName);
+                        const hidden = this.parentElement.querySelector(`input[type="hidden"][name="${originalName}"]`);
+                        if (hidden) hidden.remove();
+                    }
+                } catch (_) {}
+            });
+        });
+    } catch (_) { /* ignore */ }
+}
+
+function _fcBindTagEditors() {
+    document.querySelectorAll('.fc-tags').forEach(container => {
+        const input = container.querySelector('.fc-tag-input');
+        if (input && !input._fcBound) {
+            input._fcBound = true;
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    const val = (input.value || '').trim();
+                    if (!val) return;
+                    const span = document.createElement('span');
+                    span.className = 'fc-chip';
+                    span.setAttribute('data-tag', val);
+                    setSafeHTML(span, `${Utils.escapeHtml(val)}<button type=\"button\" class=\"fc-chip-x\" aria-label=\"Remove\">×</button>`);
+                    input.before(span);
+                    input.value = '';
+                }
+            });
+        }
+        container.querySelectorAll('.fc-chip .fc-chip-x').forEach(btn => {
+            if (!btn._fcBound) {
+                btn._fcBound = true;
+                btn.addEventListener('click', () => {
+                    const chip = btn.parentElement;
+                    if (chip) chip.remove();
+                });
+            }
+        });
+    });
+}
+
+function _fcCollectTagsFromRow(row) {
+    try {
+        const tags = [];
+        row.querySelectorAll('.fc-tags .fc-chip').forEach(chip => {
+            const t = chip.getAttribute('data-tag');
+            if (t) tags.push(t);
+        });
+        const input = row.querySelector('.fc-tags .fc-tag-input');
+        if (input && input.value.trim()) tags.push(input.value.trim());
+        return tags.length ? tags : undefined;
+    } catch (_) { return undefined; }
+}
+
+function flashSelectPage(checked) {
+    const boxes = document.querySelectorAll('#fc_cards_container .fc-row-select');
+    boxes.forEach(b => {
+        b.checked = !!checked;
+        const row = b.closest('tr');
+        const uuid = row?.getAttribute('data-uuid');
+        if (!uuid) return;
+        if (checked) _fcSelection.add(uuid); else _fcSelection.delete(uuid);
+    });
+    _fcSelectionAll = false;
+    _fcUpdateMasterState();
+    _fcUpdateSelectionBar();
+}
+
+async function flashBulkDeleteSelected() {
+    const uuids = Array.from(_fcSelection);
+    if (uuids.length === 0) {
+        if (typeof Toast !== 'undefined') Toast.info('No cards selected');
+        return;
+    }
+    if (!confirm(`Delete ${uuids.length} selected card(s)?`)) return;
+    let ok = 0, fail = 0;
+    for (const uuid of uuids) {
+        const expected = await _fcGetVersionFor(uuid);
+        try {
+            await window.apiClient.delete(`/api/v1/flashcards/${uuid}?expected_version=${encodeURIComponent(expected)}`);
+            // Remove from UI if visible
+            const row = document.getElementById(_fcRowId(uuid));
+            if (row) row.remove();
+            _fcSelection.delete(uuid);
+            ok++;
+        } catch (_) {
+            fail++;
+        }
+    }
+    if (typeof Toast !== 'undefined') {
+        if (fail === 0) Toast.success(`Deleted ${ok} card(s)`);
+        else Toast.warning(`Deleted ${ok}; failed ${fail}`);
+    }
+    _fcUpdateMasterState();
+    _fcUpdateSelectionBar();
+}
+
+async function flashBulkSetDeck() {
+    const newDeck = parseInt(document.getElementById('fc_bulk_deck')?.value || '', 10);
+    if (!newDeck) { if (typeof Toast !== 'undefined') Toast.warning('Enter Deck ID'); return; }
+    const uuids = Array.from(_fcSelection);
+    if (!uuids.length) { if (typeof Toast !== 'undefined') Toast.info('No cards selected'); return; }
+    if (!confirm(`Set deck to ${newDeck} for ${uuids.length} card(s)?`)) return;
+    let ok=0, fail=0;
+    for (const uuid of uuids) {
+        const expected = await _fcGetVersionFor(uuid);
+        try {
+            const data = await window.apiClient.patch(`/api/v1/flashcards/${uuid}`, { deck_id: newDeck, expected_version: expected });
+            const row = document.getElementById(_fcRowId(uuid));
+            if (row && data && typeof data.version === 'number') row.setAttribute('data-version', String(data.version));
+            // Update deck input value
+            if (row) {
+                const deckEl = row.querySelector('[data-field="deck_id"]');
+                if (deckEl) deckEl.value = String(newDeck);
+            }
+            ok++;
+        } catch (_) { fail++; }
+    }
+    if (typeof Toast !== 'undefined') {
+        if (fail === 0) Toast.success(`Updated deck for ${ok} card(s)`);
+        else Toast.warning(`Updated ${ok}; failed ${fail}`);
+    }
+}
+
+async function flashBulkSetTags() {
+    const tagsStr = (document.getElementById('fc_bulk_tags')?.value || '').trim();
+    const tags = tagsStr ? tagsStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    const append = !!document.getElementById('fc_bulk_tags_append')?.checked;
+    if (!tags.length) { if (typeof Toast !== 'undefined') Toast.warning('Enter one or more tags'); return; }
+    const uuids = Array.from(_fcSelection);
+    if (!uuids.length) { if (typeof Toast !== 'undefined') Toast.info('No cards selected'); return; }
+    if (!confirm(`${append ? 'Append' : 'Replace'} tags for ${uuids.length} card(s)?`)) return;
+    let ok=0, fail=0;
+    for (const uuid of uuids) {
+        try {
+            let finalTags = tags;
+            if (append) {
+                // Try to read from row; if not present, fetch card
+                const row = document.getElementById(_fcRowId(uuid));
+                let current = [];
+                if (row) {
+                    current = _fcCollectTagsFromRow(row) || [];
+                } else {
+                    const card = await window.apiClient.get(`/api/v1/flashcards/id/${uuid}`);
+                    try { const arr = card?.tags_json ? JSON.parse(card.tags_json) : []; current = Array.isArray(arr) ? arr : []; } catch(_) { current = []; }
+                }
+                const set = new Set([...(current || []).map(String), ...tags.map(String)]);
+                finalTags = Array.from(set);
+            }
+            await window.apiClient.put(`/api/v1/flashcards/${uuid}/tags`, { tags: finalTags });
+            // Update UI if visible
+            const row = document.getElementById(_fcRowId(uuid));
+            if (row) {
+                const cell = row.querySelector('.fc-tags');
+                if (cell) setSafeHTML(cell.parentElement, _fcRenderTagEditor(finalTags));
+            }
+            ok++;
+        } catch (_) { fail++; }
+    }
+    // Re-bind chips
+    _fcBindTagEditors();
+    if (typeof Toast !== 'undefined') {
+        if (fail === 0) Toast.success(`${append ? 'Appended' : 'Replaced'} tags for ${ok} card(s)`);
+        else Toast.warning(`Updated ${ok}; failed ${fail}`);
+    }
+}
+
+function _fcUpdateMasterState() {
+    try {
+        const cont = document.getElementById('fc_cards_container');
+        const master = cont?.querySelector('.fc-master-select');
+        if (!master) return;
+        const boxes = Array.from(cont.querySelectorAll('.fc-row-select'));
+        const checkedCount = boxes.filter(b => b.checked).length;
+        if (checkedCount === 0) { master.checked = false; master.indeterminate = false; }
+        else if (checkedCount === boxes.length) { master.checked = true; master.indeterminate = false; }
+        else { master.checked = false; master.indeterminate = true; }
+    } catch (_) {}
+}
+
+function _fcUpdateSelectionBar() {
+    try {
+        const bar = document.getElementById('fc_selection_bar');
+        if (!bar) return;
+        const count = _fcSelectionAll ? _fcLastTotal : _fcSelection.size;
+        if (count <= 0) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+        let html = `<span>${count} selected.</span> `;
+        if (!_fcSelectionAll && _fcLastTotal && _fcSelection.size < _fcLastTotal) {
+            html += `<a href="#" class="fc-select-all-results">Select all ${_fcLastTotal} results</a> · `;
+        }
+        html += `<a href="#" class="fc-clear-selection">Clear selection</a>`;
+        setSafeHTML(bar, html);
+        bar.style.display = 'block';
+    } catch (_) {}
+}
+
+function _fcBindRowActions() {
+    try {
+        const cont = document.getElementById('fc_cards_container');
+        if (cont && !cont._fcRowDelegated) {
+            cont._fcRowDelegated = true;
+            cont.addEventListener('click', (e) => {
+                const t = e.target;
+                if (!(t && t.classList)) return;
+                if (t.classList.contains('fc-update-btn')) {
+                    const uuid = t.getAttribute('data-uuid');
+                    if (uuid) flashUpdateCard(uuid);
+                } else if (t.classList.contains('fc-delete-btn')) {
+                    const uuid = t.getAttribute('data-uuid');
+                    if (uuid) flashDeleteCard(uuid);
+                }
+            });
+        }
+        const bar = document.getElementById('fc_selection_bar');
+        if (bar && !bar._fcDelegated) {
+            bar._fcDelegated = true;
+            bar.addEventListener('click', (e) => {
+                const a = e.target.closest('a');
+                if (!a) return;
+                if (a.classList.contains('fc-select-all-results')) {
+                    e.preventDefault();
+                    flashSelectAllResults();
+                } else if (a.classList.contains('fc-clear-selection')) {
+                    e.preventDefault();
+                    flashClearSelection();
+                }
+            });
+        }
+    } catch (_) {}
+}
+
+async function flashSelectAllResults() {
+    if (!_fcLastQueryCtx) { if (typeof Toast !== 'undefined') Toast.warning('List cards first'); return; }
+    const total = _fcLastTotal || 0;
+    if (total > 5000) {
+        if (!confirm(`This will select ${total} cards. Continue?`)) return;
+    }
+    try {
+        _fcSelection.clear();
+        const pageSize = 1000;
+        for (let offset = 0; offset < total; offset += pageSize) {
+            const q = { ...(_fcLastQueryCtx || {}), limit: pageSize, offset };
+            // Remove nulls
+            Object.keys(q).forEach(k => { if (q[k] == null || q[k] === '') delete q[k]; });
+            const data = await window.apiClient.get('/api/v1/flashcards', q);
+            const items = (data && data.items) || [];
+            for (const it of items) if (it.uuid) _fcSelection.add(it.uuid);
+        }
+        _fcSelectionAll = true;
+        _fcSyncCheckboxesFromSelection();
+        _fcUpdateMasterState();
+        _fcUpdateSelectionBar();
+        if (typeof Toast !== 'undefined') Toast.success(`Selected all ${_fcLastTotal} results`);
+    } catch (e) {
+        if (typeof Toast !== 'undefined') Toast.error(`Failed to select all: ${e.message || e}`);
+    }
+}
+
+function flashClearSelection() {
+    _fcSelection.clear();
+    _fcSelectionAll = false;
+    _fcSyncCheckboxesFromSelection();
+    _fcUpdateMasterState();
+    _fcUpdateSelectionBar();
+}
+
+function _fcSyncCheckboxesFromSelection() {
+    const cont = document.getElementById('fc_cards_container');
+    if (!cont) return;
+    cont.querySelectorAll('.fc-row-select').forEach(cb => {
+        const row = cb.closest('tr');
+        const uuid = row?.getAttribute('data-uuid');
+        if (!uuid) return;
+        cb.checked = _fcSelectionAll || _fcSelection.has(uuid);
+    });
+}
+
+async function _fcGetVersionFor(uuid) {
+    const row = document.getElementById(_fcRowId(uuid));
+    if (row) return parseInt(row.getAttribute('data-version') || '1', 10) || 1;
+    const card = await window.apiClient.get(`/api/v1/flashcards/id/${uuid}`);
+    return (card && typeof card.version === 'number') ? card.version : 1;
+}
+
+async function flashDeleteCard(uuid) {
+    try {
+        const row = document.getElementById(_fcRowId(uuid));
+        if (!row) return;
+        const expected = parseInt(row.dataset.version || '0', 10) || 1;
+        if (!confirm('Delete this card?')) return;
+        await window.apiClient.delete(`/api/v1/flashcards/${uuid}?expected_version=${encodeURIComponent(expected)}`);
+        row.remove();
+        if (typeof Toast !== 'undefined') Toast.success('Card deleted');
+    } catch (e) {
+        if (typeof Toast !== 'undefined') Toast.error(`Delete failed: ${e.message || e}`);
+    }
+}
+
+async function flashImportJSONFile() {
+    const input = document.getElementById('fc_import_json_file');
+    const out = document.getElementById('fc_import_json_result');
+    if (!input || !input.files || !input.files[0]) {
+        if (typeof Toast !== 'undefined') Toast.warning('Choose a JSON/JSONL file first');
+        return;
+    }
+    try {
+        const fd = new FormData();
+        fd.append('file', input.files[0]);
+        const res = await window.apiClient.makeRequest('POST', '/api/v1/flashcards/import/json', { body: fd, headers: {} });
+        if (out) setSafeHTML(out, Utils.syntaxHighlightJSON(res || {}));
+        flashPopulateDecks();
+    } catch (e) {
+        if (out) out.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashGenFetchItems() {
+    const source = (document.getElementById('fc_gen_source')?.value || 'notes').trim();
+    const box = document.getElementById('fc_gen_items');
+    if (!box) return;
+    try {
+        let html = '';
+        if (source === 'notes') {
+            const notesList = (window.apiClient && window.apiClient.endpoint('notes','list')) || '/api/v1/notes/';
+            const data = await window.apiClient.get(notesList, { limit: 20, offset: 0 });
+            const notes = (data && (data.notes || data.items)) || [];
+            for (const n of notes) {
+                const id = n.id;
+                const title = n.title || id;
+                html += `<label style="display:block; margin-bottom:6px;">
+                    <input type="checkbox" data-kind="note" value="${Utils.escapeHtml(String(id))}" />
+                    ${Utils.escapeHtml(title)}
+                </label>`;
+            }
+        } else {
+            const mediaList = (window.apiClient && window.apiClient.endpoint('media','list')) || '/api/v1/media';
+            const data = await window.apiClient.get(mediaList, { page: 1, results_per_page: 20 });
+            const items = (data && data.items) || [];
+            for (const m of items) {
+                const id = m.id;
+                const title = m.title || `Media ${id}`;
+                html += `<label style="display:block; margin-bottom:6px;">
+                    <input type="checkbox" data-kind="media" value="${Utils.escapeHtml(String(id))}" />
+                    ${Utils.escapeHtml(title)}
+                </label>`;
+            }
+        }
+        if (html) setSafeHTML(box, html); else box.textContent = 'No items.';
+    } catch (e) {
+        box.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+function _fcBuildGenPrompt() {
+    return (
+        'You are an expert tutor creating concise study flashcards. ' +
+        'Generate high-quality flashcards in JSON with an array named items. ' +
+        'Each item should have: front (string), back (string), optional notes (string), optional tags (array of strings), ' +
+        'and optional model_type ("basic"|"basic_reverse"|"cloze"). For cloze, include is_cloze=true and use {{cN::...}}. ' +
+        'Be precise and avoid duplicates.'
+    );
+}
+
+async function flashGenerateFromSelection() {
+    const box = document.getElementById('fc_gen_items');
+    const model = (document.getElementById('fc_gen_model')?.value || '').trim();
+    if (!box) return;
+    const checks = box.querySelectorAll('input[type="checkbox"]:checked');
+    if (!checks.length) { if (typeof Toast !== 'undefined') Toast.warning('Select at least one item'); return; }
+    try {
+        // Gather texts
+        let combined = '';
+        const seed = (document.getElementById('fc_gen_seed')?.value || '').trim();
+        if (seed) combined += `${seed}\n\n`;
+        for (const c of checks) {
+            const kind = c.getAttribute('data-kind');
+            const id = c.value;
+            if (kind === 'note') {
+                const nPath = (window.apiClient && window.apiClient.endpoint('notes','get', { note_id: id })) || `/api/v1/notes/${encodeURIComponent(id)}`;
+                const n = await window.apiClient.get(nPath);
+            if (n && n.title) combined += `\n\n# ${n.title}\n`;
+            if (n && n.content) combined += `${n.content}\n`;
+            } else {
+                const mPath = (window.apiClient && window.apiClient.endpoint('media','by_id', { media_id: id })) || `/api/v1/media/${encodeURIComponent(id)}`;
+                const m = await window.apiClient.get(mPath, { include_content: 'true', include_versions: 'false' });
+                const text = m && m.content && (m.content.text || m.content.transcript || m.content.analysis) || '';
+                const title = m && m.source && m.source.title;
+                if (title) combined += `\n\n# ${title}\n`;
+                if (text) combined += `${text}\n`;
+            }
+        }
+        // Build chat payload
+        const sys = _fcBuildGenPrompt();
+        const messages = [
+            { role: 'system', content: sys },
+            { role: 'user', content: 'Create flashcards from the following content. Respond with JSON: {"items":[...]}.' },
+            { role: 'user', content: combined.slice(0, 200000) }
+        ];
+        const body = { model: model || undefined, messages, temperature: 0.3 };
+        const res = await window.apiClient.post((window.apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), body);
+        const choice = res && res.choices && res.choices[0];
+        const text = (choice && choice.message && choice.message.content) || '';
+        // Try to parse JSON from response
+        let parsed = null;
+        try {
+            const m = text.match(/```json[\s\S]*?```/i) || text.match(/\{[\s\S]*\}/);
+            const jsonStr = m ? (m[0].replace(/```json|```/gi, '')) : text;
+            parsed = JSON.parse(jsonStr);
+        } catch(_) {}
+        const preview = document.getElementById('fc_gen_preview');
+        if (parsed) {
+            // Expect either {items:[...]} or [...]
+            const items = Array.isArray(parsed) ? parsed : (parsed.items || []);
+            setSafeHTML(preview, Utils.syntaxHighlightJSON(items));
+            preview.dataset.items = JSON.stringify(items);
+        } else {
+            preview.textContent = text || '[no response]';
+            preview.dataset.items = '';
+        }
+    } catch (e) {
+        const preview = document.getElementById('fc_gen_preview');
+        if (preview) preview.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashGenerateImportDraft() {
+    const preview = document.getElementById('fc_gen_preview');
+    const deckSel = document.getElementById('fc_gen_deck');
+    const tagsStr = (document.getElementById('fc_gen_tags')?.value || '').trim();
+    if (!preview) return;
+    let items = [];
+    try { items = JSON.parse(preview.dataset.items || '[]'); } catch(_) { items = []; }
+    if (!Array.isArray(items) || !items.length) { if (typeof Toast !== 'undefined') Toast.warning('No draft cards to import'); return; }
+    const deckId = deckSel && deckSel.value ? Number(deckSel.value) : undefined;
+    const defaultTags = tagsStr ? tagsStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    const payload = items.map(it => ({
+        deck_id: typeof it.deck_id === 'number' ? it.deck_id : deckId,
+        front: String(it.front || ''),
+        back: String(it.back || ''),
+        notes: it.notes ? String(it.notes) : undefined,
+        tags: Array.isArray(it.tags) ? it.tags.map(String) : defaultTags,
+        model_type: it.model_type || (it.is_cloze ? 'cloze' : (it.reverse ? 'basic_reverse' : 'basic')),
+        is_cloze: it.is_cloze ? true : undefined,
+        reverse: it.reverse ? true : undefined,
+        source_ref_type: 'manual'
+    }));
+    try {
+        const res = await window.apiClient.post('/api/v1/flashcards/bulk', payload);
+        if (typeof Toast !== 'undefined') Toast.success(`Imported ${res && res.count || payload.length} cards`);
+        // clear preview dataset
+        preview.dataset.items = '';
+        // refresh decks to reflect possible new deck creation elsewhere
+        flashPopulateDecks();
+    } catch (e) {
+        if (typeof Toast !== 'undefined') Toast.error(`Import failed: ${e.message || e}`);
+    }
+}
+
+// Deep-link helpers from Notes/Media
+window.notesCreateFlashcardsFromDisplayed = function () {
+    try {
+        const pre = document.getElementById('notesGet_response');
+        let text = window.getSelection && String(window.getSelection()) || '';
+        if (!text && pre) text = pre.textContent || '';
+        _fcNavigateWithSeed(text);
+    } catch (e) { if (typeof Toast !== 'undefined') Toast.error('Failed to capture selection'); }
+};
+
+window.mediaCreateFlashcardsFromHighlighted = function () {
+    try {
+        const ta = document.getElementById('analysisMediaContent');
+        let text = window.getSelection && String(window.getSelection()) || '';
+        if (!text && ta) text = ta.value || '';
+        _fcNavigateWithSeed(text);
+    } catch (e) { if (typeof Toast !== 'undefined') Toast.error('Failed to capture selection'); }
+};
+
+function _fcNavigateWithSeed(seedText) {
+    try {
+        // Switch to Flashcards top tab and Import subtab
+        const flashTop = document.querySelector('.top-tab-button[data-toptab="flashcards"]');
+        if (flashTop && typeof window.webUI?.activateTopTab === 'function') {
+            window.webUI.activateTopTab(flashTop).then(() => {
+                const subrow = document.getElementById('flashcards-subtabs');
+                const importBtn = subrow && subrow.querySelector('.sub-tab-button[data-content-id="tabFlashcardsImport"]');
+                if (importBtn) window.webUI.activateSubTab(importBtn);
+                setTimeout(() => {
+                    const seedBox = document.getElementById('fc_gen_seed');
+                    if (seedBox && seedText) seedBox.value = seedText.slice(0, 200000);
+                    // Highlight and scroll Generate section
+                    const genPanel = document.getElementById('fc_gen_seed')?.closest('.column');
+                    if (genPanel) {
+                        genPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const oldBg = genPanel.style.backgroundColor;
+                        genPanel.style.backgroundColor = 'rgba(255, 246, 143, 0.5)';
+                        setTimeout(() => { genPanel.style.backgroundColor = oldBg || ''; }, 1200);
+                    }
+                }, 150);
+            });
+        } else {
+            // Fallback: set textarea if present
+            const seedBox = document.getElementById('fc_gen_seed');
+            if (seedBox && seedText) seedBox.value = seedText.slice(0, 200000);
+        }
+        if (typeof Toast !== 'undefined') Toast.info('Switched to Flashcards. Seed set in Generate section.');
+    } catch (_) { /* ignore */ }
+}
+
+async function flashLoadDueCard() {
+    const deckId = (document.getElementById('fc_review_deck')?.value || '').trim();
+    const query = { due_status: 'due', limit: 1 };
+    if (deckId) query.deck_id = deckId;
+    try {
+        const data = await window.apiClient.get('/api/v1/flashcards', query);
+        const items = (data && data.items) || [];
+        const cf = document.getElementById('fc_card_front');
+        const cb = document.getElementById('fc_card_back');
+        const rv = document.getElementById('fc_reveal_btn');
+        const cu = document.getElementById('fc_current_uuid');
+        if (!items.length) {
+            if (cf) cf.textContent = 'No due cards.';
+            if (cb) { cb.textContent = ''; cb.style.display = 'none'; }
+            if (rv) rv.disabled = true;
+            if (cu) cu.value = '';
+            return;
+        }
+        const card = items[0];
+        if (cf) cf.textContent = card.front || '';
+        if (cb) { cb.textContent = card.back || ''; cb.style.display = 'none'; }
+        if (rv) rv.disabled = false;
+        if (cu) cu.value = card.uuid || '';
+    } catch (e) {
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+function flashRevealBack() {
+    try {
+        const cb = document.getElementById('fc_card_back');
+        if (cb) cb.style.display = 'block';
+    } catch (e) { /* ignore */ }
+}
+
+async function flashReviewRate(rating) {
+    const cu = document.getElementById('fc_current_uuid');
+    const uuid = (cu && cu.value) ? cu.value : '';
+    if (!uuid) {
+        if (typeof Toast !== 'undefined') Toast.warning('Load a due card first');
+        return;
+    }
+    let ans = 0;
+    try { ans = parseInt(document.getElementById('fc_answer_time')?.value || '0', 10) || 0; } catch(_){}
+    const payload = { card_uuid: uuid, rating: Number(rating), answer_time_ms: ans || undefined };
+    try {
+        const data = await window.apiClient.post('/api/v1/flashcards/review', payload);
+        const rr = document.getElementById('fc_review_result');
+        if (rr) setSafeHTML(rr, Utils.syntaxHighlightJSON(data || {}));
+        // Load next due
+        setTimeout(() => flashLoadDueCard(), 100);
+    } catch (e) {
+        const rr = document.getElementById('fc_review_result');
+        if (rr) rr.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashImportTSV() {
+    const content = (document.getElementById('fc_import_text')?.value || '').trim();
+    const delimiter = (document.getElementById('fc_import_delim')?.value || '\t');
+    const hasHeader = !!(document.getElementById('fc_import_has_header')?.checked);
+    if (!content) {
+        if (typeof Toast !== 'undefined') Toast.warning('Paste some content to import');
+        return;
+    }
+    const payload = { content, delimiter, has_header: hasHeader };
+    try {
+        const data = await window.apiClient.post('/api/v1/flashcards/import', payload);
+        const el = document.getElementById('fc_import_result');
+        if (el) setSafeHTML(el, Utils.syntaxHighlightJSON(data || {}));
+        flashPopulateDecks();
+    } catch (e) {
+        const el = document.getElementById('fc_import_result');
+        if (el) el.textContent = `Error: ${e.message || e}`;
+    }
+}
+
+async function flashExport() {
+    const deckId = (document.getElementById('fc_export_deck')?.value || '').trim();
+    const tag = (document.getElementById('fc_export_tag')?.value || '').trim();
+    const format = (document.getElementById('fc_export_format')?.value || 'csv').trim();
+    const includeHeader = !!(document.getElementById('fc_export_header')?.checked);
+    const extendedHeader = !!(document.getElementById('fc_export_extended')?.checked);
+    const includeReverse = !!(document.getElementById('fc_export_reverse')?.checked);
+    const query = { format };
+    if (deckId) query.deck_id = deckId;
+    if (tag) query.tag = tag;
+    if (format !== 'apkg') {
+        query.include_header = includeHeader ? 'true' : 'false';
+        query.extended_header = extendedHeader ? 'true' : 'false';
+    } else {
+        query.include_reverse = includeReverse ? 'true' : 'false';
+    }
+    try {
+        const blob = await window.apiClient.get('/api/v1/flashcards/export', query, { responseType: 'blob' });
+        const name = format === 'apkg' ? 'flashcards.apkg' : 'flashcards.csv';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        if (typeof Toast !== 'undefined') Toast.error(`Export failed: ${e.message || e}`);
+    }
+}
+
+
 // Button handlers wired in audio_content.html
 async function generateTTS() {
     return audioTTSGenerate();
@@ -343,17 +1471,17 @@ async function embeddingsListDLQ() {
                 <td>${Utils.escapeHtml(state)}</td>
                 <td>${Utils.escapeHtml(note)}</td>
                 <td>
-                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
-                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <button class="api-button" data-action="dlq-requeue" data-entry-id="${eid}">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" data-action="dlq-skip" data-job-id="${job}">Skip</button>` : ''}
                     <div class="btn-group" style="margin-top:4px">
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
-                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="quarantined">Quarantine</button>
+                      <button class="api-button" data-action="dlq-approve" data-entry-id="${eid}">Approve</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="ignored">Ignore</button>
                     </div>
                 </td>
             </tr>`;
         }).join('');
-        out.innerHTML = `
+        const __dlqMarkup = `
             <table class="table">
                 <thead>
                     <tr><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
@@ -362,6 +1490,37 @@ async function embeddingsListDLQ() {
             </table>
             <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(out, __dlqMarkup);
+        } else {
+            out.innerHTML = __dlqMarkup;
+        }
+
+        // Bind DLQ actions via delegation
+        try {
+            if (out && !out._dlqBound) {
+                out._dlqBound = true;
+                out.addEventListener('click', (ev) => {
+                    const btn = ev.target && ev.target.closest('button[data-action]');
+                    if (!btn) return;
+                    const action = btn.getAttribute('data-action');
+                    if (action === 'dlq-requeue') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsRequeueDLQ(id);
+                    } else if (action === 'dlq-skip') {
+                        const jobId = btn.getAttribute('data-job-id');
+                        if (jobId) embeddingsSkipJob(jobId);
+                    } else if (action === 'dlq-set-state') {
+                        const id = btn.getAttribute('data-entry-id');
+                        const state = btn.getAttribute('data-state');
+                        if (id && state) embeddingsSetDLQState(id, state);
+                    } else if (action === 'dlq-approve') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsApproveDLQ(id);
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');
@@ -425,17 +1584,17 @@ async function embeddingsListDLQ2() {
                 <td>${Utils.escapeHtml(state)}</td>
                 <td>${Utils.escapeHtml(note)}</td>
                 <td>
-                    <button class="api-button" onclick="embeddingsRequeueDLQ('${eid}')">Requeue</button>
-                    ${job ? `<button class="api-button btn-warning" onclick="embeddingsSkipJob('${job}')">Skip</button>` : ''}
+                    <button class="api-button" data-action="dlq-requeue" data-entry-id="${eid}">Requeue</button>
+                    ${job ? `<button class="api-button btn-warning" data-action="dlq-skip" data-job-id="${job}">Skip</button>` : ''}
                     <div class="btn-group" style="margin-top:4px">
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','quarantined')">Quarantine</button>
-                      <button class="api-button" onclick="embeddingsApproveDLQ('${eid}')">Approve</button>
-                      <button class="api-button" onclick="embeddingsSetDLQState('${eid}','ignored')">Ignore</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="quarantined">Quarantine</button>
+                      <button class="api-button" data-action="dlq-approve" data-entry-id="${eid}">Approve</button>
+                      <button class="api-button" data-action="dlq-set-state" data-entry-id="${eid}" data-state="ignored">Ignore</button>
                     </div>
                 </td>
             </tr>`;
         }).join('');
-        out.innerHTML = `
+        const __dlq2Markup = `
             <table class="table">
                 <thead>
                     <tr><th></th><th>Entry ID</th><th>Job ID</th><th>Error</th><th>Code</th><th>Type</th><th>State</th><th>Note</th><th>Action</th></tr>
@@ -444,6 +1603,37 @@ async function embeddingsListDLQ2() {
             </table>
             <details style="margin-top:8px"><summary>Raw</summary><pre>${Utils.syntaxHighlight(res)}</pre></details>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(out, __dlq2Markup);
+        } else {
+            out.innerHTML = __dlq2Markup;
+        }
+
+        // Bind DLQ actions via delegation (reuse same handler)
+        try {
+            if (out && !out._dlqBound) {
+                out._dlqBound = true;
+                out.addEventListener('click', (ev) => {
+                    const btn = ev.target && ev.target.closest('button[data-action]');
+                    if (!btn) return;
+                    const action = btn.getAttribute('data-action');
+                    if (action === 'dlq-requeue') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsRequeueDLQ(id);
+                    } else if (action === 'dlq-skip') {
+                        const jobId = btn.getAttribute('data-job-id');
+                        if (jobId) embeddingsSkipJob(jobId);
+                    } else if (action === 'dlq-set-state') {
+                        const id = btn.getAttribute('data-entry-id');
+                        const state = btn.getAttribute('data-state');
+                        if (id && state) embeddingsSetDLQState(id, state);
+                    } else if (action === 'dlq-approve') {
+                        const id = btn.getAttribute('data-entry-id');
+                        if (id) embeddingsApproveDLQ(id);
+                    }
+                });
+            }
+        } catch (_) { /* ignore */ }
     } catch (e) {
         out.textContent = JSON.stringify(e.response || e, null, 2);
         Toast.error('Failed to list DLQ');
@@ -787,10 +1977,11 @@ async function loadProviderVoices() {
         // Show loading state
         if (voiceList) {
             voiceList.style.display = 'block';
-            voiceList.innerHTML = '<span class="loading-spinner"></span> Loading voices...';
+            setSafeHTML(voiceList, '<span class="loading-spinner"></span> Loading voices...');
         }
 
-        const res = await apiClient.get('/api/v1/audio/voices/catalog', { provider });
+        const voicesEp = apiClient.endpoint('audio','voices_catalog') || '/api/v1/audio/voices/catalog';
+        const res = await apiClient.get(voicesEp, { provider });
         const voices = (res && (res[provider] || res[provider?.toLowerCase?.()] || res[provider?.toUpperCase?.()])) || res || [];
 
         // Update dropdown
@@ -807,7 +1998,7 @@ async function loadProviderVoices() {
         // Render list
         if (voiceList) {
             if (!Array.isArray(voices) || !voices.length) {
-                voiceList.innerHTML = '<span class="text-muted">No voices reported by provider.</span>';
+                setSafeHTML(voiceList, '<span class="text-muted">No voices reported by provider.</span>');
             } else {
                 const items = voices.map(v => {
                     const id = v.id || v.name || 'voice';
@@ -1337,7 +2528,8 @@ async function loadEmbeddingProviderConfig() {
     try {
         const baseUrl = (window.apiClient && window.apiClient.baseUrl) ? window.apiClient.baseUrl : window.location.origin;
         const token = (window.apiClient && window.apiClient.token) ? window.apiClient.token : '';
-        const res = await fetch(`${baseUrl}/api/v1/embeddings/providers-config`, {
+        const ep = (window.apiClient && window.apiClient.endpoint('embeddings','providers_config')) || '/api/v1/embeddings/providers-config';
+        const res = await fetch(`${baseUrl}${ep}`, {
             headers: {
                 ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
             }
@@ -1518,6 +2710,12 @@ function initializeWebScrapingIngestTab() {
 
         // Initial validation state
         updateFriendlyIngestValidationState();
+
+        // Bind submit/show-curl buttons (replacing inline handlers)
+        const submitBtn = document.getElementById('friendlyIngest_submit');
+        if (submitBtn && !submitBtn._bound) { submitBtn.addEventListener('click', () => submitWebScrapingIngestFriendly(false)); submitBtn._bound = true; }
+        const curlBtn = document.getElementById('friendlyIngest_show_curl');
+        if (curlBtn && !curlBtn._bound) { curlBtn.addEventListener('click', () => submitWebScrapingIngestFriendly(true)); curlBtn._bound = true; }
     } catch (e) {
         console.warn('Failed to initialize Web Scraping Ingest tab:', e.message);
     }
@@ -1663,7 +2861,7 @@ function updateFriendlyIngestValidationState() {
         } else {
             // Render as list for clarity
             const list = errors.map(e => `<li>${e}</li>`).join('');
-            hintEl.innerHTML = `<ul style="margin: 6px 0 0 18px;">${list}</ul>`;
+            setSafeHTML(hintEl, `<ul style="margin: 6px 0 0 18px;">${list}</ul>`);
         }
     }
 
@@ -1674,7 +2872,7 @@ function updateFriendlyIngestValidationState() {
         } else {
             const prefix = '<strong>Please fix the following:</strong>';
             const list = errors.map(e => `<li>${e}</li>`).join('');
-            summaryEl.innerHTML = `${prefix}<ul style="margin: 6px 0 0 18px;">${list}</ul>`;
+            setSafeHTML(summaryEl, `${prefix}<ul style="margin: 6px 0 0 18px;">${list}</ul>`);
             summaryEl.classList.add('visible');
         }
     }
@@ -1969,7 +3167,7 @@ function renderMultiQueue(queue) {
     container.innerHTML = '';
 
     if (!Array.isArray(queue) || queue.length === 0) {
-        container.innerHTML = '<div style="color: var(--color-text-muted);">Queue is empty.</div>';
+        setSafeHTML(container, '<div style="color: var(--color-text-muted);">Queue is empty.</div>');
         return;
     }
 
@@ -1984,20 +3182,46 @@ function renderMultiQueue(queue) {
             metaHtml = `<div class="json-viewer-content" style="margin-top:8px;">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</div>`;
         }
 
-        card.innerHTML = `
+        const html = `
             <h3 style="margin-bottom:4px;">${escapeHtml(item.title || 'Untitled')} <small style="color: var(--color-text-muted);">(${item.ephemeral ? 'Ephemeral' : 'ID: ' + item.media_id})</small></h3>
             <div style="margin-bottom:8px; color: var(--color-text-secondary);">${escapeHtml(item.source || '')}</div>
             ${metaHtml}
             <div class="form-group" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                <button class="btn btn-primary" onclick="${item.ephemeral ? `multiAnalyzeEphemeral('${key}')` : `multiAnalyzeItem(${key})`}">Analyze</button>
-                <button class="btn" onclick="${item.ephemeral ? `multiSaveEphemeralAnalysis('${key}')` : `multiSaveItemAnalysis(${key})`}">Save Analysis</button>
-                <button class="btn btn-danger" onclick="${item.ephemeral ? `multiRemoveEphemeral('${key}')` : `multiRemoveFromQueue(${key})`}">Remove</button>
+                <button class="btn btn-primary" data-action="multi-analyze" data-key="${key}" data-ephemeral="${item.ephemeral ? '1' : '0'}">Analyze</button>
+                <button class="btn" data-action="multi-save" data-key="${key}" data-ephemeral="${item.ephemeral ? '1' : '0'}">Save Analysis</button>
+                <button class="btn btn-danger" data-action="multi-remove" data-key="${key}" data-ephemeral="${item.ephemeral ? '1' : '0'}">Remove</button>
             </div>
             <h4>Analysis</h4>
             <pre id="multi_analysis_${key}">(Not analyzed)</pre>
         `;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(card, html);
+        } else {
+            card.innerHTML = html;
+        }
         container.appendChild(card);
     });
+
+    // Bind container actions via delegation (once)
+    try {
+        if (!container._multiBound) {
+            container._multiBound = true;
+            container.addEventListener('click', (ev) => {
+                const btn = ev.target && ev.target.closest('button[data-action]');
+                if (!btn) return;
+                const action = btn.getAttribute('data-action');
+                const key = btn.getAttribute('data-key');
+                const isEphemeral = btn.getAttribute('data-ephemeral') === '1';
+                if (action === 'multi-analyze') {
+                    try { isEphemeral ? multiAnalyzeEphemeral(key) : multiAnalyzeItem(key); } catch (_) {}
+                } else if (action === 'multi-save') {
+                    try { isEphemeral ? multiSaveEphemeralAnalysis(key) : multiSaveItemAnalysis(key); } catch (_) {}
+                } else if (action === 'multi-remove') {
+                    try { isEphemeral ? multiRemoveEphemeral(key) : multiRemoveFromQueue(key); } catch (_) {}
+                }
+            });
+        }
+    } catch (_) { /* ignore */ }
 }
 
 function multiPersistQueue(queue) {
@@ -2041,7 +3265,7 @@ async function multiSearchItems() {
         } else {
             html = '(No results)';
         }
-        target.innerHTML = html;
+        setSafeHTML(target, html);
     } catch (e) {
         target.textContent = 'Search failed: ' + e.message;
     }
@@ -2593,7 +3817,8 @@ async function makeChatCompletionsRequest() {
         if (payload.stream) {
             // Handle streaming response
             responseEl.textContent += 'Streaming response:\n';
-            const response = await apiClient.post('/api/v1/chat/completions', payload, {
+                const chatEp = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+                const response = await apiClient.post(chatEp, payload, {
                 streaming: true,
                 onProgress: (chunk) => {
                     if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
@@ -2602,14 +3827,18 @@ async function makeChatCompletionsRequest() {
                 }
             });
             responseEl.textContent += '\n\n[Stream Complete]';
+            try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
         } else {
             // Handle regular response
-            const response = await apiClient.post('/api/v1/chat/completions', payload);
+            const chatEp2 = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+            const response = await apiClient.post(chatEp2, payload);
             responseEl.textContent += '\nResponse:\n' + JSON.stringify(response, null, 2);
+            try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
         }
     } catch (error) {
         responseEl.textContent = `Error: ${error.message}`;
         console.error('Chat completions error:', error);
+        try { endpointHelper.updateCorrelationSnippet(responseEl); } catch (_) {}
     }
 }
 
@@ -2931,7 +4160,7 @@ async function sendChatMessage() {
                     } catch (_) {}
                 });
             };
-            chatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+            chatStreamHandle = apiClient.streamSSE((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), {
                 method: 'POST',
                 body: requestPayload,
                 onEvent: (evt) => {
@@ -2995,7 +4224,8 @@ async function sendChatMessage() {
             return;
         }
 
-        const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
+        const chatEp3 = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+        const response = await apiClient.post(chatEp3, requestPayload);
 
         if (response.choices && response.choices[0] && response.choices[0].message) {
             const assistantMessage = response.choices[0].message.content;
@@ -3334,7 +4564,7 @@ async function continueConversation() {
                 } catch (_) {}
             });
         };
-        chatStreamHandle = apiClient.streamSSE('/api/v1/chat/completions', {
+        chatStreamHandle = apiClient.streamSSE((apiClient.endpoint('chat','completions') || '/api/v1/chat/completions'), {
             method: 'POST',
             body: requestPayload,
             onEvent: (evt) => {
@@ -3387,7 +4617,8 @@ async function continueConversation() {
 
     // Non-stream
     try {
-        const response = await apiClient.post('/api/v1/chat/completions', requestPayload);
+        const chatEp4 = apiClient.endpoint('chat','completions') || '/api/v1/chat/completions';
+        const response = await apiClient.post(chatEp4, requestPayload);
         const assistantMessage = response?.choices?.[0]?.message?.content || '';
         chatMessages.push({ role: 'assistant', content: assistantMessage });
         assistantDiv.innerHTML = '';
@@ -3866,7 +5097,11 @@ async function populateModelDropdowns() {
         if (!providersInfo || !providersInfo.providers || providersInfo.providers.length === 0) {
             console.warn('No LLM providers configured');
             document.querySelectorAll('.llm-model-select').forEach(select => {
-                select.innerHTML = '<option value="">No models available - check configuration</option>';
+                while (select.firstChild) select.removeChild(select.firstChild);
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'No models available - check configuration';
+                select.appendChild(opt);
             });
             return;
         }
@@ -3913,7 +5148,7 @@ async function populateModelDropdowns() {
             }
             html += optionsHtml;
 
-            select.innerHTML = html;
+            setSafeHTML(select, html);
 
             if (currentValue) {
                 select.value = currentValue;
@@ -3930,7 +5165,11 @@ async function populateModelDropdowns() {
     } catch (error) {
         console.error('Failed to populate model dropdowns:', error);
         document.querySelectorAll('.llm-model-select').forEach(select => {
-            select.innerHTML = '<option value="">Error loading models</option>';
+            while (select.firstChild) select.removeChild(select.firstChild);
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Error loading models';
+            select.appendChild(opt);
         });
     }
 }
@@ -4085,14 +5324,15 @@ async function createPrompt() {
         responseEl.textContent = 'Creating prompt...';
 
         // Generate cURL command
+        const createPath = (window.apiClient && window.apiClient.endpoint('prompts','create')) || '/api/v1/prompts';
         const curlCommand = (typeof apiClient.generateCurlV2 === 'function'
-            ? apiClient.generateCurlV2('POST', '/api/v1/prompts', { body: payload })
-            : apiClient.generateCurl('POST', '/api/v1/prompts', { body: payload }));
+            ? apiClient.generateCurlV2('POST', createPath, { body: payload })
+            : apiClient.generateCurl('POST', createPath, { body: payload }));
         if (curlEl) {
             curlEl.textContent = curlCommand;
         }
 
-        const response = await apiClient.makeRequest('POST', '/api/v1/prompts', { body: payload });
+        const response = await apiClient.makeRequest('POST', createPath, { body: payload });
         responseEl.textContent = JSON.stringify(response, null, 2);
 
         // Show success message
@@ -5118,7 +6358,7 @@ async function watchlistsListRuns() {
         }
         html += '</tbody></table>';
         const tableDiv = document.getElementById('watchlistsRuns_table');
-        if (tableDiv) tableDiv.innerHTML = html;
+        if (tableDiv) setSafeHTML(tableDiv, html);
         watchlistsSetResponse('watchlistsRuns_response', res);
     } catch (err) {
         watchlistsSetResponse('watchlistsRuns_response', `Error: ${err.message}`);

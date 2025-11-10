@@ -96,6 +96,20 @@ class ToastManager {
     }
 }
 
+// Local SafeDOM helper for this module
+function setSafeHTML(el, html) {
+    if (!el) return;
+    try {
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') {
+            window.SafeDOM.setHTML(el, html);
+        } else {
+            el.innerHTML = html;
+        }
+    } catch (_) {
+        try { el.innerHTML = html; } catch (_) {}
+    }
+}
+
 class LoadingIndicator {
     constructor() {
         this.activeLoaders = new Map();
@@ -183,7 +197,7 @@ class Modal {
         // Create modal
         this.modal = document.createElement('div');
         this.modal.className = `modal modal-${this.options.size}`;
-        this.modal.innerHTML = `
+        const __modalMarkup = `
             <div class="modal-header">
                 <h2 class="modal-title">${this.options.title}</h2>
                 ${this.options.closeButton ? '<button class="modal-close" aria-label="Close">×</button>' : ''}
@@ -193,6 +207,7 @@ class Modal {
             </div>
             ${this.options.footer ? `<div class="modal-footer">${this.options.footer}</div>` : ''}
         `;
+        setSafeHTML(this.modal, __modalMarkup);
 
         // ARIA roles and labelling
         try {
@@ -275,9 +290,7 @@ class Modal {
 
     setContent(content) {
         const body = this.modal.querySelector('.modal-body');
-        if (body) {
-            body.innerHTML = content;
-        }
+        if (body) setSafeHTML(body, content);
     }
 }
 
@@ -300,23 +313,30 @@ class JSONViewer {
         const wrapper = document.createElement('div');
         wrapper.className = `json-viewer json-viewer-${this.options.theme}`;
 
-        if (this.options.enableCopy) {
-            const toolbar = document.createElement('div');
-            toolbar.className = 'json-viewer-toolbar';
-            toolbar.innerHTML = `
-                <button class="btn btn-sm" onclick="Utils.copyToClipboard('${Utils.escapeHtml(JSON.stringify(this.json, null, 2))}')">
-                    Copy JSON
-                </button>
-                <button class="btn btn-sm" onclick="Utils.downloadData(${Utils.escapeHtml(JSON.stringify(this.json))}, 'data.json')">
-                    Download
-                </button>
-            `;
-            wrapper.appendChild(toolbar);
-        }
+            if (this.options.enableCopy) {
+                const toolbar = document.createElement('div');
+                toolbar.className = 'json-viewer-toolbar';
+                // Build toolbar buttons programmatically to avoid inline handlers
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'btn btn-sm';
+                copyBtn.textContent = 'Copy JSON';
+                copyBtn.addEventListener('click', async () => {
+                    try { await Utils.copyToClipboard(JSON.stringify(this.json, null, 2)); } catch (_) {}
+                });
+                const dlBtn = document.createElement('button');
+                dlBtn.className = 'btn btn-sm';
+                dlBtn.textContent = 'Download';
+                dlBtn.addEventListener('click', () => {
+                    try { Utils.downloadData(this.json, 'data.json'); } catch (_) {}
+                });
+                toolbar.appendChild(copyBtn);
+                toolbar.appendChild(dlBtn);
+                wrapper.appendChild(toolbar);
+            }
 
         const content = document.createElement('div');
         content.className = 'json-viewer-content';
-        content.innerHTML = this.renderValue(this.json, 0);
+        setSafeHTML(content, this.renderValue(this.json, 0));
         wrapper.appendChild(content);
 
         this.container.appendChild(wrapper);
@@ -325,6 +345,8 @@ class JSONViewer {
         if (this.options.enableCollapse) {
             this.attachCollapseHandlers();
         }
+        // Bind any quick-action buttons that were rendered
+        this.attachQuickActionHandlers(content);
     }
 
     renderValue(value, depth) {
@@ -408,31 +430,31 @@ class JSONViewer {
                 html += `<div class="json-item">`;
                 if (batchItem) {
                     const payload = encodeURIComponent(JSON.stringify(batchItem));
-                    html += `<button class="btn btn-sm" onclick="addSearchItemToBatchFromPayload(this)" data-payload="${payload}">➕ Add to Batch</button>`;
+                    html += `<button class="btn btn-sm json-qa" data-action="add-batch" data-payload="${payload}">➕ Add to Batch</button>`;
                 }
                 if (pmcItem) {
                     const payloadPmc = encodeURIComponent(JSON.stringify(pmcItem));
-                    html += ` <button class="btn btn-sm" onclick="addPmcItemToBatchFromPayload(this)" data-payload="${payloadPmc}">➕ Add to PMC Batch</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="add-pmc" data-payload="${payloadPmc}">➕ Add to PMC Batch</button>`;
                 }
                 if (zenodoItem) {
                     const payloadZen = encodeURIComponent(JSON.stringify(zenodoItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestZenodoFromPayload(this)" data-payload="${payloadZen}">🚀 Ingest (Zenodo)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-zenodo" data-payload="${payloadZen}">🚀 Ingest (Zenodo)</button>`;
                 }
                 if (vixraItem) {
                     const payloadVix = encodeURIComponent(JSON.stringify(vixraItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestVixraFromPayload(this)" data-payload="${payloadVix}">🚀 Ingest (viXra)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-vixra" data-payload="${payloadVix}">🚀 Ingest (viXra)</button>`;
                 }
                 if (figshareItem) {
                     const payloadFig = encodeURIComponent(JSON.stringify(figshareItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestFigshareFromPayload(this)" data-payload="${payloadFig}">🚀 Ingest (Figshare)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-figshare" data-payload="${payloadFig}">🚀 Ingest (Figshare)</button>`;
                 }
                 if (halItem) {
                     const payloadHal = encodeURIComponent(JSON.stringify(halItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestHalFromPayload(this)" data-payload="${payloadHal}">🚀 Ingest (HAL)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-hal" data-payload="${payloadHal}">🚀 Ingest (HAL)</button>`;
                 }
                 if (osfItem) {
                     const payloadOsf = encodeURIComponent(JSON.stringify(osfItem));
-                    html += ` <button class="btn btn-sm" onclick="ingestOsfFromPayload(this)" data-payload="${payloadOsf}">🚀 Ingest (OSF)</button>`;
+                    html += ` <button class="btn btn-sm json-qa" data-action="ingest-osf" data-payload="${payloadOsf}">🚀 Ingest (OSF)</button>`;
                 }
                 html += `</div>`;
             }
@@ -599,6 +621,31 @@ class JSONViewer {
             return null;
         }
     }
+
+    attachQuickActionHandlers(rootEl) {
+        try {
+            const root = rootEl || this.container;
+            if (!root) return;
+            const map = {
+                'add-batch': (btn) => { try { window.addSearchItemToBatchFromPayload && window.addSearchItemToBatchFromPayload(btn); } catch(_){} },
+                'add-pmc': (btn) => { try { window.addPmcItemToBatchFromPayload && window.addPmcItemToBatchFromPayload(btn); } catch(_){} },
+                'ingest-zenodo': (btn) => { try { window.ingestZenodoFromPayload && window.ingestZenodoFromPayload(btn); } catch(_){} },
+                'ingest-vixra': (btn) => { try { window.ingestVixraFromPayload && window.ingestVixraFromPayload(btn); } catch(_){} },
+                'ingest-figshare': (btn) => { try { window.ingestFigshareFromPayload && window.ingestFigshareFromPayload(btn); } catch(_){} },
+                'ingest-hal': (btn) => { try { window.ingestHalFromPayload && window.ingestHalFromPayload(btn); } catch(_){} },
+                'ingest-osf': (btn) => { try { window.ingestOsfFromPayload && window.ingestOsfFromPayload(btn); } catch(_){} },
+            };
+            root.querySelectorAll('button.json-qa[data-action]')
+                .forEach((btn) => {
+                    if (btn._qaBound) return; btn._qaBound = true;
+                    btn.addEventListener('click', () => {
+                        const action = btn.getAttribute('data-action');
+                        const fn = map[action];
+                        if (typeof fn === 'function') fn(btn);
+                    });
+                });
+        } catch (_) {}
+    }
 }
 
 // Initialize global instances
@@ -609,7 +656,7 @@ const Loading = new LoadingIndicator();
 function addSearchItemToBatch(item) {
     try {
         const ta = document.getElementById('oaIngestBatch_payload');
-        if (!ta) { Toast.warning('Open OA Ingest Batch panel to collect selections.'); return; }
+        if (!ta) { if (typeof Toast !== 'undefined' && Toast) Toast.warning('Open OA Ingest Batch panel to collect selections.'); return; }
         let arr = [];
         const current = (ta.value || '').trim();
         if (current.startsWith('[')) {
@@ -619,7 +666,7 @@ function addSearchItemToBatch(item) {
         if (!Array.isArray(arr)) arr = [];
         arr.push(item);
         ta.value = JSON.stringify(arr, null, 2);
-        Toast.success('Added to batch');
+        if (typeof Toast !== 'undefined' && Toast) Toast.success('Added to batch');
     } catch (e) {
         console.error('addSearchItemToBatch failed', e);
         alert('Failed to add to batch: ' + (e?.message || e));
@@ -642,7 +689,7 @@ function addSearchItemToBatchFromPayload(el) {
 function addPmcItemToBatch(item) {
     try {
         const ta = document.getElementById('pmcBatchIngest_payload');
-        if (!ta) { Toast.warning('Open PMC Batch Ingest panel to collect selections.'); return; }
+        if (!ta) { if (typeof Toast !== 'undefined' && Toast) Toast.warning('Open PMC Batch Ingest panel to collect selections.'); return; }
         let arr = [];
         const current = (ta.value || '').trim();
         if (current.startsWith('[')) {
@@ -652,10 +699,10 @@ function addPmcItemToBatch(item) {
         if (!Array.isArray(arr)) arr = [];
         // Normalize to minimal { pmcid, title?, author? }
         const pmcid = String(item.pmcid || item.PMCID || '').trim();
-        if (!pmcid) { Toast.error('Invalid PMCID payload'); return; }
+        if (!pmcid) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Invalid PMCID payload'); return; }
         arr.push({ pmcid, title: item.title || undefined, author: item.author || undefined, keywords: item.keywords || undefined });
         ta.value = JSON.stringify(arr, null, 2);
-        Toast.success('Added to PMC batch');
+        if (typeof Toast !== 'undefined' && Toast) Toast.success('Added to PMC batch');
     } catch (e) {
         console.error('addPmcItemToBatch failed', e);
         alert('Failed to add to PMC batch: ' + (e?.message || e));
@@ -681,7 +728,7 @@ async function ingestZenodoFromPayload(el) {
         if (!payloadStr) return;
         const item = JSON.parse(decodeURIComponent(payloadStr));
         const record_id = item.record_id;
-        if (!record_id) { Toast.error('Missing Zenodo record_id'); return; }
+        if (!record_id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Missing Zenodo record_id'); return; }
         // Use defaults; advanced users can use the panel to customize
         const body = {
             perform_chunking: true,
@@ -692,10 +739,10 @@ async function ingestZenodoFromPayload(el) {
             perform_analysis: true
         };
         const res = await apiClient.post('/api/v1/paper-search/zenodo/ingest', body, { query: { record_id } });
-        Toast.success(`Zenodo ingested: media_id ${res?.media_id ?? ''}`);
+        if (typeof Toast !== 'undefined' && Toast) Toast.success(`Zenodo ingested: media_id ${res?.media_id ?? ''}`);
     } catch (e) {
         console.error('ingestZenodoFromPayload failed', e);
-        Toast.error('Zenodo ingest failed');
+        if (typeof Toast !== 'undefined' && Toast) Toast.error('Zenodo ingest failed');
     }
 }
 
@@ -706,7 +753,7 @@ async function ingestVixraFromPayload(el) {
         if (!payloadStr) return;
         const item = JSON.parse(decodeURIComponent(payloadStr));
         const vid = item.vid;
-        if (!vid) { Toast.error('Missing viXra ID'); return; }
+        if (!vid) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Missing viXra ID'); return; }
         const body = {
             perform_chunking: true,
             parser: 'pymupdf4llm',
@@ -716,10 +763,10 @@ async function ingestVixraFromPayload(el) {
             perform_analysis: true
         };
         const res = await apiClient.post('/api/v1/paper-search/vixra/ingest', body, { query: { vid } });
-        Toast.success(`viXra ingested: media_id ${res?.media_id ?? ''}`);
+        if (typeof Toast !== 'undefined' && Toast) Toast.success(`viXra ingested: media_id ${res?.media_id ?? ''}`);
     } catch (e) {
         console.error('ingestVixraFromPayload failed', e);
-        Toast.error('viXra ingest failed');
+        if (typeof Toast !== 'undefined' && Toast) Toast.error('viXra ingest failed');
     }
 }
 
@@ -730,7 +777,7 @@ async function ingestFigshareFromPayload(el) {
         if (!payloadStr) return;
         const item = JSON.parse(decodeURIComponent(payloadStr));
         const article_id = item.article_id;
-        if (!article_id) { Toast.error('Missing Figshare article_id'); return; }
+        if (!article_id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Missing Figshare article_id'); return; }
         const body = {
             perform_chunking: true,
             parser: 'pymupdf4llm',
@@ -740,10 +787,10 @@ async function ingestFigshareFromPayload(el) {
             perform_analysis: true
         };
         const res = await apiClient.post('/api/v1/paper-search/figshare/ingest', body, { query: { article_id } });
-        Toast.success(`Figshare ingested: media_id ${res?.media_id ?? ''}`);
+        if (typeof Toast !== 'undefined' && Toast) Toast.success(`Figshare ingested: media_id ${res?.media_id ?? ''}`);
     } catch (e) {
         console.error('ingestFigshareFromPayload failed', e);
-        Toast.error('Figshare ingest failed');
+        if (typeof Toast !== 'undefined' && Toast) Toast.error('Figshare ingest failed');
     }
 }
 
@@ -754,7 +801,7 @@ async function ingestHalFromPayload(el) {
         if (!payloadStr) return;
         const item = JSON.parse(decodeURIComponent(payloadStr));
         const docid = item.docid;
-        if (!docid) { Toast.error('Missing HAL docid'); return; }
+        if (!docid) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Missing HAL docid'); return; }
         const body = {
             perform_chunking: true,
             parser: 'pymupdf4llm',
@@ -764,10 +811,10 @@ async function ingestHalFromPayload(el) {
             perform_analysis: true
         };
         const res = await apiClient.post('/api/v1/paper-search/hal/ingest', body, { query: { docid } });
-        Toast.success(`HAL ingested: media_id ${res?.media_id ?? ''}`);
+        if (typeof Toast !== 'undefined' && Toast) Toast.success(`HAL ingested: media_id ${res?.media_id ?? ''}`);
     } catch (e) {
         console.error('ingestHalFromPayload failed', e);
-        Toast.error('HAL ingest failed');
+        if (typeof Toast !== 'undefined' && Toast) Toast.error('HAL ingest failed');
     }
 }
 
@@ -778,7 +825,7 @@ async function ingestOsfFromPayload(el) {
         if (!payloadStr) return;
         const item = JSON.parse(decodeURIComponent(payloadStr));
         const osf_id = item.osf_id;
-        if (!osf_id) { Toast.error('Missing OSF ID'); return; }
+        if (!osf_id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Missing OSF ID'); return; }
         const body = {
             perform_chunking: true,
             parser: 'pymupdf4llm',
@@ -788,10 +835,10 @@ async function ingestOsfFromPayload(el) {
             perform_analysis: true
         };
         const res = await apiClient.post('/api/v1/paper-search/osf/ingest', body, { query: { osf_id } });
-        Toast.success(`OSF ingested: media_id ${res?.media_id ?? ''}`);
+        if (typeof Toast !== 'undefined' && Toast) Toast.success(`OSF ingested: media_id ${res?.media_id ?? ''}`);
     } catch (e) {
         console.error('ingestOsfFromPayload failed', e);
-        Toast.error('OSF ingest failed');
+        if (typeof Toast !== 'undefined' && Toast) Toast.error('OSF ingest failed');
     }
 }
 

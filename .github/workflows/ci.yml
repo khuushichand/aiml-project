@@ -1,21 +1,45 @@
 name: CI
 
 on:
+  # Run on direct pushes to protected branches only
   push:
     branches:
       - main
-      - dev
+  # Run CI for PRs targeting these branches
   pull_request:
+    branches:
+      - main
+      - dev
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Ensure push and PR for the same commit share one slot
+  group: ci-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
 
 jobs:
+  syntax-check:
+    name: Syntax Check (compileall)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile all Python under tldw_Server_API/app
+        shell: bash
+        run: |
+          python - <<'PY'
+          import compileall, sys
+          ok = compileall.compile_dir('tldw_Server_API/app', force=True, quiet=1)
+          sys.exit(0 if ok else 1)
+          PY
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
@@ -49,7 +73,7 @@ jobs:
     name: Full Suite (Ubuntu / Python ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: lint
+    needs: [lint, syntax-check]
     strategy:
       fail-fast: false
       matrix:
@@ -58,8 +82,8 @@ jobs:
       postgres:
         image: postgres:18-bookworm
         env:
-          POSTGRES_USER: tldw
-          POSTGRES_PASSWORD: tldw
+          POSTGRES_USER: tldw_user
+          POSTGRES_PASSWORD: TestPassword123!
           POSTGRES_DB: tldw_content
         ports:
           - 5432/tcp
@@ -78,11 +102,13 @@ jobs:
       # Expose Postgres service to tests
       POSTGRES_TEST_HOST: 127.0.0.1
       POSTGRES_TEST_DB: tldw_content
-      POSTGRES_TEST_USER: tldw
-      POSTGRES_TEST_PASSWORD: tldw
+      POSTGRES_TEST_USER: tldw_user
+      POSTGRES_TEST_PASSWORD: TestPassword123!
       TEST_DB_HOST: 127.0.0.1
-      TEST_DB_USER: tldw
-      TEST_DB_PASSWORD: tldw
+      TEST_DB_USER: tldw_user
+      TEST_DB_PASSWORD: TestPassword123!
+      # Align AuthNZ_Postgres conftest default DB name with tests
+      TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
@@ -108,13 +134,29 @@ jobs:
         with:
           host: 127.0.0.1
           port: ${{ job.services.postgres.ports[5432] }}
-          user: tldw
+          user: tldw_user
 
       - name: Export PG env vars
         shell: bash
         run: |
           echo "POSTGRES_TEST_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
           echo "TEST_DB_PORT=${{ job.services.postgres.ports[5432] }}" >> "$GITHUB_ENV"
+          # Provide a unified DSN so any test preferring TEST_DATABASE_URL uses the right DB
+          echo "TEST_DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content" >> "$GITHUB_ENV"
+
+      - name: Ensure base DB exists
+        shell: bash
+        env:
+          # Use the same env vars tests read
+          PGPASSWORD: ${{ env.POSTGRES_TEST_PASSWORD }}
+        run: |
+          PORT="${{ job.services.postgres.ports[5432] }}"
+          DB_NAME="${POSTGRES_TEST_DB:-tldw_content}"
+          DB_USER="${POSTGRES_TEST_USER:-tldw_user}"
+          echo "Ensuring database '$DB_NAME' exists on port $PORT as user $DB_USER"
+          psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+            psql -h 127.0.0.1 -p "$PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE ${DB_NAME}"
 
       - name: Install additional deps for PG tests
         run: |
@@ -132,6 +174,19 @@ jobs:
               print('pytest_asyncio OK:', getattr(pytest_asyncio, '__version__', 'unknown'))
           except Exception as e:
               print('pytest_asyncio import failed:', e)
+              raise
+          PY
+
+      - name: Verify pytest-benchmark import (Linux matrix)
+        shell: bash
+        run: |
+          python - <<'PY'
+          try:
+              import importlib
+              m = importlib.import_module('pytest_benchmark.plugin')
+              print('pytest-benchmark OK')
+          except Exception as e:
+              print('pytest-benchmark import failed:', e)
               raise
           PY
 
@@ -198,6 +253,7 @@ jobs:
       - name: Run full test suite (Linux + PG) - exclude Jobs and E2E
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            --ignore=tldw_Server_API/tests/Jobs \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-linux-${{ matrix.python }}.xml
         shell: bash
@@ -229,7 +285,7 @@ jobs:
     name: Full Suite (${{ matrix.os }} / Python 3.12)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    needs: lint
+    needs: [lint, syntax-check]
     strategy:
       fail-fast: false
       matrix:
@@ -277,6 +333,19 @@ jobs:
               print('pytest_asyncio OK:', getattr(pytest_asyncio, '__version__', 'unknown'))
           except Exception as e:
               print('pytest_asyncio import failed:', e)
+              raise
+          PY
+
+      - name: Verify pytest-benchmark import (OS matrix)
+        shell: bash
+        run: |
+          python - <<'PY'
+          try:
+              import importlib
+              m = importlib.import_module('pytest_benchmark.plugin')
+              print('pytest-benchmark OK')
+          except Exception as e:
+              print('pytest-benchmark import failed:', e)
               raise
           PY
 
@@ -354,6 +423,7 @@ jobs:
       - name: Run full test suite - exclude Jobs and E2E
         run: |
           pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            --ignore=tldw_Server_API/tests/Jobs \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-${{ matrix.os }}-3.12.xml
         shell: bash

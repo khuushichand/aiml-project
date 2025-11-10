@@ -90,6 +90,8 @@ class TracingManager:
         self.telemetry = get_telemetry_manager()
         self.tracer = self.telemetry.get_tracer("tldw_server.tracing")
         self.active_spans = {}
+        # Local baggage store when OpenTelemetry baggage is unavailable
+        self._local_baggage = {}
 
     @contextmanager
     def span(
@@ -262,6 +264,9 @@ class TracingManager:
         if OTEL_AVAILABLE:
             ctx = baggage.set_baggage(key, value)
             context.attach(ctx)
+        else:
+            # Fallback: store in local in-memory baggage
+            self._local_baggage[key] = value
 
     def get_baggage(self, key: str) -> Optional[str]:
         """
@@ -275,7 +280,7 @@ class TracingManager:
         """
         if OTEL_AVAILABLE:
             return baggage.get_baggage(key)
-        return None
+        return self._local_baggage.get(key)
 
     def extract_context(self, carrier: Dict[str, str]) -> Optional[TraceContext]:
         """

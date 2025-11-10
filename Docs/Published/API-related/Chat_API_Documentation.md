@@ -17,7 +17,7 @@
 Follows OpenAI-style chat payload with extensions.
 
 Key fields:
-- `model` (string): Target model. May be prefixed as `provider/model` (e.g., `anthropic/claude-3-5-sonnet`).
+- `model` (string): Target model. May be prefixed as `provider/model` (e.g., `anthropic/claude-sonnet-4.5`).
 - `messages` (array): Conversation turns. Supports roles `system`, `user`, `assistant`, `tool`.
   - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`.
 - `stream` (bool): If true, returns Server-Sent Events (SSE) for streaming.
@@ -45,7 +45,7 @@ curl -N -X POST http://127.0.0.1:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: $API_KEY" \
   -d '{
-    "model": "anthropic/claude-3-5-sonnet",
+    "model": "anthropic/claude-sonnet-4.5",
     "messages": [{"role":"user","content":"Stream this response."}],
     "stream": true
   }'

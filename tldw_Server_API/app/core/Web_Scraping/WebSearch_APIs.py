@@ -1238,11 +1238,9 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
     except Exception as _e:
         raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-    with httpx.Client(timeout=10.0, trust_env=False) as client:
-        response = client.get(search_url, headers=headers, params=params)
-        response.raise_for_status()
+    from tldw_Server_API.app.core.http_client import fetch_json
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
-    brave_search_results = response.json()
+    brave_search_results = fetch_json(method="GET", url=search_url, headers=headers, params=params, timeout=10.0)
     return brave_search_results
 
 
@@ -1333,8 +1331,9 @@ def test_parse_brave_results():
 # https://github.com/deedy5/duckduckgo_search
 # Copied request format/structure from https://github.com/deedy5/duckduckgo_search/blob/main/duckduckgo_search/duckduckgo_search.py
 def create_httpx_client() -> httpx.Client:
-    """Create an httpx client with safe defaults."""
-    return httpx.Client(timeout=10.0, trust_env=False)
+    """Create an httpx client with centralized defaults (egress policy enforced at request-time)."""
+    from tldw_Server_API.app.core.http_client import create_client
+    return create_client(timeout=10.0)
 
 def search_web_duckduckgo(
     keywords: str,
@@ -1649,11 +1648,9 @@ def search_web_google(
         except Exception as _e:
             raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-        # Make the API call with httpx client + timeout
-        with httpx.Client(timeout=15.0, trust_env=False) as client:
-            response = client.get(search_url, params=params)
-            response.raise_for_status()
-            google_search_results = response.json()
+        # Make the API call with centralized client
+        from tldw_Server_API.app.core.http_client import fetch_json
+        google_search_results = fetch_json(method="GET", url=search_url, params=params, timeout=15.0)
 
         logging.info(f"Successfully retrieved search results. Items found: {len(google_search_results.get('items', []))}")
 
@@ -1844,11 +1841,10 @@ def search_web_kagi(query: str, limit: int = 10) -> Dict:
     except Exception as _e:
         raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-    with httpx.Client(timeout=15.0, trust_env=False) as client:
-        response = client.get(endpoint, headers=headers, params=params)
-    response.raise_for_status()
-    logging.debug(response.json())
-    return response.json()
+    from tldw_Server_API.app.core.http_client import fetch_json
+    data = fetch_json(method="GET", url=endpoint, headers=headers, params=params, timeout=15.0)
+    logging.debug(data)
+    return data
 
 
 def test_search_kagi():
@@ -1978,10 +1974,9 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
         time.sleep(delay)
 
-        # Use httpx for better encoding support
-        with httpx.Client(timeout=15.0, trust_env=False) as client:
-            response = client.get(search_url, headers=headers)
-            response.raise_for_status()
+        # Use centralized http client for request
+        from tldw_Server_API.app.core.http_client import fetch
+        response = fetch(method="GET", url=search_url, headers=headers, timeout=15.0)
 
         # Check if the response is JSON
         content_type = response.headers.get('Content-Type', '')
@@ -2118,11 +2113,10 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
         if "User-Agent" in ua_only:
             headers["User-Agent"] = ua_only["User-Agent"]
 
-        with httpx.Client(timeout=15.0, trust_env=False) as client:
-            response = client.post(tavily_api_url, headers=headers, json=payload)
-            response.raise_for_status()
-            return response.json()
-    except httpx.RequestError as e:
+        from tldw_Server_API.app.core.http_client import fetch_json
+        data = fetch_json(method="POST", url=tavily_api_url, headers=headers, json=payload, timeout=15.0)
+        return data
+    except Exception as e:
         return {"error": f"There was an error searching for content. {str(e)}"}
 
 

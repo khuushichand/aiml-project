@@ -64,7 +64,7 @@ Related:
 - At app startup, `main.py` seeds the `provider_manager` from `provider_config.API_CALL_HANDLERS` to avoid drift with the endpoint mappings.
 
 Provider selection notes:
-- Requests may specify models with a provider prefix (e.g., `anthropic/claude-3-opus`). The endpoint extracts the provider and model automatically.
+- Requests may specify models with a provider prefix (e.g., `anthropic/claude-opus-4.1`). The endpoint extracts the provider and model automatically.
 - Provider fallback is available via `provider_manager`; controlled by `[Chat-Module].enable_provider_fallback` (disabled by default for stability).
 
 ### Adding a Provider (Checklist)
@@ -85,7 +85,7 @@ Provider selection notes:
   - `logprobs/top_logprobs` relationships
   - Tool definitions size limits
   - Request size limits (`MAX_REQUEST_SIZE`), see `chat_validators.py`
-  - Model strings with provider prefixes like `anthropic/claude-3-opus` (provider extracted automatically)
+  - Model strings with provider prefixes like `anthropic/claude-opus-4.1` (provider extracted automatically)
   - Image inputs on user messages via `image_url` content parts (expects data URI with base64; validated/sanitized)
 
 ## Error Handling
@@ -159,6 +159,65 @@ Provider selection notes:
 Additional endpoint behavior to note:
 - Non-stream responses include `tldw_conversation_id` in the JSON body for client-side state tracking.
 - Streaming responses send a `stream_start` event and normalized `data:` deltas; periodic heartbeats keep connections alive; a `stream_end` event is emitted on success.
+
+### Streaming Example (Unified SSE with Metrics Labels)
+
+When using the unified streaming abstraction, instantiate `SSEStream` with optional labels to tag emitted metrics (low-cardinality keys like `component` and `endpoint` are recommended):
+
+```python
+from fastapi.responses import StreamingResponse
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+async def chat_stream_endpoint():
+    stream = SSEStream(
+        heartbeat_interval_s=10,
+        heartbeat_mode="data",
+        labels={"component": "chat", "endpoint": "chat_stream"},
+    )
+
+    async def gen():
+        # feed stream in background (e.g., provider-normalized lines or deltas)
+        async for line in stream.iter_sse():
+            yield line
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+```
+
+### Provider Control Pass-through (Advanced)
+
+Some providers emit meaningful SSE control lines (e.g., `event: ...`, `id: ...`, `retry: ...`). By default, normalization drops these. When clients or adapters depend on them, enable pass-through per endpoint and optionally filter/rename controls:
+
+```python
+from fastapi.responses import StreamingResponse
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+
+def _control_filter(name: str, value: str):
+    # Example: rename event to a standard value; drop ids
+    if name.lower() == "event":
+        return ("event", "provider_event")
+    if name.lower() == "id":
+        return None
+    return (name, value)
+
+async def chat_stream_passthru():
+    stream = SSEStream(
+        heartbeat_interval_s=10,
+        provider_control_passthru=True,
+        control_filter=_control_filter,
+        labels={"component": "chat", "endpoint": "chat_stream"},
+    )
+
+    async def gen():
+        async for line in stream.iter_sse():
+            yield line
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+```
+
 
 ## Rate Limiting
 

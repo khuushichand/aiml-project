@@ -16,9 +16,9 @@ pytestmark = [pytest.mark.postgres]
 if not (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")):
     host = os.getenv("TEST_DB_HOST", "localhost")
     port = os.getenv("TEST_DB_PORT", "5432")
-    user = os.getenv("TEST_DB_USER", "tldw_user")
-    pwd = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
-    db = os.getenv("TEST_DB_NAME", "tldw_test")
+    user = os.getenv("TEST_DB_USER") or os.getenv("POSTGRES_USER", "tldw_user")
+    pwd = os.getenv("TEST_DB_PASSWORD") or os.getenv("POSTGRES_PASSWORD", "TestPassword123!")
+    db = os.getenv("TEST_DB_NAME") or os.getenv("POSTGRES_DB", "tldw_test")
     dsn = f"postgresql://{user}:{pwd}@{host}:{port}/{db}"
     os.environ["TEST_DATABASE_URL"] = dsn
     # Don't force DATABASE_URL here; per-test fixtures set it precisely

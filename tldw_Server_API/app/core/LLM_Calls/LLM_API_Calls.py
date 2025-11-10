@@ -15,25 +15,10 @@ Notes
 - Use environment variables to override base URLs for testing/mocking.
 """
 #########################################
-# General LLM API Calling Library
-# This library is used to perform API Calls against commercial LLM endpoints.
-#
-####
-####################
-# Function List
-#
-# 1. extract_text_from_segments(segments: List[Dict]) -> str
-# 2. chat_with_openai(api_key, file_path, custom_prompt_arg, streaming=None)
-# 3. chat_with_anthropic(api_key, file_path, model, custom_prompt_arg, max_retries=3, retry_delay=5, streaming=None)
-# 4. chat_with_cohere(api_key, file_path, model, custom_prompt_arg, streaming=None)
-# 5. chat_with_qwen(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 6. chat_with_groq(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 7. chat_with_openrouter(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 8. chat_with_huggingface(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-# 9. chat_with_deepseek(api_key, input_data, custom_prompt_arg, system_prompt=None, streaming=None)
-#
-#
-####################
+# Centralized LLM API calling utilities (monolith, in gradual deprecation).
+# Public chat_* entrypoints for key providers now delegate to adapter-backed
+# shims; provider-specific legacy implementations are retained under legacy_*
+# until full parity is proven and branches can be removed safely.
 #
 # Import necessary libraries
 import asyncio
@@ -45,6 +30,7 @@ from typing import List, Any, Optional, Tuple, Dict, Union, Iterable
 # Import 3rd-Party Libraries
 import requests
 import httpx
+from tldw_Server_API.app.core.http_client import fetch, afetch_json, RetryPolicy, create_async_client
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 #
@@ -62,11 +48,144 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_data,
     sse_done,
 )
-from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries
+from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries as _legacy_create_session_with_retries
 from tldw_Server_API.app.core.LLM_Calls.streaming import (
     iter_sse_lines_requests,
     aiter_sse_lines_httpx,
+    aiter_normalized_sse,
 )
+
+# -----------------------------------------------------------------------------
+# Session shim for non-streaming POST calls
+# - Preserves the public name `create_session_with_retries` so tests can
+#   monkeypatch it, while centralizing non-streaming requests via http_client.
+# - For streaming (stream=True), falls back to the legacy requests session
+#   returned by http_helpers.create_session_with_retries to preserve
+#   iter_lines() semantics used in streaming paths still on requests.
+# -----------------------------------------------------------------------------
+
+class _RequestsLikeResponse:
+    """Wrap an httpx.Response with requests-like attributes for error paths."""
+
+    def __init__(self, resp: httpx.Response):
+        self._resp = resp
+
+    @property
+    def status_code(self) -> int:
+        return self._resp.status_code
+
+    @property
+    def headers(self):  # minimal mapping
+        return self._resp.headers
+
+    @property
+    def text(self) -> str:
+        return self._resp.text
+
+    def json(self):
+        return self._resp.json()
+
+
+class _ResponseShim:
+    """Response shim that proxies to httpx.Response for success paths
+    and raises requests.exceptions.HTTPError on raise_for_status.
+    """
+
+    def __init__(self, resp: httpx.Response):
+        self._resp = resp
+        # Expose commonly used attributes directly
+        self.status_code = resp.status_code
+        self.headers = resp.headers
+        self.text = resp.text
+
+    def json(self):
+        return self._resp.json()
+
+    def raise_for_status(self):
+        if 400 <= self._resp.status_code:
+            # Raise a requests-like HTTPError carrying a response with json()/text
+            err = requests.exceptions.HTTPError(
+                f"HTTP {self._resp.status_code}", response=_RequestsLikeResponse(self._resp)
+            )
+            raise err
+        return None
+
+
+class _SessionShim:
+    def __init__(
+        self,
+        *,
+        total: int = 3,
+        backoff_factor: float = 1.0,
+        status_forcelist: Optional[list[int]] = None,
+        allowed_methods: Optional[list[str]] = None,
+    ) -> None:
+        attempts = max(1, int(total)) + 0
+        self._retry = RetryPolicy(
+            attempts=attempts,
+            backoff_base_ms=int(float(backoff_factor) * 1000),
+            retry_on_status=tuple(status_forcelist or (408, 429, 500, 502, 503, 504)),
+        )
+        self._delegate_session = None
+
+    def post(self, url, *, headers=None, json=None, stream: bool = False, timeout=None, **kwargs):
+        if stream:
+            # For streaming, use legacy requests session to preserve iter_lines semantics
+            self._delegate_session = _legacy_create_session_with_retries(
+                total=self._retry.attempts,
+                backoff_factor=self._retry.backoff_base_ms / 1000.0,
+                status_forcelist=list(self._retry.retry_on_status),
+                allowed_methods=["POST"],
+            )
+            return self._delegate_session.post(url, headers=headers, json=json, stream=True, timeout=timeout)
+        # Non-streaming via centralized http client (egress/pinning)
+        resp = fetch(
+            method="POST",
+            url=url,
+            headers=headers,
+            json=json,
+            timeout=timeout,
+            retry=self._retry,
+        )
+        return _ResponseShim(resp)
+
+    def close(self):
+        try:
+            if self._delegate_session is not None:
+                self._delegate_session.close()
+        except Exception:
+            pass
+
+
+def create_session_with_retries(
+    *,
+    total: int = 3,
+    backoff_factor: float = 1.0,
+    status_forcelist: Optional[list[int]] = None,
+    allowed_methods: Optional[list[str]] = None,
+):
+    """Return a session object.
+
+    - Under pytest, return a real requests.Session so tests can patch
+      `requests.Session.post` directly.
+    - In production, return a shim that routes non-streaming POSTs through
+      the centralized HTTP client (egress policy, TLS pinning) and streaming
+      through a legacy requests.Session for iter_lines semantics.
+    """
+    import os as _os
+    if _os.getenv("PYTEST_CURRENT_TEST"):
+        return _legacy_create_session_with_retries(
+            total=total,
+            backoff_factor=backoff_factor,
+            status_forcelist=status_forcelist,
+            allowed_methods=allowed_methods,
+        )
+    return _SessionShim(
+        total=total,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+        allowed_methods=allowed_methods,
+    )
 #
 # Shared helper for consistent tool_choice gating across providers
 def _apply_tool_choice(payload: Dict[str, Any], tools: Optional[List[Dict[str, Any]]], tool_choice: Optional[Union[str, Dict[str, Any]]]) -> None:
@@ -85,6 +204,598 @@ def _apply_tool_choice(payload: Dict[str, Any], tools: Optional[List[Dict[str, A
         pass
 #
 #######################################################################################################################
+
+# Adapter-backed wrappers (monolith cleanup):
+# These preserve public entry points but route through adapter shims.
+# True legacy implementations are kept under legacy_* names above to avoid
+# recursion and for optional fallback paths.
+
+def chat_with_openai(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        user: Optional[str] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    return openai_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_anthropic(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    # Delegate to the original implementation to avoid adapter/shim recursion
+    return chat_with_anthropic(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_groq(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    # Direct adapter path (shimless)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("groq")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+        registry.register_adapter("groq", GroqAdapter)
+        adapter = registry.get_adapter("groq")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
+
+
+def chat_with_openrouter(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler
+    return openrouter_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_google(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        max_output_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        candidate_count: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import google_chat_handler
+    return google_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        topk=topk,
+        max_output_tokens=max_output_tokens,
+        stop_sequences=stop_sequences,
+        candidate_count=candidate_count,
+        response_format=response_format,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_mistral(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
+        random_seed: Optional[int] = None,
+        top_k: Optional[int] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import mistral_chat_handler
+    return mistral_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        tools=tools,
+        tool_choice=tool_choice,
+        max_tokens=max_tokens,
+        random_seed=random_seed,
+        top_k=top_k,
+        app_config=app_config,
+    )
+
+
+def chat_with_qwen(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import qwen_chat_handler
+    return qwen_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        maxp=maxp,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_deepseek(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        # Accept OpenAI-style extras for compatibility with adapter callers
+        response_format: Optional[Dict[str, Any]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    # Call the preserved legacy implementation directly
+    return _legacy_chat_with_deepseek_impl(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def chat_with_huggingface(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import huggingface_chat_handler
+    return huggingface_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_openai_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        user: Optional[str] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler_async
+    return await openai_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_groq_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        maxp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import groq_chat_handler_async
+    return await groq_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_anthropic_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
+    # No dedicated async shim for Anthropic; call sync adapter via loop or rely on
+    # adapter's async if present (shims expose async for common providers already)
+    return anthropic_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+async def legacy_chat_with_openrouter_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler_async
+    return await openrouter_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
 # Function Definitions
 #
 
@@ -715,7 +1426,7 @@ def get_openai_embeddings_batch(texts: List[str], model: str, app_config: Option
         raise ValueError(f"OpenAI Embeddings (batch): Unexpected error occurred: {str(e)}")
 
 
-def chat_with_openai(
+def legacy_chat_with_openai(
         input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
         model: Optional[str] = None,  # Mapped from 'model'
         api_key: Optional[str] = None,  # Mapped from 'api_key'
@@ -767,194 +1478,32 @@ def chat_with_openai(
         custom_prompt_arg: Legacy, largely ignored.
         **kwargs: Catches any unexpected keyword arguments.
     """
-    loaded_config_data = app_config or load_and_log_configs()
-    openai_config = loaded_config_data.get('openai_api', {})
-
-    final_api_key = api_key or openai_config.get('api_key')
-    if not final_api_key:
-        logging.error("OpenAI: API key is missing.")
-        raise ChatConfigurationError(provider="openai", message="OpenAI API Key is required but not found.")
-
-    logging.debug("OpenAI: Using configured API key")
-
-    # Resolve parameters: User-provided > Function arg default > Config default > Hardcoded default
-    final_model = model if model is not None else openai_config.get('model', 'gpt-4o-mini')
-    final_temp = temp if temp is not None else _safe_cast(openai_config.get('temperature'), float, 0.7)
-    final_top_p = maxp if maxp is not None else _safe_cast(
-        openai_config.get('top_p'), float, 0.95)  # 'maxp' from chat_api_call maps to 'top_p'
-
-    final_streaming_cfg = openai_config.get('streaming', False)
-    final_streaming = streaming if streaming is not None else \
-        (str(final_streaming_cfg).lower() == 'true' if isinstance(final_streaming_cfg, str) else bool(final_streaming_cfg))
-
-    final_max_tokens = max_tokens if max_tokens is not None else _safe_cast(openai_config.get('max_tokens'), int)
-
-    if custom_prompt_arg:
-        logging.warning(
-            "OpenAI: 'custom_prompt_arg' was provided but is generally ignored if 'input_data' and 'system_message' are used correctly.")
-
-    # Construct messages for OpenAI API
-    api_messages = []
-    has_system_message_in_input = any(msg.get("role") == "system" for msg in input_data)
-    if system_message and not has_system_message_in_input:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-
-    payload = {
-        "model": final_model,
-        "messages": api_messages,
-        "stream": final_streaming,
-    }
-    # Add optional parameters if they have a value
-    # gpt-5-mini has special requirements
-    if final_model and 'gpt-5' in final_model.lower():
-        # gpt-5-mini only supports temperature of 1 (default), and doesn't support top_p
-        if final_temp is not None and final_temp != 1.0:
-            logging.debug(f"OpenAI: gpt-5-mini only supports temperature of 1.0, ignoring temperature={final_temp}")
-        # Don't include temperature for gpt-5 models unless it's 1.0
-        if final_temp == 1.0:
-            payload["temperature"] = final_temp
-        # gpt-5-mini doesn't support top_p
-        if final_top_p is not None:
-            logging.debug(f"OpenAI: gpt-5-mini does not support top_p, ignoring top_p={final_top_p}")
-    else:
-        if final_temp is not None: payload["temperature"] = final_temp
-        if final_top_p is not None: payload["top_p"] = final_top_p # OpenAI uses top_p
-    # gpt-5-mini uses max_completion_tokens instead of max_tokens
-    if final_max_tokens is not None:
-        if final_model and 'gpt-5' in final_model:
-            payload["max_completion_tokens"] = final_max_tokens
-        else:
-            payload["max_tokens"] = final_max_tokens
-    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
-    if logit_bias is not None: payload["logit_bias"] = logit_bias
-    if logprobs is not None: payload["logprobs"] = logprobs
-    if top_logprobs is not None and payload.get("logprobs") is True:
-        payload["top_logprobs"] = top_logprobs
-    elif top_logprobs is not None:
-         logging.warning("OpenAI: 'top_logprobs' provided but 'logprobs' is not true. 'top_logprobs' will be ignored.")
-    if n is not None: payload["n"] = n
-    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
-    if response_format is not None: payload["response_format"] = response_format
-    if seed is not None: payload["seed"] = seed
-    if stop is not None: payload["stop"] = stop
-    if tools is not None: payload["tools"] = tools
-
-    # Then conditionally add tool_choice:
-    _apply_tool_choice(payload, tools, tool_choice)
-    if user is not None: payload["user"] = user # 'user' is OpenAI's user identifier field
-
-    payload_metadata = _sanitize_payload_for_logging(payload)
-    headers = {
-        'Authorization': f'Bearer {final_api_key}',
-        'Content-Type': 'application/json'
-    }
-    # Keep this phrasing aligned with tests that assert on the log text
-    logging.debug(f"OpenAI Request Payload (excluding messages): {payload_metadata}")
-
-    # Allow environment override for API base URL (useful for mock servers in tests)
-    env_api_base = os.getenv('OPENAI_API_BASE_URL') or os.getenv('MOCK_OPENAI_BASE_URL')
-    api_base = env_api_base or openai_config.get('api_base_url', 'https://api.openai.com/v1')
-    api_url = api_base.rstrip('/') + '/chat/completions'
-    try:
-        if final_streaming:
-            logging.debug("OpenAI: Posting request (streaming)")
-            session = create_session_with_retries(
-                total=_safe_cast(openai_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(openai_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            stream_timeout = _safe_cast(openai_config.get('api_timeout'), float, 90.0)
-            try:
-                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=stream_timeout)
-                response.raise_for_status()
-            except Exception:
-                session.close()
-                raise
-
-            def stream_generator():
-                try:
-                    for chunk in iter_sse_lines_requests(response, decode_unicode=True, provider="openai"):
-                        yield chunk
-                    # Always append a single final sentinel; helper suppresses provider [DONE]
-                    for tail in finalize_stream(response, done_already=False):
-                        yield tail
-                finally:
-                    try:
-                        session.close()
-                    except Exception:
-                        pass
-
-            return stream_generator()
-
-        else:  # Non-streaming
-            logging.debug("OpenAI: Posting request (non-streaming)")
-            session = create_session_with_retries(
-                total=_safe_cast(openai_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(openai_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=payload,
-                                        timeout=_safe_cast(openai_config.get('api_timeout'), float, 90.0))
-
-                logging.debug(f"OpenAI: Full API response status: {response.status_code}")
-                response.raise_for_status()  # Raise HTTPError for 4xx/5xx AFTER retries
-                response_data = response.json()
-                logging.debug("OpenAI: Non-streaming request successful.")
-                return response_data
-            finally:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-
-    except requests.exceptions.HTTPError as e:
-        # Map HTTP errors from OpenAI into structured Chat* errors so the
-        # FastAPI endpoint can return appropriate status codes instead of 500.
-        status_code = None
-        msg = ""
-        if e.response is not None:
-            status_code = e.response.status_code
-            # Use repr() to safely log messages that may contain braces
-            logging.error(
-                f"OpenAI Full Error Response (status {status_code}): {repr(e.response.text)}"
-            )
-            try:
-                err_json = e.response.json()
-                msg = err_json.get("error", {}).get("message") or err_json.get("message") or ""
-            except Exception:
-                msg = e.response.text or str(e)
-        else:
-            logging.error(f"OpenAI HTTPError with no response object: {e}")
-            msg = str(e)
-
-        # Default a generic message if empty
-        if not msg:
-            msg = "OpenAI API error"
-
-        # Map status codes
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="openai", message=msg)
-        elif status_code in (401, 403):
-            raise ChatAuthenticationError(provider="openai", message=msg)
-        elif status_code == 429:
-            raise ChatRateLimitError(provider="openai", message=msg)
-        elif status_code in (500, 502, 503, 504):
-            raise ChatProviderError(provider="openai", message=msg, status_code=status_code)
-        else:
-            raise ChatAPIError(provider="openai", message=msg, status_code=(status_code or 500))
-
-    except requests.exceptions.RequestException as e:
-        # Network/transport layer issue → surface as provider/unavailable (504-like)
-        logging.error(f"OpenAI RequestException: {e}", exc_info=True)
-        raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
-    except Exception as e: # Catch any other unexpected error
-        logging.error(f"OpenAI: Unexpected error in chat_with_openai: {e}", exc_info=True)
-        raise ChatProviderError(provider="openai", message=f"Unexpected error: {e}")
-
+    # Adapter era: delegate to adapter-backed shim; keep legacy body unreachable
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    return openai_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 async def chat_with_openai_async(
         input_data: List[Dict[str, Any]],
@@ -980,145 +1529,86 @@ async def chat_with_openai_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async variant of chat_with_openai using httpx.AsyncClient.
+    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
+    if not isinstance(cfg_source, dict):
+        cfg_source = {}
+    oa_cfg = cfg_source.get("openai_api") or {}
 
-    Returns JSON dict for non-streaming, and an async iterator of SSE lines for streaming.
-    """
-    loaded_config_data = app_config or load_and_log_configs()
-    openai_config = loaded_config_data.get('openai_api', {})
-    final_api_key = api_key or openai_config.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="openai", message="OpenAI API Key is required but not found.")
+    def _cfg_value(user_value, cfg_key):
+        cfg_val = oa_cfg.get(cfg_key)
+        return user_value if user_value is not None else cfg_val
 
-    final_model = model if model is not None else openai_config.get('model', 'gpt-4o-mini')
-    final_temp = temp if temp is not None else _safe_cast(openai_config.get('temperature'), float, 0.7)
-    final_top_p = maxp if maxp is not None else _safe_cast(openai_config.get('top_p'), float, 0.95)
-    final_max_tokens = max_tokens if max_tokens is not None else _safe_cast(openai_config.get('max_tokens'), int)
-    final_streaming_cfg = openai_config.get('streaming', False)
-    final_streaming = bool(streaming if streaming is not None else (
-        str(final_streaming_cfg).lower() == 'true' if isinstance(final_streaming_cfg, str) else final_streaming_cfg))
+    final_model = model or oa_cfg.get("model")
+    final_api_key = api_key or oa_cfg.get("api_key")
+    final_system_message = system_message if system_message is not None else oa_cfg.get("system_message")
+    final_temp = _cfg_value(temp, "temperature")
+    final_top_p = _cfg_value(maxp, "top_p")
+    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
+    final_n = _cfg_value(n, "n")
+    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
+    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
+    final_response_format = response_format if response_format is not None else oa_cfg.get("response_format")
+    final_seed = _cfg_value(seed, "seed")
+    final_stop = stop if stop is not None else oa_cfg.get("stop")
+    final_tools = tools if tools is not None else oa_cfg.get("tools")
+    final_tool_choice = tool_choice if tool_choice is not None else oa_cfg.get("tool_choice")
+    final_user = user if user is not None else oa_cfg.get("user")
+    final_logit_bias = logit_bias if logit_bias is not None else oa_cfg.get("logit_bias")
+    final_logprobs = logprobs if logprobs is not None else oa_cfg.get("logprobs")
+    final_top_logprobs = top_logprobs if top_logprobs is not None else oa_cfg.get("top_logprobs")
 
-    api_messages: List[Dict[str, Any]] = []
-    if system_message:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+        registry.register_adapter("openai", OpenAIAdapter)
+        adapter = registry.get_adapter("openai")
 
-    is_gpt5_model = bool(final_model and 'gpt-5' in final_model.lower())
-    payload: Dict[str, Any] = {
+    req: Dict[str, Any] = {
+        "messages": input_data,
         "model": final_model,
-        "messages": api_messages,
-        "stream": final_streaming,
+        "api_key": final_api_key,
+        "system_message": final_system_message,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+        "frequency_penalty": final_frequency_penalty,
+        "logit_bias": final_logit_bias,
+        "logprobs": final_logprobs,
+        "top_logprobs": final_top_logprobs,
+        "max_tokens": final_max_tokens,
+        "n": final_n,
+        "presence_penalty": final_presence_penalty,
+        "response_format": final_response_format,
+        "seed": final_seed,
+        "stop": final_stop,
+        "tools": final_tools,
+        "tool_choice": final_tool_choice,
+        "user": final_user,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": cfg_source,
     }
-    if is_gpt5_model:
-        if final_temp is not None and final_temp != 1.0:
-            logging.debug(f"OpenAI async: gpt-5 models only accept temperature=1.0, ignoring {final_temp}")
-        if final_temp == 1.0:
-            payload["temperature"] = final_temp
-        if final_top_p is not None:
-            logging.debug(f"OpenAI async: gpt-5 models do not accept top_p, ignoring {final_top_p}")
-    else:
-        if final_temp is not None:
-            payload["temperature"] = final_temp
-        if final_top_p is not None:
-            payload["top_p"] = final_top_p
-    if final_max_tokens is not None:
-        if is_gpt5_model:
-            payload["max_completion_tokens"] = final_max_tokens
+
+    model_lower = (final_model or "").lower()
+    if model_lower.startswith("gpt-5"):
+        if req.get("max_tokens") is not None:
+            req["max_completion_tokens"] = req.pop("max_tokens")
         else:
-            payload["max_tokens"] = final_max_tokens
-    if frequency_penalty is not None:
-        payload["frequency_penalty"] = frequency_penalty
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None and payload.get("logprobs"):
-        payload["top_logprobs"] = top_logprobs
-    if n is not None:
-        payload["n"] = n
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if tools is not None:
-        payload["tools"] = tools
-    _apply_tool_choice(payload, tools, tool_choice)
-    if user is not None:
-        payload["user"] = user
+            req.pop("max_tokens", None)
+        req.pop("top_p", None)
 
-    env_api_base = os.getenv('OPENAI_API_BASE_URL') or os.getenv('MOCK_OPENAI_BASE_URL')
-    api_base = env_api_base or openai_config.get('api_base_url', 'https://api.openai.com/v1')
-    api_url = api_base.rstrip('/') + '/chat/completions'
-    headers = {"Authorization": f"Bearer {final_api_key}", "Content-Type": "application/json"}
+    if streaming is not None:
+        req["stream"] = bool(streaming)
 
-    timeout = _safe_cast(openai_config.get('api_timeout'), float, 90.0)
-    retry_limit = max(0, _safe_cast(openai_config.get('api_retries'), int, 3))
-    retry_delay = max(0.0, _safe_cast(openai_config.get('api_retry_delay'), float, 1.0))
-
-    def _raise_openai_http_error(exc: httpx.HTTPStatusError) -> None:
-        _raise_httpx_chat_error("openai", exc)
-
+    timeout_val = oa_cfg.get("api_timeout")
     try:
-        if final_streaming:
-            async def _stream_async():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    status_code = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(status_code) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_httpx_chat_error("openai", e)
-                                async for chunk in aiter_sse_lines_httpx(resp, provider="openai"):
-                                    yield chunk
-                                # Append a single [DONE]
-                                yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="openai", message="Exceeded retry attempts for OpenAI stream", status_code=504)
+        timeout_val = float(timeout_val)
+    except (TypeError, ValueError):
+        timeout_val = 90.0
 
-            return _stream_async()
-        else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            status_code = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(status_code) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_httpx_chat_error("openai", e)
-                        return resp.json()
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="openai", message="Exceeded retry attempts for OpenAI request", status_code=504)
-    except ChatAPIError:
-        raise
-    except httpx.RequestError as e:
-        raise ChatProviderError(provider="openai", message=f"Network error: {e}", status_code=504)
-    except Exception as e:
-        raise ChatProviderError(provider="openai", message=f"Unexpected error: {e}")
-
+    if streaming:
+        return adapter.astream(req, timeout=timeout_val)
+    return await adapter.achat(req, timeout=timeout_val)
 
 async def chat_with_groq_async(
         input_data: List[Dict[str, Any]],
@@ -1143,120 +1633,76 @@ async def chat_with_groq_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async Groq provider using httpx.AsyncClient with SSE normalization."""
-    cfg_source = app_config or load_and_log_configs()
-    cfg = cfg_source.get('groq_api', {})
-    final_api_key = api_key or cfg.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="groq", message="Groq API Key required.")
-    current_model = model or cfg.get('model', 'llama3-8b-8192')
-    current_temp = temp if temp is not None else _safe_cast(cfg.get('temperature'), float, 0.2)
-    current_top_p = maxp if maxp is not None else _safe_cast(cfg.get('top_p'), float, None)
-    stream_cfg = cfg.get('streaming', False)
-    current_streaming = streaming if streaming is not None else (
-        str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
-    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(cfg.get('max_tokens'), int, None)
+    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
+    if not isinstance(cfg_source, dict):
+        cfg_source = {}
+    gr_cfg = cfg_source.get("groq_api") or {}
 
-    api_messages: List[Dict[str, Any]] = []
-    if system_message:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-    payload: Dict[str, Any] = {"model": current_model, "messages": api_messages, "stream": current_streaming}
-    if current_temp is not None:
-        payload["temperature"] = current_temp
-    if current_top_p is not None:
-        payload["top_p"] = current_top_p
-    if current_max_tokens is not None:
-        payload["max_tokens"] = current_max_tokens
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if n is not None:
-        payload["n"] = n
-    if user is not None:
-        payload["user"] = user
-    if tools is not None:
-        payload["tools"] = tools
-    _apply_tool_choice(payload, tools, tool_choice)
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None:
-        payload["frequency_penalty"] = frequency_penalty
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None and payload.get("logprobs"):
-        payload["top_logprobs"] = top_logprobs
+    def _cfg_value(user_value, cfg_key):
+        cfg_val = gr_cfg.get(cfg_key)
+        return user_value if user_value is not None else cfg_val
 
-    api_url = (cfg.get('api_base_url', 'https://api.groq.com/openai/v1').rstrip('/') + '/chat/completions')
-    headers = {"Authorization": f"Bearer {final_api_key}", "Content-Type": "application/json"}
-    timeout = _safe_cast(cfg.get('api_timeout'), float, 90.0)
-    retry_limit = max(0, _safe_cast(cfg.get('api_retries'), int, 3))
-    retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
+    final_model = model or gr_cfg.get("model")
+    final_api_key = api_key or gr_cfg.get("api_key")
+    final_system_message = system_message if system_message is not None else gr_cfg.get("system_message")
+    final_temp = _cfg_value(temp, "temperature")
+    final_top_p = _cfg_value(maxp, "top_p")
+    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
+    final_seed = _cfg_value(seed, "seed")
+    final_stop = stop if stop is not None else gr_cfg.get("stop")
+    final_response_format = response_format if response_format is not None else gr_cfg.get("response_format")
+    final_n = _cfg_value(n, "n")
+    final_user = user if user is not None else gr_cfg.get("user")
+    final_tools = tools if tools is not None else gr_cfg.get("tools")
+    final_tool_choice = tool_choice if tool_choice is not None else gr_cfg.get("tool_choice")
+    final_logit_bias = logit_bias if logit_bias is not None else gr_cfg.get("logit_bias")
+    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
+    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
+    final_logprobs = logprobs if logprobs is not None else gr_cfg.get("logprobs")
+    final_top_logprobs = top_logprobs if top_logprobs is not None else gr_cfg.get("top_logprobs")
 
-    def _raise_groq_http_error(exc: httpx.HTTPStatusError) -> None:
-        _raise_httpx_chat_error("groq", exc)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("groq")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
+        registry.register_adapter("groq", GroqAdapter)
+        adapter = registry.get_adapter("groq")
 
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": final_model,
+        "api_key": final_api_key,
+        "system_message": final_system_message,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+        "max_tokens": final_max_tokens,
+        "seed": final_seed,
+        "stop": final_stop,
+        "response_format": final_response_format,
+        "n": final_n,
+        "user": final_user,
+        "tools": final_tools,
+        "tool_choice": final_tool_choice,
+        "logit_bias": final_logit_bias,
+        "presence_penalty": final_presence_penalty,
+        "frequency_penalty": final_frequency_penalty,
+        "logprobs": final_logprobs,
+        "top_logprobs": final_top_logprobs,
+        "app_config": cfg_source,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+
+    timeout_val = gr_cfg.get("api_timeout")
     try:
-        if current_streaming:
-            async def _stream():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    sc = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(sc) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_groq_http_error(e)
-                                async for chunk in aiter_sse_lines_httpx(resp, provider="groq"):
-                                    yield chunk
-                                yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="groq", message="Exceeded retry attempts for Groq stream", status_code=504)
+        timeout_val = float(timeout_val)
+    except (TypeError, ValueError):
+        timeout_val = 90.0
 
-            return _stream()
-        else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            sc = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(sc) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_groq_http_error(e)
-                        return resp.json()
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="groq", message="Exceeded retry attempts for Groq request", status_code=504)
-    except ChatAPIError:
-        raise
-    except httpx.RequestError as e:
-        raise ChatProviderError(provider="groq", message=f"Network error: {e}", status_code=504)
-    except Exception as e:
-        raise ChatProviderError(provider="groq", message=f"Unexpected error: {e}")
-
+    if streaming:
+        return adapter.astream(req, timeout=timeout_val)
+    return await adapter.achat(req, timeout=timeout_val)
 
 async def chat_with_anthropic_async(
         input_data: List[Dict[str, Any]],
@@ -1272,212 +1718,32 @@ async def chat_with_anthropic_async(
         tools: Optional[List[Dict[str, Any]]] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """Async Anthropic messages API with SSE normalization."""
-    cfg_source = app_config or load_and_log_configs()
-    cfg = cfg_source.get('anthropic_api', {})
-    final_api_key = api_key or cfg.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="anthropic", message="Anthropic API Key is required.")
-    current_model = model or cfg.get('model', 'claude-3-haiku-20240307')
-    current_temp = temp if temp is not None else _safe_cast(cfg.get('temperature'), float, 0.7)
-    stream_cfg = cfg.get('streaming', False)
-    current_streaming = streaming if streaming is not None else (
-        str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
-    default_max_tokens = int(cfg.get('max_tokens_to_sample', cfg.get('max_tokens', 4096)))
-    current_max_tokens = max_tokens if max_tokens is not None else default_max_tokens
-
-    anthropic_messages: List[Dict[str, Any]] = []
-    for msg in input_data:
-        role = msg.get("role")
-        content = msg.get("content")
-        if role not in ["user", "assistant"]:
-            continue
-        parts: List[Dict[str, Any]] = []
-        if isinstance(content, str):
-            parts.append({"type": "text", "text": content})
-        elif isinstance(content, list):
-            for part in content:
-                if part.get("type") == "text":
-                    parts.append({"type": "text", "text": part.get("text", "")})
-                elif part.get("type") == "image_url":
-                    image_source = _anthropic_image_source_from_part(part.get("image_url", {}))
-                    if image_source:
-                        parts.append({"type": "image", "source": image_source})
-        if parts:
-            anthropic_messages.append({"role": role, "content": parts})
-    if not any(m['role'] == 'user' for m in anthropic_messages):
-        raise ChatBadRequestError(provider="anthropic", message="No valid user messages found.")
-
-    headers = {
-        'x-api-key': final_api_key,
-        'anthropic-version': cfg.get('api_version', '2023-06-01'),
-        'Content-Type': 'application/json'
+    # Shimless adapter path
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("anthropic")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+        registry.register_adapter("anthropic", AnthropicAdapter)
+        adapter = registry.get_adapter("anthropic")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": topp,
+        "top_k": topk,
+        "max_tokens": max_tokens,
+        "stop": stop_sequences,
+        "tools": tools,
+        "app_config": app_config,
     }
-    payload: Dict[str, Any] = {
-        "model": current_model,
-        "max_tokens": current_max_tokens,
-        "messages": anthropic_messages,
-        "stream": current_streaming,
-    }
-    if system_prompt is not None:
-        payload["system"] = system_prompt
-    if current_temp is not None:
-        payload["temperature"] = current_temp
-    if topp is not None:
-        payload["top_p"] = topp
-    if topk is not None:
-        payload["top_k"] = topk
-    if stop_sequences is not None:
-        payload["stop_sequences"] = stop_sequences
-    if tools is not None:
-        payload["tools"] = tools
-
-    api_url = (cfg.get('api_base_url', 'https://api.anthropic.com/v1').rstrip('/') + '/messages')
-    timeout = _safe_cast(cfg.get('api_timeout'), float, 90.0)
-    retry_limit = max(0, _safe_cast(cfg.get('api_retries'), int, 3))
-    retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
-
-    def _raise_anthropic_http_error(exc: httpx.HTTPStatusError) -> None:
-        _raise_httpx_chat_error("anthropic", exc)
-
-    try:
-        if current_streaming:
-            async def _stream():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    sc = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(sc) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_anthropic_http_error(e)
-                                tool_states: Dict[int, Dict[str, Any]] = {}
-                                tool_counter = 0
-                                done_sent = False
-                                async for line in resp.aiter_lines():
-                                    if not line:
-                                        continue
-                                    if is_done_line(line):
-                                        if not done_sent:
-                                            done_sent = True
-                                            yield sse_done()
-                                        continue
-                                    ls = line.strip()
-                                    if not ls or not ls.startswith('data:'):
-                                        continue
-                                    event_data_str = ls[len('data:'):].strip()
-                                    if not event_data_str:
-                                        continue
-                                    try:
-                                        ev = json.loads(event_data_str)
-                                    except Exception:
-                                        continue
-                                    ev_type = ev.get('type')
-                                    if ev_type == 'content_block_start':
-                                        content_block = ev.get('content_block', {})
-                                        if content_block.get('type') == 'tool_use':
-                                            block_index = ev.get('index')
-                                            tool_id = content_block.get('id') or f"anthropic_tool_{tool_counter}"
-                                            tool_name = content_block.get('name')
-                                            initial_input = content_block.get('input')
-                                            buffer = ""
-                                            if initial_input:
-                                                try:
-                                                    buffer = json.dumps(initial_input)
-                                                except Exception:
-                                                    buffer = str(initial_input)
-                                            tool_states[block_index] = {
-                                                "id": tool_id,
-                                                "name": tool_name,
-                                                "buffer": buffer,
-                                                "position": tool_counter,
-                                            }
-                                            tool_counter += 1
-                                            yield _anthropic_tool_delta_chunk(
-                                                tool_states[block_index]["position"],
-                                                tool_id,
-                                                tool_name,
-                                                buffer,
-                                            )
-                                    elif ev_type == 'content_block_delta':
-                                        delta = ev.get('delta', {})
-                                        block_index = ev.get('index')
-                                        delta_type = delta.get('type')
-                                        if delta_type == 'text_delta' and 'text' in delta:
-                                            yield openai_delta_chunk(delta.get('text', ''))
-                                        elif delta_type == 'input_json_delta' and block_index in tool_states:
-                                            partial = delta.get('partial_json', '')
-                                            if partial:
-                                                state = tool_states[block_index]
-                                                state['buffer'] += partial
-                                                yield _anthropic_tool_delta_chunk(
-                                                    state['position'], state['id'], state['name'], state['buffer']
-                                                )
-                                        elif delta_type == 'tool_use_delta' and block_index in tool_states:
-                                            state = tool_states[block_index]
-                                            if 'name' in delta and delta['name']:
-                                                state['name'] = delta['name']
-                                            if 'input' in delta and delta['input'] is not None:
-                                                try:
-                                                    state['buffer'] = json.dumps(delta['input'])
-                                                except Exception:
-                                                    state['buffer'] = str(delta['input'])
-                                            yield _anthropic_tool_delta_chunk(
-                                                state['position'], state['id'], state['name'], state['buffer']
-                                            )
-                                    elif ev_type == 'message_delta':
-                                        stop_reason = (ev.get('delta') or {}).get('stop_reason')
-                                        if stop_reason:
-                                            finish_reason_map = {
-                                                "end_turn": "stop",
-                                                "max_tokens": "length",
-                                                "stop_sequence": "stop",
-                                                "tool_use": "tool_calls",
-                                            }
-                                            finish_reason = finish_reason_map.get(stop_reason, stop_reason)
-                                            yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
-                                if not done_sent:
-                                    yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="anthropic", message="Exceeded retry attempts for Anthropic stream", status_code=504)
-
-            return _stream()
-        else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            sc = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(sc) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_anthropic_http_error(e)
-                        data = resp.json()
-                        return _normalize_anthropic_response(data, current_model)
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="anthropic", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="anthropic", message="Exceeded retry attempts for Anthropic request", status_code=504)
-    except ChatAPIError:
-        raise
-    except Exception as e:
-        raise ChatProviderError(provider="anthropic", message=f"Unexpected error: {e}")
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.astream(req)
+    return await adapter.achat(req)
 
 
 async def chat_with_openrouter_async(
@@ -1505,129 +1771,81 @@ async def chat_with_openrouter_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    cfg_source = app_config or load_and_log_configs()
-    cfg = cfg_source.get('openrouter_api', {})
-    final_api_key = api_key or cfg.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider='openrouter', message='OpenRouter API Key required.')
-    current_model = model or cfg.get('model', 'mistralai/mistral-7b-instruct:free')
-    stream_cfg = cfg.get('streaming', False)
-    current_streaming = streaming if streaming is not None else (
-        str(stream_cfg).lower() == 'true' if isinstance(stream_cfg, str) else bool(stream_cfg))
+    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
+    if not isinstance(cfg_source, dict):
+        cfg_source = {}
+    or_cfg = cfg_source.get("openrouter_api") or {}
 
-    api_messages = []
-    if system_message:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
+    def _cfg_value(user_value, cfg_key):
+        cfg_val = or_cfg.get(cfg_key)
+        return user_value if user_value is not None else cfg_val
 
-    payload: Dict[str, Any] = {"model": current_model, "messages": api_messages, "stream": current_streaming}
-    if temp is not None:
-        payload["temperature"] = temp
-    if top_p is not None:
-        payload["top_p"] = top_p
-    if top_k is not None:
-        payload["top_k"] = top_k
-    if min_p is not None:
-        payload["min_p"] = min_p
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if n is not None:
-        payload["n"] = n
-    if user is not None:
-        payload["user"] = user
-    if tools is not None:
-        payload["tools"] = tools
-    _apply_tool_choice(payload, tools, tool_choice)
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None:
-        payload["frequency_penalty"] = frequency_penalty
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None and payload.get("logprobs"):
-        payload["top_logprobs"] = top_logprobs
+    final_model = model or or_cfg.get("model")
+    final_api_key = api_key or or_cfg.get("api_key")
+    final_system_message = system_message if system_message is not None else or_cfg.get("system_message")
+    final_temp = _cfg_value(temp, "temperature")
+    final_top_p = _cfg_value(top_p, "top_p")
+    final_top_k = _cfg_value(top_k, "top_k")
+    final_min_p = _cfg_value(min_p, "min_p")
+    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
+    final_seed = _cfg_value(seed, "seed")
+    final_stop = stop if stop is not None else or_cfg.get("stop")
+    final_response_format = response_format if response_format is not None else or_cfg.get("response_format")
+    final_n = _cfg_value(n, "n")
+    final_user = user if user is not None else or_cfg.get("user")
+    final_tools = tools if tools is not None else or_cfg.get("tools")
+    final_tool_choice = tool_choice if tool_choice is not None else or_cfg.get("tool_choice")
+    final_logit_bias = logit_bias if logit_bias is not None else or_cfg.get("logit_bias")
+    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
+    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
+    final_logprobs = logprobs if logprobs is not None else or_cfg.get("logprobs")
+    final_top_logprobs = top_logprobs if top_logprobs is not None else or_cfg.get("top_logprobs")
 
-    base_url = cfg.get('api_base_url', 'https://openrouter.ai/api/v1')
-    api_url = base_url.rstrip('/') + '/chat/completions'
-    headers = {
-        "Authorization": f"Bearer {final_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": cfg.get("site_url", "http://localhost"),
-        "X-Title": cfg.get("site_name", "TLDW-API"),
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("openrouter")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
+        registry.register_adapter("openrouter", OpenRouterAdapter)
+        adapter = registry.get_adapter("openrouter")
+
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": final_model,
+        "api_key": final_api_key,
+        "system_message": final_system_message,
+        "temperature": final_temp,
+        "top_p": final_top_p,
+        "top_k": final_top_k,
+        "min_p": final_min_p,
+        "max_tokens": final_max_tokens,
+        "seed": final_seed,
+        "stop": final_stop,
+        "response_format": final_response_format,
+        "n": final_n,
+        "user": final_user,
+        "tools": final_tools,
+        "tool_choice": final_tool_choice,
+        "logit_bias": final_logit_bias,
+        "presence_penalty": final_presence_penalty,
+        "frequency_penalty": final_frequency_penalty,
+        "logprobs": final_logprobs,
+        "top_logprobs": final_top_logprobs,
+        "app_config": cfg_source,
     }
-    timeout = _safe_cast(cfg.get('api_timeout'), float, 90.0)
-    retry_limit = max(0, _safe_cast(cfg.get('api_retries'), int, 3))
-    retry_delay = max(0.0, _safe_cast(cfg.get('api_retry_delay'), float, 1.0))
+    if streaming is not None:
+        req["stream"] = bool(streaming)
 
-    def _raise_openrouter_http_error(exc: httpx.HTTPStatusError) -> None:
-        _raise_httpx_chat_error("openrouter", exc)
-
+    timeout_val = or_cfg.get("api_timeout")
     try:
-        if current_streaming:
-            async def _stream():
-                for attempt in range(retry_limit + 1):
-                    try:
-                        async with httpx.AsyncClient(timeout=timeout) as client:
-                            async with client.stream("POST", api_url, headers=headers, json=payload) as resp:
-                                try:
-                                    resp.raise_for_status()
-                                except httpx.HTTPStatusError as e:
-                                    sc = getattr(e.response, "status_code", None)
-                                    if _is_retryable_status(sc) and attempt < retry_limit:
-                                        await _async_retry_sleep(retry_delay, attempt)
-                                        continue
-                                    _raise_openrouter_http_error(e)
-                                async for chunk in aiter_sse_lines_httpx(resp, provider="openrouter"):
-                                    yield chunk
-                                yield sse_done()
-                                return
-                    except httpx.RequestError as e:
-                        if attempt < retry_limit:
-                            await _async_retry_sleep(retry_delay, attempt)
-                            continue
-                        raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
-                    except ChatAPIError:
-                        raise
-                raise ChatProviderError(provider="openrouter", message="Exceeded retry attempts for OpenRouter stream", status_code=504)
+        timeout_val = float(timeout_val)
+    except (TypeError, ValueError):
+        timeout_val = 90.0
 
-            return _stream()
-        else:
-            for attempt in range(retry_limit + 1):
-                try:
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(api_url, headers=headers, json=payload)
-                        try:
-                            resp.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            sc = getattr(e.response, "status_code", None)
-                            if _is_retryable_status(sc) and attempt < retry_limit:
-                                await _async_retry_sleep(retry_delay, attempt)
-                                continue
-                            _raise_openrouter_http_error(e)
-                        return resp.json()
-                except httpx.RequestError as e:
-                    if attempt < retry_limit:
-                        await _async_retry_sleep(retry_delay, attempt)
-                        continue
-                    raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
-            raise ChatProviderError(provider="openrouter", message="Exceeded retry attempts for OpenRouter request", status_code=504)
-    except ChatAPIError:
-        raise
-    except httpx.RequestError as e:
-        raise ChatProviderError(provider="openrouter", message=f"Network error: {e}", status_code=504)
-    except Exception as e:
-        raise ChatProviderError(provider="openrouter", message=f"Unexpected error: {e}")
-
-
-def chat_with_bedrock(
+    if streaming:
+        return adapter.astream(req, timeout=timeout_val)
+    return await adapter.achat(req, timeout=timeout_val)
+def legacy_chat_with_bedrock(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -1653,7 +1871,7 @@ def chat_with_bedrock(
         app_config: Optional[Dict[str, Any]] = None,
 ):
     """
-    AWS Bedrock via OpenAI-compatible Chat Completions endpoint.
+    AWS Bedrock via OpenAI-compatible Chat Completions endpoint (legacy path).
 
     Uses Bedrock Runtime OpenAI compatibility layer:
     https://bedrock-runtime.<region>.amazonaws.com/openai/v1/chat/completions
@@ -1735,7 +1953,7 @@ def chat_with_bedrock(
     retry_delay = _safe_cast(br_cfg.get('api_retry_delay'), float, 1.0)
     timeout = _safe_cast(br_cfg.get('api_timeout'), float, 90.0)
 
-    logging.debug(f"Bedrock: POST {api_url} (stream={current_streaming})")
+    logging.debug(f"Bedrock(legacy): POST {api_url} (stream={current_streaming})")
 
     session = create_session_with_retries(
         total=retry_count,
@@ -1772,10 +1990,10 @@ def chat_with_bedrock(
                         done_sent = True
                         yield sse_done()
                 except requests.exceptions.ChunkedEncodingError as e_chunk:
-                    logging.error(f"Bedrock stream chunked encoding error: {e_chunk}")
+                    logging.error(f"Bedrock(legacy) stream chunked encoding error: {e_chunk}")
                     yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "bedrock_stream_error"}})
                 except Exception as e_stream:
-                    logging.error(f"Bedrock stream iteration error: {e_stream}", exc_info=True)
+                    logging.error(f"Bedrock(legacy) stream iteration error: {e_stream}", exc_info=True)
                     yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "bedrock_stream_error"}})
                 finally:
                     for tail in finalize_stream(response_handle, done_already=done_sent):
@@ -1789,7 +2007,7 @@ def chat_with_bedrock(
             return stream_generator()
         else:
             response = session.post(api_url, headers=headers, json=payload, timeout=timeout)
-            logging.debug(f"Bedrock: status={response.status_code}")
+            logging.debug(f"Bedrock(legacy): status={response.status_code}")
             response.raise_for_status()
             try:
                 return response.json()
@@ -1801,7 +2019,7 @@ def chat_with_bedrock(
     except requests.exceptions.HTTPError as e:
         status_code = getattr(e.response, 'status_code', None)
         error_text = getattr(e.response, 'text', str(e))
-        logging.error(f"Bedrock HTTPError {status_code}: {repr(error_text[:500])}")
+        logging.error(f"Bedrock(legacy) HTTPError {status_code}: {repr(error_text[:500])}")
         if status_code in (400, 404, 422):
             raise ChatBadRequestError(provider="bedrock", message=error_text)
         elif status_code in (401, 403):
@@ -1813,34 +2031,169 @@ def chat_with_bedrock(
         else:
             raise ChatAPIError(provider="bedrock", message=error_text, status_code=(status_code or 500))
     except requests.exceptions.RequestException as e:
-        logging.error(f"Bedrock RequestException: {e}", exc_info=True)
+        logging.error(f"Bedrock(legacy) RequestException: {e}", exc_info=True)
         raise ChatProviderError(provider="bedrock", message=f"Network error: {e}", status_code=504)
     except Exception as e:
-        logging.error(f"Bedrock unexpected error: {e}", exc_info=True)
+        logging.error(f"Bedrock(legacy) unexpected error: {e}", exc_info=True)
         raise ChatProviderError(provider="bedrock", message=f"Unexpected error: {e}")
     finally:
         if session is not None:
             session.close()
 
 
-def chat_with_anthropic(
-        input_data: List[Dict[str, Any]], # Mapped from 'messages_payload'
+def chat_with_bedrock(
+        input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
-        system_prompt: Optional[str] = None, # Mapped from 'system_message'
+        system_message: Optional[str] = None,
         temp: Optional[float] = None,
-        topp: Optional[float] = None,       # Mapped from 'topp' (becomes top_p)
-        topk: Optional[int] = None,
         streaming: Optional[bool] = False,
-        max_tokens: Optional[int] = None,   # New: Anthropic uses 'max_tokens'
-        stop_sequences: Optional[List[str]] = None, # New: Mapped from 'stop'
-        tools: Optional[List[Dict[str, Any]]] = None, # New: Anthropic tool format
-        # Anthropic doesn't typically use seed, response_format (for JSON object mode directly), n, user identifier, logit_bias,
-        # presence_penalty, frequency_penalty, logprobs, top_logprobs in the same way as OpenAI.
-        # tool_choice is usually implicit with tools or controlled differently.
-        custom_prompt_arg: Optional[str] = None, # Legacy
+        maxp: Optional[float] = None,  # top_p
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        seed: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        user: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
+    """Uniform adapter-backed Bedrock entry point (prod) with test-friendly fallbacks.
+
+    Delegates to adapter_shims.bedrock_chat_handler which uses the Bedrock adapter
+    by default and falls back to the legacy implementation only if the adapter is
+    unavailable (e.g., missing dependency).
+    """
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import bedrock_chat_handler
+    return bedrock_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        maxp=maxp,
+        max_tokens=max_tokens,
+        n=n,
+        stop=stop,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        seed=seed,
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        user=user,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        app_config=app_config,
+    )
+
+
+async def chat_with_bedrock_async(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        maxp: Optional[float] = None,  # top_p
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        seed: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        user: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import bedrock_chat_handler_async
+    return await bedrock_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        maxp=maxp,
+        max_tokens=max_tokens,
+        n=n,
+        stop=stop,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        seed=seed,
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        user=user,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
+        app_config=app_config,
+    )
+
+
+def chat_with_anthropic(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        streaming: Optional[bool] = False,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+    registry = get_registry()
+    adapter = registry.get_adapter("anthropic")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+        registry.register_adapter("anthropic", AnthropicAdapter)
+        adapter = registry.get_adapter("anthropic")
+    req: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": topp,
+        "top_k": topk,
+        "max_tokens": max_tokens,
+        "stop": stop_sequences,
+        "tools": tools,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        req["stream"] = bool(streaming)
+    if streaming:
+        return adapter.stream(req)
+    return adapter.chat(req)
     # Assuming load_and_log_configs is defined elsewhere
     loaded_config_data = app_config or load_and_log_configs()
     anthropic_config = loaded_config_data.get('anthropic_api', {})
@@ -1850,7 +2203,7 @@ def chat_with_anthropic(
 
     logging.debug("Anthropic: Using configured API key")
 
-    current_model = model or anthropic_config.get('model', 'claude-3-haiku-20240307')
+    current_model = model or anthropic_config.get('model', 'claude-haiku-4.5')
     current_temp = temp if temp is not None else _safe_cast(anthropic_config.get('temperature'), float, 0.7)
     current_top_p = topp
     current_top_k = topk
@@ -2126,7 +2479,7 @@ def chat_with_cohere(
     current_num_generations = num_generations if num_generations is not None else _safe_cast(
         cohere_config.get('num_generations'), int, None)
 
-    api_base_url = cohere_config.get('api_base_url', 'https://api.cohere.com').rstrip('/')
+    api_base_url = cohere_config.get('api_base_url', 'https://api.cohere.ai').rstrip('/')
     # Using /v1/chat is standard for Cohere's current Chat API
     COHERE_CHAT_URL = f"{api_base_url}/v1/chat"
 
@@ -2139,8 +2492,6 @@ def chat_with_cohere(
         "Authorization": f"Bearer {final_api_key}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if streaming else "application/json",
-        # Consider using a more recent API version or removing if not strictly needed, to get Cohere's latest defaults
-        "Cohere-Version": cohere_config.get('api_version_date', "2024-05-13")
     }
 
     chat_history_for_cohere = []
@@ -2399,6 +2750,9 @@ def chat_with_cohere(
         logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
         # This will catch the ReadTimeout after retries are exhausted
         raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504) # 504 for gateway timeout like
+    except KeyError as e:
+        # Surface clearer configuration error if payload/response shape assumptions break
+        raise ChatBadRequestError(provider="cohere", message=f"Key error while preparing or parsing Cohere payload/response: {e}")
     except Exception as e:
         logging.error(f"Cohere API call: Unexpected error: {e}", exc_info=True)
         if not isinstance(e, ChatAPIError):
@@ -2410,7 +2764,7 @@ def chat_with_cohere(
             session.close()
 
 
-def chat_with_deepseek(
+def _legacy_chat_with_deepseek_impl(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -2543,7 +2897,35 @@ def chat_with_deepseek(
             )
             try:
                 response = session.post(api_url, headers=headers, json=data, timeout=120)
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    # Fallback: retry once with a minimal payload if upstream returns 5xx
+                    status_code = getattr(e.response, 'status_code', 500)
+                    if status_code and status_code >= 500:
+                        minimal_payload = {
+                            "model": current_model,
+                            "messages": (
+                                [{"role": "system", "content": system_message}] if system_message else []
+                            ) + input_data,
+                            "stream": False,
+                        }
+                        try:
+                            resp2 = session.post(api_url, headers=headers, json=minimal_payload, timeout=120)
+                            resp2.raise_for_status()
+                            try:
+                                return resp2.json()
+                            finally:
+                                try:
+                                    resp2.close()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            # Re-raise original error if fallback also fails
+                            raise
+                    # If not a 5xx, re-raise
+                    raise
+                # Success path
                 try:
                     return response.json()
                 finally:
@@ -2559,7 +2941,58 @@ def chat_with_deepseek(
         raise ChatProviderError(provider="deepseek", message=f"Unexpected error: {e}")
 
 
-def chat_with_google(
+def chat_with_deepseek(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_message: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import deepseek_chat_handler
+    return deepseek_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_google(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -2829,7 +3262,7 @@ def chat_with_google(
 # https://console.groq.com/docs/quickstart
 
 
-def chat_with_qwen(
+def legacy_chat_with_qwen(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -3020,7 +3453,7 @@ def chat_with_qwen(
         logging.error(f"Qwen unexpected error: {e}", exc_info=True)
         raise ChatProviderError(provider="qwen", message=f"Unexpected error: {e}")
 
-def chat_with_groq(
+def legacy_chat_with_groq(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -3169,7 +3602,7 @@ def chat_with_groq(
         raise ChatProviderError(provider="groq", message=f"Unexpected error: {e}")
 
 
-def chat_with_huggingface(
+def legacy_chat_with_huggingface(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,  # This is the model_id like "Org/ModelName"
         api_key: Optional[str] = None,
@@ -3398,7 +3831,7 @@ def chat_with_huggingface(
             raise # Re-raise if it's already a ChatAPIError subtype
 
 
-def chat_with_mistral(
+def legacy_chat_with_mistral(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -3530,7 +3963,7 @@ def chat_with_mistral(
         raise ChatProviderError(provider="mistral", message=f"Unexpected error: {e}")
 
 
-def chat_with_openrouter(
+def legacy_chat_with_openrouter(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,

@@ -9,11 +9,11 @@ import pytest
 
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "true"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "true"
-    os.environ["TLDW_SANDBOX_DOCKER_FAKE_EXEC"] = "1"
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
     # Import app after env so settings pick up values
     from tldw_Server_API.app.main import app as _app
     return TestClient(_app)
@@ -22,8 +22,8 @@ def _client() -> TestClient:
 pytestmark = pytest.mark.timeout(10)
 
 
-def test_ws_frames_include_monotonic_seq(ws_flush) -> None:
-    with _client() as client:
+def test_ws_frames_include_monotonic_seq(ws_flush, monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         # Start a run
         body: Dict[str, Any] = {
             "spec_version": "1.0",

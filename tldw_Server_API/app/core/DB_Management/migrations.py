@@ -103,6 +103,15 @@ class MigrationManager:
         if target_version is None:
             target_version = max([m.version for m in self.migrations]) if self.migrations else 0
 
+        try:
+            pending_versions = [m.version for m in self.migrations if m.version > current_version]
+            logger.info(
+                f"MigrationManager.migrate: start current={current_version}, target={target_version}, pending={pending_versions}"
+            )
+        except Exception:
+            # Ensure instrumentation never breaks migrations
+            pass
+
         if current_version >= target_version:
             logger.info(f"Database already at version {current_version}, no migrations needed")
             return
@@ -113,6 +122,7 @@ class MigrationManager:
                 if current_version < migration.version <= target_version:
                     try:
                         # Begin transaction for each migration
+                        logger.info(f"MigrationManager.migrate: BEGIN v={migration.version} name='{migration.name}'")
                         conn.execute("BEGIN")
 
                         # Apply migration
@@ -126,15 +136,17 @@ class MigrationManager:
 
                         # Commit transaction
                         conn.commit()
-                        logger.info(f"Successfully applied migration {migration.version}")
+                        logger.info(f"MigrationManager.migrate: COMMIT v={migration.version} ok")
 
                     except Exception as e:
                         # Rollback on error
                         conn.rollback()
-                        logger.error(f"Failed to apply migration {migration.version}: {e}")
+                        logger.error(
+                            f"MigrationManager.migrate: ROLLBACK v={migration.version} name='{migration.name}' error={e}"
+                        )
                         raise
 
-        logger.info(f"Database migrated to version {target_version}")
+        logger.info(f"MigrationManager.migrate: done target={target_version}")
 
     def rollback(self, target_version: int = 0) -> None:
         """

@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 
 from loguru import logger
 
@@ -51,6 +51,11 @@ DEFAULT_PRICING: Dict[str, Dict[str, Dict[str, float]]] = {
         "text-embedding-ada-002": {"prompt": 0.1e-3, "completion": 0.1e-3},
     },
     "anthropic": {
+        # Claude 4.5 / 4.1 families
+        "claude-sonnet-4.5": {"prompt": 3e-3, "completion": 15e-3},
+        "claude-haiku-4.5": {"prompt": 1e-3, "completion": 5e-3},
+        "claude-opus-4.1": {"prompt": 15e-3, "completion": 75e-3},
+        # Back-compat Claude 3 family
         "claude-3-opus": {"prompt": 15e-3, "completion": 75e-3},
         "claude-3-sonnet": {"prompt": 3e-3, "completion": 15e-3},
         "claude-3-haiku": {"prompt": 0.25e-3, "completion": 1.25e-3},
@@ -184,3 +189,23 @@ def reset_pricing_catalog() -> PricingCatalog:
     global _DEFAULT_CATALOG
     _DEFAULT_CATALOG = PricingCatalog()
     return _DEFAULT_CATALOG
+
+
+def list_provider_models(provider: str) -> List[str]:
+    """Return the list of known models for a provider from the pricing catalog.
+
+    Sources include defaults and overrides loaded from the environment and
+    tldw_Server_API/Config_Files/model_pricing.json. This is useful for
+    enumerating available commercial models even when not explicitly listed
+    in config.txt.
+    """
+    try:
+        prov = (provider or "").lower()
+        cat = get_pricing_catalog()
+        # Access the internal mapping via get_rates fallbacks would be inefficient;
+        # use the loaded catalog directly.
+        # _catalog structure: { provider: { model: {prompt, completion} } }
+        models_map = getattr(cat, "_catalog", {}).get(prov, {})
+        return sorted(list(models_map.keys()))
+    except Exception:
+        return []

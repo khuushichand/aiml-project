@@ -6,17 +6,48 @@ import pytest
 
 # Import or skip if psycopg not available
 psycopg = pytest.importorskip("psycopg")
+import socket
+from urllib.parse import urlparse, urlunparse
 
 
 # Resolve a DSN for Postgres tests from env, preferring the general test DSNs.
-# Order of precedence aligns with the AuthNZ/general fixtures so Jobs PG tests
-# can reuse the same cluster without extra env wiring.
-pg_dsn: Optional[str] = (
-    os.getenv("TEST_DATABASE_URL")
-    or os.getenv("DATABASE_URL")
-    or os.getenv("JOBS_DB_URL")
-    or os.getenv("POSTGRES_TEST_DSN")
-)
+# If none are set, build a DSN using the centralized helper so we honor
+# POSTGRES_* fallbacks (e.g., container env like tldw/tldw/tldw_content).
+pg_dsn: Optional[str] = None
+def _normalize_dsn(dsn: str) -> str:
+    try:
+        p = urlparse(dsn)
+        host = p.hostname
+        port = p.port or 5432
+        # If no host or an unresolvable host is provided, fall back to 127.0.0.1
+        needs_fallback = False
+        if not host:
+            needs_fallback = True
+        else:
+            try:
+                socket.getaddrinfo(host, port)
+            except Exception:
+                needs_fallback = True
+        if needs_fallback:
+            # Rebuild DSN with 127.0.0.1 while preserving user/pass/db/port
+            netloc = p.netloc
+            # netloc could be 'user:pass@host:port' or similar
+            # Recompose with host replaced
+            userinfo = ''
+            if '@' in netloc:
+                userinfo, _ = netloc.split('@', 1)
+            new_netloc = f"{userinfo+'@' if userinfo else ''}127.0.0.1:{port}"
+            p = p._replace(netloc=new_netloc)
+            return urlunparse(p)
+        return dsn
+    except Exception:
+        return dsn
+
+try:
+    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+    pg_dsn = _normalize_dsn(get_pg_env().dsn)
+except Exception:
+    pg_dsn = None
 
 
 def ensure_db_exists(dsn: str) -> None:
@@ -53,8 +84,9 @@ def pg_schema_and_cleanup():
 
     # Determine DSN
     dsn = pg_dsn
-    if not dsn:
-        pytest.skip("JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests")
+    # Skip cleanly when a proper Postgres DSN is not provided
+    if not dsn or not str(dsn).lower().startswith("postgres"):
+        pytest.skip("Postgres DSN not configured; skipping Postgres jobs tests")
 
     # Ensure DB exists and schema is created
     ensure_db_exists(dsn)

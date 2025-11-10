@@ -6,20 +6,19 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 
 
 pytestmark = [
     pytest.mark.pg_jobs,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping PG tests"),
 ]
 
 
-def test_pg_single_update_acquire_toggle(monkeypatch, pg_schema_and_cleanup):
+def test_pg_single_update_acquire_toggle(monkeypatch, jobs_pg_dsn):
     # Enable single-update SKIP LOCKED acquire path
     monkeypatch.setenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "true")
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
 
-    jm = JobManager(None, backend="postgres", db_url=pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 
     # Seed two jobs with different priorities and availability
     j1 = jm.create_job(

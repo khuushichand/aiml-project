@@ -130,6 +130,31 @@ async def api_health():
         "checks": checks,
         "timestamp": _dt.utcnow().isoformat(),
     }
+    # Include Resource Governor policy snapshot metadata when available (mirrors top-level /health)
+    try:
+        from tldw_Server_API.app.main import app as _app
+        rgv = getattr(_app.state, "rg_policy_version", None)
+        if rgv is not None:
+            body["rg_policy_version"] = int(rgv)
+            body["rg_policy_store"] = getattr(_app.state, "rg_policy_store", None)
+            body["rg_policy_count"] = getattr(_app.state, "rg_policy_count", None)
+        else:
+            # Fallback: read from configured policy file if available
+            import os as _os
+            from pathlib import Path as _Path
+            import yaml as _yaml
+            p = _os.getenv("RG_POLICY_PATH")
+            if p and _Path(p).exists():
+                try:
+                    with _Path(p).open('r', encoding='utf-8') as _f:
+                        _data = _yaml.safe_load(_f) or {}
+                    body["rg_policy_version"] = int(_data.get("version") or 1)
+                    body["rg_policy_store"] = _os.getenv("RG_POLICY_STORE", "file")
+                    body["rg_policy_count"] = len((_data.get("policies") or {}).keys())
+                except Exception:
+                    pass
+    except Exception:
+        pass
     code = status.HTTP_200_OK if overall == "ok" else (206 if overall == "degraded" else 503)
     return JSONResponse(body, status_code=code)
 

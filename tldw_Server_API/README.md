@@ -73,7 +73,11 @@ See `app/main.py` for router includes and full route namespaces.
   - Config file: `tldw_Server_API/Config_Files/config.txt`
     - Under `[RAG]`: `default_fts_level = media` (or `chunk`)
   - Requests can still override with `fts_level` in the unified RAG API payload.
-- The `GET /api/v1/llm/providers` endpoint reflects configured providers and models.
+- The `GET /api/v1/llm/providers` endpoint reflects configured providers and models. For commercial providers,
+  the list is now seeded from `Config_Files/model_pricing.json` (pricing catalog) and merged with any models
+  explicitly listed in `config.txt`. This makes `model_pricing.json` the primary reference for discoverable
+  models; add entries there (with per‑1K prompt/completion rates) to expose them system‑wide.
+  - Reload without restart: `POST /api/v1/admin/llm-usage/pricing/reload`.
 - Chat request validation is in `app/api/v1/schemas/chat_request_schemas.py` and related modules.
 
 ### Chatbooks Job Backend Configuration

@@ -312,6 +312,8 @@ class StreamingResponseHandler:
                     payload_str = candidate[len("data:"):].strip()
                     if payload_str == "[DONE]":
                         outputs.append("data: [DONE]\n\n")
+                        # Mark DONE as sent to avoid emitting a second terminal sentinel in cleanup
+                        self.done_sent = True
                         self.update_activity()
                         return outputs, True
                     try:
@@ -331,7 +333,14 @@ class StreamingResponseHandler:
                         choices = data.get("choices")
                         if isinstance(choices, list) and choices:
                             for choice in choices:
-                                delta = choice.get("delta") or {}
+                                delta = choice.get("delta")
+                                # Be tolerant: providers/tests may send a plain string delta
+                                if isinstance(delta, str):
+                                    delta = {"content": delta}
+                                # Guard against unexpected delta types
+                                if not isinstance(delta, dict):
+                                    delta = {}
+
                                 tool_calls_delta = delta.get("tool_calls")
                                 if tool_calls_delta:
                                     self._accumulate_tool_calls(tool_calls_delta)
@@ -524,9 +533,10 @@ class StreamingResponseHandler:
                             "conversation_id": self.conversation_id
                         }
                         yield f"data: {json.dumps(done_payload)}\n\n"
-                    # Emit terminal DONE sentinel and mark it as sent to avoid duplicates
-                    yield "data: [DONE]\n\n"
-                    self.done_sent = True
+                    # Emit terminal DONE sentinel only if not already sent by upstream
+                    if not self.done_sent:
+                        yield "data: [DONE]\n\n"
+                        self.done_sent = True
 
                 # Save the full response/tool calls if callback provided (only when not cancelled)
                 has_output = self.has_accumulated_output()
@@ -605,20 +615,21 @@ async def create_streaming_response_with_timeout(
         text_transform=text_transform,
     )
 
-    # Create tasks for streaming and heartbeat using persistent generator instances
+    # Create tasks for streaming and optional heartbeat using persistent generator instances
     async def stream_with_heartbeat():
         stream_gen = handler.safe_stream_generator(stream, save_callback)
-        heartbeat_gen = handler.heartbeat_generator()
+        heartbeats_enabled = isinstance(heartbeat_interval, (int, float)) and heartbeat_interval > 0
+        heartbeat_gen = handler.heartbeat_generator() if heartbeats_enabled else None
 
         stream_task: Optional[asyncio.Task] = asyncio.create_task(stream_gen.__anext__())
-        heartbeat_task: Optional[asyncio.Task] = asyncio.create_task(heartbeat_gen.__anext__())
+        heartbeat_task: Optional[asyncio.Task] = (
+            asyncio.create_task(heartbeat_gen.__anext__()) if heartbeats_enabled and heartbeat_gen is not None else None
+        )
 
         try:
             while not handler.is_cancelled and not handler.error_occurred:
-                done, pending = await asyncio.wait(
-                    {stream_task, heartbeat_task},
-                    return_when=asyncio.FIRST_COMPLETED
-                )
+                wait_set = {t for t in (stream_task, heartbeat_task) if t is not None}
+                done, pending = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
 
                 should_exit = False
                 for task in done:
@@ -630,12 +641,13 @@ async def create_streaming_response_with_timeout(
                                 yield result
                             # Schedule next chunk
                             stream_task = asyncio.create_task(stream_gen.__anext__())
-                        else:
+                        elif heartbeat_task is not None and task is heartbeat_task:
                             # Heartbeat
                             if result is not None:
                                 yield result
                             # Schedule next heartbeat
-                            heartbeat_task = asyncio.create_task(heartbeat_gen.__anext__())
+                            if heartbeats_enabled and heartbeat_gen is not None:
+                                heartbeat_task = asyncio.create_task(heartbeat_gen.__anext__())
                     except StopAsyncIteration:
                         # A generator ended naturally; exit the loop without flagging cancel
                         should_exit = True
@@ -684,10 +696,11 @@ async def create_streaming_response_with_timeout(
                 await stream_gen.aclose()
             except Exception:
                 pass
-            try:
-                await heartbeat_gen.aclose()
-            except Exception:
-                pass
+            if heartbeat_gen is not None:
+                try:
+                    await heartbeat_gen.aclose()
+                except Exception:
+                    pass
 
     async for message in stream_with_heartbeat():
         yield message

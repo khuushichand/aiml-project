@@ -115,7 +115,7 @@ class MediaAnalysisManager {
         }
 
         const html = items.map(item => `
-            <div class="search-result-item" onclick="mediaAnalysisManager.loadMediaForAnalysis(${item.id})">
+            <div class="search-result-item" data-id="${item.id}">
                 <div style="display:flex; justify-content: space-between; align-items:center; gap:8px;">
                     <div>
                         <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
@@ -124,13 +124,22 @@ class MediaAnalysisManager {
                         ${item.description ? `<p class="item-description">${this.escapeHtml(item.description).substring(0, 150)}...</p>` : ''}
                     </div>
                     <div>
-                        <button class="api-button btn-sm admin-only" style="display:none" title="Schedule Re-Embed" onclick="event.stopPropagation(); scheduleReembedForMedia(${item.id});">Re-Embed</button>
+                        <button class="api-button btn-sm admin-only" style="display:none" title="Schedule Re-Embed" data-reembed="${item.id}">Re-Embed</button>
                     </div>
                 </div>
             </div>
         `).join('');
-
-        resultsDiv.innerHTML = html;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') { window.SafeDOM.setHTML(resultsDiv, html); } else { resultsDiv.innerHTML = html; }
+        // Delegate click handlers
+        if (!resultsDiv._bound) {
+            resultsDiv._bound = true;
+            resultsDiv.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-reembed]');
+                if (btn) { e.stopPropagation(); const mid = parseInt(btn.getAttribute('data-reembed')); if (mid) scheduleReembedForMedia(mid); return; }
+                const card = e.target.closest('.search-result-item');
+                if (card && card.dataset.id) { this.loadMediaForAnalysis(parseInt(card.dataset.id)); }
+            });
+        }
     }
 
     async loadAllMedia(page = 1) {
@@ -182,22 +191,30 @@ class MediaAnalysisManager {
         }
 
         const html = items.map(item => `
-            <div class="media-list-item" onclick="mediaAnalysisManager.loadMediaForAnalysis(${item.id})">
+            <div class="media-list-item" data-id="${item.id}">
                 <div class="media-item-header" style="display:flex; justify-content: space-between; align-items:center; gap:8px;">
                     <div>
                         <h4>${this.escapeHtml(item.title || 'Untitled')}</h4>
                         <span class="media-type-badge">${item.media_type || 'Unknown'}</span>
                     </div>
                     <div>
-                        <button class="api-button btn-sm admin-only" style="display:none" title="Schedule Re-Embed" onclick="event.stopPropagation(); scheduleReembedForMedia(${item.id});">Re-Embed</button>
+                        <button class="api-button btn-sm admin-only" style="display:none" title="Schedule Re-Embed" data-reembed="${item.id}">Re-Embed</button>
                     </div>
                 </div>
                 ${item.author ? `<p class="item-author">By: ${this.escapeHtml(item.author)}</p>` : ''}
                 ${item.created_at ? `<p class="item-date">Added: ${new Date(item.created_at).toLocaleDateString()}</p>` : ''}
             </div>
         `).join('');
-
-        mediaListDiv.innerHTML = html;
+        if (window.SafeDOM && typeof window.SafeDOM.setHTML === 'function') { window.SafeDOM.setHTML(mediaListDiv, html); } else { mediaListDiv.innerHTML = html; }
+        if (!mediaListDiv._bound) {
+            mediaListDiv._bound = true;
+            mediaListDiv.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-reembed]');
+                if (btn) { e.stopPropagation(); const mid = parseInt(btn.getAttribute('data-reembed')); if (mid) scheduleReembedForMedia(mid); return; }
+                const card = e.target.closest('.media-list-item');
+                if (card && card.dataset.id) { this.loadMediaForAnalysis(parseInt(card.dataset.id)); }
+            });
+        }
     }
 
     updatePaginationControls() {
@@ -236,19 +253,26 @@ class MediaAnalysisManager {
         try {
             const media = await apiClient.get(`/api/v1/media/${mediaId}`);
 
-            // Display media info
-            selectedMediaDiv.innerHTML = `
+            // Display media info (no inline handlers)
+            const cardHtml = `
                 <div class="selected-media-card">
                     <div style="display:flex; justify-content: space-between; align-items:center; gap:8px;">
                         <h3>${this.escapeHtml(media.title || 'Untitled')}</h3>
-                        <button class="api-button btn-sm" title="Schedule Re-Embed" onclick="scheduleReembedForMedia(${mediaId});">Re-Embed</button>
+                        <button class="api-button btn-sm" title="Schedule Re-Embed" data-reembed="${mediaId}">Re-Embed</button>
                     </div>
                     <p><strong>Type:</strong> ${media.media_type || 'Unknown'}</p>
                     ${media.author ? `<p><strong>Author:</strong> ${this.escapeHtml(media.author)}</p>` : ''}
                     ${media.description ? `<p><strong>Description:</strong> ${this.escapeHtml(media.description)}</p>` : ''}
                     <p><strong>Content Length:</strong> ${media.content ? media.content.length : 0} characters</p>
-                </div>
-            `;
+                </div>`;
+            if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(selectedMediaDiv, cardHtml); } else { selectedMediaDiv.innerHTML = cardHtml; }
+            if (!selectedMediaDiv._bound) {
+                selectedMediaDiv._bound = true;
+                selectedMediaDiv.addEventListener('click', (e) => {
+                    const btn = e.target.closest('button[data-reembed]');
+                    if (btn) { e.preventDefault(); const mid = parseInt(btn.getAttribute('data-reembed')); if (mid) scheduleReembedForMedia(mid); }
+                });
+            }
 
             // Populate the content textarea with the media content
             if (media.content) {
@@ -287,10 +311,8 @@ class MediaAnalysisManager {
 
     async loadAvailablePrompts() {
         try {
-            const data = await apiClient.get('/api/v1/prompts/list', {
-                page: 1,
-                per_page: 100
-            });
+            const listPath = (apiClient.endpoint('prompts','list') || '/api/v1/prompts');
+            const data = await apiClient.get(listPath, { page: 1, per_page: 100 });
             this.availablePrompts = data.prompts || [];
             this.updatePromptDropdown();
         } catch (error) {
@@ -463,13 +485,15 @@ async function byIdentifierSelectForAnalysis() {
             let analysisResult = '';
             if (stream) {
                 // For streaming, we need the raw response
-                const response = await apiClient.makeRequest('POST', '/api/v1/chat/completions', {
+                const ep = (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions');
+                const response = await apiClient.makeRequest('POST', ep, {
                     body: chatPayload,
                     streaming: true
                 });
                 analysisResult = await this.handleStreamingResponse(response, resultsDiv);
             } else {
-                const result = await apiClient.post('/api/v1/chat/completions', chatPayload);
+                const ep2 = (apiClient.endpoint('chat','completions') || '/api/v1/chat/completions');
+                const result = await apiClient.post(ep2, chatPayload);
                 analysisResult = result.choices[0].message.content;
                 this.displayAnalysisResult({
                     analysis: analysisResult,
@@ -641,13 +665,21 @@ async function byIdentifierSelectForAnalysis() {
                     ${this.escapeHtml((analysis.analysis_content || '').substring(0, 200))}...
                 </div>
                 <div class="analysis-actions">
-                    <button onclick="mediaAnalysisManager.viewAnalysis(${analysis.version_number})" class="btn-small">View</button>
-                    <button onclick="mediaAnalysisManager.deleteAnalysis(${analysis.version_number})" class="btn-small btn-danger">Delete</button>
+                    <button class="btn-small" data-view="${analysis.version_number}">View</button>
+                    <button class="btn-small btn-danger" data-delete="${analysis.version_number}">Delete</button>
                 </div>
             </div>
         `;}).join('');
-
-        container.innerHTML = html;
+        if (window.SafeDOM && window.SafeDOM.setHTML) { window.SafeDOM.setHTML(container, html); } else { container.innerHTML = html; }
+        if (!container._bound) {
+            container._bound = true;
+            container.addEventListener('click', (e) => {
+                const viewBtn = e.target.closest('button[data-view]');
+                if (viewBtn) { const v = parseInt(viewBtn.getAttribute('data-view')); if (v) this.viewAnalysis(v); return; }
+                const delBtn = e.target.closest('button[data-delete]');
+                if (delBtn) { const v = parseInt(delBtn.getAttribute('data-delete')); if (v && confirm(`Delete analysis version ${v}?`)) this.deleteAnalysis(v); }
+            });
+        }
     }
 
     async viewAnalysis(versionNumber) {

@@ -9,10 +9,10 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 
 
-def _client(ttl_sec: int | None = None) -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch, ttl_sec: int | None = None) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     if ttl_sec is not None:
-        os.environ["SANDBOX_IDEMPOTENCY_TTL_SEC"] = str(ttl_sec)
+        monkeypatch.setenv("SANDBOX_IDEMPOTENCY_TTL_SEC", str(ttl_sec))
     return TestClient(app)
 
 
@@ -26,20 +26,27 @@ def _run_body(msg: str = "echo") -> Dict[str, Any]:
     }
 
 
-def test_idempotency_conflict_on_mismatch() -> None:
-    with _client() as client:
+def test_idempotency_conflict_on_mismatch(monkeypatch) -> None:
+    with _client(monkeypatch) as client:
         key = "k-conflict-1"
         r1 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 1"))
         assert r1.status_code == 200
+        rid1 = r1.json().get("id")
+        assert isinstance(rid1, str) and rid1
         r2 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 2"))
         assert r2.status_code == 409
         j = r2.json()
         assert j.get("error", {}).get("code") == "idempotency_conflict"
+        details = j.get("error", {}).get("details", {})
+        assert details.get("prior_id") == rid1
+        assert details.get("key") == key
+        # ISO 8601 string expected (not validating format strictly)
+        assert isinstance(details.get("prior_created_at"), str) and details.get("prior_created_at")
 
 
-def test_idempotency_ttl_expiry_allows_new_execution() -> None:
+def test_idempotency_ttl_expiry_allows_new_execution(monkeypatch) -> None:
     # TTL = 0 means immediate expiry
-    with _client(ttl_sec=0) as client:
+    with _client(monkeypatch, ttl_sec=0) as client:
         key = "k-expire-1"
         r1 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 1"))
         assert r1.status_code == 200

@@ -226,12 +226,8 @@ def _ocr_via_vllm(image_bytes: bytes, prompt: str) -> str:
         "do_sample": _getf("DOTS_VLLM_DO_SAMPLE", lambda x: str(x).lower() in ("1","true","yes"), True),
     }
 
-    resp = requests.post(url, json=data, timeout=timeout)
-    resp.raise_for_status()
-    try:
-        j = resp.json()
-    except Exception:
-        j = json.loads(resp.text)
+    from tldw_Server_API.app.core.http_client import fetch_json
+    j = fetch_json(method="POST", url=url, json=data, timeout=timeout)
     return (
         j.get("choices", [{}])[0]
         .get("message", {})

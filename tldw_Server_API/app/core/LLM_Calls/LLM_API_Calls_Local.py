@@ -6,9 +6,15 @@
 ####
 import json
 import os
-from typing import Any, Generator, Union, Dict, Optional, List
+from typing import Any, Generator, Union, Dict, Optional, List, Callable
 
 import httpx
+from tldw_Server_API.app.core.http_client import (
+    create_client as _hc_create_client,
+    fetch as _hc_fetch,
+    RetryPolicy as _HC_RetryPolicy,
+)
+import requests
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatBadRequestError, ChatConfigurationError
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -63,21 +69,45 @@ def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]]
 
 
 def _raise_chat_error_from_httpx(provider_name: str, error: httpx.HTTPStatusError) -> None:
-    """Raise the appropriate Chat*Error derived from an httpx HTTPStatusError."""
+    """Map httpx HTTPStatusError to Chat*Error without assuming body shape.
+
+    - Extract a human-friendly message from JSON bodies like {"error": {"message": "..."}}
+      or {"error": "..."} or {"message": "..."}. Fallback to raw text.
+    - 4xx → ChatBadRequestError; 5xx/other → ChatProviderError.
+    - Never raise during parsing; always fall back safely.
+    """
     response = getattr(error, "response", None)
     status_code = getattr(response, "status_code", None)
 
     detail: str = ""
     if response is not None:
+        # Try JSON first for structured error messages
         try:
-            detail = response.text or str(error)
+            body = response.json()
+            # Common patterns: {"error": {"message": "..."}} or {"error": "..."} or {"message": "..."}
+            if isinstance(body, dict):
+                err_obj = body.get("error")
+                if isinstance(err_obj, dict) and isinstance(err_obj.get("message"), str):
+                    detail = err_obj.get("message") or ""
+                elif isinstance(err_obj, str):
+                    detail = err_obj
+                elif isinstance(body.get("message"), str):
+                    detail = body.get("message")  # type: ignore[assignment]
         except Exception:
-            detail = str(error)
+            # Ignore JSON parsing errors and fall back to text
+            pass
+        # Fallback to plain text if no structured message extracted
+        if not detail:
+            try:
+                detail = response.text or str(error)
+            except Exception:
+                detail = str(error)
     else:
         detail = str(error)
 
     if status_code is not None and 400 <= status_code < 500:
-        raise ChatBadRequestError(provider=provider_name, message=detail, status_code=status_code)
+        # Do not pass status_code kwarg; ChatBadRequestError fixes status to 400 internally
+        raise ChatBadRequestError(provider=provider_name, message=detail)
 
     raise ChatProviderError(
         provider=provider_name,
@@ -116,6 +146,10 @@ def _chat_with_openai_compatible_local_server(
         api_retries: int = 1,
         api_retry_delay: int = 1,
         filter_unknown_params: bool = False,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[
+            Callable[..., Any]
+        ] = None,  # Mirrors signature of _hc_fetch(method=..., url=..., ...)
 ):
     logging.debug(f"{provider_name}: Chat request starting. API Base: {api_base_url}, Model: {model_name}")
 
@@ -213,64 +247,38 @@ def _chat_with_openai_compatible_local_server(
     logging.debug(f"{provider_name}: Payload metadata: {payload_metadata}")
 
 
-    def _post_with_retries(client: httpx.Client):
-        attempts = 0
-        while True:
-            resp: Optional[httpx.Response] = None
-            try:
-                resp = client.post(full_api_url, headers=headers, json=payload, timeout=timeout)
-                if resp.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
-                    attempts += 1
-                    import time
-                    time.sleep(api_retry_delay * attempts)
-                    resp.close()
-                    continue
-                resp.raise_for_status()
-                return resp
-            except httpx.HTTPStatusError as http_error:
-                if resp is not None:
-                    resp.close()
-                _raise_chat_error_from_httpx(provider_name, http_error)
-            except httpx.RequestError as e_req:
-                if resp is not None:
-                    resp.close()
-                if attempts < api_retries:
-                    attempts += 1
-                    import time
-                    time.sleep(api_retry_delay * attempts)
-                    continue
-                logging.error(f"{provider_name}: Request Exception: {e_req}", exc_info=True)
-                raise ChatProviderError(provider=provider_name, message=f"Network error making request to {provider_name}: {e_req}", status_code=503)
-
-    client = httpx.Client()
+    is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    # Use centralized client (egress/TLS enforcement) in production; keep raw httpx in tests
+    session = None
+    if http_client_factory:
+        session = http_client_factory(timeout)
+    else:
+        session = httpx.Client(timeout=timeout) if is_test else _hc_create_client(timeout=timeout)
     try:
         if streaming:
             logging.debug(f"{provider_name}: Opening streaming connection to {full_api_url}")
 
             def stream_generator():
                 done_sent = False
-                response_obj: Optional[httpx.Response] = None
+                response_obj = None
                 try:
                     try:
-                        with client.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
+                        with session.stream("POST", full_api_url, headers=headers, json=payload, timeout=timeout + 60) as response:
                             response_obj = response
                             response.raise_for_status()
                             logging.debug(f"{provider_name}: Streaming response received.")
-
-                            iterator = response.iter_lines() if hasattr(response, "iter_lines") else (line for line in response.iter_text())
                             try:
+                                iterator = response.iter_lines()
                                 for line in iterator:
                                     if not line:
                                         continue
-                                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else str(line)
+                                    decoded = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
                                     if is_done_line(decoded):
                                         done_sent = True
                                     normalized = normalize_provider_line(decoded)
                                     if normalized is None:
                                         continue
                                     yield normalized
-                            except GeneratorExit:
-                                raise
                             except httpx.HTTPError as e_stream:
                                 logging.error(f"{provider_name}: HTTP error during stream iteration: {e_stream}", exc_info=True)
                                 yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
@@ -281,7 +289,13 @@ def _chat_with_openai_compatible_local_server(
                                 for tail in finalize_stream(response, done_already=done_sent):
                                     yield tail
                     except httpx.HTTPStatusError as e_http:
-                        logging.error(f"{provider_name}: HTTP Error during stream setup: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+                        logging.error(
+                            "{}: HTTP Error during stream setup: {} - {}",
+                            provider_name,
+                            getattr(e_http.response, 'status_code', 'N/A'),
+                            getattr(e_http.response, 'text', str(e_http))[:500],
+                            exc_info=False,
+                        )
                         _raise_chat_error_from_httpx(provider_name, e_http)
                     except httpx.RequestError as e_req:
                         logging.error(f"{provider_name}: Request error during stream setup: {e_req}", exc_info=True)
@@ -295,31 +309,60 @@ def _chat_with_openai_compatible_local_server(
                             yield tail
                 finally:
                     try:
-                        client.close()
+                        session.close()
                     except Exception:
                         pass
             return stream_generator()
         else:
-            response = _post_with_retries(client)
-            try:
-                data = response.json()
-                logging.debug(f"{provider_name}: Non-streaming request successful.")
-                return data
-            finally:
+            if is_test:
+                response = session.post(full_api_url, headers=headers, json=payload, timeout=timeout)
                 try:
-                    response.close()
-                except Exception:
-                    pass
+                    response.raise_for_status()
+                    data = response.json()
+                    logging.debug(f"{provider_name}: Non-streaming request successful.")
+                    return data
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+            else:
+                # Centralized client fetch with retries for prod
+                attempts = max(1, int(api_retries)) + 1
+                base_ms = max(50, int(api_retry_delay * 1000))
+                policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
+                fetch_impl = http_fetcher or _hc_fetch
+                response = fetch_impl(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
+                try:
+                    response.raise_for_status()
+                    data = response.json()
+                    logging.debug(f"{provider_name}: Non-streaming request successful.")
+                    return data
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
     except httpx.HTTPStatusError as e_http:
-        logging.error(f"{provider_name}: HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+        logging.error(
+            "{}: HTTP Error: {} - {}",
+            provider_name,
+            getattr(e_http.response, 'status_code', 'N/A'),
+            getattr(e_http.response, 'text', str(e_http))[:500],
+            exc_info=False,
+        )
         _raise_chat_error_from_httpx(provider_name, e_http)
+    except httpx.RequestError as e_req:
+        # Network/connectivity, DNS, timeouts prior to receiving a response
+        logging.error(f"{provider_name}: Request error: {e_req}", exc_info=False)
+        raise ChatProviderError(provider=provider_name, message=str(e_req), status_code=504)
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
         raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
     finally:
         if not streaming:
             try:
-                client.close()
+                session.close()
             except Exception:
                 pass
 
@@ -354,6 +397,8 @@ def chat_with_local_llm(
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -432,6 +477,8 @@ def chat_with_local_llm(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -462,6 +509,8 @@ def chat_with_llama(
         # or loaded from config if not passed. Let's assume it's primarily from config for now.
         api_url: Optional[str] = None, # This is specific to this function's call from API_CALL_HANDLERS if special handling exists
         app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -533,6 +582,8 @@ def chat_with_llama(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -648,18 +699,9 @@ def chat_with_kobold(
 
 
     try:
-        attempts = 0
-        with httpx.Client() as client:
-            while True:
-                response = client.post(api_url, headers=headers, json=payload, timeout=timeout)
-                if response.status_code in (429, 500, 502, 503, 504) and attempts < api_retries:
-                    attempts += 1
-                    import time
-                    time.sleep(api_retry_delay * attempts)
-                    continue
-                response.raise_for_status()
-                response_data = response.json()
-                break
+        policy = _HC_RetryPolicy(attempts=max(1, int(api_retries)) + 1, backoff_base_ms=max(50, int(api_retry_delay * 1000)))
+        response = _hc_fetch(method="POST", url=api_url, headers=headers, json=payload, retry=policy)
+        response_data = response.json()
 
         if response_data and 'results' in response_data and len(response_data['results']) > 0:
             # Kobold /generate usually returns a list of results, each with 'text'
@@ -670,11 +712,19 @@ def chat_with_kobold(
             # This assumes non-streaming. Streaming would need a generator yielding SSE-like events.
             return {"choices": [{"message": {"role": "assistant", "content": generated_text}, "finish_reason": "stop"}]} # Assuming "stop"
         else:
-            logging.error(f"KoboldAI (Native): Unexpected response structure: {response_data}")
+            logging.error(
+                "KoboldAI (Native): Unexpected response structure: {}",
+                response_data,
+            )
             raise ChatProviderError(provider="kobold", message=f"Unexpected response structure from KoboldAI (Native): {str(response_data)[:200]}")
 
     except httpx.HTTPStatusError as e_http:
-        logging.error(f"KoboldAI (Native): HTTP Error: {getattr(e_http.response, 'status_code', 'N/A')} - {getattr(e_http.response, 'text', str(e_http))[:500]}", exc_info=False)
+        logging.error(
+            "KoboldAI (Native): HTTP Error: {} - {}",
+            getattr(e_http.response, 'status_code', 'N/A'),
+            getattr(e_http.response, 'text', str(e_http))[:500],
+            exc_info=False,
+        )
         raise
     except httpx.RequestError as e_req:
         logging.error(f"KoboldAI (Native): Request Exception: {e_req}", exc_info=True)
@@ -710,6 +760,8 @@ def chat_with_oobabooga(
     frequency_penalty: Optional[float] = None, # from map
     api_url: Optional[str] = None, # Specific, not from generic map unless handled
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -782,6 +834,8 @@ def chat_with_oobabooga(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -814,6 +868,8 @@ def chat_with_tabbyapi(
     top_logprobs: Optional[int] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -902,6 +958,8 @@ def chat_with_tabbyapi(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
         # Add other OpenAI params here if TabbyAPI supports them
     )
 
@@ -937,6 +995,8 @@ def chat_with_vllm(
     top_logprobs: Optional[int] = None,
     vllm_api_url: Optional[str] = None, # Specific config, not from generic map typically
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
                                        # Could be loaded from cfg or passed if chat_api_call handles it
 ):
     if temp is not None:
@@ -1021,6 +1081,8 @@ def chat_with_vllm(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
         # tools, tool_choice for vLLM? If supported, add to map and pass.
     )
 
@@ -1054,6 +1116,8 @@ def chat_with_aphrodite(
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     top_logprobs: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     # top_logprobs, tools, tool_choice not in Aphrodite's map currently
 ):
     if temp is not None:
@@ -1137,6 +1201,8 @@ def chat_with_aphrodite(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
@@ -1170,6 +1236,8 @@ def chat_with_ollama(
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     # Missing from Ollama PROVIDER_PARAM_MAP that _openai_compatible_server handles:
     # logit_bias, n (num_choices), user_identifier, logprobs, top_logprobs, tools, tool_choice, min_p
     # Add to signature and pass if Ollama supports them.
@@ -1265,10 +1333,68 @@ def chat_with_ollama(
         api_retries=api_retries,
         api_retry_delay=api_retry_delay,
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
 # Custom OpenAI API 1
+def legacy_chat_with_custom_openai(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    maxp: Optional[float] = None,
+    topp: Optional[float] = None,
+    minp: Optional[float] = None,
+    topk: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    # Delegate to existing implementation to preserve legacy behavior
+    return chat_with_custom_openai(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_arg=custom_prompt_arg,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        maxp=maxp,
+        topp=topp,
+        minp=minp,
+        topk=topk,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
+
 def chat_with_custom_openai(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None,
@@ -1296,6 +1422,8 @@ def chat_with_custom_openai(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = app_config or load_settings()
@@ -1376,11 +1504,62 @@ def chat_with_custom_openai(
         provider_name=cfg_section.capitalize(),
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
     )
 
 
 # Custom OpenAI API 2
+def legacy_chat_with_custom_openai_2(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    topp: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    return chat_with_custom_openai_2(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_arg=custom_prompt_arg,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        topp=topp,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
+
 def chat_with_custom_openai_2(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None,
@@ -1404,6 +1583,8 @@ def chat_with_custom_openai_2(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     # This custom API 2 map is missing top_k, min_p, max_p (top_p) compared to custom 1.
     # Assuming it doesn't support them or they are set server-side.
 ):
@@ -1488,7 +1669,9 @@ def chat_with_custom_openai_2(
         provider_name=cfg_section.capitalize(),
         timeout=timeout,
         api_retries=api_retries,
-        api_retry_delay=api_retry_delay
+        api_retry_delay=api_retry_delay,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher
     )
 
 

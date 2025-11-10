@@ -129,13 +129,23 @@ async def test_fetch_site_items_with_rules_pagination(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def get(self, url: str, headers=None):
-            self.calls.append(url)
-            if url not in responses:
-                raise ValueError(f"unexpected URL {url}")
-            return FakeResponse(url)
+    async def fake_afetch(*, method: str, url: str, client=None, headers=None, timeout=None, **kwargs):
+        # mimic http_client.afetch signature; ignore method and headers
+        if url not in responses:
+            raise ValueError(f"unexpected URL {url}")
+        return FakeResponse(url)
 
-    monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.httpx.AsyncClient", FakeClient)
+    # fetch_site_items_with_rules relies on http_client.create_async_client and afetch
+    # Patch those in the http_client module so no real network calls occur
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.http_client.create_async_client",
+        lambda *args, **kwargs: FakeClient(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.http_client.afetch",
+        fake_afetch,
+        raising=True,
+    )
     monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.is_url_allowed_for_tenant", lambda url, tenant_id: True)
     monkeypatch.setattr("tldw_Server_API.app.core.Watchlists.fetchers.is_url_allowed", lambda url: True)
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Optional, Dict, Any, List
+import asyncio
+from pathlib import Path
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
@@ -167,7 +169,6 @@ async def create_organization(
                 (name, slug, owner_user_id, json.dumps(metadata) if metadata else None),
             )
             org_id = cur.lastrowid
-            await conn.commit()
             cur2 = await conn.execute(
                 "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
                 (org_id,),

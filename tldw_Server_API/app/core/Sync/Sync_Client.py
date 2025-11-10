@@ -111,7 +111,16 @@ class ClientSyncEngine:
             logger.error(f"Network error during push phase: {e}")
             network_error = True # Don't proceed to pull if push failed due to network
         except Exception as e:
-            logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
+            # Treat centralized NetworkError as network error as well
+            try:
+                from tldw_Server_API.app.core.exceptions import NetworkError as _NetErr
+                if isinstance(e, _NetErr):
+                    logger.error(f"Network error during push phase: {e}")
+                    network_error = True
+                else:
+                    logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
+            except Exception:
+                logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
             # Decide if we should attempt pull phase even if push had non-network error
 
         if not network_error:
@@ -164,8 +173,9 @@ class ClientSyncEngine:
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_SEND}"
             logger.debug(f"Posting {len(client_changes)} changes to {full_url}")
 
-            response = requests.post(full_url, json=payload, headers=headers, timeout=45)
-            response.raise_for_status() # Raises HTTPError for 4xx/5xx responses
+            # Use requests here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.requests.post
+            resp = requests.post(full_url, headers=headers, json=payload, timeout=45)
+            resp.raise_for_status()
 
             # If successful, update the marker
             new_last_sent = client_changes[-1]['change_id']
@@ -178,6 +188,19 @@ class ClientSyncEngine:
             status = e.response.status_code if e.response else "Unknown"
             text = e.response.text if e.response else "No response body"
             logger.error(f"HTTP error pushing changes: {status} - {text}")
+        except Exception as e:
+            # httpx HTTPStatusError path
+            try:
+                import httpx as _httpx
+                if isinstance(e, _httpx.HTTPStatusError):
+                    resp = getattr(e, 'response', None)
+                    status = getattr(resp, 'status_code', 'Unknown')
+                    text = getattr(resp, 'text', 'No response body')
+                    logger.error(f"HTTP error pushing changes: {status} - {text}")
+                else:
+                    raise e
+            except Exception:
+                raise
             # Do NOT update last_local_log_id_sent if push fails
         # Let RequestException (network errors) be caught by run_sync_cycle
 
@@ -195,10 +218,10 @@ class ClientSyncEngine:
             full_url = f"{self.server_api_url}{SYNC_ENDPOINT_GET}"
             logger.debug(f"Getting changes from {full_url} with params {params}")
 
-            response = requests.get(full_url, params=params, headers=headers, timeout=45)
-            response.raise_for_status()
-
-            sync_data = response.json()
+            # Use requests here so tests can patch tldw_Server_API.app.core.Sync.Sync_Client.requests.get
+            r = requests.get(full_url, params=params, headers=headers, timeout=45)
+            r.raise_for_status()
+            sync_data = r.json()
             remote_changes = sync_data.get('changes', [])
             # Server should tell us its latest ID, even if no changes sent for us
             server_latest_id = sync_data.get('latest_change_id', self.last_server_log_id_processed)
@@ -229,6 +252,16 @@ class ClientSyncEngine:
 
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error pulling changes: {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            try:
+                import httpx as _httpx
+                if isinstance(e, _httpx.HTTPStatusError):
+                    resp = getattr(e, 'response', None)
+                    logger.error(f"HTTP error pulling changes: {getattr(resp, 'status_code', 'Unknown')} - {getattr(resp, 'text', '')}")
+                else:
+                    raise e
+            except Exception:
+                raise
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding JSON response from server: {e}")
         # Let RequestException (network errors) be caught by run_sync_cycle

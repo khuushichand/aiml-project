@@ -15,6 +15,7 @@ class APIClient {
         this.activeRequests = new Map(); // Track active fetch requests
         this.csrfToken = null; // Cached CSRF token (double-submit pattern)
         this.includeTokenInCurl = false; // UI preference for cURL token masking
+        this.apiEndpoints = null; // Server-provided endpoint catalog
         this.init();
     }
 
@@ -85,6 +86,10 @@ class APIClient {
 
                     // Store the loaded config for later use (includes LLM providers)
                     this.loadedConfig = config;
+                    // Capture server-provided endpoint map (if present)
+                    if (config && config.api_endpoints) {
+                        this.apiEndpoints = config.api_endpoints;
+                    }
 
                     // Use apiUrl if provided, otherwise keep same origin
                     if (config.apiUrl) {
@@ -153,6 +158,9 @@ class APIClient {
                         this.configLoaded = true;
                         console.log('Loaded API configuration from webui-config.json');
                     }
+                    if (config && config.api_endpoints) {
+                        this.apiEndpoints = config.api_endpoints;
+                    }
                 }
             } catch (error) {
                 // Config file not found or error reading it, that's okay
@@ -193,6 +201,40 @@ class APIClient {
                 this.includeTokenInCurl = !!prefs.includeTokenInCurl;
             }
         } catch (e) { /* ignore */ }
+    }
+
+    // Resolve endpoint path from server-provided catalog. Falls back to known defaults when absent.
+    endpoint(category, name, params = {}) {
+        try {
+            let path = null;
+            if (this.apiEndpoints && this.apiEndpoints[category] && this.apiEndpoints[category][name]) {
+                path = this.apiEndpoints[category][name];
+            } else {
+                // Fallback table for core endpoints
+                const defaults = {
+                    llm: {
+                        providers: '/api/v1/llm/providers',
+                        provider: '/api/v1/llm/providers/{provider}',
+                        models: '/api/v1/llm/models'
+                    },
+                    chat: { completions: '/api/v1/chat/completions' },
+                    audio: { voices_catalog: '/api/v1/audio/voices/catalog' },
+                    embeddings: {
+                        models: '/api/v1/embeddings/models',
+                        providers_config: '/api/v1/embeddings/providers-config'
+                    }
+                };
+                path = (((defaults[category] || {})[name]) || null);
+            }
+            if (!path) return null;
+            // Replace simple placeholders like {provider}
+            Object.entries(params || {}).forEach(([k, v]) => {
+                path = path.replace(new RegExp(`{${k}}`, 'g'), encodeURIComponent(String(v)));
+            });
+            return path;
+        } catch (e) {
+            return null;
+        }
     }
 
     setBaseUrl(url) {
@@ -339,6 +381,12 @@ class APIClient {
             }
         };
 
+        // Always send a correlation request id
+        try {
+            const rid = (typeof Utils !== 'undefined' && Utils.uuidv4) ? Utils.uuidv4() : `${Date.now()}`;
+            fetchOptions.headers['X-Request-ID'] = rid;
+        } catch (e) { /* ignore */ }
+
         const credsMode = this._determineCredentialsMode();
         if (credsMode) {
             fetchOptions.credentials = credsMode;
@@ -400,6 +448,17 @@ class APIClient {
             this.activeRequests.delete(requestKey);
 
             const duration = Date.now() - startTime;
+
+            // Capture correlation headers for UI surfacing
+            try {
+                const reqId = response.headers.get('X-Request-ID') || response.headers.get('x-request-id') || null;
+                const traceparent = response.headers.get('traceparent') || response.headers.get('Traceparent') || null;
+                const traceId = response.headers.get('X-Trace-Id') || response.headers.get('x-trace-id') || null;
+                this.lastCorrelation = { requestId: reqId, traceparent, traceId };
+                if (window && window.webUI && typeof window.webUI.updateCorrelationBadge === 'function') {
+                    window.webUI.updateCorrelationBadge(this.lastCorrelation);
+                }
+            } catch (_) { /* ignore */ }
 
             this._syncCsrfFromResponse(response);
 
@@ -670,6 +729,10 @@ class APIClient {
 
         const ctrl = new AbortController();
         const fetchHeaders = { 'Accept': 'text/event-stream', ...headers };
+        try {
+            const rid = (typeof Utils !== 'undefined' && Utils.uuidv4) ? Utils.uuidv4() : `${Date.now()}`;
+            fetchHeaders['X-Request-ID'] = rid;
+        } catch (e) { /* ignore */ }
 
         const credsMode = this._determineCredentialsMode();
         if (this.token) {
@@ -694,6 +757,15 @@ class APIClient {
 
         const done = (async () => {
             const response = await fetch(url.toString(), fetchOptions);
+            try {
+                const reqId = response.headers.get('X-Request-ID') || response.headers.get('x-request-id') || null;
+                const traceparent = response.headers.get('traceparent') || response.headers.get('Traceparent') || null;
+                const traceId = response.headers.get('X-Trace-Id') || response.headers.get('x-trace-id') || null;
+                this.lastCorrelation = { requestId: reqId, traceparent, traceId };
+                if (window && window.webUI && typeof window.webUI.updateCorrelationBadge === 'function') {
+                    window.webUI.updateCorrelationBadge(this.lastCorrelation);
+                }
+            } catch (_) { /* ignore */ }
             if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -878,11 +950,49 @@ class APIClient {
                 return config.llm_providers;
             }
 
-            // Fallback to API endpoint
-            const response = await this.get('/api/v1/llm/providers');
-            this.cachedProviders = response;
-            this.cacheTimestamp = Date.now();
-            return response;
+            // Prefer providers endpoint
+            try {
+                const ep = this.endpoint('llm', 'providers') || '/api/v1/llm/providers';
+                const response = await this.get(ep);
+                this.cachedProviders = response;
+                this.cacheTimestamp = Date.now();
+                return response;
+            } catch (e) {
+                // Fallback to flat models endpoint and synthesize provider mapping
+                try {
+                    const modelsEp = this.endpoint('llm', 'models') || '/api/v1/llm/models';
+                    const models = await this.get(modelsEp);
+                    const byProvider = {};
+                    (models || []).forEach((m) => {
+                        const parts = String(m).split('/');
+                        if (parts.length >= 2) {
+                            const prov = parts.shift();
+                            const model = parts.join('/');
+                            byProvider[prov] = byProvider[prov] || [];
+                            byProvider[prov].push(model);
+                        }
+                    });
+                    const providers = Object.keys(byProvider).map((name) => ({
+                        name,
+                        display_name: name,
+                        type: 'unknown',
+                        models: byProvider[name],
+                        default_model: byProvider[name] && byProvider[name][0],
+                        is_configured: true,
+                    }));
+                    const synthesized = {
+                        providers,
+                        default_provider: providers[0] ? providers[0].name : null,
+                        total_configured: providers.length,
+                        synthesized: true,
+                    };
+                    this.cachedProviders = synthesized;
+                    this.cacheTimestamp = Date.now();
+                    return synthesized;
+                } catch (e2) {
+                    throw e2;
+                }
+            }
         } catch (error) {
             console.error('Failed to get LLM providers:', error);
             // Return empty providers list as fallback
@@ -902,7 +1012,9 @@ class APIClient {
      */
     async getProviderDetails(providerName) {
         try {
-            const response = await this.get(`/api/v1/llm/providers/${providerName}`);
+            const ep = this.endpoint('llm', 'provider', { provider: providerName })
+                || `/api/v1/llm/providers/${providerName}`;
+            const response = await this.get(ep);
             return response;
         } catch (error) {
             console.error(`Failed to get provider details for ${providerName}:`, error);
@@ -916,7 +1028,8 @@ class APIClient {
      */
     async getAllAvailableModels() {
         try {
-            const response = await this.get('/api/v1/llm/models');
+            const ep = this.endpoint('llm', 'models') || '/api/v1/llm/models';
+            const response = await this.get(ep);
             return response;
         } catch (error) {
             console.error('Failed to get all models:', error);

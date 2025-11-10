@@ -294,9 +294,13 @@ async def create_chatbook(
     except HTTPException:
         raise
     except Exception as e:
-        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
-            "Error creating chatbook for user %s: %s", user.id, e
-        )
+        # Log full traceback to aid debugging intermittent 500s in CI
+        get_ps_logger(
+            request_id=ensure_request_id(request),
+            ps_component="endpoint",
+            ps_job_kind="chatbooks",
+            traceparent=ensure_traceparent(request),
+        ).exception(f"Unhandled exception creating chatbook for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook")
 
 

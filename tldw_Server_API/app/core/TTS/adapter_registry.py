@@ -252,9 +252,10 @@ class TTSAdapterRegistry:
                     logger.info(f"Provider {provider.value} is disabled in configuration")
                     return False
             else:
-                # Using direct config for testing
+                # Using direct config (legacy/flattened dict). Treat missing keys as disabled
+                # to avoid inadvertently enabling providers that aren't explicitly configured.
                 enabled_key = f"{provider.value}_enabled"
-                if not self.config.get(enabled_key, True):
+                if not self.config.get(enabled_key, False):
                     logger.info(f"Provider {provider.value} is disabled in configuration")
                     return False
 
@@ -649,7 +650,11 @@ class TTSAdapterFactory:
         # Kokoro models
         "kokoro": TTSProvider.KOKORO,
         "kokoro-v0_19": TTSProvider.KOKORO,
+        "kokoro-v1_0": TTSProvider.KOKORO,
+        "kokoro-v1.0": TTSProvider.KOKORO,
+        "kokoro-1.0": TTSProvider.KOKORO,
         "kokoro-onnx": TTSProvider.KOKORO,
+        "onnx-community/kokoro-82m-v1.0-onnx-timestamped": TTSProvider.KOKORO,
 
         # Higgs models
         "higgs": TTSProvider.HIGGS,
@@ -675,8 +680,12 @@ class TTSAdapterFactory:
         "vibevoice": TTSProvider.VIBEVOICE,
         "vibevoice-1.5b": TTSProvider.VIBEVOICE,
         "vibevoice-7b": TTSProvider.VIBEVOICE,
+        "vibevoice-7b-q8": TTSProvider.VIBEVOICE,
         "microsoft/vibevoice-1.5b": TTSProvider.VIBEVOICE,
-        "westzhang/vibevoice-large-pt": TTSProvider.VIBEVOICE,
+        # Official 7B repo id
+        "vibevoice/vibevoice-7b": TTSProvider.VIBEVOICE,
+        # Community 8-bit quantized 7B variant
+        "fabiosarracino/vibevoice-large-q8": TTSProvider.VIBEVOICE,
 
         # NeuTTS models
         "neutts": TTSProvider.NEUTTS,

@@ -22,18 +22,18 @@
                     <label for="vs_model">Embedding Model (metadata):</label>
                     <input id="vs_model" placeholder="text-embedding-3-small">
                 </div>
-                <button class="api-button" onclick="vsCreate()">Create Store</button>
+                <button class="api-button" data-action="vs-create">Create Store</button>
             </div>
 
             <div class="column">
                 <h3>Vector Stores</h3>
-                <button class="api-button" onclick="vsList()">Refresh</button>
+                <button class="api-button" data-action="vs-list">Refresh</button>
                 <ul id="vs_list"></ul>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; margin-top:8px;">
                     <input id="vs_duplicate_name" placeholder="Duplicate as name">
-                    <button class="api-button" onclick="vsDuplicateSelected()">Duplicate Selected</button>
+                    <button class="api-button" data-action="vs-duplicate">Duplicate Selected</button>
                     <input id="vs_rename_name" placeholder="Rename selected to" style="margin-left:12px;">
-                    <button class="api-button" onclick="vsRenameSelectedFromPanel()">Rename Selected</button>
+                    <button class="api-button" data-action="vs-rename-from-panel">Rename Selected</button>
                 </div>
             </div>
         </div>
@@ -53,9 +53,9 @@
                     <label for="vs_edit_metadata">Metadata (JSON):</label>
                     <textarea id="vs_edit_metadata" rows="4" placeholder='{"description":"..."}'></textarea>
                 </div>
-                <button class="api-button" onclick="vsLoadStore()">Load</button>
-                <button class="api-button" onclick="vsSaveStore()">Save</button>
-                <button class="api-button btn-danger" onclick="vsDeleteStore()">Delete Store</button>
+                <button class="api-button" data-action="vs-load">Load</button>
+                <button class="api-button" data-action="vs-save">Save</button>
+                <button class="api-button btn-danger" data-action="vs-delete">Delete Store</button>
             </div>
         </div>
 
@@ -90,14 +90,14 @@
                     </select>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center;">
-                    <button class="api-button" onclick="uiCreateStoreFromMedia()">Create New Store</button>
+                    <button class="api-button" data-action="vs-create-from-media">Create New Store</button>
                     <input id="vs_media_existing_store_id" placeholder="Existing Store ID (vs_...)" style="flex:1;"/>
                     <select id="vs_media_existing_store_select" style="max-width: 260px;">
                         <option value="">-- Select Existing Store --</option>
                     </select>
-                    <button class="api-button" onclick="uiLoadExistingStores()">Load Stores</button>
-                    <button class="api-button" onclick="uiUpdateStoreFromMedia()">Update Existing Store</button>
-                    <button class="api-button" onclick="uiRenameSelectedStore()">Rename Selected</button>
+                    <button class="api-button" data-action="vs-load-stores">Load Stores</button>
+                    <button class="api-button" data-action="vs-update-from-media">Update Existing Store</button>
+                    <button class="api-button" data-action="vs-rename-selected">Rename Selected</button>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_media_chunk_size">Chunk Size:</label>
@@ -132,22 +132,22 @@
             <div class="column">
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_id">Store ID:</label>
-                    <input id="vs_id" placeholder="vs_..." onblur="vsUpdateIndexBadgeFromId()">
+                    <input id="vs_id" placeholder="vs_...">
                     <span id="vs_index_badge" style="padding:2px 6px; border-radius:10px; font-size:12px; background:#ccc; color:#222; display:none;">index: n/a</span>
-                    <button class="btn btn-sm btn-secondary" type="button" onclick="vsUpdateIndexBadgeFromId()">Refresh Badge</button>
+                    <button class="btn btn-sm btn-secondary" type="button" data-action="vs-refresh-badge">Refresh Badge</button>
                 </div>
                 <div class="form-group">
                     <label for="vec_text">Content (auto-embed) or Values (JSON array):</label>
                     <textarea id="vec_text" rows="3" placeholder="Enter text to embed..."></textarea>
                     <input id="vec_values" placeholder='[0.1, 0.2, ...]' style="margin-top:8px;">
                 </div>
-                <button class="api-button" onclick="vsUpsertVector()">Upsert Vector</button>
+                <button class="api-button" data-action="vs-upsert">Upsert Vector</button>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <button class="api-button" onclick="vsListVectors()">List Vectors</button>
+                    <button class="api-button" data-action="vs-list-vectors">List Vectors</button>
                     <label for="vs_limit" style="margin-left:8px;">Page Size:</label>
                     <input id="vs_limit" type="number" value="50" min="1" max="1000" style="width:80px;">
-                    <button class="api-button" onclick="vsPrevPage()">Prev</button>
-                    <button class="api-button" onclick="vsNextPage()">Next</button>
+                    <button class="api-button" data-action="vs-prev">Prev</button>
+                    <button class="api-button" data-action="vs-next">Next</button>
                     <span id="vs_page_info" style="color: var(--color-text-muted);"></span>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -158,21 +158,21 @@
                     <label for="vs_order_dir">Dir:</label>
                     <select id="vs_order_dir"><option>asc</option><option>desc</option></select>
                 </div>
-                <button class="api-button" onclick="vsQuery()">Query</button>
+                <button class="api-button" data-action="vs-query">Query</button>
                 <div class="form-group" style="margin-top:12px;">
                     <label for="vs_bulk">Bulk Upsert (JSON array of records or newline-separated texts):</label>
                     <textarea id="vs_bulk" rows="6" placeholder='[{"id":"1","content":"text"},{"values":[...],"metadata":{}}] OR one text per line'></textarea>
-                    <button class="api-button" onclick="vsBulkUpsert()">Bulk Upsert</button>
+                    <button class="api-button" data-action="vs-bulk-upsert">Bulk Upsert</button>
                 </div>
                 <div class="form-group">
                     <label for="vec_delete_id">Delete Vector ID:</label>
                     <input id="vec_delete_id" placeholder="vector id">
-                    <button class="api-button btn-danger" onclick="vsDeleteVector()">Delete Vector</button>
+                    <button class="api-button btn-danger" data-action="vs-delete-vector">Delete Vector</button>
                 </div>
                 <div class="form-group">
                     <label for="vs_delete_filter">Delete By Filter (JSON):</label>
                     <input id="vs_delete_filter" placeholder='{"media_id":"42"}'>
-                    <button class="api-button btn-danger" onclick="vsDeleteByFilter()">Delete by Filter</button>
+                    <button class="api-button btn-danger" data-action="vs-delete-by-filter">Delete by Filter</button>
                 </div>
             </div>
             <div class="column">
@@ -187,14 +187,14 @@
             <div class="column">
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <label for="vs_admin_id">Store ID:</label>
-                    <input id="vs_admin_id" placeholder="vs_..." style="width:240px;" onblur="vsUpdateIndexBadgeFromId()">
-                    <button class="api-button" onclick="vsAdminIndexInfo()">Index Info</button>
-                    <button class="btn btn-sm btn-secondary" type="button" onclick="vsUpdateIndexBadgeFromId()">Refresh Badge</button>
+                    <input id="vs_admin_id" placeholder="vs_..." style="width:240px;">
+                    <button class="api-button" data-action="vs-admin-index-info">Index Info</button>
+                    <button class="btn btn-sm btn-secondary" type="button" data-action="vs-refresh-badge">Refresh Badge</button>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center;">
                     <label for="vs_ef_search">ef_search:</label>
                     <input id="vs_ef_search" type="number" value="64" min="1" style="width:120px;">
-                    <button class="api-button" onclick="vsAdminSetEfSearch()">Set ef_search</button>
+                    <button class="api-button" data-action="vs-admin-set-ef">Set ef_search</button>
                     <small style="color: var(--color-text-muted);">Note: ef_search applies to pgvector only; ignored for Chroma.</small>
                 </div>
                 <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -208,7 +208,7 @@
                     <input id="vs_index_efc" type="number" value="200" min="1" style="width:120px;">
                     <label for="vs_index_lists">lists (IVF):</label>
                     <input id="vs_index_lists" type="number" value="100" min="1" style="width:100px;">
-                    <button class="api-button btn-danger" onclick="vsAdminRebuildIndex()">Rebuild Index</button>
+                    <button class="api-button btn-danger" data-action="vs-admin-rebuild">Rebuild Index</button>
                 </div>
             </div>
         </div>
@@ -667,7 +667,7 @@ async function uiRenameSelectedStore(){
     <div class="card" style="padding:10px; border:1px solid var(--color-border); border-radius:6px; margin-bottom:10px;">
       <h3 style="margin:0 0 8px 0;">Admin: Discover Users</h3>
       <div class="form-group" style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
-        <button class="api-button" onclick="vbLoadUsers()">Load Users</button>
+        <button class="api-button" data-action="vb-load-users">Load Users</button>
         <select id="vb_user_select" style="min-width:220px;">
           <option value="">-- Select User --</option>
         </select>
@@ -689,7 +689,7 @@ async function uiRenameSelectedStore(){
       <input id="vb_offset" type="number" value="0" min="0" style="width:100px;"/>
       <label for="vb_user">User ID (admin):</label>
       <input id="vb_user" type="text" placeholder="user id" style="width:160px;"/>
-      <button class="api-button" onclick="vbList()">Refresh</button>
+      <button class="api-button" data-action="vb-refresh">Refresh</button>
     </div>
     <div id="vb_list"></div>
     <pre id="vb_result">---</pre>

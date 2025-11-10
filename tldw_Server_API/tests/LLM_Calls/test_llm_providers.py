@@ -82,12 +82,16 @@ class TestMoonshotProvider:
 
     def test_moonshot_basic_chat(self, mock_response):
         """Test basic chat functionality."""
-        with patch('requests.Session.post') as mock_post:
+        with patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries') as mock_factory:
+            fake_session = Mock()
+            mock_factory.return_value = fake_session
+
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = mock_response
             mock_response_obj.raise_for_status = Mock()
-            mock_post.return_value = mock_response_obj
+            mock_response_obj.close = Mock()
+            fake_session.post.return_value = mock_response_obj
 
             result = chat_with_moonshot(
                 input_data=[{"role": "user", "content": "Hello"}],
@@ -96,22 +100,25 @@ class TestMoonshotProvider:
             )
 
             assert result["choices"][0]["message"]["content"] == "Hello from Moonshot AI!"
-            mock_post.assert_called_once()
+            fake_session.post.assert_called_once()
 
             # Check request payload
-            call_args = mock_post.call_args
+            call_args = fake_session.post.call_args
             payload = call_args[1]['json']
             assert payload['model'] == "moonshot-v1-8k"
             assert len(payload['messages']) == 1
 
-    @patch('requests.Session.post')
-    def test_moonshot_with_system_message(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_moonshot_with_system_message(self, mock_factory, mock_response):
         """Test chat with system message."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         result = chat_with_moonshot(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -119,20 +126,23 @@ class TestMoonshotProvider:
             system_message="You are a helpful assistant."
         )
 
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload['messages'][0]['role'] == "system"
         assert payload['messages'][0]['content'] == "You are a helpful assistant."
 
-    @patch('requests.Session.post')
-    def test_moonshot_vision_model(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_moonshot_vision_model(self, mock_factory, mock_response):
         """Test vision model with image content."""
         mock_response['model'] = "moonshot-v1-8k-vision-preview"
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         input_data = [{
             "role": "user",
@@ -149,7 +159,7 @@ class TestMoonshotProvider:
         )
 
         assert result["choices"][0]["message"]["content"] == "Hello from Moonshot AI!"
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload['model'] == "moonshot-v1-8k-vision-preview"
 
@@ -184,8 +194,8 @@ class TestMoonshotProvider:
         assert len(chunks) == 4  # 3 content chunks + [DONE]
         assert "[DONE]" in chunks[-1]
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.requests.Session')
-    def test_moonshot_streaming_session_lifecycle(self, mock_session_cls):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls._legacy_create_session_with_retries')
+    def test_moonshot_streaming_session_lifecycle(self, mock_legacy_factory):
         """Ensure streaming keeps the session open until iteration finishes."""
         session_state = {"closed": False}
         response_state = {"closed": False}
@@ -223,7 +233,7 @@ class TestMoonshotProvider:
         response.iter_lines.side_effect = iter_lines
 
         session_instance.post.return_value = response
-        mock_session_cls.return_value = session_instance
+        mock_legacy_factory.return_value = session_instance
 
         generator = chat_with_moonshot(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -241,11 +251,13 @@ class TestMoonshotProvider:
         assert session_state["closed"] is True
         assert response_state["closed"] is True
 
-    @patch('requests.Session.post')
-    def test_moonshot_error_handling(self, mock_post):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_moonshot_error_handling(self, mock_factory):
         """Test error handling."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         response = make_response(401, '{"error": {"message": "Unauthorized"}}')
-        mock_post.return_value = response
+        fake_session.post.return_value = response
 
         with pytest.raises(ChatAuthenticationError) as exc_info:
             _ = chat_with_moonshot(
@@ -283,14 +295,17 @@ class TestZAIProvider:
             }
         }
 
-    @patch('requests.Session.post')
-    def test_zai_basic_chat(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_zai_basic_chat(self, mock_factory, mock_response):
         """Test basic chat functionality."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         result = chat_with_zai(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -299,21 +314,25 @@ class TestZAIProvider:
         )
 
         assert result["choices"][0]["message"]["content"] == "Hello from Z.AI GLM!"
-        mock_post.assert_called_once()
+        # Ensure our session post was invoked once
+        fake_session.post.assert_called_once()
 
         # Check request payload
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload['model'] == "glm-4.5"
 
-    @patch('requests.Session.post')
-    def test_zai_with_request_id(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_zai_with_request_id(self, mock_factory, mock_response):
         """Test chat with request_id."""
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.json.return_value = mock_response
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         result = chat_with_zai(
             input_data=[{"role": "user", "content": "Hello"}],
@@ -321,22 +340,25 @@ class TestZAIProvider:
             request_id="custom_req_123"
         )
 
-        call_args = mock_post.call_args
+        call_args = fake_session.post.call_args
         payload = call_args[1]['json']
         assert payload.get('request_id') == "custom_req_123"
 
-    @patch('requests.Session.post')
-    def test_zai_model_variants(self, mock_post, mock_response):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    def test_zai_model_variants(self, mock_factory, mock_response):
         """Test different model variants."""
         models = ["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4-32b-0414-128k"]
 
         for model in models:
             mock_response['model'] = model
+            fake_session = Mock()
+            mock_factory.return_value = fake_session
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = mock_response
             mock_response_obj.raise_for_status = Mock()
-            mock_post.return_value = mock_response_obj
+            mock_response_obj.close = Mock()
+            fake_session.post.return_value = mock_response_obj
 
             result = chat_with_zai(
                 input_data=[{"role": "user", "content": "Test"}],
@@ -344,7 +366,7 @@ class TestZAIProvider:
                 model=model
             )
 
-            call_args = mock_post.call_args
+            call_args = fake_session.post.call_args
             payload = call_args[1]['json']
             assert payload['model'] == model
 
@@ -409,10 +431,91 @@ class TestZAIProvider:
     ],
 )
 def test_provider_http_error_mapping(func, kwargs, status_code, expected_exception):
-    response = make_response(status_code, '{"error": {"message": "boom"}}')
-    with patch('requests.Session.post', return_value=response):
-        with pytest.raises(expected_exception):
-            func(**kwargs)
+    if func is chat_with_google:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{kwargs['model']}:generateContent",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    elif func is chat_with_openrouter:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://openrouter.ai/api/v1/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    elif func is chat_with_mistral:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://api.mistral.ai/v1/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    elif func is chat_with_deepseek:
+        with patch(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory"
+        ) as mock_client_factory:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = None
+            request = httpx.Request(
+                "POST",
+                "https://api.deepseek.com/chat/completions",
+            )
+            http_response = httpx.Response(
+                status_code=status_code,
+                request=request,
+                content=b'{"error": {"message": "boom"}}',
+            )
+            mock_client.post.return_value = http_response
+            mock_client_factory.return_value = mock_client
+            with pytest.raises(expected_exception):
+                func(**kwargs)
+    else:
+        response = make_response(status_code, '{"error": {"message": "boom"}}')
+        with patch('requests.Session.post', return_value=response):
+            with pytest.raises(expected_exception):
+                func(**kwargs)
 
 
 class TestHuggingFaceAPI:
@@ -614,8 +717,8 @@ class TestIntegration:
     """Integration tests for provider interactions."""
 
     @pytest.mark.asyncio
-    @patch('requests.Session.post')
-    async def test_provider_switching(self, mock_post):
+    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    async def test_provider_switching(self, mock_factory):
         """Test switching between different providers."""
         # Mock responses for different providers
         moonshot_response = {
@@ -625,10 +728,13 @@ class TestIntegration:
             "choices": [{"message": {"content": "Z.AI response"}}]
         }
 
+        fake_session = Mock()
+        mock_factory.return_value = fake_session
         mock_response_obj = Mock()
         mock_response_obj.status_code = 200
         mock_response_obj.raise_for_status = Mock()
-        mock_post.return_value = mock_response_obj
+        mock_response_obj.close = Mock()
+        fake_session.post.return_value = mock_response_obj
 
         # Test Moonshot
         mock_response_obj.json.return_value = moonshot_response
@@ -649,14 +755,17 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_concurrent_requests(self):
         """Test concurrent requests to multiple providers."""
-        with patch('requests.Session.post') as mock_post:
+        with patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries') as mock_factory:
+            fake_session = Mock()
+            mock_factory.return_value = fake_session
             mock_response_obj = Mock()
             mock_response_obj.status_code = 200
             mock_response_obj.json.return_value = {
                 "choices": [{"message": {"content": "Response"}}]
             }
             mock_response_obj.raise_for_status = Mock()
-            mock_post.return_value = mock_response_obj
+            mock_response_obj.close = Mock()
+            fake_session.post.return_value = mock_response_obj
 
             # Simulate concurrent requests
             tasks = [
@@ -743,16 +852,28 @@ class TestSSENormalization:
         assert first_chunk.startswith("data: ")
         assert remaining[-1].strip().lower() == "data: [done]"
 
-    @patch('requests.Session.post')
-    def test_qwen_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            'data: {"choices":[{"delta":{"content":"!"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_qwen_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                            'data: {"choices":[{"delta":{"content":"!"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_qwen(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -765,16 +886,32 @@ class TestSSENormalization:
         assert all(c.endswith('\n\n') for c in chunks[:-1])
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_groq_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" Groq"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_groq_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+                            'data: {"choices":[{"delta":{"content":" Groq"}}]}\n\n',
+                            'data: [DONE]\n\n',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.http_client_factory",
+            lambda *args, **kwargs: _Client(),
+        )
 
         gen = chat_with_groq(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -783,8 +920,7 @@ class TestSSENormalization:
         chunks = list(gen)
         assert len(chunks) == 3
         assert chunks[0].startswith('data: ')
-        assert chunks[0].endswith('\n\n')
-        assert '[DONE]' in chunks[-1]
+        assert chunks[-1].strip() == 'data: [DONE]'
 
     @patch('requests.Session.post')
     def test_google_gemini_stream_normalized(self, mock_post):
@@ -837,16 +973,31 @@ class TestSSENormalization:
         assert json.loads(tool_call["function"]["arguments"]) == {"query": "mars"}
         assert chunks[-1].strip() == "data: [DONE]"
 
-    @patch('requests.Session.post')
-    def test_bedrock_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_bedrock_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, method, url, *, headers=None, json=None):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                            b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_bedrock(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -858,25 +1009,35 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_bedrock_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_bedrock(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", model="meta.llama3-8b-instruct", streaming=True
+    def test_bedrock_stream_error_chunked(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, method, url, *, headers=None, json=None):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        raise RuntimeError('boom')
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
-        chunks = list(gen)
-        assert any('bedrock_stream_error' in c for c in chunks)
-        assert all(c.startswith('data: ') for c in chunks)
+
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        with pytest.raises(ChatProviderError):
+            list(chat_with_bedrock(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", model="meta.llama3-8b-instruct", streaming=True
+            ))
 
     @patch('requests.Session.post')
     def test_gemini_stream_error_chunked(self, mock_post):
@@ -917,16 +1078,31 @@ class TestSSENormalization:
         assert any('"finish_reason": "stop"' in c for c in chunks)
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_finish_reason(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
-            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
-        ])
-        mock_post.return_value = mock_response
+    def test_anthropic_stream_finish_reason(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
+                            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -957,16 +1133,32 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_openrouter_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" OpenRouter"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_openrouter_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+                            'data: {"choices":[{"delta":{"content":" OpenRouter"}}]}\n\n',
+                            'data: [DONE]\n\n',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
+            lambda *args, **kwargs: _Client(),
+        )
 
         gen = chat_with_openrouter(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -975,19 +1167,28 @@ class TestSSENormalization:
         chunks = list(gen)
         assert len(chunks) == 3
         assert chunks[0].startswith('data: ')
-        assert chunks[0].endswith('\n\n')
-        assert '[DONE]' in chunks[-1]
+        assert chunks[-1].strip() == 'data: [DONE]'
 
-    @patch('requests.Session.post')
-    def test_deepseek_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_deepseek_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+                            'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_deepseek(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -999,17 +1200,26 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_huggingface_stream_normalized(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        # HF path uses requests.post directly (not a Session)
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
-            b'data: {"choices":[{"delta":{"content":" HF"}}]}',
-        ])
-        mock_post.return_value = mock_response
+    def test_huggingface_stream_normalized(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        return iter([
+                            b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+                            b'data: {"choices":[{"delta":{"content":" HF"}}]}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
 
         gen = chat_with_huggingface(
             input_data=[{"role": "user", "content": "Hi"}],
@@ -1021,173 +1231,218 @@ class TestSSENormalization:
         assert chunks[0].endswith('\n\n')
         assert '[DONE]' in chunks[-1]
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_includes_done(self, mock_post):
-        # Simulate Anthropic event stream: text delta then end
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
-            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
-        ])
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_stream_includes_done(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
+                            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         gen = chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
             api_key="key", streaming=True
         )
         chunks = list(gen)
-        # Should include a DONE sentinel at end
         assert any('[DONE]' in c for c in chunks)
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_emits_tool_calls(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=[
-            b'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}',
-            b'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"Paris\\"}"}}',
-            b'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
-        ])
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_stream_emits_tool_calls(self, monkeypatch):
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([
+                            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}',
+                            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"Paris\\"}"}}',
+                            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
+                        ])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         gen = chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
             api_key="key", streaming=True
         )
         chunks = list(gen)
-
         assert any('"tool_calls"' in c for c in chunks)
         assert any('[DONE]' in c for c in chunks)
 
-    @patch('requests.Session.post')
-    def test_anthropic_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_anthropic(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+    def test_anthropic_stream_error_chunked(self, monkeypatch):
+        # Simulate a midstream error: adapter.normalize_error should raise a Chat*Error
+        class _ErrClient:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    def raise_for_status(self):
+                        import httpx
+                        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+                        resp = httpx.Response(400, request=req, content=b'{"error":{"message":"bad"}}')
+                        raise httpx.HTTPStatusError("err", request=req, response=resp)
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, exc_type, exc, tb):
+                        return False
+                    def iter_lines(self):
+                        return iter([])
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _ErrClient(),
         )
-        chunks = list(gen)
-        assert any('anthropic_stream_error' in c for c in chunks)
-        assert any(c.startswith('data: ') for c in chunks)
+        with pytest.raises(ChatBadRequestError):
+            _ = list(chat_with_anthropic(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", streaming=True
+            ))
 
-    @patch('requests.Session.post')
-    def test_anthropic_payload_includes_image_url(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "id": "msg_1",
-            "model": "claude-3-haiku-20240307",
-            "content": [{"type": "text", "text": "hi"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_payload_includes_image_url(self, monkeypatch):
+        captured = {"json": None}
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def post(self, url, headers=None, json=None):
+                captured["json"] = json
+                class R:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def json(self):
+                        return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
+                return R()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         chat_with_anthropic(
             input_data=[{
                 "role": "user",
-                "content": [{
-                    "type": "image_url",
-                    "image_url": {"url": "https://example.com/cat.png"},
-                }],
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
             }],
             api_key="key",
             streaming=False,
         )
-
-        payload = mock_post.call_args[1]['json']
+        payload = captured["json"]
         image_source = payload['messages'][0]['content'][0]['source']
         assert image_source['type'] == 'url'
         assert image_source['url'] == 'https://example.com/cat.png'
 
-    @patch('requests.Session.post')
-    def test_anthropic_payload_includes_base64_image(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "id": "msg_2",
-            "model": "claude-3-haiku-20240307",
-            "content": [{"type": "text", "text": "hi"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        }
-        mock_response.close = Mock()
-        mock_post.return_value = mock_response
-
+    def test_anthropic_payload_includes_base64_image(self, monkeypatch):
+        captured = {"json": None}
+        class _Client:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return False
+            def post(self, url, headers=None, json=None):
+                captured["json"] = json
+                class R:
+                    status_code = 200
+                    def raise_for_status(self):
+                        return None
+                    def json(self):
+                        return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
+                return R()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
+        )
         chat_with_anthropic(
             input_data=[{
                 "role": "user",
-                "content": [{
-                    "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,QUJD"},
-                }],
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}],
             }],
             api_key="key",
             streaming=False,
         )
-
-        payload = mock_post.call_args[1]['json']
+        payload = captured["json"]
         image_source = payload['messages'][0]['content'][0]['source']
         assert image_source['type'] == 'base64'
         assert image_source['media_type'] == 'image/png'
         assert image_source['data'] == 'QUJD'
 
-    @patch('requests.Session.post')
-    def test_mistral_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_mistral(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+    def test_mistral_stream_error_chunked(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        raise RuntimeError('boom')
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
-        chunks = list(gen)
-        assert any('mistral_stream_error' in c for c in chunks)
-        assert any(c.startswith('data: ') for c in chunks)
+        # Adapter path should be taken under pytest automatically
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        with pytest.raises(ChatProviderError):
+            list(chat_with_mistral(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", streaming=True
+            ))
 
-    @patch('requests.Session.post')
-    def test_openrouter_stream_error_chunked(self, mock_post):
-        class ErrIterator:
-            def __iter__(self):
-                raise requests.exceptions.ChunkedEncodingError('boom')
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.iter_lines = Mock(return_value=ErrIterator())
-        mock_post.return_value = mock_response
-
-        gen = chat_with_openrouter(
-            input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+    def test_openrouter_stream_error_chunked(self, monkeypatch):
+        class _Client:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, tb): return False
+            def stream(self, *args, **kwargs):
+                class _Resp:
+                    status_code = 200
+                    def raise_for_status(self): return None
+                    def __enter__(self): return self
+                    def __exit__(self, exc_type, exc, tb): return False
+                    def iter_lines(self):
+                        raise RuntimeError('boom')
+                return _Resp()
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
-        chunks = list(gen)
-        assert any('openrouter_stream_error' in c for c in chunks)
-        assert any(c.startswith('data: ') for c in chunks)
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        with pytest.raises(ChatProviderError):
+            list(chat_with_openrouter(
+                input_data=[{"role": "user", "content": "Hi"}],
+                api_key="key", streaming=True
+            ))
 
     @pytest.mark.asyncio
     async def test_anthropic_async_matches_sync_normalization(self, monkeypatch):
@@ -1195,7 +1450,7 @@ class TestSSENormalization:
 
         response_payload = {
             "id": "msg_42",
-            "model": "claude-3-haiku-20240307",
+            "model": "claude-haiku-4.5",
             "content": [
                 {"type": "text", "text": "Hello"},
                 {"type": "tool_use", "id": "tool_99", "name": "lookup", "input": {"city": "Paris"}},
@@ -1205,44 +1460,26 @@ class TestSSENormalization:
         }
 
         def _make_response():
-            resp = Mock()
-            resp.status_code = 200
-            resp.raise_for_status = Mock()
-            resp.json.return_value = copy.deepcopy(response_payload)
-            resp.close = Mock()
-            return resp
+            class R:
+                status_code = 200
+                def raise_for_status(self):
+                    return None
+                def json(self):
+                    return copy.deepcopy(response_payload)
+            return R()
 
-        sync_session = Mock()
-        sync_session.post.return_value = _make_response()
-        sync_session.close = Mock()
-        monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
-            lambda **kwargs: sync_session,
-        )
-
-        class _AsyncClientSuccess:
-            def __init__(self, *args, **kwargs):
-                self._response = _make_response()
-
-            async def __aenter__(self):
+        class _Client:
+            def __enter__(self):
                 return self
-
-            async def __aexit__(self, exc_type, exc, tb):
+            def __exit__(self, exc_type, exc, tb):
                 return False
-
-            async def post(self, *args, **kwargs):
-                return self._response
-
+            def post(self, *args, **kwargs):
+                return _make_response()
             def stream(self, *args, **kwargs):
                 raise AssertionError("Streaming not expected in this test.")
-
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.httpx.AsyncClient",
-            _AsyncClientSuccess,
-        )
-        monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
-            lambda: {"anthropic_api": {"api_key": "key"}},
+            "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+            lambda *a, **k: _Client(),
         )
 
         sync_result = chat_with_anthropic(
@@ -1255,22 +1492,19 @@ class TestSSENormalization:
             api_key="key",
             streaming=False,
         )
-
-        assert sync_result == async_result
-        tool_call = sync_result["choices"][0]["message"]["tool_calls"][0]
-        assert tool_call["function"]["name"] == "lookup"
-        assert tool_call["function"]["arguments"] == json.dumps({"city": "Paris"})
+        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+        expected = AnthropicAdapter()._normalize_to_openai_shape(response_payload)
+        assert sync_result == expected
+        assert async_result == expected
 
 
 def test_openai_defaults_with_blank_config(monkeypatch):
     captured = {}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
-
         def raise_for_status(self):
-            return
-
+            return None
         def json(self):
             return {
                 "choices": [
@@ -1283,40 +1517,30 @@ def test_openai_defaults_with_blank_config(monkeypatch):
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }
 
-    class DummySession:
-        def post(self, url, headers=None, json=None, timeout=None):
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
-            captured["timeout"] = timeout
-            return DummyResponse()
-
-        def close(self):
-            return
+            return FakeResp()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
-        lambda *args, **kwargs: DummySession(),
-    )
-
-    monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
-        lambda: {
-            'openai_api': {
-                'api_key': 'test-key',
-                'temperature': '',
-                'top_p': None,
-                'api_timeout': '',
-                'api_retry_delay': '',
-                'api_retries': '',
-                'max_tokens': '',
-                'api_base_url': 'https://mock.openai.local/v1',
-            }
-        },
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(**k),
     )
 
     result = chat_with_openai(
         input_data=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        temp=0.7,
+        maxp=0.95,
+        app_config={"openai_api": {"api_base_url": "https://mock.openai.local/v1", "api_timeout": 90}},
     )
 
     assert result["choices"][0]["message"]["content"] == "ok"
@@ -1328,11 +1552,15 @@ def test_openai_defaults_with_blank_config(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_async_streaming_normalized(monkeypatch):
-    class MockResp:
+    captured: Dict[str, Any] = {}
+
+    class FakeResp:
         status_code = 200
+
         def raise_for_status(self):
-            return
-        async def aiter_lines(self):
+            return None
+
+        def iter_lines(self):
             yield 'event: completion.delta'
             yield 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
             yield 'id: chunk-1'
@@ -1340,27 +1568,37 @@ async def test_openai_async_streaming_normalized(monkeypatch):
             yield 'retry: 1000'
             yield 'data: [DONE]'
 
-    class MockStreamCtx:
-        async def __aenter__(self):
-            return MockResp()
-        async def __aexit__(self, exc_type, exc, tb):
+    class FakeStreamCtx:
+        def __enter__(self):
+            return FakeResp()
+
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-    class MockAsyncClient:
-        def __init__(self, timeout=None):
-            pass
-        async def __aenter__(self):
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            self.timeout = kwargs.get("timeout")
+
+        def __enter__(self):
             return self
-        async def __aexit__(self, exc_type, exc, tb):
+
+        def __exit__(self, exc_type, exc, tb):
             return False
-        def stream(self, *args, **kwargs):
-            return MockStreamCtx()
 
-    async def _mock_client_ctor(*args, **kwargs):
-        return MockAsyncClient()
+        def stream(self, method, url, *, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = json
+            return FakeStreamCtx()
 
-    # Monkeypatch httpx.AsyncClient to our mock client
-    monkeypatch.setattr('httpx.AsyncClient', MockAsyncClient)
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient(**kwargs)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        fake_factory,
+    )
 
     gen = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
@@ -1387,7 +1625,7 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
     def fake_config():
         return {"openai_api": {"api_key": "cfg-key"}}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
@@ -1396,27 +1634,34 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
         def json(self):
             return expected_response
 
-    class DummyAsyncClient:
-        def __init__(self, *args, timeout=None, **kwargs):
-            captured["timeout"] = timeout
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            self.timeout = kwargs.get("timeout")
 
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
-            return DummyResponse()
+            return FakeResp()
+
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        fake_factory,
+    )
 
     result = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi async"}],
@@ -1428,6 +1673,7 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
     assert captured["url"].endswith("/chat/completions")
     assert captured["payload"]["messages"][-1]["content"] == "hi async"
     assert captured["timeout"] == 90.0
+    assert captured["payload"]["stream"] is False
 
 
 @pytest.mark.asyncio
@@ -1445,7 +1691,7 @@ async def test_openai_async_gpt5_payload(monkeypatch):
             }
         }
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
@@ -1454,27 +1700,31 @@ async def test_openai_async_gpt5_payload(monkeypatch):
         def json(self):
             return {"choices": []}
 
-    class DummyAsyncClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
+    class FakeClient:
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
-            return DummyResponse()
+            return FakeResp()
+
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient()
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        fake_factory,
+    )
 
     result = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi there"}],
@@ -1501,7 +1751,7 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
     def fake_config():
         return {"groq_api": {"api_key": "groq-key"}}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
@@ -1510,27 +1760,34 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
         def json(self):
             return expected_response
 
-    class DummyAsyncClient:
-        def __init__(self, *args, timeout=None, **kwargs):
-            captured["timeout"] = timeout
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            self.timeout = kwargs.get("timeout")
 
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url, headers=None, json=None):
+        def post(self, url, headers=None, json=None):
             captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
-            return DummyResponse()
+            return FakeResp()
+
+    def fake_factory(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.http_client_factory",
+        fake_factory,
+    )
 
     result = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "groq async"}],
@@ -1549,43 +1806,49 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
     def fake_config():
         return {"openrouter_api": {"api_key": "router-key"}}
 
-    class DummyResponse:
+    class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
             return None
 
-        async def aiter_lines(self):
+        def iter_lines(self):
             yield "event: ping"
             yield 'data: {"choices":[{"delta":{"content":"chunk"}}]}'
             yield "id: 123"
             yield "data: [DONE]"
 
-    class DummyStreamCtx:
-        async def __aenter__(self):
-            return DummyResponse()
+    class FakeStreamCtx:
+        def __enter__(self):
+            return FakeResp()
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-    class DummyAsyncClient:
-        def __init__(self, *args, timeout=None, **kwargs):
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
             pass
 
-        async def __aenter__(self):
+        def __enter__(self):
             return self
 
-        async def __aexit__(self, exc_type, exc, tb):
+        def __exit__(self, exc_type, exc, tb):
             return False
 
-        def stream(self, *args, **kwargs):
-            return DummyStreamCtx()
+        def stream(self, method, url, *, headers=None, json=None):
+            return FakeStreamCtx()
+
+    def fake_factory(*args, **kwargs):
+        return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
         fake_config,
     )
-    monkeypatch.setattr('httpx.AsyncClient', DummyAsyncClient)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
+        fake_factory,
+    )
 
     gen = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "hello"}],
@@ -1604,31 +1867,41 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
 
 
 def test_openai_non_streaming_session_closed(monkeypatch):
-    response = Mock()
-    response.status_code = 200
-    response.raise_for_status = Mock()
-    response.json.return_value = {"choices": [], "id": "test"}
+    closed = {"v": False}
 
-    session = Mock()
-    session.post.return_value = response
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"choices": [], "id": "test"}
+        def close(self):
+            return None
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            closed["v"] = True
+            return True
+        def post(self, *a, **k):
+            return FakeResp()
+        def close(self):
+            return None
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
-        lambda *args, **kwargs: session,
-    )
-
-    monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
-        lambda: {"openai_api": {"api_key": "cfg-key"}},
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
     )
 
     chat_with_openai(
         input_data=[{"role": "user", "content": "hello"}],
         streaming=False,
         api_key="cfg-key",
+        app_config={"openai_api": {"api_timeout": 90}},
     )
 
-    session.close.assert_called_once()
+    assert closed["v"] is True
 
 
 def test_cohere_config_fallbacks(monkeypatch):

@@ -6,32 +6,16 @@ from __future__ import annotations
 
 import asyncpg
 import os
+from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 import pytest
 
 pytestmark = pytest.mark.integration
 
-_TEST_DSN = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
-_TEST_DSN = _TEST_DSN.strip()
-
-def _parse_pg_dsn(dsn: str):
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(dsn)
-        if not parsed.scheme.startswith("postgres"):
-            return None
-        host = parsed.hostname or "localhost"
-        port = int(parsed.port or 5432)
-        user = parsed.username or "tldw_user"
-        password = parsed.password or "TestPassword123!"
-        return host, port, user, password
-    except Exception:
-        return None
-
-_parsed = _parse_pg_dsn(_TEST_DSN) if _TEST_DSN else None
-TEST_DB_HOST = (_parsed[0] if _parsed else os.getenv("TEST_DB_HOST", "localhost"))
-TEST_DB_PORT = int(_parsed[1] if _parsed else int(os.getenv("TEST_DB_PORT", "5432")))
-TEST_DB_USER = (_parsed[2] if _parsed else os.getenv("TEST_DB_USER", "tldw_user"))
-TEST_DB_PASSWORD = (_parsed[3] if _parsed else os.getenv("TEST_DB_PASSWORD", "TestPassword123!"))
+_pg = get_pg_env()
+TEST_DB_HOST = _pg.host
+TEST_DB_PORT = int(_pg.port)
+TEST_DB_USER = _pg.user
+TEST_DB_PASSWORD = _pg.password
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,328 @@
+<!-- Flashcards: Manage -->
+<div id="tabFlashcardsManage" class="tab-content" role="tabpanel">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method get">FLASHCARDS</span>
+      <span class="endpoint-path">Decks & Cards</span>
+    </h2>
+
+    <div class="columns">
+      <div class="column">
+        <h3>Decks</h3>
+        <div class="form-group">
+          <button class="api-button" id="fc_list_decks_btn">List Decks</button>
+        </div>
+        <div class="form-group">
+          <label for="fc_new_deck_name">New Deck Name</label>
+          <input id="fc_new_deck_name" type="text" placeholder="e.g., Biology" />
+        </div>
+        <div class="form-group">
+          <label for="fc_new_deck_desc">Description (optional)</label>
+          <input id="fc_new_deck_desc" type="text" placeholder="Short description" />
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" id="fc_create_deck_btn">Create Deck</button>
+        </div>
+        <div class="form-group">
+          <label for="fc_manage_deck_select">Deck</label>
+          <select id="fc_manage_deck_select"></select>
+        </div>
+      </div>
+
+      <div class="column">
+        <h3>Cards</h3>
+        <div class="form-group">
+          <div class="columns">
+            <div class="column">
+              <label for="fc_filter_tag">Tag</label>
+              <input id="fc_filter_tag" type="text" placeholder="optional tag" />
+            </div>
+            <div class="column">
+              <label for="fc_filter_due">Due Status</label>
+              <select id="fc_filter_due">
+                <option value="all">All</option>
+                <option value="new">New</option>
+                <option value="learning">Learning</option>
+                <option value="due">Due</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="fc_filter_q">Search</label>
+          <input id="fc_filter_q" type="text" placeholder="full-text search" />
+        </div>
+        <div class="form-group">
+          <div class="columns">
+            <div class="column">
+              <label for="fc_page">Page</label>
+              <input id="fc_page" type="number" value="1" min="1" style="width:80px;" />
+            </div>
+            <div class="column">
+              <label for="fc_page_size">Page Size</label>
+              <input id="fc_page_size" type="number" value="50" min="1" max="1000" style="width:100px;" />
+            </div>
+            <div class="column">
+              <label for="fc_search_q">Search</label>
+              <input id="fc_search_q" type="text" placeholder="front/back/notes" />
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="btn-group">
+            <button class="api-button" id="fc_list_cards_btn">List Cards</button>
+            <button class="api-button" id="fc_prev_btn">Prev</button>
+            <button class="api-button" id="fc_next_btn">Next</button>
+          </div>
+          <span id="fc_page_info" class="text-muted" style="margin-left:8px;"></span>
+        </div>
+        <div class="form-group">
+          <div class="btn-group">
+            <button class="api-button" id="fc_select_page_btn">Select Page</button>
+            <button class="api-button" id="fc_clear_page_btn">Clear Selection</button>
+            <button class="api-button" id="fc_bulk_delete_btn">Bulk Delete</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="columns">
+            <div class="column">
+              <label for="fc_bulk_deck">Set Deck for Selected</label>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <input id="fc_bulk_deck" type="number" placeholder="Deck ID" style="width:120px;" />
+                <button class="api-button" id="fc_bulk_set_deck_btn">Set Deck</button>
+              </div>
+            </div>
+            <div class="column">
+              <label for="fc_bulk_tags">Tags for Selected</label>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <input id="fc_bulk_tags" type="text" placeholder="tag1,tag2" />
+                <button class="api-button" id="fc_bulk_set_tags_btn">Set Tags</button>
+              </div>
+              <div style="margin-top:4px; display:flex; gap:12px; align-items:center;">
+                <label><input type="checkbox" id="fc_bulk_tags_append" /> Append (union) instead of replace</label>
+                <small class="text-muted">If unchecked, tags are replaced.</small>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h4>Create Card</h4>
+        <div class="form-group">
+          <label for="fc_front">Front</label>
+          <textarea id="fc_front" rows="2" placeholder="Question or {{c1::cloze}} text"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="fc_back">Back</label>
+          <textarea id="fc_back" rows="2" placeholder="Answer (ignored for cloze)"></textarea>
+        </div>
+        <div class="columns">
+          <div class="column">
+            <label for="fc_model_type">Model</label>
+            <select id="fc_model_type">
+              <option value="basic">Basic</option>
+              <option value="basic_reverse">Basic (Reverse)</option>
+              <option value="cloze">Cloze</option>
+            </select>
+          </div>
+          <div class="column">
+            <label for="fc_tags">Tags (comma-separated)</label>
+            <input id="fc_tags" type="text" placeholder="e.g., bio,cell" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="fc_notes">Notes</label>
+          <input id="fc_notes" type="text" placeholder="optional" />
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" id="fc_create_card_btn">Create Card</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <h3>Results</h3>
+      <div id="fc_selection_bar" style="display:none; margin-bottom:8px;" aria-live="polite"></div>
+      <div id="fc_cards_container" class="json-viewer-content" style="overflow:auto;"></div>
+      <pre id="fc_manage_result" class="json-viewer" style="margin-top:8px;"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- Flashcards: Review -->
+<div id="tabFlashcardsReview" class="tab-content" role="tabpanel">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method post">FLASHCARDS</span>
+      <span class="endpoint-path">Review</span>
+    </h2>
+
+    <div class="columns">
+      <div class="column">
+        <div class="form-group">
+          <label for="fc_review_deck">Deck</label>
+          <select id="fc_review_deck"></select>
+        </div>
+        <div class="form-group">
+          <button class="api-button" id="fc_load_due_btn">Load Due Card</button>
+        </div>
+        <div class="form-group">
+          <div id="fc_card_front" class="json-viewer-content" style="min-height:3rem;" aria-live="polite"></div>
+          <button class="api-button secondary" id="fc_reveal_btn" disabled>Reveal</button>
+          <div id="fc_card_back" class="json-viewer-content" style="min-height:3rem; display:none;"></div>
+        </div>
+        <div class="form-group">
+          <label for="fc_answer_time">Answer time (ms)</label>
+          <input id="fc_answer_time" type="number" placeholder="e.g., 800" />
+        </div>
+        <div class="form-group">
+          <div class="btn-group">
+            <button class="api-button" id="fc_rate_again">Again (1)</button>
+            <button class="api-button" id="fc_rate_hard">Hard (2)</button>
+            <button class="api-button" id="fc_rate_good">Good (3)</button>
+            <button class="api-button" id="fc_rate_easy">Easy (4)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <h3>Review Result</h3>
+      <pre id="fc_review_result" class="json-viewer"></pre>
+    </div>
+  </div>
+  <input id="fc_current_uuid" type="hidden" />
+</div>
+
+<!-- Flashcards: Import/Export -->
+<div id="tabFlashcardsImport" class="tab-content" role="tabpanel">
+  <div class="endpoint-section">
+    <h2>
+      <span class="endpoint-method post">FLASHCARDS</span>
+      <span class="endpoint-path">Import & Export</span>
+    </h2>
+
+    <div class="columns">
+      <div class="column">
+        <h3>Import (TSV/CSV-like)</h3>
+        <div class="form-group">
+          <label for="fc_import_text">Content</label>
+          <textarea id="fc_import_text" rows="8" placeholder="Deck\tFront\tBack\tTags\tNotes"></textarea>
+        </div>
+        <div class="columns">
+          <div class="column">
+            <label for="fc_import_delim">Delimiter</label>
+            <input id="fc_import_delim" type="text" value="\t" />
+          </div>
+          <div class="column">
+            <label>
+              <input type="checkbox" id="fc_import_has_header" /> Has header row
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" id="fc_import_tsv_btn">Import</button>
+        </div>
+        <div class="form-group">
+          <pre id="fc_import_result" class="json-viewer"></pre>
+        </div>
+      </div>
+      <div class="column">
+        <h3>Export</h3>
+        <div class="form-group">
+          <label for="fc_export_deck">Deck</label>
+          <select id="fc_export_deck"></select>
+        </div>
+        <div class="form-group">
+          <label for="fc_export_tag">Tag (optional)</label>
+          <input id="fc_export_tag" type="text" />
+        </div>
+        <div class="columns">
+          <div class="column">
+            <label for="fc_export_format">Format</label>
+            <select id="fc_export_format">
+              <option value="csv">CSV</option>
+              <option value="apkg">Anki (.apkg)</option>
+            </select>
+          </div>
+          <div class="column">
+            <label>
+              <input type="checkbox" id="fc_export_header" /> Include header
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="fc_export_extended" /> Extended header (include Extra / Reverse)
+          </label>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="fc_export_reverse" /> Include reverse cards in APKG
+          </label>
+        </div>
+        <div class="form-group">
+          <button class="api-button" id="fc_export_btn">Export</button>
+        </div>
+
+        <hr />
+        <h3>Import (JSON / JSONL file)</h3>
+        <div class="form-group">
+          <input id="fc_import_json_file" type="file" accept="application/json,.json,.jsonl" />
+        </div>
+        <div class="form-group">
+          <button class="api-button" id="fc_import_json_btn">Import JSON</button>
+        </div>
+        <div class="form-group">
+          <pre id="fc_import_json_result" class="json-viewer"></pre>
+        </div>
+      </div>
+    </div>
+
+    <hr />
+    <h3>Create From Selection (Media/Notes)</h3>
+    <div class="columns">
+      <div class="column">
+        <div class="form-group">
+          <label for="fc_gen_source">Source</label>
+          <select id="fc_gen_source">
+            <option value="notes">Notes</option>
+            <option value="media">Media</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <button class="api-button" id="fc_gen_fetch_btn">Fetch Items</button>
+        </div>
+        <div id="fc_gen_items" class="json-viewer-content" style="max-height:240px; overflow:auto;"></div>
+      </div>
+      <div class="column">
+        <div class="columns">
+          <div class="column">
+            <label for="fc_gen_deck">Target Deck</label>
+            <select id="fc_gen_deck"></select>
+          </div>
+          <div class="column">
+            <label for="fc_gen_tags">Default Tags (comma)</label>
+            <input id="fc_gen_tags" type="text" placeholder="optional tags" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="fc_gen_seed">Captured Seed Text</label>
+          <textarea id="fc_gen_seed" rows="6" placeholder="Seed content (auto-filled from selection)"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="fc_gen_model">Model</label>
+          <select id="fc_gen_model" class="llm-model-select"></select>
+        </div>
+        <div class="form-group">
+          <button class="api-button primary" id="fc_gen_generate_btn">Generate Draft Cards</button>
+        </div>
+        <div class="form-group">
+          <pre id="fc_gen_preview" class="json-viewer"></pre>
+        </div>
+        <div class="form-group">
+          <button class="api-button" id="fc_gen_import_btn">Import Draft Cards</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

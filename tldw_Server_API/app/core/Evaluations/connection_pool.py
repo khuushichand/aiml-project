@@ -6,6 +6,7 @@ preparing for future aiosqlite migration.
 """
 
 import asyncio
+import os
 import sqlite3
 import threading
 from typing import Optional, Callable, Any, Dict, List, AsyncContextManager
@@ -582,12 +583,19 @@ class EvaluationsConnectionManager:
         # Load pool configuration
         db_config = get_config("database.connection", {})
 
+        # When running tests, prefer very small pool sizes/timeouts to avoid overhead
+        try:
+            _tm = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
+            _testy = _tm in {"1", "true", "yes", "y", "on"}
+        except Exception:
+            _testy = False
+
         self._pool = ConnectionPool(
             db_path=str(db_path),
-            pool_size=db_config.get("pool_size", 10),
-            max_overflow=db_config.get("max_overflow", 20),
-            pool_timeout=db_config.get("pool_timeout", 30),
-            pool_recycle=db_config.get("pool_recycle", 3600),
+            pool_size=int(db_config.get("pool_size", 1 if _testy else 10)),
+            max_overflow=int(db_config.get("max_overflow", 2 if _testy else 20)),
+            pool_timeout=float(db_config.get("pool_timeout", 5 if _testy else 30)),
+            pool_recycle=int(db_config.get("pool_recycle", 600 if _testy else 3600)),
             enable_monitoring=True
         )
 
@@ -614,26 +622,62 @@ class EvaluationsConnectionManager:
         self._pool.shutdown()
 
 
-# Global connection manager instance
-connection_manager = EvaluationsConnectionManager()
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def get_connection_manager() -> "EvaluationsConnectionManager":
+    """Lazily construct a singleton EvaluationsConnectionManager.
+
+    Returns the same instance across calls until shutdown clears the cache.
+    """
+    return EvaluationsConnectionManager()
+
+# Backwards-compatibility: allow tests to patch this symbol directly.
+# Do not assign a real instance here to preserve lazy behavior.
+connection_manager: Optional[EvaluationsConnectionManager] = None
 
 
 # Convenience functions for easy access
 def get_connection():
-    """Get a database connection from the global pool."""
-    return connection_manager.get_connection()
+    """Get a database connection from the lazily-initialized pool."""
+    return get_connection_manager().get_connection()
 
 
 async def get_connection_async():
-    """Get an async database connection from the global pool."""
-    return await connection_manager.get_connection_async()
+    """Get an async database connection from the lazily-initialized pool."""
+    return await get_connection_manager().get_connection_async()
 
 
 def get_connection_health() -> Dict[str, Any]:
     """Get connection pool health status."""
-    return connection_manager.get_health_status()
+    # Prefer patched global if present (used by tests), else lazy getter
+    mgr = connection_manager or get_connection_manager()
+    return mgr.get_health_status()
 
 
 def get_connection_stats() -> ConnectionStats:
     """Get connection pool statistics."""
-    return connection_manager.get_statistics()
+    # Prefer patched global if present (used by tests), else lazy getter
+    mgr = connection_manager or get_connection_manager()
+    return mgr.get_statistics()
+
+
+def shutdown_evaluations_pool_if_initialized() -> None:
+    """Shutdown the pool if the connection manager has been created.
+
+    No-op if never initialized. Clears the cache to allow clean re-init later.
+    """
+    try:
+        info = get_connection_manager.cache_info()  # type: ignore[attr-defined]
+        if (getattr(info, "hits", 0) or getattr(info, "misses", 0)):
+            try:
+                get_connection_manager().shutdown()
+            finally:
+                try:
+                    get_connection_manager.cache_clear()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+    except Exception:
+        # Be conservative: never raise during shutdown
+        pass

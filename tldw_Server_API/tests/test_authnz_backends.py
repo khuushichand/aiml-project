@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 import argparse
 import json
 from urllib.parse import urlparse, parse_qs
+from tldw_Server_API.tests.helpers.pg_env import pg_dsn
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -51,9 +52,7 @@ class TestConfig:
     def get_postgresql_config() -> DatabaseConfig:
         """Get PostgreSQL test configuration"""
         # Use environment variables or defaults
-        dsn = (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
-        if not dsn:
-            dsn = "postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_test"
+        dsn = pg_dsn()
 
         parsed = urlparse(dsn)
         config = DatabaseConfig(

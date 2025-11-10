@@ -215,7 +215,13 @@ class ChromaDBManager:
                 raise RuntimeError(f"Chroma client factory failed: {e}") from e
         else:
             backend = str(chroma_client_settings_config.get("backend", "persistent")).lower()
-            use_stub = bool(chroma_client_settings_config.get("use_in_memory_stub", False) or backend == "stub")
+            # Honor explicit config, and also support CHROMADB_FORCE_STUB for tests/CI
+            _env_force_stub = str(os.getenv("CHROMADB_FORCE_STUB", "")).strip().lower() in {"1", "true", "yes", "on"}
+            use_stub = bool(
+                chroma_client_settings_config.get("use_in_memory_stub", False)
+                or backend == "stub"
+                or _env_force_stub
+            )
             allow_stub_fallback = bool(chroma_client_settings_config.get("allow_stub_fallback", True))
 
             if use_stub:

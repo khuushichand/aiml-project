@@ -362,6 +362,7 @@ def rollback_003_drop_api_keys_table(conn: sqlite3.Connection) -> None:
 
 def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     """Create tables for enhanced authentication features"""
+    logger.info("Migration 011: START enhanced auth tables + uuid")
 
     # Password reset tokens table
     conn.execute("""
@@ -466,6 +467,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
 
 def migration_012_create_rbac_tables(conn: sqlite3.Connection) -> None:
     """Create core RBAC tables: roles, permissions, mappings, and user overrides."""
+    logger.info("Migration 012: START RBAC core tables")
     # Roles
     conn.execute(
         """
@@ -545,6 +547,7 @@ def migration_012_create_rbac_tables(conn: sqlite3.Connection) -> None:
 
 def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None:
     """Create optional RBAC rate limit and usage tables (SQLite)."""
+    logger.info("Migration 013: START RBAC limits + usage tables")
     # Role-level rate limits
     conn.execute(
         """
@@ -659,6 +662,7 @@ def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None
 
 def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
     """Seed default roles and a baseline permission catalog."""
+    logger.info("Migration 014: START seed default roles + permissions")
     # Seed roles
     conn.execute(
         """
@@ -751,6 +755,7 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
 
 def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
     """Create llm_usage_log and llm_usage_daily tables (SQLite)."""
+    logger.info("Migration 015: START LLM usage tables")
     # Per-request LLM usage log
     try:
         import os as _os
@@ -872,6 +877,7 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
 
 def migration_016_create_orgs_teams(conn: sqlite3.Connection) -> None:
     """Create Organizations/Teams hierarchy tables (SQLite)."""
+    logger.info("Migration 016: START organizations/teams tables")
     # organizations
     conn.execute(
         """
@@ -1301,6 +1307,14 @@ def apply_authnz_migrations(db_path: Path, target_version: int = None) -> None:
         target_version: Target migration version (None = latest)
     """
     manager = MigrationManager(db_path)
+    try:
+        from loguru import logger as _logger
+        _latest = len(get_authnz_migrations())
+        _logger.info(
+            f"AuthNZ.apply_migrations: db={db_path} target={'latest' if target_version is None else target_version} latest={_latest}"
+        )
+    except Exception:
+        pass
 
     # Add all migrations to the manager
     for migration in get_authnz_migrations():
@@ -1375,7 +1389,9 @@ def ensure_authnz_tables(db_path: Path) -> None:
     status = check_migration_status(db_path)
 
     if not status["is_up_to_date"]:
-        logger.info(f"Database needs migrations. Current: {status['current_version']}, Latest: {status['latest_version']}")
+        logger.info(
+            f"Database needs migrations for {db_path}. Current: {status['current_version']}, Latest: {status['latest_version']}"
+        )
         apply_authnz_migrations(db_path)
     else:
         logger.debug("AuthNZ tables are up to date")

@@ -57,6 +57,39 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
                 if not is_admin_ev and (now - last) < min_interval:
                     return
                 _rate_state["last_ts"] = now
+            # Fast path: avoid re-running schema DDL while a transaction on jobs table is active
+            # Attempt direct connection using JOBS_DB_URL when Postgres is configured.
+            _db_url = os.getenv("JOBS_DB_URL", "").strip()
+            if _db_url.startswith("postgres"):
+                try:
+                    import psycopg  # type: ignore
+                    from .pg_util import negotiate_pg_dsn
+                    _dsn = negotiate_pg_dsn(_db_url)
+                    with psycopg.connect(_dsn) as _conn:
+                        with _conn.cursor() as _cur:
+                            _cur.execute(
+                                (
+                                    "INSERT INTO job_events(job_id, domain, queue, job_type, event_type, attrs_json, owner_user_id, request_id, trace_id, created_at) "
+                                    "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW())"
+                                ),
+                                (
+                                    (job or {}).get("id"),
+                                    (job or {}).get("domain"),
+                                    (job or {}).get("queue"),
+                                    (job or {}).get("job_type"),
+                                    event,
+                                    json.dumps(attrs or {}),
+                                    (job or {}).get("owner_user_id"),
+                                    (job or {}).get("request_id"),
+                                    (job or {}).get("trace_id"),
+                                ),
+                            )
+                            _conn.commit()
+                    return
+                except Exception:
+                    # Fall back to JobManager-based path if direct insert fails
+                    pass
+
             from tldw_Server_API.app.core.Jobs.manager import JobManager
             # Admin context for outbox writes (RLS bypass)
             try:

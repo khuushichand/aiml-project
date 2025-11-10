@@ -848,7 +848,7 @@ encoding_gpt4 = tiktoken.encoding_for_model("gpt-4")    # cl100k_base
 # Anthropic (use their API)
 async def count_anthropic_tokens(text: str):
     response = await anthropic_client.count_tokens(
-        model="claude-3-opus",
+        model="claude-opus-4.1",
         messages=[{"role": "user", "content": text}]
     )
     return response.usage.input_tokens
@@ -1857,7 +1857,7 @@ class MultiModelOrchestrator:
             temperature=0
         )
         self.smart_model = ChatAnthropic(
-            model="claude-3-opus",
+            model="claude-opus-4.1",
             temperature=0
         )
         self.code_model = ChatOpenAI(

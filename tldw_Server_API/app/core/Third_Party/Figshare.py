@@ -13,36 +13,11 @@ Docs:
 from __future__ import annotations
 
 from typing import Optional, Tuple, List, Dict, Any
-import requests
-try:
-    import httpx  # type: ignore
-except Exception:  # pragma: no cover
-    httpx = None  # type: ignore
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from tldw_Server_API.app.core.http_client import create_client
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
 BASE_URL = "https://api.figshare.com/v2"
 OAI_BASE = f"{BASE_URL}/oai"
-
-
-def _mk_session():
-    try:
-        return create_client(timeout=20)
-    except Exception:
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        s = requests.Session()
-        s.headers.update({"Accept": "application/json"})
-        s.mount("https://", adapter)
-        s.mount("http://", adapter)
-        return s
 
 
 def _join_authors(item: Dict[str, Any]) -> Optional[str]:
@@ -111,7 +86,6 @@ def search_articles(
     Returns normalized GenericPaper-like records (without expensive file lookups).
     """
     try:
-        session = _mk_session()
         params: Dict[str, Any] = {
             "page": max(1, page),
             "page_size": max(1, min(page_size, 1000)),
@@ -127,14 +101,16 @@ def search_articles(
         if order_direction:
             body["order_direction"] = order_direction
 
-        r = session.post(f"{BASE_URL}/articles/search", params=params, json=body or {}, timeout=20)
-        r.raise_for_status()
-        data = r.json() or []
-        if not isinstance(data, list):
-            # Some deployments may wrap the results; handle minimally
-            items_raw = data.get("items") or data.get("results") or []
-        else:
-            items_raw = data
+        data = fetch_json(
+            method="POST",
+            url=f"{BASE_URL}/articles/search",
+            params=params,
+            json=body or {},
+            headers={"Accept": "application/json"},
+            timeout=20,
+        )
+        # Some deployments may wrap the results; handle minimally
+        items_raw = data.get("items") or data.get("results") or data or []
         items = []
         for it in items_raw:
             if isinstance(it, dict):
@@ -143,78 +119,39 @@ def search_articles(
         total = len(items)
         return items, total, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, 0, "Request to Figshare API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, 0, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, 0, "Request to Figshare API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, 0, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, 0, f"Figshare API Request Error: {str(e)}"
         return None, 0, f"Figshare error: {str(e)}"
 
 
 def get_article_by_id(article_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
-        session = _mk_session()
-        r = session.get(f"{BASE_URL}/articles/{article_id}", timeout=20)
+        r = fetch(method="GET", url=f"{BASE_URL}/articles/{article_id}", headers={"Accept": "application/json"}, timeout=20)
         if r.status_code == 404:
+            try:
+                r.close()
+            except Exception:
+                pass
             return None, None
-        r.raise_for_status()
         data = r.json() or {}
         return _normalize_article(data), None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to Figshare API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to Figshare API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"Figshare API Request Error: {str(e)}"
         return None, f"Figshare error: {str(e)}"
 
 
 def get_article_raw(article_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Return raw Figshare article JSON for inspection."""
     try:
-        session = _mk_session()
-        r = session.get(f"{BASE_URL}/articles/{article_id}", timeout=20)
-        r.raise_for_status()
-        return r.json() or {}, None
+        data = fetch_json(method="GET", url=f"{BASE_URL}/articles/{article_id}", headers={"Accept": "application/json"}, timeout=20)
+        return data or {}, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, f"Request to Figshare API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, f"Request to Figshare API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"Figshare API Request Error: {str(e)}"
         return None, f"Figshare error: {str(e)}"
 
 
 def get_article_files(article_id: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     try:
-        session = _mk_session()
-        r = session.get(f"{BASE_URL}/articles/{article_id}/files", timeout=20)
-        r.raise_for_status()
-        data = r.json() or []
+        data = fetch_json(method="GET", url=f"{BASE_URL}/articles/{article_id}/files", headers={"Accept": "application/json"}, timeout=20)
         if not isinstance(data, list):
             return [], None
         return data, None
-    except requests.exceptions.Timeout:
-        return None, "Request to Figshare API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"Figshare API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"Figshare API Request Error: {str(e)}"
     except Exception as e:
         return None, f"Figshare error: {str(e)}"
 
@@ -235,23 +172,12 @@ def get_article_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str
 def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
     """Raw OAI-PMH passthrough to Figshare OAI endpoint."""
     try:
-        s = _mk_session()
-        s.headers.update({"Accept": "application/xml"})
-        r = s.get(OAI_BASE, params=params, timeout=20)
-        r.raise_for_status()
+        r = fetch(method="GET", url=OAI_BASE, params=params, headers={"Accept": "application/xml"}, timeout=20)
+        if r.status_code >= 400:
+            return None, None, f"Figshare OAI-PMH HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/xml"
         return r.content, ct.split(";")[0], None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, None, "Request to Figshare OAI-PMH timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, None, f"Figshare OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, None, "Request to Figshare OAI-PMH timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, None, f"Figshare OAI-PMH HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, None, f"Figshare OAI-PMH Request Error: {str(e)}"
         return None, None, f"Figshare OAI-PMH error: {str(e)}"
 
 

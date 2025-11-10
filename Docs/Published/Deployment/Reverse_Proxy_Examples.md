@@ -200,6 +200,13 @@ export ALLOWED_ORIGINS='["https://your.domain.com", "https://admin.your.domain.c
 
 This overrides the default origins configured in `tldw_Server_API/app/core/config.py`.
 
+Browser extensions (streaming)
+- If a browser extension needs to call the API (including `text/event-stream` for SSE), add the extension origin to `ALLOWED_ORIGINS`:
+  ```bash
+  export ALLOWED_ORIGINS='["https://your.domain.com", "chrome-extension://abcd1234efgh5678"]'
+  ```
+  The server exposes `X-Request-ID`, `traceparent`, and `X-Trace-Id` headers for correlation; these are made available to the browser via CORS `expose_headers`.
+
 ## Security reminders
 - Run the app as non-root (Dockerfile.prod already does this).
 - Don’t log secrets in production; the app masks the single-user API key when `tldw_production=true`.

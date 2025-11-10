@@ -179,7 +179,8 @@ class TestMultiUserIsolation:
                 assert gen.status_code == 200
                 self._poll_embeddings_ready(client_a, mid, timeout_s=15)
                 rag_b = client_b.client.post(
-                    "/api/v1/rag/search/simple", json={"query": token, "databases": ["media"], "top_k": 5}
+                    "/api/v1/rag/search",
+                    json={"query": token, "sources": ["media_db"], "top_k": 5},
                 )
                 if rag_b.status_code == 200 and isinstance(rag_b.json(), dict):
                     items = rag_b.json().get("results", [])
@@ -306,10 +307,10 @@ class TestAdminMintedVirtualKeyConstraints:
         key = mk.json().get("key")
         assert key, mk.text
 
-        # Allowed: POST rag simple search
+        # Allowed: POST unified RAG search
         r_ok = user.client.post(
-            "/api/v1/rag/search/simple",
-            json={"query": "test", "databases": ["media"], "top_k": 1},
+            "/api/v1/rag/search",
+            json={"query": "test", "sources": ["media_db"], "top_k": 1},
             headers={"X-API-KEY": key},
         )
         assert r_ok.status_code in (200, 404), r_ok.text  # Accept 404 if RAG not wired, but not 401/403
@@ -323,9 +324,9 @@ class TestAdminMintedVirtualKeyConstraints:
         )
         assert r_forbid_path.status_code in (401, 403)
 
-        # Forbidden by method: GET on rag path
+        # Forbidden by method: GET on rag path (unified is POST-only)
         r_forbid_method = user.client.get(
-            "/api/v1/rag/search/simple",
+            "/api/v1/rag/search",
             headers={"X-API-KEY": key},
         )
         assert r_forbid_method.status_code in (401, 403, 405)

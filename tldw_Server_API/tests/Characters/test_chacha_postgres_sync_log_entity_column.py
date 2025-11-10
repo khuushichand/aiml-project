@@ -1,53 +1,16 @@
 from __future__ import annotations
 
-import os
+import uuid
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-try:
-    import psycopg as _psycopg_v3  # type: ignore
-    _PG = True
-except Exception:
-    try:
-        import psycopg2 as _psycopg2  # type: ignore
-        _PG = True
-    except Exception:
-        _PG = False
 
-
-pytestmark = pytest.mark.skipif(not _PG, reason="Postgres driver not installed")
-
-
-def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path, pg_eval_params):
-    config = DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=pg_eval_params["host"],
-        pg_port=int(pg_eval_params["port"]),
-        pg_database=pg_eval_params["database"],
-        pg_user=pg_eval_params["user"],
-        pg_password=pg_eval_params.get("password"),
-    )
-    backend = DatabaseBackendFactory.create_backend(config)
-
-    # Skip gracefully if Postgres is not reachable and not explicitly required
-    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes")
-    try:
-        # Probe connectivity with a no-op transaction
-        with backend.transaction() as _conn:
-            pass
-    except Exception as e:
-        if not require_pg:
-            pytest.skip(f"PostgreSQL not available ({e}); skipping Postgres-specific test.")
-        raise
-
-    # Fresh schema
-    with backend.transaction() as conn:
-        backend.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;", connection=conn)
-
-    # Initialize ChaCha DB
+def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path, pg_database_config: DatabaseConfig):
+    backend = DatabaseBackendFactory.create_backend(pg_database_config)
+    # Initialize ChaCha DB on the empty temp database provided by fixture
     db = CharactersRAGDB(db_path=":memory:", client_id="sync-test", backend=backend)
     try:
         # Replace sync_log with a version that uses entity_uuid to simulate shared schema from Media DB
@@ -88,4 +51,10 @@ def test_sync_log_entity_column_adapts_to_entity_uuid_on_postgres(tmp_path, pg_e
             assert last.get("entity") == "note_keywords"
             assert "_" in last.get("entity_uuid", "")
     finally:
-        db.close_connection()
+        try:
+            db.close_connection()
+        finally:
+            try:
+                backend.get_pool().close_all()
+            except Exception:
+                pass

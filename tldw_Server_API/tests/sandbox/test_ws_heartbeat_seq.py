@@ -12,12 +12,12 @@ from tldw_Server_API.app.main import app
 
 pytestmark = pytest.mark.timeout(10)
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Disable real execution so WS doesn't end immediately (to receive heartbeats)
-    os.environ["SANDBOX_ENABLE_EXECUTION"] = "false"
-    os.environ["SANDBOX_BACKGROUND_EXECUTION"] = "true"
-    os.environ["TLDW_SANDBOX_DOCKER_FAKE_EXEC"] = "1"
+    monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "false")
+    monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
     return TestClient(app)
 
 
@@ -33,7 +33,7 @@ def test_ws_heartbeats_include_seq(monkeypatch: pytest.MonkeyPatch, ws_flush) ->
 
     monkeypatch.setattr(sb.asyncio, "sleep", _fast_sleep, raising=True)
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",

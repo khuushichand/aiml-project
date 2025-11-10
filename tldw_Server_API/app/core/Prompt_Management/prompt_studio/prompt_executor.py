@@ -434,6 +434,11 @@ class PromptExecutor:
                 "gpt-3.5-turbo-16k": 0.003
             },
             "anthropic": {
+                # Current
+                "claude-opus-4.1": 0.015,
+                "claude-sonnet-4.5": 0.003,
+                "claude-haiku-4.5": 0.001,
+                # Back-compat
                 "claude-3-opus": 0.015,
                 "claude-3-sonnet": 0.003,
                 "claude-3-haiku": 0.00025,

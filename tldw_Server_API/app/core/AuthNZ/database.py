@@ -229,6 +229,7 @@ class DatabasePool:
             # Ensure AuthNZ migrations are up to date (handles legacy columns)
             try:
                 if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
+                    logger.info(f"SQLite schema harmonization: ensuring AuthNZ tables at {self._sqlite_fs_path}")
                     await asyncio.to_thread(ensure_authnz_tables, Path(self._sqlite_fs_path))
             except Exception as migration_error:
                 logger.debug(f"SQLite migration harmonization skipped: {migration_error}")
@@ -563,6 +564,12 @@ async def get_db_pool() -> DatabasePool:
 async def reset_db_pool():
     """Reset database pool (mainly for testing)"""
     global _db_pool
+    # Ensure subsequent get_db_pool() picks up environment changes by resetting settings
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
+        _reset_settings()
+    except Exception:
+        pass
     if _db_pool:
         try:
             await _db_pool.close()

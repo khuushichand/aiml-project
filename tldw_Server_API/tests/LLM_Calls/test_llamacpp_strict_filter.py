@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
@@ -32,22 +32,26 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
 
     captured_payload = {}
 
-    def fake_post(url, headers=None, json=None, timeout=None):
-        captured_payload.clear()
-        if json:
-            captured_payload.update(json)
-        return DummyResponse({})
+    class FakeClient:
+        def __init__(self):
+            self.closed = False
+
+        def post(self, url, headers=None, json=None, timeout=None):  # noqa: ANN001
+            captured_payload.clear()
+            if json:
+                captured_payload.update(json)
+            return DummyResponse({})
+
+        def stream(self, *args, **kwargs):  # noqa: ANN001
+            raise AssertionError("Streaming should not be invoked in this test")
+
+        def close(self):
+            self.closed = True
 
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.load_settings",
         return_value=fake_settings,
-    ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.httpx.Client"
-    ) as mock_client_cls:
-        mock_client = MagicMock()
-        mock_client.post.side_effect = fake_post
-        mock_client.close.return_value = None
-        mock_client_cls.return_value = mock_client
+    ):
 
         chat_api_call(
             api_endpoint="llama.cpp",
@@ -55,6 +59,7 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
             messages_payload=[{"role": "user", "content": "hello"}],
             topk=5,
             streaming=False,
+            http_client_factory=lambda timeout: FakeClient(),
         )
 
     assert "top_k" not in captured_payload

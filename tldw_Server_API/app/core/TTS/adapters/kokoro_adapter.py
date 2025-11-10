@@ -3,6 +3,9 @@
 #
 # Imports
 import os
+import sys
+import platform
+from ctypes.util import find_library as _ctypes_find_library
 import re
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
 #
@@ -141,9 +144,9 @@ class KokoroAdapter(TTSAdapter):
             self.device = "cuda" if cuda_avail else "cpu"
 
         # Model paths
-        self.model_path = self.config.get("kokoro_model_path", "kokoro-v0_19.onnx")
+        self.model_path = self.config.get("kokoro_model_path", "models/kokoro/onnx/model.onnx")
         # Maintain both attribute names for compatibility with tests and internal code
-        self.voices_json_path = self.config.get("kokoro_voices_json", "voices.json")
+        self.voices_json_path = self.config.get("kokoro_voices_json", "models/kokoro/voices")
         self.voices_json = self.voices_json_path
         self.voice_dir = self.config.get("kokoro_voice_dir", "voices")
 
@@ -221,23 +224,98 @@ class KokoroAdapter(TTSAdapter):
                     details={"model_path": self.model_path}
                 )
 
-            if not os.path.exists(self.voices_json_path):
+            voices_json_arg: Optional[str]
+            if self.voices_json_path and os.path.isfile(self.voices_json_path):
+                voices_json_arg = self.voices_json_path
+            elif self.voices_json_path and self.voices_json_path.endswith('.json') and not os.path.exists(self.voices_json_path):
+                # Explicit JSON file configured but not found
                 raise TTSModelNotFoundError(
                     f"Kokoro voices.json not found at {self.voices_json_path}",
                     provider=self.provider_name,
                     details={"voices_json": self.voices_json_path}
                 )
+            else:
+                # Directory or unspecified: rely on built-in/default voices; dynamic voices loaded separately
+                voices_json_arg = None
 
-            # Configure eSpeak
-            espeak_lib = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
+            # Configure eSpeak (auto-detect to avoid requiring an env var)
+            def _discover_espeak_library() -> Optional[str]:
+                # 1) Explicit config override
+                path = self.config.get("kokoro_espeak_lib")
+                if path and os.path.exists(str(path)):
+                    return str(path)
+                # 2) Environment variable
+                path = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
+                if path and os.path.exists(path):
+                    return path
+                # 3) Platform heuristics
+                sys_plat = sys.platform
+                candidates = []
+                if sys_plat == "darwin":
+                    candidates = [
+                        "/opt/homebrew/lib/libespeak-ng.dylib",
+                        "/usr/local/lib/libespeak-ng.dylib",
+                        "/opt/local/lib/libespeak-ng.dylib",
+                    ]
+                elif sys_plat.startswith("linux"):
+                    arch = platform.machine() or ""
+                    candidates = [
+                        f"/usr/lib/{arch}/libespeak-ng.so.1" if arch else "",
+                        "/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+                        "/usr/lib/aarch64-linux-gnu/libespeak-ng.so.1",
+                        "/usr/lib64/libespeak-ng.so.1",
+                        "/usr/lib/libespeak-ng.so.1",
+                        "/lib/x86_64-linux-gnu/libespeak-ng.so.1",
+                        "/lib/aarch64-linux-gnu/libespeak-ng.so.1",
+                        "/lib/libespeak-ng.so.1",
+                    ]
+                elif sys_plat in ("win32", "cygwin"):
+                    pf = os.environ.get("PROGRAMFILES", r"C:\\Program Files")
+                    pf86 = os.environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)")
+                    candidates = [
+                        os.path.join(pf, "eSpeak NG", "libespeak-ng.dll"),
+                        os.path.join(pf86, "eSpeak NG", "libespeak-ng.dll"),
+                    ]
+                    # Also probe PATH entries
+                    for d in os.environ.get("PATH", "").split(os.pathsep):
+                        if not d:
+                            continue
+                        candidates.append(os.path.join(d, "libespeak-ng.dll"))
+                # Try ctypes discovery last (may return name not path)
+                try:
+                    lib_name = _ctypes_find_library("espeak-ng") or _ctypes_find_library("espeak")
+                    if lib_name and os.path.isabs(lib_name) and os.path.exists(lib_name):
+                        candidates.insert(0, lib_name)
+                except Exception:
+                    pass
+                for cand in candidates:
+                    if cand and os.path.exists(cand):
+                        return cand
+                return None
+
+            espeak_lib = _discover_espeak_library()
             espeak_config = EspeakConfig(lib_path=espeak_lib) if espeak_lib else None
 
-            # Initialize Kokoro
-            self.kokoro_instance = Kokoro(
-                self.model_path,
-                self.voices_json_path,
-                espeak_config=espeak_config
-            )
+            # Initialize Kokoro (support constructors that accept either 1 or 2 positional args)
+            if voices_json_arg:
+                self.kokoro_instance = Kokoro(
+                    self.model_path,
+                    voices_json_arg,
+                    espeak_config=espeak_config
+                )
+            else:
+                try:
+                    self.kokoro_instance = Kokoro(
+                        self.model_path,
+                        espeak_config=espeak_config
+                    )
+                except TypeError:
+                    # Fallback: pass empty string for voices path if constructor requires it
+                    self.kokoro_instance = Kokoro(
+                        self.model_path,
+                        "",
+                        espeak_config=espeak_config
+                    )
 
             logger.info(f"{self.provider_name}: ONNX model loaded successfully")
             return True
@@ -568,35 +646,70 @@ class KokoroAdapter(TTSAdapter):
         path = self.voices_json
         if not path or not os.path.exists(path):
             return
-        import json
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
         dyn: List[VoiceInfo] = []
-        if isinstance(data, dict) and "voices" in data:
-            entries = data["voices"]
-        else:
-            entries = data
-        if not isinstance(entries, list):
-            return
-        # Existing ids to avoid duplicates
         existing_ids = set(self.VOICES.keys()) | {v.id for v in self._dynamic_voices}
-        for entry in entries:
-            try:
-                vid = str(entry.get("id") or entry.get("voice_id") or "").strip()
-                if not vid or vid in existing_ids:
+        try:
+            if os.path.isdir(path):
+                # v1.0 layout: voices directory containing *.bin (ONNX) or *.pt (PyTorch) files
+                for fname in os.listdir(path):
+                    if not (fname.endswith('.bin') or fname.endswith('.pt')):
+                        continue
+                    vid = os.path.splitext(fname)[0]
+                    if not vid or vid in existing_ids:
+                        continue
+                    # Heuristic language by prefix like 'af_', 'am_', 'bf_', 'bm_', 'zf_', 'zm_', etc.
+                    lang = 'en'
+                    try:
+                        if vid.startswith('a'):
+                            lang = 'en-us'
+                        elif vid.startswith('b'):
+                            lang = 'en-gb'
+                    except Exception:
+                        pass
+                    vinfo = VoiceInfo(
+                        id=vid,
+                        name=vid,
+                        gender=None,
+                        language=lang,
+                        description='Kokoro voice profile'
+                    )
+                    dyn.append(vinfo)
+                    existing_ids.add(vid)
+                self._dynamic_voices = dyn
+                return
+        except Exception:
+            # Fall back to JSON parsing
+            pass
+        # JSON file layout (legacy)
+        try:
+            import json
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "voices" in data:
+                entries = data["voices"]
+            else:
+                entries = data
+            if not isinstance(entries, list):
+                return
+            for entry in entries:
+                try:
+                    vid = str(entry.get("id") or entry.get("voice_id") or "").strip()
+                    if not vid or vid in existing_ids:
+                        continue
+                    vinfo = VoiceInfo(
+                        id=vid,
+                        name=str(entry.get("name") or vid),
+                        gender=entry.get("gender"),
+                        language=str(entry.get("language") or "en"),
+                        description=entry.get("description")
+                    )
+                    dyn.append(vinfo)
+                    existing_ids.add(vid)
+                except Exception:
                     continue
-                vinfo = VoiceInfo(
-                    id=vid,
-                    name=str(entry.get("name") or vid),
-                    gender=entry.get("gender"),
-                    language=str(entry.get("language") or "en"),
-                    description=entry.get("description")
-                )
-                dyn.append(vinfo)
-                existing_ids.add(vid)
-            except Exception:
-                continue
-        self._dynamic_voices = dyn
+            self._dynamic_voices = dyn
+        except Exception:
+            return
 
     def _get_language_from_voice(self, voice: str) -> str:
         """Get language code from voice ID"""

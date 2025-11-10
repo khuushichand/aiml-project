@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import os
+import random
+import string
+
+import pytest
+
+
+def _has_psycopg() -> bool:
+    try:
+        import psycopg  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.integration
+def test_postgres_store_adds_missing_columns(monkeypatch):
+    dsn = os.getenv("SANDBOX_TEST_PG_DSN")
+    if not dsn or not _has_psycopg():
+        pytest.skip("Postgres DSN not provided or psycopg not installed")
+    import psycopg
+
+    # Prepare a clean slate: drop tables if exist and create old schema without new columns
+    with psycopg.connect(dsn, autocommit=True) as con:
+        with con.cursor() as cur:
+            for tbl in ("sandbox_runs", "sandbox_idempotency", "sandbox_usage"):
+                try:
+                    cur.execute(f"DROP TABLE IF EXISTS {tbl}")
+                except Exception:
+                    pass
+            # Old sandbox_runs schema (no runtime_version/resource_usage)
+            cur.execute(
+                """
+                CREATE TABLE sandbox_runs (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    spec_version TEXT,
+                    runtime TEXT,
+                    base_image TEXT,
+                    phase TEXT,
+                    exit_code INTEGER,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    message TEXT,
+                    image_digest TEXT,
+                    policy_hash TEXT
+                );
+                """
+            )
+            # Minimal other tables
+            cur.execute(
+                """
+                CREATE TABLE sandbox_idempotency (
+                    endpoint TEXT,
+                    user_key TEXT,
+                    key TEXT,
+                    fingerprint TEXT,
+                    object_id TEXT,
+                    response_body JSONB,
+                    created_at DOUBLE PRECISION,
+                    PRIMARY KEY (endpoint, user_key, key)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE sandbox_usage (
+                    user_id TEXT PRIMARY KEY,
+                    artifact_bytes BIGINT
+                );
+                """
+            )
+
+    # Instantiate store; __init__ runs _init_db which performs migrations
+    from tldw_Server_API.app.core.Sandbox.store import PostgresStore
+    st = PostgresStore(dsn=dsn)
+    # Verify columns now exist
+    with psycopg.connect(dsn, autocommit=True) as con:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='sandbox_runs'
+                """
+            )
+            cols = {r[0] for r in cur.fetchall()}
+            assert "runtime_version" in cols
+            assert "resource_usage" in cols

@@ -271,57 +271,57 @@
         <div style="color:var(--color-base-0); font-size:0.9em">Read-only snapshot of effective Workflows settings</div>
       </div>
       <div>
-        <button class="api-button" onclick="wfLoadConfig()">Refresh</button>
+        <button class="api-button" id="wfCfg_refresh">Refresh</button>
       </div>
     </div>
     <div id="wfConfig_card" style="margin-top:8px"></div>
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfGetStepTypes()">Get Step Types</button>
+    <button class="api-button" id="wfStepTypes_btn">Get Step Types</button>
   </div>
   <div class="form-group">
     <label for="wfDef_payload">Definition JSON</label>
     <div id="wfTpl_featured" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:6px 0">
       <span style="opacity:0.85">Featured:</span>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('site_watch_digest_tts')">Site Watch + Digest + TTS</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('site_watch_digest_tts')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('site_watch_digest_tts')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('pdf_qa')">PDF → Q&A</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('pdf_qa')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('pdf_qa')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('paper_roundup')">Paper Roundup</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('paper_roundup')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('paper_roundup')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('policy_checker')">Policy Checker</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('policy_checker')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('policy_checker')">Run & Watch</button>
-      <button class="api-button btn-sm" onclick="wfTplLoadByName('podcast_summary_narration')">Podcast → Summary → TTS</button>
-      <button class="api-button btn-sm" onclick="wfTplRunByName('podcast_summary_narration')">Create & Run</button>
-      <button class="api-button btn-sm" onclick="wfTplRunWatchByName('podcast_summary_narration')">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="site_watch_digest_tts">Site Watch + Digest + TTS</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="site_watch_digest_tts">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="site_watch_digest_tts">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="pdf_qa">PDF → Q&A</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="pdf_qa">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="pdf_qa">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="paper_roundup">Paper Roundup</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="paper_roundup">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="paper_roundup">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="policy_checker">Policy Checker</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="policy_checker">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="policy_checker">Run & Watch</button>
+      <button class="api-button btn-sm" data-action="wfTpl-load" data-template="podcast_summary_narration">Podcast → Summary → TTS</button>
+      <button class="api-button btn-sm" data-action="wfTpl-run" data-template="podcast_summary_narration">Create & Run</button>
+      <button class="api-button btn-sm" data-action="wfTpl-runwatch" data-template="podcast_summary_narration">Run & Watch</button>
     </div>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
       <label style="margin:0">Templates</label>
-      <input id="wfTpl_search" type="search" placeholder="Search templates..." style="min-width:200px" onkeydown="if(event.key==='Enter'){wfTplLoadList()}" oninput="wfTplQueryChanged()"/>
+      <input id="wfTpl_search" type="search" placeholder="Search templates..." style="min-width:200px" />
       <label style="margin:0 0 0 6px">Tag</label>
       <select id="wfTpl_tag" style="min-width:160px"><option value="">(all)</option></select>
       <select id="wfTpl_select" style="min-width:240px"></select>
-      <button class="api-button" onclick="wfTplLoadList()">Search/Refresh</button>
-      <button class="api-button" onclick="wfTplApply()">Load Selected</button>
-      <button class="api-button" onclick="wfTplInsert()">Insert Selected</button>
-      <button class="api-button" onclick="wfTplRun()">Run This Template</button>
-      <button class="api-button" onclick="wfTplRunWatch()">Run & Watch</button>
-      <button class="api-button" onclick="wfTplSaveAsNew()" title="Save the editor JSON as a local template stored in your browser">Save as New</button>
-      <button class="api-button btn-sm" onclick="wfTplDeleteLocal()" title="Delete the selected local template">Delete Local</button>
-      <button class="api-button" onclick="wfTplCopyCurlAlt()" title="Copy a shell snippet that uses jq to parse the workflow id and start a run">Copy cURL (Create+Run)</button>
+      <button class="api-button" id="wfTpl_search_btn">Search/Refresh</button>
+      <button class="api-button" id="wfTpl_apply_btn">Load Selected</button>
+      <button class="api-button" id="wfTpl_insert_btn">Insert Selected</button>
+      <button class="api-button" id="wfTpl_run_btn">Run This Template</button>
+      <button class="api-button" id="wfTpl_runwatch_btn">Run & Watch</button>
+      <button class="api-button" id="wfTpl_saveas_btn" title="Save the editor JSON as a local template stored in your browser">Save as New</button>
+      <button class="api-button btn-sm" id="wfTpl_delete_local_btn" title="Delete the selected local template">Delete Local</button>
+      <button class="api-button" id="wfTpl_copy_curl_btn" title="Copy a shell snippet that uses jq to parse the workflow id and start a run">Copy cURL (Create+Run)</button>
       <label style="display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--color-base-0); font-size:0.9em" title="jq is used to extract the workflow id from the create response. Toggle 'No jq' for a placeholder-based script.">
         <span id="wfTpl_curl_note" title="Default: jq required. Switch to 'No jq' for a manual WID placeholder.">Requires jq</span>
         <span class="wf-help" title="The generated shell snippet uses jq to parse JSON responses. Toggle 'No jq' to output a placeholder-based script if jq is unavailable.">i</span>
         <span style="opacity:0.8">|</span>
-        <input type="checkbox" id="wfTpl_curl_nojq" onchange="wfTplCurlToggle()" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
+        <input type="checkbox" id="wfTpl_curl_nojq" aria-label="Generate cURL snippet without jq" title="Generate a pure-cURL snippet without jq; you'll set WID manually"> No jq
       </label>
-      <button class="api-button" onclick="wfTplResetFilters()" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
+      <button class="api-button" id="wfTpl_reset_filters" title="Clears both search and tag filters and reloads the templates list">Reset filters</button>
     </div>
-    <textarea id="wfDef_payload" rows="12" style="width:100%" oninput="wfRoutingDebounceRefresh()">{
+    <textarea id="wfDef_payload" rows="12" style="width:100%">{
   "name": "hello",
   "version": 1,
   "steps": [
@@ -336,8 +336,8 @@
         <div style="color:var(--color-base-0); font-size:0.9em">Wire success/failure paths without editing JSON manually.</div>
       </div>
       <div style="display:flex; gap:8px;">
-        <button class="api-button btn-sm" onclick="wfRoutingRefreshOptions(true)" title="Rebuild the step lists from the JSON definition">Refresh Step IDs</button>
-        <button class="api-button btn-sm" onclick="wfRoutingClear()" title="Clear the current routing inputs">Clear</button>
+        <button class="api-button btn-sm" id="wfRouting_refresh_ids" title="Rebuild the step lists from the JSON definition">Refresh Step IDs</button>
+        <button class="api-button btn-sm" id="wfRouting_clear" title="Clear the current routing inputs">Clear</button>
       </div>
     </div>
     <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
@@ -347,7 +347,7 @@
       <input list="wfRouting_target_ids" id="wfRouting_success" placeholder="next step id" style="min-width:180px" />
       <label for="wfRouting_failure" style="margin:0;">On failure</label>
       <input list="wfRouting_target_ids" id="wfRouting_failure" placeholder="fallback id (optional)" style="min-width:180px" />
-      <button class="api-button" onclick="wfApplyRouting()" title="Apply routing to the selected step">Apply Routing</button>
+      <button class="api-button" id="wfRouting_apply" title="Apply routing to the selected step">Apply Routing</button>
     </div>
     <div style="font-size:0.85em; color:var(--color-base-0); margin-top:6px;">
       Tip: Use the Branch step template to produce ready-made true/false paths.
@@ -362,7 +362,7 @@
         <div style="color:var(--color-base-0); font-size:0.9em">Create cron schedules that enqueue workflow runs</div>
       </div>
       <div>
-        <button class="api-button" onclick="wfSchedList()">Refresh</button>
+        <button class="api-button" id="wfSched_refresh">Refresh</button>
       </div>
     </div>
     <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
@@ -384,27 +384,27 @@
       <label style="display:flex; gap:6px; align-items:center"><input type="checkbox" id="wfSched_enabled" checked /> Enabled</label>
       <label style="display:flex; gap:6px; align-items:center" title="If enabled, run only when you are online (have an active session)"><input type="checkbox" id="wfSched_require_online" /> Require online</label>
       <input type="text" id="wfSched_inputs" placeholder='inputs JSON (optional)' style="flex:1; min-width:220px"/>
-      <button class="api-button" onclick="wfSchedCreate()">Create</button>
+      <button class="api-button" id="wfSched_create">Create</button>
     </div>
     <div id="wfSched_list"></div>
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfCreateDefinition()">Create Definition</button>
-    <button class="api-button" onclick="wfListDefinitions()">List Definitions</button>
-    <button class="api-button" onclick="wfInsertDelay()">Insert Delay Step</button>
-    <button class="api-button" onclick="wfInsertLog()">Insert Log Step</button>
-    <button class="api-button" onclick="wfInsertBranch()">Insert Branch Step</button>
-    <button class="api-button" onclick="wfInsertPrompt()">Insert Prompt Step</button>
-    <button class="api-button" onclick="wfInsertRagSearch()">Insert RAG Search Step</button>
-    <button class="api-button" onclick="wfInsertMediaIngest()">Insert Media Ingest Step</button>
-    <button class="api-button" onclick="wfInsertTTS()">Insert TTS Step</button>
-    <button class="api-button" onclick="wfInsertProcessMedia()">Insert Process Media Step</button>
-    <button class="api-button" onclick="wfInsertRSSFetch()">Insert RSS Fetch Step</button>
-    <button class="api-button" onclick="wfInsertEmbed()">Insert Embed Step</button>
-    <button class="api-button" onclick="wfInsertTranslate()">Insert Translate Step</button>
-    <button class="api-button" onclick="wfInsertSTT()">Insert STT Transcribe Step</button>
-    <button class="api-button" onclick="wfInsertNotify()">Insert Notify Step</button>
-    <button class="api-button" onclick="wfInsertDiff()">Insert Diff Change Step</button>
+    <button class="api-button" id="wfDef_create">Create Definition</button>
+    <button class="api-button" id="wfDef_list">List Definitions</button>
+    <button class="api-button" data-action="wf-insert" data-kind="delay">Insert Delay Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="log">Insert Log Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="branch">Insert Branch Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="prompt">Insert Prompt Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="rag">Insert RAG Search Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="ingest">Insert Media Ingest Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="tts">Insert TTS Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="process_media">Insert Process Media Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="rss">Insert RSS Fetch Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="embed">Insert Embed Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="translate">Insert Translate Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="stt">Insert STT Transcribe Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="notify">Insert Notify Step</button>
+    <button class="api-button" data-action="wf-insert" data-kind="diff">Insert Diff Change Step</button>
   </div>
   <div class="form-group">
     <label>Workflow ID</label>
@@ -416,11 +416,11 @@
     </select>
     <label>Inputs (JSON)</label>
     <input type="text" id="wfRun_inputs" placeholder='{"name":"Alice"}' />
-    <button class="api-button" onclick="wfRunSaved()">Run Saved</button>
+    <button class="api-button" id="wfRun_saved">Run Saved</button>
   </div>
   <div class="form-group" style="margin-bottom:4px">
-    <button class="api-button" onclick="wfCopyJson('wfDef_result')">Copy</button>
-    <button class="api-button" onclick="wfClearJson('wfDef_result')">Clear</button>
+    <button class="api-button" data-action="wf-copy-json" data-target="wfDef_result">Copy</button>
+    <button class="api-button" data-action="wf-clear-json" data-target="wfDef_result">Clear</button>
   </div>
   <pre id="wfDef_result" class="json-viewer"></pre>
   <script>
@@ -1159,7 +1159,7 @@
   <h2>Workflows: Runs</h2>
   <div class="form-group">
     <label>Quick</label>
-    <select id="wfList_quick" onchange="wfQuickHours()">
+    <select id="wfList_quick">
       <option value="">(none)</option>
       <option value="1">last 1h</option>
       <option value="24">last 24h</option>
@@ -1167,14 +1167,14 @@
       <option value="720">last 30d</option>
     </select>
     <div id="wfList_status_chips" style="margin-bottom:8px">
-      <span class="chip" data-status="queued" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">queued</span>
-      <span class="chip" data-status="running" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
-      <span class="chip" data-status="paused" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
-      <span class="chip" data-status="waiting_human" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
-      <span class="chip" data-status="waiting_approval" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_approval</span>
-      <span class="chip" data-status="succeeded" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
-      <span class="chip" data-status="failed" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
-      <span class="chip" data-status="cancelled" onclick="wfToggleChip(this)" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
+      <span class="chip" data-status="queued" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">queued</span>
+      <span class="chip" data-status="running" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">running</span>
+      <span class="chip" data-status="paused" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">paused</span>
+      <span class="chip" data-status="waiting_human" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_human</span>
+      <span class="chip" data-status="waiting_approval" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">waiting_approval</span>
+      <span class="chip" data-status="succeeded" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">succeeded</span>
+      <span class="chip" data-status="failed" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">failed</span>
+      <span class="chip" data-status="cancelled" role="button" tabindex="0" style="display:inline-block;padding:4px 8px;border:1px solid var(--color-base-40);border-radius:12px;margin-right:6px;cursor:pointer">cancelled</span>
     </div>
     <label>Last N Hours</label>
     <input type="number" id="wfList_last_hours" min="1" style="width:80px" placeholder="e.g., 24">
@@ -1187,7 +1187,7 @@
     <label>Created Before</label>
     <input type="datetime-local" id="wfList_created_before" placeholder="YYYY-MM-DD HH:MM">
     <label>Date Presets</label>
-    <select id="wfList_presets" onchange="wfApplyPreset()">
+    <select id="wfList_presets">
       <option value="">(none)</option>
       <option value="today">Today</option>
       <option value="yesterday">Yesterday</option>
@@ -1212,50 +1212,50 @@
     <input type="number" id="wfList_limit" value="25" min="1" max="200" style="width:80px">
     <label>Offset</label>
     <input type="number" id="wfList_offset" value="0" min="0" style="width:80px">
-    <label style="margin-left:8px" title="When enabled, the cursor token is used and the 'offset' value is ignored."><input type="checkbox" id="wfList_use_cursor" onchange="wfSaveFilters()"> Use cursor</label>
-    <button class="api-button btn-sm" onclick="wfShowCursorHelp()" title="What is cursor pagination?">Cursor Help</button>
+    <label style="margin-left:8px" title="When enabled, the cursor token is used and the 'offset' value is ignored."><input type="checkbox" id="wfList_use_cursor"> Use cursor</label>
+    <button class="api-button btn-sm" id="wfCursor_help" title="What is cursor pagination?">Cursor Help</button>
     <label>Cursor</label>
-    <input type="text" id="wfList_cursor" placeholder="opaque token" style="width:260px" oninput="wfSaveFilters()">
-    <button class="api-button btn-sm" onclick="wfResetCursor()">Reset cursor</button>
-      <button class="api-button" onclick="wfListRuns()">List Runs</button>
-      <button class="api-button" onclick="wfCopyRunsCurl()" title="Copy the current runs list request as cURL, including cursor if enabled">Copy cURL (List)</button>
-      <button class="api-button" onclick="wfCopyShareLink()" title="Copy a URL with these filters applied">Copy Share Link</button>
-      <button class="api-button" onclick="wfClearFilters()">Clear Filters</button>
+    <input type="text" id="wfList_cursor" placeholder="opaque token" style="width:260px">
+    <button class="api-button btn-sm" id="wfCursor_reset">Reset cursor</button>
+      <button class="api-button" id="wfList_runs">List Runs</button>
+      <button class="api-button" id="wfList_copy_curl" title="Copy the current runs list request as cURL, including cursor if enabled">Copy cURL (List)</button>
+      <button class="api-button" id="wfList_copy_link" title="Copy a URL with these filters applied">Copy Share Link</button>
+      <button class="api-button" id="wfList_clear_filters">Clear Filters</button>
   </div>
   <div class="form-group">
     <label>Run ID</label>
     <input type="text" id="wfRun_run_id" placeholder="uuid" />
-    <button class="api-button" onclick="wfGetRun()">Get Status</button>
-    <button class="api-button" onclick="wfGetEvents()">Get Events</button>
+    <button class="api-button" id="wfRun_get">Get Status</button>
+    <button class="api-button" id="wfRun_get_events">Get Events</button>
     <label style="display:inline-flex;align-items:center;gap:6px;margin-left:6px">
-      <input type="checkbox" id="wfWatch_toggle" onchange="wfToggleWatchStatus()" aria-label="Toggle run watcher">
+      <input type="checkbox" id="wfWatch_toggle" aria-label="Toggle run watcher">
       Watching
       <span id="wfWatch_spinner" class="wf-inline-spinner" style="display:none" aria-hidden="true"></span>
     </label>
     <label>Events Limit</label>
     <input type="number" id="wfEvents_limit" min="1" max="1000" value="500" style="width:90px"/>
-    <button class="api-button" onclick="wfGetNextEvents()">Load Next Events</button>
-    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto" onchange="wfToggleAutoEvents()"> Auto-refresh</label>
-    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_tail" onchange="wfToggleTail()"> Auto-follow tail</label>
+    <button class="api-button" id="wfEvents_next">Load Next Events</button>
+    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_auto"> Auto-refresh</label>
+    <label style="margin-left:8px"><input type="checkbox" id="wfEvents_tail"> Auto-follow tail</label>
     <label style="margin-left:8px" title="Use server-provided Next-Cursor header for paging instead of since=last_seq"><input type="checkbox" id="wfEvents_use_cursor"> Use cursor (events)</label>
-    <button class="api-button btn-sm" id="wfEvents_next_cursor_btn" onclick="wfGetNextEvents()" disabled>Next (cursor)</button>
+    <button class="api-button btn-sm" id="wfEvents_next_cursor_btn" disabled>Next (cursor)</button>
     <label style="margin-left:8px">Filter (types)</label>
-    <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px" oninput="wfSyncEventTypeChips()"/>
-    <button class="api-button btn-sm" onclick="wfApplyErrorFilter()" title="Filter to failure and warning events">Errors/Warns</button>
-    <button class="api-button" onclick="wfListArtifacts()">List Artifacts</button>
-    <button class="api-button" onclick="wfDownloadAllServer()">Download All (server)</button>
-    <button class="api-button" onclick="wfDownloadAllClient()">Download All (client)</button>
+    <input type="text" id="wfEvents_filter" placeholder="step_failed,run_failed" style="width:220px"/>
+    <button class="api-button btn-sm" id="wfEvents_error_filter" title="Filter to failure and warning events">Errors/Warns</button>
+    <button class="api-button" id="wfArtifacts_list">List Artifacts</button>
+    <button class="api-button" id="wfArtifacts_dl_server">Download All (server)</button>
+    <button class="api-button" id="wfArtifacts_dl_client">Download All (client)</button>
   </div>
   <div id="wfEvents_type_chips" class="wf-type-chips"></div>
   <div class="form-group">
-    <button class="api-button" onclick="wfPause()">Pause</button>
-    <button class="api-button" onclick="wfResume()">Resume</button>
-    <button class="api-button" onclick="wfCancel()">Cancel</button>
-    <button class="api-button" onclick="wfRetry()">Retry</button>
+    <button class="api-button" id="wfRun_pause">Pause</button>
+    <button class="api-button" id="wfRun_resume">Resume</button>
+    <button class="api-button" id="wfRun_cancel">Cancel</button>
+    <button class="api-button" id="wfRun_retry">Retry</button>
   </div>
   <div class="form-group" style="margin-bottom:4px">
-    <button class="api-button" onclick="wfCopyJson('wfRun_result')">Copy</button>
-    <button class="api-button" onclick="wfClearJson('wfRun_result')">Clear</button>
+    <button class="api-button" id="wfRun_copy_json">Copy</button>
+    <button class="api-button" id="wfRun_clear_json">Clear</button>
   </div>
   <pre id="wfRun_result" class="json-viewer"></pre>
   <div id="wfRuns_cursor_hint" style="margin-top:4px;color:var(--color-base-0)"></div>
@@ -1265,20 +1265,20 @@
   <div class="form-group" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;color:var(--color-base-0)">
     <label style="margin:0">Events next cursor</label>
     <input type="text" id="wfEvents_next_cursor_value" readonly style="min-width:280px" placeholder="(available when server returns Next-Cursor)">
-    <button class="api-button btn-sm" id="wfEvents_copy_cursor" onclick="wfCopyEventsCursor()" disabled>Copy</button>
+    <button class="api-button btn-sm" id="wfEvents_copy_cursor" disabled>Copy</button>
   </div>
   <div id="wfEvents_table"></div>
   <div id="wfRun_list" class="json-viewer" style="margin-top:8px"></div>
   <div class="form-group">
-    <button class="api-button" id="wfList_prev" onclick="wfPrevPage()" disabled>Prev</button>
-    <button class="api-button" id="wfList_next" onclick="wfNextPage()" disabled>Next</button>
-    <button class="api-button" id="wfList_next_cursor" onclick="wfNextCursor()" disabled>Next (cursor)</button>
+    <button class="api-button" id="wfList_prev" disabled>Prev</button>
+    <button class="api-button" id="wfList_next" disabled>Next</button>
+    <button class="api-button" id="wfList_next_cursor" disabled>Next (cursor)</button>
     <span id="wfList_page_info" style="margin-left:8px;color:var(--color-base-0)"></span>
     <span id="wfList_cursor_info" style="margin-left:8px;color:var(--color-base-0)"></span>
     <div style="margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap">
       <label style="margin:0">next_cursor</label>
       <input type="text" id="wfList_next_cursor_value" style="min-width:420px" readonly placeholder="(will appear after listing)"/>
-      <button class="api-button" id="wfList_copy_cursor_btn" onclick="wfCopyNextCursor()" disabled>Copy</button>
+      <button class="api-button" id="wfList_copy_cursor_btn" disabled>Copy</button>
     </div>
   </div>
   <div id="wfRun_artifacts" class="json-viewer"></div>
@@ -1289,7 +1289,7 @@
       <input type="number" id="wfDlq_limit" value="50" min="1" max="500" style="width:80px">
       <label>Offset</label>
       <input type="number" id="wfDlq_offset" value="0" min="0" style="width:80px">
-      <button class="api-button" onclick="wfDlqLoad()">Refresh</button>
+      <button class="api-button" id="wfDlq_refresh">Refresh</button>
     </div>
     <div id="wfDlq_table"></div>
   </div>
@@ -1966,13 +1966,13 @@
   <div id="wfModal_panel" role="document" tabindex="-1">
     <div class="wf-modal-header">
       <h3 id="wfModal_title">Details</h3>
-      <button type="button" class="api-button btn-sm" onclick="wfCloseModal()" aria-label="Close dialog">Close</button>
+      <button type="button" class="api-button btn-sm" id="wfModal_close_btn" aria-label="Close dialog">Close</button>
     </div>
     <div id="wfModal_description" class="visually-hidden"></div>
     <div id="wfModal_body" class="wf-modal-body" tabindex="0"></div>
     <div class="wf-modal-footer">
-      <button class="api-button" type="button" id="wfModal_copy_btn" onclick="wfCopyModal()" aria-label="Copy modal content">Copy</button>
-      <button class="api-button" type="button" onclick="wfCloseModal()">Close</button>
+      <button class="api-button" type="button" id="wfModal_copy_btn2" aria-label="Copy modal content">Copy</button>
+      <button class="api-button" type="button" id="wfModal_close_btn2">Close</button>
     </div>
   </div>
 </div>
@@ -1991,8 +1991,8 @@
     <input type="text" id="wfAppr_edited" placeholder='{"final_text":"..."}' />
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfApprove()">Approve</button>
-    <button class="api-button" onclick="wfReject()">Reject</button>
+    <button class="api-button" id="wfApprove_btn">Approve</button>
+    <button class="api-button" id="wfReject_btn">Reject</button>
   </div>
   <pre id="wfAppr_result" class="json-viewer"></pre>
   <script>
@@ -2039,8 +2039,8 @@
     <input type="text" id="wfAppr_edited" placeholder='{"final_text":"..."}' />
   </div>
   <div class="form-group">
-    <button class="api-button" onclick="wfApprove()">Approve</button>
-    <button class="api-button" onclick="wfReject()">Reject</button>
+    <button class="api-button" id="wfApprove_btn2">Approve</button>
+    <button class="api-button" id="wfReject_btn2">Reject</button>
   </div>
   <pre id="wfAppr_result" class="json-viewer"></pre>
   <script>

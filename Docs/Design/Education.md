@@ -6,7 +6,7 @@
 https://openscilm.allen.ai/
 https://arxiv.org/abs/2411.14199
 https://arxiv.org/html/2411.14199v1
-
+https://github.com/K-Dense-AI/claude-scientific-skills
 https://github.com/gudvardur/amazon_book_downloader
 https://github.com/presenton/presenton
 https://arxiv.org/abs/2412.02035
@@ -14,6 +14,7 @@ https://github.com/andreamust/NEON-GPT
 https://arxiv.org/abs/2412.02035v1
 https://arxiv.org/abs/2411.07407
 https://arxiv.org/abs/2412.16429
+https://mqleet.github.io/AutoPage_ProjectPage/
 https://huggingface.co/papers/2412.15443
 https://github.com/thiswillbeyourgithub/AnkiAIUtils
 https://news.ycombinator.com/item?id=42534931

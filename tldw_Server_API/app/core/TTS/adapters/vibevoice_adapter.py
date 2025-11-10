@@ -57,9 +57,16 @@ class VibeVoiceAdapter(TTSAdapter):
             "frame_rate": 7.5   # Hz
         },
         "7B": {
-            "path": "WestZhang/VibeVoice-Large-pt",
+            # Official 7B repository
+            "path": "vibevoice/VibeVoice-7B",
             "context": 32000,  # 32K context (~45 min generation)
             "frame_rate": 7.5   # Hz
+        },
+        "7B-Q8": {
+            # Community 8-bit quantized 7B variant (reduced VRAM usage)
+            "path": "FabioSarracino/VibeVoice-Large-Q8",
+            "context": 32000,
+            "frame_rate": 7.5
         }
     }
 
@@ -118,8 +125,16 @@ class VibeVoiceAdapter(TTSAdapter):
         # Memory optimization settings (4-bit quantization is effectively CUDA-only)
         requested_quant = bool(self.config.get("vibevoice_use_quantization", False))
         self.use_quantization = requested_quant and self.device == "cuda"
+        # If using the pre-quantized 7B-Q8 variant (or Q8 repo), avoid stacking 4-bit quantization
+        try:
+            if self.variant.upper() == "7B-Q8" or "vibevoice-large-q8" in str(self.model_path).lower():
+                if self.use_quantization:
+                    logger.info("VibeVoice: Disabling additional 4-bit quantization for 7B-Q8 model")
+                self.use_quantization = False
+        except Exception:
+            pass
         self.auto_cleanup = self.config.get("vibevoice_auto_cleanup", True)
-        # Auto-download behavior: config override > env overrides > default True
+        # Auto-download behavior: config override > env overrides > default False
         def _parse_bool(val, default=True):
             if isinstance(val, bool):
                 return val
@@ -132,7 +147,8 @@ class VibeVoiceAdapter(TTSAdapter):
 
         cfg_auto = self.config.get("vibevoice_auto_download")
         env_auto = os.getenv("VIBEVOICE_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
-        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
+        # Default to False to prevent background model downloads unless explicitly allowed
+        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, False))
 
         # Advanced attention settings
         self.enable_sage = self.config.get("vibevoice_enable_sage", False)
@@ -383,12 +399,10 @@ class VibeVoiceAdapter(TTSAdapter):
                 error_msg = (
                     f"{self.provider_name}: Required libraries not installed. "
                     f"To use VibeVoice, follow these steps:\n"
-                    f"1. Ensure VibeVoice is installed:\n"
+                    f"1. Ensure VibeVoice is installed (official repo):\n"
+                    f"   git clone https://github.com/microsoft/VibeVoice.git libs/VibeVoice\n"
                     f"   cd libs/VibeVoice && pip install -e .\n"
-                    f"2. Or clone and install (community reference):\n"
-                    f"   git clone https://github.com/vibevoice-community/VibeVoice.git libs/VibeVoice\n"
-                    f"   cd libs/VibeVoice && pip install -e .\n"
-                    f"3. The {self.variant} model will auto-download on first use from:\n"
+                    f"2. The {self.variant} model will auto-download on first use from:\n"
                     f"   {self.model_path}"
                 )
                 logger.error(f"{self.provider_name}: Required libraries not installed: {e}")
@@ -514,7 +528,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 local_dir=str(self.model_dir),
                 cache_dir=str(self.cache_dir),
                 resume_download=True,
-                local_dir_use_symlinks=False
+                # No symlinks parameter needed in recent huggingface_hub
             )
             if progress.pbar:
                 progress.pbar.close()

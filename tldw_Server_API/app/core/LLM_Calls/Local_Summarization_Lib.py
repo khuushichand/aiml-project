@@ -24,6 +24,12 @@ from typing import Optional
 # Import 3rd-party Libraries
 import httpx
 import requests
+from tldw_Server_API.app.core.http_client import (
+    create_client as _hc_create_client,
+    fetch as _hc_fetch,
+    fetch_json as _hc_fetch_json,
+    RetryPolicy as _HC_RetryPolicy,
+)
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries
@@ -136,7 +142,7 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
         logging.debug("Local LLM: Posting request")
         if streaming:
             logging.debug("Local LLM: Processing streaming response")
-            client = httpx.Client()
+            client = _hc_create_client()
             resp = client.stream("POST", url, headers=headers, json=data)
             resp.raise_for_status()
             def stream_generator():
@@ -161,7 +167,7 @@ def summarize_with_local_llm(input_data, custom_prompt_arg, temp, system_message
                     resp.close()
             return stream_generator()
         else:
-            with httpx.Client() as client:
+            with _hc_create_client() as client:
                 resp = client.post(url, headers=headers, json=data)
                 resp.raise_for_status()
                 logging.debug("Local LLM: Processing non-streaming response")
@@ -282,7 +288,7 @@ def summarize_with_llama(input_data, custom_prompt, api_key=None, temp=None, sys
 
         logging.debug("Llama: Submitting request to API endpoint")
         if streaming:
-            client = httpx.Client()
+            client = _hc_create_client()
             resp = client.stream("POST", api_url, headers=headers, json=data)
             resp.raise_for_status()
             logging.debug("Llama: Processing streaming response")
@@ -308,7 +314,7 @@ def summarize_with_llama(input_data, custom_prompt, api_key=None, temp=None, sys
                     resp.close()
             return stream_generator()
         else:
-            with httpx.Client() as client:
+            with _hc_create_client() as client:
                 resp = client.post(api_url, headers=headers, json=data)
                 resp.raise_for_status()
                 logging.debug("Llama.cpp Summarizer: Processing non-streaming response")
@@ -405,7 +411,8 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
             logging.debug("Kobold Summarization: Streaming mode enabled")
             try:
                 # Create a session
-                session = requests.Session()
+                # Replace legacy requests with centralized client
+                session = _hc_create_client()
 
                 # Load config values
                 retry_count = loaded_config_data['kobold_api']['api_retries']
@@ -468,7 +475,7 @@ def summarize_with_kobold(input_data, api_key, custom_prompt_input,  system_mess
         else:
             try:
                 # Create a session
-                session = requests.Session()
+                session = _hc_create_client()
 
                 # Load config values
                 retry_count = loaded_config_data['kobold_api']['api_retries']
@@ -638,7 +645,7 @@ def summarize_with_oobabooga(input_data, api_key, custom_prompt, system_message=
         if streaming:
             logging.debug("Oobabooga: Streaming mode enabled")
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['ooba_api']['api_retries']
@@ -687,7 +694,7 @@ def summarize_with_oobabooga(input_data, api_key, custom_prompt, system_message=
                 return f"Error summarizing with Oobabooga: {str(e)}"
         else:
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['ooba_api']['api_retries']
@@ -833,7 +840,7 @@ def summarize_with_tabbyapi(
             logging.debug("TabbyAPI: Streaming mode enabled")
             try:
                 # Create a session
-                session = requests.Session()
+                session = _hc_create_client()
 
                 # Load config values
                 retry_count = loaded_config_data['tabby_api']['api_retries']
@@ -882,7 +889,7 @@ def summarize_with_tabbyapi(
         else:
             try:
                 # Create a session
-                session = requests.Session()
+                session = _hc_create_client()
 
                 # Load config values
                 retry_count = loaded_config_data['tabby_api']['api_retries']
@@ -1031,7 +1038,7 @@ def summarize_with_vllm(api_key, input_data, custom_prompt_arg, temp=None, syste
         # Handle streaming
         if streaming:
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['vllm_api']['api_retries']
@@ -1083,7 +1090,7 @@ def summarize_with_vllm(api_key, input_data, custom_prompt_arg, temp=None, syste
         # Handle non-streaming
         else:
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['vllm_api']['api_retries']
@@ -1269,7 +1276,7 @@ def summarize_with_ollama(
 
         try:
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['ollama_api']['api_retries']
@@ -1339,7 +1346,7 @@ def summarize_with_ollama(
             # Non-streaming => parse entire JSON once and return the text
             try:
                 # Create a session
-                session = requests.Session()
+                session = _hc_create_client()
 
                 # Load config values
                 retry_count = loaded_config_data['ollama_api']['api_retries']
@@ -1498,7 +1505,7 @@ def summarize_with_custom_openai(api_key, input_data, custom_prompt_arg, temp=No
 
         if streaming:
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['custom_openai_api']['api_retries']
@@ -1549,7 +1556,7 @@ def summarize_with_custom_openai(api_key, input_data, custom_prompt_arg, temp=No
             return stream_generator()
         else:
             # Create a session
-            session = requests.Session()
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['custom_openai_api']['api_retries']
@@ -1708,8 +1715,8 @@ def summarize_with_custom_openai_2(api_key, input_data, custom_prompt_arg, temp=
         }
 
         if streaming:
-            # Create a session
-            session = requests.Session()
+            # Centralized client for streaming; no adapter mounting
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['custom_openai_api_2']['api_retries']
@@ -1722,12 +1729,7 @@ def summarize_with_custom_openai_2(api_key, input_data, custom_prompt_arg, temp=
                 status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
             )
 
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
+            # Note: streaming path uses client.stream via httpx client from factory
             response = session.post(
                 custom_openai_api_url,
                 headers=headers,
@@ -1759,8 +1761,8 @@ def summarize_with_custom_openai_2(api_key, input_data, custom_prompt_arg, temp=
                 yield collected_messages
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
+            # Non-streaming path: use centralized fetch with retries
+            session = _hc_create_client()
 
             # Load config values
             retry_count = loaded_config_data['custom_openai_api_2']['api_retries']
@@ -1773,30 +1775,29 @@ def summarize_with_custom_openai_2(api_key, input_data, custom_prompt_arg, temp=
                 status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
             )
 
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            logging.debug("Custom OpenAI API-2: Posting request")
-            response = session.post(custom_openai_api_url, headers=headers, json=data)
-            logging.debug(f"Custom OpenAI API-2 full API response data: {response}")
-            if response.status_code == 200:
-                response_data = response.json()
-                logging.debug(response_data)
-                if 'choices' in response_data and len(response_data['choices']) > 0:
-                    chat_response = response_data['choices'][0]['message']['content'].strip()
-                    logging.debug("Custom OpenAI API-2: Chat Sent successfully")
-                    logging.debug(f"Custom OpenAI API-2: Chat response: {chat_response}")
-                    return chat_response
-                else:
-                    logging.warning("Custom OpenAI API-2: Chat response not found in the response data")
-                    return "Custom OpenAI API-2: Chat not available"
+            policy = _HC_RetryPolicy(attempts=max(1, int(retry_count)))
+            logging.debug("Custom OpenAI API-2: Posting request via centralized client")
+            r = _hc_fetch(
+                method="POST",
+                url=custom_openai_api_url,
+                headers=headers,
+                json=data,
+                client=session,
+                retry=policy,
+            )
+            try:
+                response_data = r.json()
+            except Exception:
+                response_data = {}
+            logging.debug(response_data)
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                chat_response = response_data['choices'][0]['message']['content'].strip()
+                logging.debug("Custom OpenAI API-2: Chat Sent successfully")
+                logging.debug(f"Custom OpenAI API-2: Chat response: {chat_response}")
+                return chat_response
             else:
-                logging.error(f"Custom OpenAI API-2: Chat request failed with status code {response.status_code}")
-                logging.error(f"Custom OpenAI API-2: Error response: {response.text}")
-                return f"OpenAI: Failed to process chat response. Status code: {response.status_code}"
+                logging.warning("Custom OpenAI API-2: Chat response not found in the response data")
+                return "Custom OpenAI API-2: Chat not available"
     except json.JSONDecodeError as e:
         logging.error(f"Custom OpenAI API-2: Error decoding JSON: {str(e)}", exc_info=True)
         return f"Custom OpenAI API-2: Error decoding JSON input: {str(e)}"

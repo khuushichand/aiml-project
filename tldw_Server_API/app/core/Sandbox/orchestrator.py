@@ -19,9 +19,12 @@ from typing import List
 
 
 class IdempotencyConflict(Exception):
-    def __init__(self, original_id: str, message: str = "Idempotency conflict") -> None:
+    def __init__(self, original_id: str, key: Optional[str] = None, prior_created_at: Optional[str] = None, message: str = "Idempotency conflict") -> None:
         super().__init__(message)
         self.original_id = original_id
+        self.key = key
+        # ISO 8601 timestamp string (UTC) preferred at orchestrator/api layers
+        self.prior_created_at = prior_created_at
 
 
 def _fingerprint_body(body: Dict[str, Any]) -> str:
@@ -89,20 +92,21 @@ class SandboxOrchestrator:
         except Exception:
             return ""
 
-    def _cleanup_idem(self) -> None:
-        now = time.time()
-        expired: list[Tuple[str, str, str]] = []
-        for k, rec in self._idem.items():
-            if now - rec.created_at > self._idem_ttl_sec:
-                expired.append(k)
-        for k in expired:
-            self._idem.pop(k, None)
+
 
     def _check_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             return self._store.check_idempotency(endpoint, user_id, idem_key, body)
         except StoreIdemConflict as e:
-            raise IdempotencyConflict(e.original_id)
+            # Convert store-level epoch seconds into ISO 8601 for API surfaces
+            iso_ct: Optional[str] = None
+            try:
+                if getattr(e, "created_at", None) is not None:
+                    from datetime import datetime, timezone
+                    iso_ct = datetime.fromtimestamp(float(e.created_at), tz=timezone.utc).isoformat()
+            except Exception:
+                iso_ct = None
+            raise IdempotencyConflict(e.original_id, key=getattr(e, "key", None), prior_created_at=iso_ct)
 
     def _store_idem(self, endpoint: str, user_id: Any, idem_key: Optional[str], body: Dict[str, Any], object_id: str, response: Dict[str, Any]) -> None:
         self._store.store_idempotency(endpoint, user_id, idem_key, body, object_id, response)
@@ -279,10 +283,13 @@ class SandboxOrchestrator:
     # Artifacts
     # -----------------
     def _artifact_dir(self, user_id: str, run_id: str) -> Path:
-        try:
-            root = getattr(app_settings, "SANDBOX_ROOT_DIR", None)
-        except Exception:
-            root = None
+        # Prefer an explicit shared artifacts root for cluster deployments
+        root = os.getenv("SANDBOX_SHARED_ARTIFACTS_DIR")
+        if not root:
+            try:
+                root = getattr(app_settings, "SANDBOX_ROOT_DIR", None)
+            except Exception:
+                root = None
         if not root:
             try:
                 proj = getattr(app_settings, "PROJECT_ROOT", ".")

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
@@ -170,6 +171,7 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
     async def save_message_fn(*_args, **_kwargs):
         return None
 
+    # Disable queue path to exercise direct streaming behavior
     monkeypatch.setattr(chat_service, "get_request_queue", lambda: None)
 
     request = SimpleNamespace(
@@ -179,39 +181,63 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
         state=SimpleNamespace(user_id=None, api_key_id=None),
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await execute_streaming_call(
-            current_loop=asyncio.get_running_loop(),
-            cleaned_args={
-                "api_endpoint": "openai",
-                "messages_payload": [],
-                "model": "gpt-test",
-                "streaming": True,
-            },
-            selected_provider="openai",
-            provider="openai",
-            model="gpt-test",
-            request_json="{}",
-            request=request,
-            metrics=metrics,
-            provider_manager=provider_manager,
-            templated_llm_payload=[],
-            should_persist=False,
-            final_conversation_id="conv-test",
-            character_card_for_context={"name": "Test"},
-            chat_db=None,
-            save_message_fn=save_message_fn,
-            audit_service=None,
-            audit_context=None,
-            client_id="client-test",
-            queue_execution_enabled=False,
-            enable_provider_fallback=False,
-            llm_call_func=failing_llm_call,
-            refresh_provider_params=lambda _provider: ({}, None),
-            moderation_getter=lambda: _DummyModeration(),
-        )
+    resp = await execute_streaming_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            "api_endpoint": "openai",
+            "messages_payload": [],
+            "model": "gpt-test",
+            "streaming": True,
+        },
+        selected_provider="openai",
+        provider="openai",
+        model="gpt-test",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=provider_manager,
+        templated_llm_payload=[],
+        should_persist=False,
+        final_conversation_id="conv-test",
+        character_card_for_context={"name": "Test"},
+        chat_db=None,
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client-test",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=failing_llm_call,
+        refresh_provider_params=lambda _provider: ({}, None),
+        moderation_getter=lambda: _DummyModeration(),
+    )
 
-    assert exc_info.value is http_exc
+    assert isinstance(resp, StreamingResponse)
+
+    # Consume the StreamingResponse body iterator and validate error payload + DONE
+    agen = resp.body_iterator
+    chunks = []
+    try:
+        for _ in range(4):
+            try:
+                ln = await agen.__anext__()
+            except StopAsyncIteration:
+                break
+            if not ln:
+                continue
+            chunks.append(ln)
+    finally:
+        try:
+            await agen.aclose()
+        except Exception:
+            pass
+
+    # Normalize to str for assertions
+    chunks = [c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in chunks]
+    assert any("\"error\"" in c for c in chunks), f"No error frame in chunks: {chunks}"
+    assert any("HTTPException" in c and "Rate limited" in c for c in chunks), f"Missing HTTPException details in error frame: {chunks}"
+    assert chunks and chunks[-1].strip() == "data: [DONE]"
+
     # The last llm call recorded should indicate an HTTPException error type
     assert metrics.llm_calls[-1][3] in ("HTTPException", "HTTPException")
 

@@ -460,11 +460,38 @@ class TTSServiceV2:
                 if fallback_plan is None and response is not None:
                     if response.audio_stream:
                         async for chunk in response.audio_stream:
+                            # Record TTFB on first emitted chunk
+                            if chunks_count == 0:
+                                try:
+                                    self.metrics.observe(
+                                        "tts_ttfb_seconds",
+                                        max(0.0, time.time() - start_time),
+                                        labels={
+                                            "provider": adapter.provider_name,
+                                            "voice": tts_request.voice or "default",
+                                            "format": tts_request.format.value,
+                                        },
+                                    )
+                                except Exception:
+                                    pass
                             chunks_count += 1
                             audio_size += len(chunk)
                             yield chunk
                     elif response.audio_data:
                         chunks_count = 1
+                        # Record TTFB when first audio bytes are available
+                        try:
+                            self.metrics.observe(
+                                "tts_ttfb_seconds",
+                                max(0.0, time.time() - start_time),
+                                labels={
+                                    "provider": adapter.provider_name,
+                                    "voice": tts_request.voice or "default",
+                                    "format": tts_request.format.value,
+                                },
+                            )
+                        except Exception:
+                            pass
                         audio_size = len(response.audio_data)
                         yield response.audio_data
                     else:
@@ -594,10 +621,37 @@ class TTSServiceV2:
                 response = await adapter.generate(request)
 
                 if response.audio_stream:
+                    first_emitted = False
                     async for chunk in response.audio_stream:
+                        if not first_emitted:
+                            first_emitted = True
+                            try:
+                                self.metrics.observe(
+                                    "tts_ttfb_seconds",
+                                    max(0.0, time.time() - start_time),
+                                    labels={
+                                        "provider": adapter.provider_name,
+                                        "voice": request.voice or "default",
+                                        "format": request.format.value,
+                                    },
+                                )
+                            except Exception:
+                                pass
                         audio_size += len(chunk)
                         yield chunk
                 elif response.audio_data:
+                    try:
+                        self.metrics.observe(
+                            "tts_ttfb_seconds",
+                            max(0.0, time.time() - start_time),
+                            labels={
+                                "provider": adapter.provider_name,
+                                "voice": request.voice or "default",
+                                "format": request.format.value,
+                            },
+                        )
+                    except Exception:
+                        pass
                     audio_size = len(response.audio_data)
                     yield response.audio_data
                 else:

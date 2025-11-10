@@ -27,10 +27,12 @@ from ..tts_exceptions import (
     TTSNetworkError,
     TTSTimeoutError,
     TTSProviderError,
+    TTSValidationError,
+    TTSGenerationError,
     auth_error,
     rate_limit_error,
     network_error,
-    timeout_error
+    timeout_error,
 )
 from ..tts_validation import validate_tts_request
 from ..tts_resource_manager import get_resource_manager
@@ -486,8 +488,9 @@ class OpenAITTSAdapter(OpenAIAdapter):
             "speed": request.speed
         }
 
-        # Use a dedicated client to honor tests patching httpx.AsyncClient.stream
-        client = self.client or httpx.AsyncClient()
+        # Use centralized client to ensure egress/policy; still an httpx.AsyncClient
+        from tldw_Server_API.app.core.http_client import create_async_client
+        client = self.client or create_async_client()
         try:
             async with client.stream("POST", self.base_url, headers=headers, json=payload) as response:
                 async for chunk in response.aiter_bytes():

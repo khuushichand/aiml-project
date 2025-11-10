@@ -20,7 +20,7 @@ def _override_admin_dep(app):
     return require_admin
 
 
-def test_admin_orgs_list_with_total_and_search(monkeypatch, tmp_path):
+def test_admin_orgs_list_with_total_and_search(monkeypatch, tmp_path, authnz_schema_ready_sync):
     # Use SQLite and TEST_MODE to avoid network and simplify setup
     db_path = tmp_path / "authnz_admin_search.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")

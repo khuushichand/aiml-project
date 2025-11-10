@@ -83,6 +83,7 @@ from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_pr
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -1131,6 +1132,66 @@ def adjust_dimensions(
                 adjusted.append(arr.tolist())
     return adjusted
 
+def decide_and_apply_l2(
+    embedding: Union[List[float], np.ndarray],
+    encoding_format: str,
+    embeddings_from_adapter: bool,
+) -> Tuple[np.ndarray, bool]:
+    """Decide and apply L2-normalization policy.
+
+    Policy:
+    - Base64 outputs: never L2-normalize (numeric representation is not returned).
+    - Numeric outputs: L2-normalize by default.
+    - Adapter-supplied vectors are preserved as-is unless LLM_EMBEDDINGS_L2_NORMALIZE is truthy.
+
+    Returns (arr, did_l2) where arr is a float32 numpy array (possibly normalized).
+    If an unexpected error occurs while reading env vars or applying L2, logs with context
+    and preserves default behavior (numeric outputs normalized; adapter vectors preserved
+    unless normalization is explicitly requested via env flag).
+    """
+    # Default: normalize for numeric outputs; never for base64
+    do_l2 = encoding_format != "base64"
+
+    normalize_requested: Optional[bool] = None
+    try:
+        env_val = os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")
+        normalize_requested = str(env_val).lower() in {"1", "true", "yes", "on"}
+    except Exception as e:
+        # Preserve default behavior on error; log with context
+        logger.warning(
+            "Error reading env var LLM_EMBEDDINGS_L2_NORMALIZE in decide_and_apply_l2; "
+            f"encoding_format={encoding_format}, embeddings_from_adapter={embeddings_from_adapter}: {e}"
+        )
+        normalize_requested = None
+
+    # Adapter vectors: preserve as-is unless normalization explicitly requested
+    if embeddings_from_adapter:
+        if normalize_requested is True:
+            do_l2 = encoding_format != "base64"
+        else:
+            do_l2 = False
+
+    try:
+        arr = np.asarray(embedding, dtype=np.float32)
+        if do_l2:
+            norm = np.linalg.norm(arr)
+            if norm > 0:
+                arr = arr / norm
+        return arr, do_l2
+    except Exception as e:
+        # Log error and return original values (converted to float32 if possible)
+        logger.error(
+            "Error applying L2 policy in decide_and_apply_l2 "
+            f"(LLM_EMBEDDINGS_L2_NORMALIZE, encoding_format={encoding_format}, "
+            f"embeddings_from_adapter={embeddings_from_adapter}): {e}"
+        )
+        try:
+            arr = np.asarray(embedding, dtype=np.float32)
+        except Exception:
+            # Last resort: best-effort array without dtype guarantee
+            arr = np.array(embedding)
+        return arr, False
+
 def _should_enforce_policy(user: Optional[User] = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
@@ -1798,11 +1859,65 @@ async def create_embedding_endpoint(
         )
 
         embeddings: List[List[float]] = []
+        embeddings_from_adapter = False
 
         original_provider = provider
         original_model = model
 
-        if use_synthetic_openai:
+        # Optional adapter-backed path (Stage 4 wiring): allow routing to
+        # Embeddings adapters when explicitly enabled via env flag. Adapters take
+        # precedence over synthetic OpenAI vectors when enabled to honor explicit
+        # configuration in tests and production.
+        try:
+            adapters_enabled = str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+        except Exception:
+            adapters_enabled = False
+        if adapters_enabled:
+            try:
+                # Currently wire OpenAI/HF/Google adapters via registry
+                from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
+                registry = get_embeddings_registry()
+                adapter = registry.get_adapter(provider)
+                # Prepare adapter request (provider-specific key if available)
+                _api_key: Optional[str] = None
+                if provider == "openai":
+                    _api_key = settings.get("OPENAI_API_KEY")
+                elif provider == "huggingface":
+                    _api_key = settings.get("HUGGINGFACE_API_KEY") or settings.get("HUGGINGFACE_TOKEN")
+                elif provider == "google":
+                    _api_key = settings.get("GOOGLE_API_KEY")
+
+                adapter_request: Dict[str, Any] = {
+                    "input": texts_to_embed if len(texts_to_embed) > 1 else texts_to_embed[0],
+                    "model": model,
+                    "api_key": _api_key,
+                }
+                result = adapter.embed(adapter_request) if adapter else None
+                if isinstance(result, dict) and isinstance(result.get("data"), list):
+                    embs: List[List[float]] = []
+                    for item in result["data"]:
+                        vec = item.get("embedding") if isinstance(item, dict) else None
+                        if isinstance(vec, list):
+                            embs.append(vec)
+                    if embs and len(embs) == len(texts_to_embed):
+                        # Adapter-provided vectors may already be normalized. Preserve them as-is
+                        # unless LLM_EMBEDDINGS_L2_NORMALIZE explicitly requests normalization.
+                        processed: List[List[float]] = []
+                        for v in embs:
+                            arr, did_l2 = decide_and_apply_l2(
+                                v,
+                                embedding_request.encoding_format,
+                                embeddings_from_adapter=True,
+                            )
+                            processed.append(arr.tolist() if did_l2 else v)
+                        embeddings = processed
+                        embeddings_from_adapter = True
+                # If adapter failed to produce vectors, fall through to legacy/synthetic path
+            except Exception as _e:
+                # Log and fall back silently; adapter path is optional
+                logger.debug(f"Embeddings adapter path failed; falling back to legacy: {_e}")
+
+        if use_synthetic_openai and not embeddings:
             dim = 1536
             mid = (model or "").lower()
             if "3-large" in mid:
@@ -1817,7 +1932,7 @@ async def create_embedding_endpoint(
                 if nrm > 0:
                     vec = vec / nrm
                 embeddings.append(vec.tolist())
-        else:
+        elif not embeddings:
             # Try provider with fallback chain on failure
             last_error: Optional[Exception] = None
             # Fallback policy when explicit provider header is present:
@@ -1910,15 +2025,18 @@ async def create_embedding_endpoint(
         # Format response
         output_data = []
         for i, embedding in enumerate(embeddings):
-            # Ensure vectors are L2-normalized for numeric output
-            arr = np.array(embedding, dtype=np.float32)
-            norm = np.linalg.norm(arr)
-            if norm > 0 and embedding_request.encoding_format != "base64":
-                arr = arr / norm
+            # Adapter-provided vectors may already be normalized. Preserve them as-is
+            # unless LLM_EMBEDDINGS_L2_NORMALIZE explicitly requests normalization.
+            arr, did_l2 = decide_and_apply_l2(
+                embedding,
+                embedding_request.encoding_format,
+                embeddings_from_adapter=embeddings_from_adapter,
+            )
             if embedding_request.encoding_format == "base64":
                 processed_value = base64.b64encode(arr.tobytes()).decode('utf-8')
             else:
-                processed_value = arr.tolist()
+                # Preserve exact adapter-supplied values when not L2-normalizing
+                processed_value = embedding if not did_l2 else arr.tolist()
 
             output_data.append(
                 EmbeddingData(
@@ -3544,9 +3662,10 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
             # Jittered interval around 5s
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
         except Exception as e:
-            # keep the stream alive; emit error info once
+            # Keep the stream alive; emit a sanitized error and log details server-side
             try:
-                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                logger.exception("Orchestrator stream error")
+                yield f"event: error\ndata: {json.dumps({'error': 'Temporary service error'})}\n\n"
             except Exception:
                 pass
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
@@ -3559,11 +3678,71 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
 async def orchestrator_events(current_user: User = Depends(get_request_user)):
     require_admin(current_user)
     client = await _get_redis_client()
-    async def _gen():
+
+    # Legacy path (default): keep existing SSE generator behavior
+    if os.getenv("STREAMS_UNIFIED", "0") != "1":
+        async def _gen():
+            try:
+                orchestrator_sse_connections.inc()
+                async for chunk in _sse_orchestrator_stream(client):
+                    yield chunk
+            finally:
+                try:
+                    orchestrator_sse_connections.dec()
+                    orchestrator_sse_disconnects_total.inc()
+                except Exception:
+                    pass
+                await ensure_async_client_closed(client)
+        return StreamingResponse(_gen(), media_type="text/event-stream")
+
+    # Unified path (flagged): use SSEStream with standardized heartbeats and error handling
+    async def _gen_unified():
+        import random as _random
         try:
             orchestrator_sse_connections.inc()
-            async for chunk in _sse_orchestrator_stream(client):
-                yield chunk
+            stream = SSEStream(
+                # Honor env defaults for interval/mode; allow overriding via env
+                heartbeat_interval_s=None,
+                heartbeat_mode=None,
+                close_on_error=False,  # do not close the stream on transient errors
+                labels={"component": "embeddings", "endpoint": "orchestrator_events"},
+            )
+
+            async def _produce():
+                while True:
+                    try:
+                        payload = await _build_orchestrator_snapshot(client)
+                        await stream.send_event("summary", payload)
+                    except Exception as e:
+                        # Emit a non-fatal sanitized error frame and continue; log details server-side
+                        logger.exception("Provider error during orchestrator snapshot")
+                        await stream.error("provider_error", "Temporary service error", data=None, close=False)
+                    # Jittered ~5s cadence
+                    await asyncio.sleep(_random.uniform(4.5, 5.5))
+
+            producer = asyncio.create_task(_produce())
+            try:
+                async for line in stream.iter_sse():
+                    yield line
+            except asyncio.CancelledError:
+                # Client cancelled: cancel producer promptly and re-raise
+                if not producer.done():
+                    try:
+                        producer.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.gather(producer, return_exceptions=True)
+                    except Exception:
+                        pass
+                raise
+            else:
+                # Normal shutdown: ensure producer completes without forced cancel
+                if not producer.done():
+                    try:
+                        await asyncio.gather(producer, return_exceptions=True)
+                    except Exception:
+                        pass
         finally:
             try:
                 orchestrator_sse_connections.dec()
@@ -3571,8 +3750,12 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
             except Exception:
                 pass
             await ensure_async_client_closed(client)
-    # The client will keep the connection; we don't close Redis here (shared)
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(_gen_unified(), media_type="text/event-stream", headers=headers)
 
 
 @router.get(

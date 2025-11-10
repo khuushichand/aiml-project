@@ -129,6 +129,12 @@ class JobManager:
         if self.backend == "postgres":
             if not (self.db_url and str(self.db_url).startswith("postgres")):
                 raise ValueError("Postgres backend selected but no valid db_url provided; set JOBS_DB_URL or pass db_url")
+            # Normalize DSN and negotiate options for server compatibility
+            try:
+                from .pg_util import negotiate_pg_dsn
+                self.db_url = negotiate_pg_dsn(self.db_url)
+            except Exception:
+                pass
             ensure_jobs_tables_pg(self.db_url)
             try:
                 ensure_job_counters_pg(self.db_url)
@@ -256,6 +262,83 @@ class JobManager:
             except Exception:
                 pass
         return cur
+
+    # --- Acquire ordering policy (env-driven overrides) ---
+    def _priority_dir_for(self, domain: Optional[str], backend: str) -> str:
+        """Return 'ASC' or 'DESC' for priority ordering based on env.
+
+        Env (checked in order):
+          - JOBS_{BACKEND}_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)
+          - JOBS_{ALIAS}_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)  # e.g., BACKEND=pg -> ALIAS=postgres
+          - JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS (comma list)
+        If domain is listed => DESC; otherwise ASC.
+        """
+        try:
+            dom = (domain or "").strip()
+            b = (backend or "").strip().lower()
+            key_backend = f"JOBS_{b.upper()}_ACQUIRE_PRIORITY_DESC_DOMAINS"
+            # Support alternate alias names (e.g., pg -> postgres)
+            alias = "postgres" if b == "pg" else None
+            key_alias = f"JOBS_{alias.upper()}_ACQUIRE_PRIORITY_DESC_DOMAINS" if alias else None
+            key_global = "JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS"
+            raw = (
+                os.getenv(key_backend)
+                or (os.getenv(key_alias) if key_alias else None)
+                or os.getenv(key_global)
+                or ""
+            )
+            listed = {d.strip().lower() for d in raw.split(",") if d.strip()}
+            if dom.lower() in listed:
+                return "DESC"
+            # Default behavior across domains (including 'chatbooks'):
+            # lower numeric value means higher priority -> ASC
+            return "ASC"
+        except Exception:
+            return "ASC"
+
+    def _tie_break_for(self, domain: Optional[str], backend: str) -> Optional[str]:
+        """Return 'fifo' or 'lifo' if explicitly configured, else None for default behavior.
+
+        Env (checked in order):
+          - JOBS_{BACKEND}_ACQUIRE_TIE_BREAK_{DOMAIN}
+          - JOBS_{BACKEND}_ACQUIRE_TIE_BREAK
+          - JOBS_ACQUIRE_TIE_BREAK_{DOMAIN}
+          - JOBS_ACQUIRE_TIE_BREAK
+        """
+        try:
+            dom = (domain or "").strip()
+            b = (backend or "").strip().lower()
+            # Build alias list mirroring _priority_dir_for semantics and adding common variants
+            aliases: List[str] = []
+            if b in {"pg", "postgres", "postgresql"}:
+                # Preserve caller's preferred token first
+                base_order = [b, "postgres", "postgresql", "pg"]
+                seen = set()
+                for t in base_order:
+                    if t not in seen:
+                        aliases.append(t)
+                        seen.add(t)
+            else:
+                aliases = [b]
+
+            cands: List[str] = []
+            # Backend/alias-scoped overrides (domain-specific then general)
+            for a in aliases:
+                cands.append(f"JOBS_{a.upper()}_ACQUIRE_TIE_BREAK_{dom.upper()}")
+            for a in aliases:
+                cands.append(f"JOBS_{a.upper()}_ACQUIRE_TIE_BREAK")
+            # Global fallbacks (domain-specific then general)
+            cands.append(f"JOBS_ACQUIRE_TIE_BREAK_{dom.upper()}")
+            cands.append("JOBS_ACQUIRE_TIE_BREAK")
+            for k in cands:
+                v = os.getenv(k)
+                if v:
+                    v2 = v.strip().lower()
+                    if v2 in {"fifo", "lifo"}:
+                        return v2
+            return None
+        except Exception:
+            return None
 
     @classmethod
     def set_rls_context(cls, *, is_admin: bool, domain_allowlist: Optional[str], owner_user_id: Optional[str]) -> None:
@@ -1470,39 +1553,39 @@ class JobManager:
             if self.backend == "postgres":
                 with conn:
                     with self._pg_cursor(conn) as cur:
+                        d = None  # type: ignore[assignment]
                         if str(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")).lower() in {"1","true","yes","y","on"}:
+                            # Build ordering clause with optional env overrides
+                            prio_dir = self._priority_dir_for(domain, backend="pg")
+                            tie = self._tie_break_for(domain, backend="pg")
+                            if tie == "fifo":
+                                _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            elif tie == "lifo":
+                                _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            else:
+                                _order = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            _cond_owner = (" AND owner_user_id = %s" if owner_user_id else "")
+                            _sql = (
+                                "WITH picked AS ("
+                                "  SELECT id FROM jobs WHERE domain=%s AND queue=%s AND ("
+                                "    (status='queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
+                                "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
+                                "  )"
+                                + _cond_owner + _order +
+                                ") "
+                                "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
+                                "WHERE id IN (SELECT id FROM picked) RETURNING *"
+                            )
                             cur.execute(
-                                (
-                                    "WITH picked AS ("
-                                    "  SELECT id FROM jobs WHERE domain=%s AND queue=%s AND ("
-                                    "    (status='queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
-                                    "    (status='processing' AND (leased_until IS NULL OR leased_until <= NOW()))"
-                                    "  )"
-                                    + (" AND owner_user_id = %s" if owner_user_id else "") +
-                                    "  ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
-                                    ")"
-                                    "UPDATE jobs SET status='processing', started_at = COALESCE(started_at, NOW()), acquired_at = COALESCE(acquired_at, NOW()), leased_until = NOW() + (%s || ' seconds')::interval, worker_id = %s, lease_id = %s "
-                                    "WHERE id IN (SELECT id FROM picked) RETURNING *"
-                                ),
+                                _sql,
                                 ([domain, queue] + ([owner_user_id] if owner_user_id else []) + [int(lease_seconds), worker_id, str(_uuid.uuid4())]),
                             )
                             row2 = cur.fetchone()
                             if not row2:
                                 return None
                             d = dict(row2)
-                        # SLA check: queue latency
-                        try:
-                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))
-                            if pol and (pol.get("enabled") in (True, 1)):
-                                ca = _parse_dt(d.get("acquired_at"))
-                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
-                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
-                                    qlat = max(0.0, (ca - cr).total_seconds())
-                                    if qlat > float(pol.get("max_queue_latency_seconds")):
-                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
-                        except Exception:
-                            pass
                         else:
+                            # Two-step acquire: select next ID then update+return full row
                             base = (
                                 "SELECT id FROM jobs WHERE domain = %s AND queue = %s AND ("
                                 "  (status = 'queued' AND (available_at IS NULL OR available_at <= NOW())) OR"
@@ -1513,8 +1596,15 @@ class JobManager:
                             if owner_user_id:
                                 base += " AND owner_user_id = %s"
                                 params.append(owner_user_id)
-                            # Stable ordering: priority ASC (lower numeric first), then available/created, then id
-                            base += " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            # Stable ordering: allow env-based override
+                            prio_dir = self._priority_dir_for(domain, backend="pg")
+                            tie = self._tie_break_for(domain, backend="pg")
+                            if tie == "fifo":
+                                base += f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            elif tie == "lifo":
+                                base += f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1 FOR UPDATE SKIP LOCKED"
+                            else:
+                                base += f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                             cur.execute(base, params)
                             row = cur.fetchone()
                             if not row:
@@ -1536,6 +1626,19 @@ class JobManager:
                             if not row2:
                                 return None
                             d = dict(row2)
+
+                        # SLA check: queue latency (after acquiring and populating d)
+                        try:
+                            pol = self._get_sla_policy(d.get("domain"), d.get("queue"), d.get("job_type"))  # type: ignore[arg-type]
+                            if pol and (pol.get("enabled") in (True, 1)):
+                                ca = _parse_dt(d.get("acquired_at"))
+                                cr = _parse_dt(d.get("created_at")) if d.get("created_at") else None
+                                if ca and cr and (pol.get("max_queue_latency_seconds") is not None):
+                                    qlat = max(0.0, (ca - cr).total_seconds())
+                                    if qlat > float(pol.get("max_queue_latency_seconds")):
+                                        self._record_sla_breach(int(d.get("id")), str(d.get("domain")), str(d.get("queue")), str(d.get("job_type")), "queue_latency", qlat, float(pol.get("max_queue_latency_seconds")))
+                        except Exception:
+                            pass
                         # Counters: adjust queued->processing
                         try:
                             if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
@@ -1610,8 +1713,15 @@ class JobManager:
                         if owner_user_id:
                             sub += " AND owner_user_id = ?"
                             params_sub.append(owner_user_id)
-                        # Ordering: priority ASC (lower number first), then available/created oldest first, then id ASC
-                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        # Ordering: env-based override; else default FIFO
+                        prio_dir = self._priority_dir_for(domain, backend="sqlite")
+                        tie = self._tie_break_for(domain, backend="sqlite")
+                        if tie == "fifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        elif tie == "lifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        else:
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         sub += order_sql
                         sql = (
                             "UPDATE jobs SET status='processing', "
@@ -1677,8 +1787,30 @@ class JobManager:
                         if owner_user_id:
                             base += " AND owner_user_id = ?"
                             params.append(owner_user_id)
-                        # Ordering: priority ASC (lower first), then newest by available/created, then id DESC
-                        order_sql = " ORDER BY priority ASC, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        # Ordering: env-based override; otherwise default FIFO for most domains.
+                        prio_dir = self._priority_dir_for(domain, backend="sqlite")
+                        tie = self._tie_break_for(domain, backend="sqlite")
+                        if tie == "fifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                        elif tie == "lifo":
+                            order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                        else:
+                            # Only 'chatbooks' uses the dynamic tie-break by default; others stick to FIFO
+                            if str(domain) == 'chatbooks':
+                                try:
+                                    _r = conn.execute(
+                                        "SELECT 1 FROM jobs WHERE domain=? AND queue=? AND status='queued' AND (available_at IS NOT NULL AND available_at > DATETIME('now')) LIMIT 1",
+                                        (domain, queue),
+                                    ).fetchone()
+                                    _has_sched = bool(_r)
+                                except Exception:
+                                    _has_sched = False
+                                if _has_sched:
+                                    order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
+                                else:
+                                    order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) DESC, id DESC LIMIT 1"
+                            else:
+                                order_sql = f" ORDER BY priority {prio_dir}, COALESCE(available_at, created_at) ASC, id ASC LIMIT 1"
                         base += order_sql
                         if _test_mode:
                             try:
@@ -3620,6 +3752,7 @@ class JobManager:
         domain: Optional[str] = None,
         queue: Optional[str] = None,
         job_type: Optional[str] = None,
+        reference_time: Optional[datetime] = None,
     ) -> int:
         """Apply TTL policies for queued/scheduled (age) and processing (runtime).
 
@@ -3637,9 +3770,12 @@ class JobManager:
                 # Ensure updates are committed
                 with conn:
                     with self._pg_cursor(conn) as cur:
+                        # Track per-phase counts for diagnostics while returning a single total.
                         affected = 0
+                        affected_age = 0
+                        affected_runtime = 0
                         if age_seconds is not None:
-                            now_ts = self._clock.now_utc()
+                            now_ts = reference_time or self._clock.now_utc()
                             where = ["status='queued'", "created_at <= (%s - (%s || ' seconds')::interval)"]
                             params: List[Any] = [now_ts, int(age_seconds)]
                             if domain:
@@ -3709,9 +3845,10 @@ class JobManager:
                                     f"UPDATE jobs SET status='failed', error_message = 'ttl_age', completed_at = %s WHERE {' AND '.join(where)}",
                                     tuple([now_ts] + params),
                                 )
-                            affected += cur.rowcount or 0
+                            affected_age = int(cur.rowcount or 0)
+                            affected += affected_age
                         if runtime_seconds is not None:
-                            now_ts2 = self._clock.now_utc()
+                            now_ts2 = reference_time or self._clock.now_utc()
                             where = ["status='processing'", "COALESCE(started_at, acquired_at) <= (%s - (%s || ' seconds')::interval)"]
                             params2: List[Any] = [now_ts2, int(runtime_seconds)]
                             if domain:
@@ -3762,13 +3899,16 @@ class JobManager:
                                     f"UPDATE jobs SET status='failed', error_message = 'ttl_runtime', completed_at = %s, leased_until = NULL WHERE {' AND '.join(where)}",
                                     tuple([now_ts2] + params2),
                                 )
-                            affected += cur.rowcount or 0
+                            affected_runtime = int(cur.rowcount or 0)
+                            affected += affected_runtime
                         try:
                             emit_job_event(
                                 "jobs.ttl_sweep",
                                 job=None,
                                 attrs={
                                     "affected": int(affected),
+                                    "affected_age": int(affected_age),
+                                    "affected_runtime": int(affected_runtime),
                                     "action": action,
                                     "age_seconds": int(age_seconds or 0),
                                     "runtime_seconds": int(runtime_seconds or 0),
@@ -3783,8 +3923,11 @@ class JobManager:
             else:
                 # Ensure updates are committed by using an explicit transaction block
                 affected2 = 0
+                affected2_age = 0
+                affected2_runtime = 0
                 with conn:
-                    now_str = self._clock.now_utc().astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    ref_dt = reference_time or self._clock.now_utc()
+                    now_str = ref_dt.astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
                     if age_seconds is not None:
                         where = ["status='queued'", "created_at <= DATETIME(?, ?)" ]
                         params3: List[Any] = [now_str, f"-{int(age_seconds)} seconds"]
@@ -3844,10 +3987,15 @@ class JobManager:
                         sql = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_age'" if action == "cancel" else "status='failed', error_message='ttl_age', completed_at = DATETIME('now')") + f" WHERE {' AND '.join(where)}"
                         cur = conn.execute(sql, tuple(params3))
                         try:
-                            logger.debug(f"TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}")
+                            _tm = os.getenv("TEST_MODE", "").lower() in {"1","true","yes","y","on"}
+                            if _tm:
+                                logger.info(f"[TEST] TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}")
+                            else:
+                                logger.debug(f"TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}")
                         except Exception:
                             pass
-                        affected2 += cur.rowcount or 0
+                        affected2_age = int(cur.rowcount or 0)
+                        affected2 += affected2_age
                     if runtime_seconds is not None:
                         where = ["status='processing'", "COALESCE(started_at, acquired_at) <= DATETIME(?, ?)"]
                         params4: List[Any] = [now_str, f"-{int(runtime_seconds)} seconds"]
@@ -3889,16 +4037,23 @@ class JobManager:
                         sql2 = "UPDATE jobs SET " + ("status='cancelled', cancelled_at = DATETIME('now'), cancellation_reason='ttl_runtime', leased_until = NULL" if action == "cancel" else "status='failed', error_message='ttl_runtime', completed_at = DATETIME('now'), leased_until = NULL") + f" WHERE {' AND '.join(where)}"
                         cur2 = conn.execute(sql2, tuple(params4))
                         try:
-                            logger.debug(f"TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}")
+                            _tm = os.getenv("TEST_MODE", "").lower() in {"1","true","yes","y","on"}
+                            if _tm:
+                                logger.info(f"[TEST] TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}")
+                            else:
+                                logger.debug(f"TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}")
                         except Exception:
                             pass
-                        affected2 += cur2.rowcount or 0
+                        affected2_runtime = int(cur2.rowcount or 0)
+                        affected2 += affected2_runtime
                 try:
                     emit_job_event(
                         "jobs.ttl_sweep",
                         job=None,
                         attrs={
                             "affected": int(affected2),
+                            "affected_age": int(affected2_age),
+                            "affected_runtime": int(affected2_runtime),
                             "action": action,
                             "age_seconds": int(age_seconds or 0),
                             "runtime_seconds": int(runtime_seconds or 0),

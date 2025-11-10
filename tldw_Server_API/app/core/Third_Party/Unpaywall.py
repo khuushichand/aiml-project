@@ -7,26 +7,10 @@ from __future__ import annotations
 
 import os
 from typing import Optional, Tuple
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from tldw_Server_API.app.core.http_client import fetch
 
 
 BASE_URL = "https://api.unpaywall.org/v2"
-
-
-def _mk_session() -> requests.Session:
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s = requests.Session()
-    s.mount("https://", adapter)
-    s.mount("http://", adapter)
-    return s
 
 
 def resolve_oa_pdf(doi: str) -> Tuple[Optional[str], Optional[str]]:
@@ -38,13 +22,13 @@ def resolve_oa_pdf(doi: str) -> Tuple[Optional[str], Optional[str]]:
     if not email:
         return None, "Unpaywall contact email not configured. Set UNPAYWALL_EMAIL."
     try:
-        session = _mk_session()
         doi_clean = doi.strip()
         url = f"{BASE_URL}/{doi_clean}"
-        r = session.get(url, params={"email": email}, timeout=20)
+        r = fetch(method="GET", url=url, params={"email": email}, timeout=20)
         if r.status_code == 404:
             return None, None
-        r.raise_for_status()
+        if r.status_code >= 400:
+            return None, f"Unpaywall HTTP error: {r.status_code}"
         data = r.json() or {}
         # Prefer best_oa_location.url_for_pdf, then scan oa_locations
         best = data.get("best_oa_location") or {}
@@ -55,11 +39,5 @@ def resolve_oa_pdf(doi: str) -> Tuple[Optional[str], Optional[str]]:
                 if pdf:
                     break
         return (pdf if pdf else None), None
-    except requests.exceptions.Timeout:
-        return None, "Request to Unpaywall API timed out."
-    except requests.exceptions.HTTPError as e:
-        return None, f"Unpaywall API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-    except requests.exceptions.RequestException as e:
-        return None, f"Unpaywall API Request Error: {str(e)}"
     except Exception as e:
         return None, f"Unpaywall error: {str(e)}"

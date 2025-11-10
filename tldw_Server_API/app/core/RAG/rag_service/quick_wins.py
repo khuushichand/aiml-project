@@ -252,6 +252,11 @@ class CostTracker:
             "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
         },
         "anthropic": {
+            # Current
+            "claude-opus-4.1": {"input": 0.015, "output": 0.075},
+            "claude-sonnet-4.5": {"input": 0.003, "output": 0.015},
+            "claude-haiku-4.5": {"input": 0.001, "output": 0.005},
+            # Back-compat
             "claude-3-opus": {"input": 0.015, "output": 0.075},
             "claude-3-sonnet": {"input": 0.003, "output": 0.015},
             "claude-3-haiku": {"input": 0.00025, "output": 0.00125},

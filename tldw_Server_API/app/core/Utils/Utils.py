@@ -1,4 +1,4 @@
-# Utils.py
+    # Utils.py
 from __future__ import annotations
 #########################################
 # General Utilities Library
@@ -49,7 +49,7 @@ from typing import Union, AnyStr, Tuple, List, Optional, Protocol, cast
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 #
 # 3rd-Party Imports
-import requests
+from tldw_Server_API.app.core.http_client import fetch, download, RetryPolicy, DownloadError
 import unicodedata
 from tqdm import tqdm
 from loguru import logger
@@ -405,7 +405,7 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
     # ---------- 2) if no ext, probe HEAD  -----------------------------------
     if not guessed_ext:
         try:
-            head = requests.head(url, allow_redirects=True, timeout=10)
+            head = fetch(method="HEAD", url=url, allow_redirects=True, timeout=10)
             ctype = head.headers.get("content-type", "")
             guessed_ext = mimetypes.guess_extension(ctype.split(";")[0].strip()) or ""
         except Exception:
@@ -429,61 +429,17 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
     if dest_dir:
         os.makedirs(dest_dir, exist_ok=True)
 
-    for attempt in range(max_retries):
-        try:
-            resume_from = 0
-            if os.path.exists(temp_path):
-                resume_from = os.path.getsize(temp_path)
-
-            headers = {'Range': f'bytes={resume_from}-'} if resume_from else {}
-
-            response = requests.get(url, stream=True, headers=headers, timeout=60)
-            response.raise_for_status()
-
-            content_range = response.headers.get('Content-Range') or response.headers.get('content-range')
-            is_partial = response.status_code == 206 or content_range is not None
-            if resume_from and not is_partial:
-                # Server ignored our range request; restart download from scratch
-                os.remove(temp_path)
-                resume_from = 0
-
-            total_header = response.headers.get('content-length')
-            total_size = int(total_header) if total_header and total_header.isdigit() else None
-            total_for_progress = (total_size + resume_from) if (total_size is not None and resume_from and is_partial) else total_size
-
-            mode = 'ab' if resume_from and is_partial else 'wb'
-            initial_progress = resume_from if mode == 'ab' else 0
-
-            with open(temp_path, mode) as temp_file, tqdm(
-                total=total_for_progress,
-                unit='B',
-                unit_scale=True,
-                desc=dest_path,
-                initial=initial_progress,
-                ascii=True,
-                leave=False,
-            ) as pbar:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        temp_file.write(chunk)
-                        pbar.update(len(chunk))
-
-            if expected_checksum and not verify_checksum(temp_path, expected_checksum):
-                os.remove(temp_path)
-                raise ValueError("Downloaded file's checksum does not match the expected checksum")
-
-            os.rename(temp_path, dest_path)
-            logging.info("Download complete and verified!")
-            return dest_path
-
-        except Exception as e:
-            logging.warning(f"Attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                logging.warning(f"Retrying in {delay} seconds...")
-                time.sleep(delay)
-            else:
-                logging.error("Max retries reached. Download failed.")
-                raise
+    # Use centralized downloader with resume+retries and atomic rename
+    try:
+        policy = RetryPolicy(attempts=max_retries, backoff_base_ms=int(delay * 1000))
+        download(url=url, dest=dest_path, resume=True, retry=policy)
+        if expected_checksum and not verify_checksum(dest_path, expected_checksum):
+            raise ValueError("Downloaded file's checksum does not match the expected checksum")
+        logging.info("Download complete and verified!")
+        return dest_path
+    except Exception as e:
+        logging.error(f"Download failed: {e}")
+        raise
 
 def download_file_if_missing(url: str, local_path: str) -> None:
     """
@@ -496,11 +452,11 @@ def download_file_if_missing(url: str, local_path: str) -> None:
     dirpath = os.path.dirname(local_path)
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
-    r = requests.get(url, stream=True, timeout=60)
-    r.raise_for_status()
-    with open(local_path, "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192):
-            f.write(chunk)
+    try:
+        download(url=url, dest=local_path, resume=False)
+    except Exception as e:
+        logging.error(f"Download failed: {e}")
+        raise
 
 def create_download_directory(title):
     base_dir = "Results"

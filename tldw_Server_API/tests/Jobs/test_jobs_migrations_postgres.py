@@ -5,23 +5,19 @@ import pytest
 psycopg = pytest.importorskip("psycopg")
 
 from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
-from tldw_Server_API.tests.helpers.pg import pg_dsn, pg_schema_and_cleanup
 
 
-pytestmark = [
-    pytest.mark.pg_jobs,
-    pytest.mark.skipif(not pg_dsn, reason="JOBS_DB_URL/POSTGRES_TEST_DSN not set; skipping Postgres jobs tests"),
-]
+pytestmark = [pytest.mark.pg_jobs]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _setup(pg_schema_and_cleanup):
-    yield
+@pytest.fixture(autouse=True)
+def _setup(jobs_pg_dsn):
+    return
 
 
-def test_pg_forward_migration_adds_missing_columns_and_partial_indexes():
-    ensure_jobs_tables_pg(pg_dsn)
-    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+def test_pg_forward_migration_adds_missing_columns_and_partial_indexes(jobs_pg_dsn):
+    ensure_jobs_tables_pg(jobs_pg_dsn)
+    with psycopg.connect(jobs_pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             # Try to drop a new-ish column to simulate an older schema
             try:
@@ -30,9 +26,9 @@ def test_pg_forward_migration_adds_missing_columns_and_partial_indexes():
                 pass
 
     # Run ensure to forward-migrate
-    ensure_jobs_tables_pg(pg_dsn)
+    ensure_jobs_tables_pg(jobs_pg_dsn)
 
-    with psycopg.connect(pg_dsn) as conn:
+    with psycopg.connect(jobs_pg_dsn) as conn:
         with conn.cursor() as cur:
             # Column should exist now
             cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='jobs' AND column_name='progress_message'")

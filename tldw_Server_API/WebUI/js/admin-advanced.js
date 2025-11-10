@@ -3,10 +3,40 @@
 
 function esc(x) { return Utils.escapeHtml(String(x ?? '')); }
 
+// ---------- User Registration (moved from inline) ----------
+async function adminCreateUser() {
+  const username = (document.getElementById('adminReg_username')?.value || '').trim();
+  const email = (document.getElementById('adminReg_email')?.value || '').trim();
+  const password = document.getElementById('adminReg_password')?.value || '';
+  const registration_code = (document.getElementById('adminReg_code')?.value || '').trim() || null;
+  if (!username || !email || !password) {
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Username, email, and password are required');
+    return;
+  }
+  try {
+    const res = await window.apiClient.post('/api/v1/auth/register', { username, email, password, registration_code });
+    const out = document.getElementById('adminUserRegister_response'); if (out) out.textContent = JSON.stringify(res, null, 2);
+    if (res && res.api_key) { if (typeof Toast !== 'undefined' && Toast) Toast.success('User created. API key returned below. Copy and store it securely.'); }
+    else { if (typeof Toast !== 'undefined' && Toast) Toast.success('User created.'); }
+  } catch (e) {
+    const out = document.getElementById('adminUserRegister_response'); if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to create user');
+  }
+}
+
+function bindAdminUsersBasics() {
+  // List Users
+  const listBtn = document.getElementById('btnAdminUsersList');
+  if (listBtn) listBtn.addEventListener('click', () => window.makeRequest && window.makeRequest('adminUsersList', 'GET', '/api/v1/admin/users', 'query'));
+  // Create User
+  const createBtn = document.getElementById('btnAdminCreateUser');
+  if (createBtn) createBtn.addEventListener('click', adminCreateUser);
+}
+
 // ---------- Virtual Keys (per user) ----------
 async function admVKList() {
   const userId = parseInt(document.getElementById('admVK_userId')?.value || '0', 10);
-  if (!userId) { Toast.error('Enter user id'); return; }
+  if (!userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter user id'); return; }
   try {
     const items = await window.apiClient.get(`/api/v1/admin/users/${userId}/virtual-keys`);
     const c = document.getElementById('adminVirtualKeys_list');
@@ -35,7 +65,7 @@ async function admVKList() {
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
     const c = document.getElementById('adminVirtualKeys_list');
     if (c) c.innerHTML = '';
-    Toast.error('Failed to list virtual keys');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list virtual keys');
   }
 }
 
@@ -51,12 +81,12 @@ async function rcCreate() {
     const res = await window.apiClient.post('/api/v1/admin/registration-codes', payload);
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    Toast.success('Registration code created');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code created');
     await rcList();
   } catch (e) {
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to create code');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to create code');
   }
 }
 
@@ -70,7 +100,7 @@ async function rcList() {
   } catch (e) {
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to list codes');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list codes');
   }
 }
 
@@ -80,12 +110,12 @@ async function rcDelete(id) {
     const res = await window.apiClient.delete(`/api/v1/admin/registration-codes/${id}`);
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    Toast.success('Registration code deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code deleted');
     await rcList();
   } catch (e) {
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to delete code');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to delete code');
   }
 }
 
@@ -115,7 +145,7 @@ function rcRenderList(items) {
 
 async function admVKCreate() {
   const userId = parseInt(document.getElementById('admVK_userId')?.value || '0', 10);
-  if (!userId) { Toast.error('Enter user id'); return; }
+  if (!userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter user id'); return; }
   const toList = (val) => (val || '').split(',').map(s => s.trim()).filter(Boolean);
   const payload = {
     name: (document.getElementById('admVK_name')?.value || '').trim() || null,
@@ -131,12 +161,12 @@ async function admVKCreate() {
     const res = await window.apiClient.post(`/api/v1/admin/users/${userId}/virtual-keys`, payload);
     const out = document.getElementById('adminVirtualKeys_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    Toast.success('Virtual key created');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Virtual key created');
     await admVKList();
   } catch (e) {
     const out = document.getElementById('adminVirtualKeys_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Create failed');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Create failed');
   }
 }
 
@@ -146,12 +176,12 @@ async function admVKRevoke(userId, keyId) {
     const res = await window.apiClient.delete(`/api/v1/admin/users/${userId}/api-keys/${keyId}`);
     const out = document.getElementById('adminVirtualKeys_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    Toast.success('Key revoked');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Key revoked');
     await admVKList();
   } catch (e) {
     const out = document.getElementById('adminVirtualKeys_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Revoke failed');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Revoke failed');
   }
 }
 
@@ -187,7 +217,7 @@ async function adminQueryLLMUsage() {
     else pre.textContent = JSON.stringify(res, null, 2);
   } catch (e) {
     document.getElementById('adminLLMUsage_result').textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to fetch LLM usage');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to fetch LLM usage');
   }
 }
 
@@ -236,10 +266,10 @@ async function _auditFetchAndDownload(qs, format) {
     const fname = parsedQS.get('filename') || (format === 'csv' ? 'audit_export.csv' : 'audit_export.json');
     const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8';
     Utils.downloadData(text, fname, mime);
-    Toast.success('Audit export downloaded');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Audit export downloaded');
   } catch (e) {
     console.error('Audit export failed:', e);
-    Toast.error(`Audit export failed: ${e.message || e}`);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error(`Audit export failed: ${e.message || e}`);
   }
 }
 
@@ -302,6 +332,498 @@ function _shadeFromHex(hex, lighten = 0, darken = 0) {
   const rd = d(r, darken), gd = d(g, darken), bd = d(b, darken);
   const toHex = (x) => x.toString(16).padStart(2, '0');
   return { base: `#${toHex(r)}${toHex(g)}${toHex(b)}`, light: `#${toHex(rl)}${toHex(gl)}${toHex(bl)}`, dark: `#${toHex(rd)}${toHex(gd)}${toHex(bd)}` };
+}
+
+// ==============================
+// Moderation (migrated from inline)
+// ==============================
+
+// Settings
+async function moderationLoadSettings() {
+  try {
+    const res = await window.apiClient.get('/api/v1/moderation/settings');
+    const eff = res && res.effective ? res.effective : {};
+    const cats = (eff.categories_enabled || []).join(',');
+    const piiOverride = (res && Object.prototype.hasOwnProperty.call(res, 'pii_enabled')) ? res.pii_enabled : null;
+    const piiVal = (piiOverride === null || piiOverride === undefined) ? '' : String(!!piiOverride);
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    setVal('modSettings_categories', cats);
+    setVal('modSettings_pii', piiVal);
+    const pre = document.getElementById('moderationSettings_status'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded settings');
+  } catch (e) {
+    const pre = document.getElementById('moderationSettings_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load settings');
+  }
+}
+
+async function moderationSaveSettings() {
+  try {
+    const rawCats = (document.getElementById('modSettings_categories')?.value || '').trim();
+    const cats = rawCats ? rawCats.split(',').map(x => x.trim()).filter(Boolean) : [];
+    const piiVal = (document.getElementById('modSettings_pii')?.value || '');
+    const body = {};
+    if (piiVal !== '') body.pii_enabled = (piiVal === 'true');
+    body.categories_enabled = cats;
+    body.persist = !!document.getElementById('modSettings_persist')?.checked;
+    const res = await window.apiClient.put('/api/v1/moderation/settings', body);
+    const pre = document.getElementById('moderationSettings_status'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Saved settings');
+  } catch (e) {
+    const pre = document.getElementById('moderationSettings_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to save settings');
+  }
+}
+
+// Managed Blocklist
+window._moderationManaged = { version: '', items: [] };
+window._moderationManagedLint = {}; // id -> lint item
+
+function renderManagedBlocklist() {
+  const container = document.getElementById('moderationManaged_table'); if (!container) return;
+  const filter = (document.getElementById('moderationManaged_filter')?.value || '').toLowerCase();
+  let items = (window._moderationManaged.items || []).filter(it => !filter || String(it.line).toLowerCase().includes(filter));
+  const onlyInvalid = !!document.getElementById('moderationManaged_onlyInvalid')?.checked;
+  if (onlyInvalid) {
+    items = items.filter((it) => {
+      const lint = window._moderationManagedLint[String(it.id)] || null;
+      return lint && lint.ok === false;
+    });
+  }
+  let html = '<table class="table"><thead><tr><th>ID</th><th>Pattern</th><th>Lint</th><th>Actions</th></tr></thead><tbody>';
+  for (const it of items) {
+    const lint = window._moderationManagedLint[String(it.id)] || null;
+    const lintText = lint ? (lint.ok ? 'ok' : (lint.error || 'invalid')) : '';
+    const lintClass = lint ? (lint.ok ? 'ok' : 'invalid') : '';
+    const lintIcon = lint ? (lint.ok ? '✓' : '⚠') : '';
+    html += `<tr>
+      <td>${Utils.escapeHtml(String(it.id ?? ''))}</td>
+      <td><code>${Utils.escapeHtml(String(it.line))}</code></td>
+      <td><span class="lint-${lintClass}" title="${Utils.escapeHtml(lintText)}"><span class="lint-icon">${lintIcon}</span>${Utils.escapeHtml(lint ? (lint.pattern_type || '') : '')}</span></td>
+      <td><button class="btn btn-danger mod-managed-del" data-id="${Utils.escapeHtml(String(it.id ?? ''))}">Delete</button></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+async function moderationLoadManaged() {
+  try {
+    const res = await window.apiClient.get('/api/v1/moderation/blocklist/managed');
+    window._moderationManaged = res || { version: '', items: [] };
+    await moderationLintManagedAll();
+    renderManagedBlocklist();
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = `Loaded version: ${res.version}`;
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded managed blocklist');
+  } catch (e) {
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load managed blocklist');
+  }
+}
+
+async function moderationRefreshManaged() { return moderationLoadManaged(); }
+
+async function moderationAppendManaged() {
+  try {
+    const line = (document.getElementById('moderationManaged_newLine')?.value || '').trim();
+    if (!line) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter a line'); return; }
+    const lint = await window.apiClient.post('/api/v1/moderation/blocklist/lint', { line });
+    const invalid = (lint.items || []).filter(it => !it.ok);
+    if (invalid.length > 0) {
+      const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(lint, null, 2);
+      if (typeof Toast !== 'undefined' && Toast) Toast.error('Lint failed: fix the line before append');
+      return;
+    }
+    const res = await window.apiClient.post('/api/v1/moderation/blocklist/append', { line }, { headers: { 'If-Match': window._moderationManaged.version }});
+    window._moderationManaged.version = res.version;
+    await moderationLoadManaged();
+    const input = document.getElementById('moderationManaged_newLine'); if (input) input.value = '';
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Appended');
+  } catch (e) {
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to append');
+  }
+}
+
+async function moderationDeleteManaged(id) {
+  try {
+    if (!confirm('Delete blocklist entry #' + id + '?')) return;
+    const res = await window.apiClient.delete(`/api/v1/moderation/blocklist/${id}`, { headers: { 'If-Match': window._moderationManaged.version }});
+    window._moderationManaged.version = res.version;
+    await moderationLoadManaged();
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Deleted');
+  } catch (e) {
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to delete');
+  }
+}
+
+async function moderationLintManaged() {
+  try {
+    const line = (document.getElementById('moderationManaged_newLine')?.value || '').trim();
+    if (!line) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter a line'); return; }
+    const res = await window.apiClient.post('/api/v1/moderation/blocklist/lint', { line });
+    const invalid = (res.items || []).filter(it => !it.ok);
+    const msg = `Lint: ${res.valid_count} valid, ${res.invalid_count} invalid`;
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (invalid.length === 0) { if (typeof Toast !== 'undefined' && Toast) Toast.success(msg); } else { if (typeof Toast !== 'undefined' && Toast) Toast.error(msg); }
+  } catch (e) {
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Lint failed');
+  }
+}
+
+async function moderationLintManagedAll() {
+  try {
+    const lines = (window._moderationManaged.items || []).map(it => it.line);
+    if (!lines.length) { window._moderationManagedLint = {}; return; }
+    const res = await window.apiClient.post('/api/v1/moderation/blocklist/lint', { lines });
+    const map = {};
+    // Key lint results by blocklist entry ID instead of array index
+    (res.items || []).forEach((it) => { map[String(it.id)] = it; });
+    window._moderationManagedLint = map;
+    renderManagedBlocklist();
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = 'Linted';
+  } catch (e) {
+    const pre = document.getElementById('moderationManaged_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+  }
+}
+
+// Raw Blocklist
+window._moderationBlocklistLastLint = null;
+
+async function moderationLoadBlocklist() {
+  try {
+    const lines = await window.apiClient.get('/api/v1/moderation/blocklist');
+    const ta = document.getElementById('moderationBlocklist_text'); if (ta) ta.value = (lines || []).join('\n');
+    const pre = document.getElementById('moderationBlocklist_status'); if (pre) pre.textContent = 'Loaded';
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded blocklist');
+  } catch (e) {
+    const pre = document.getElementById('moderationBlocklist_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load blocklist');
+  }
+}
+
+async function moderationSaveBlocklist() {
+  try {
+    const raw = document.getElementById('moderationBlocklist_text')?.value || '';
+    const lines = raw.split(/\r?\n/);
+    const res = await window.apiClient.put('/api/v1/moderation/blocklist', { lines });
+    const pre = document.getElementById('moderationBlocklist_status'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Blocklist saved');
+  } catch (e) {
+    const pre = document.getElementById('moderationBlocklist_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to save blocklist');
+  }
+}
+
+async function moderationLintBlocklist() {
+  try {
+    const raw = document.getElementById('moderationBlocklist_text')?.value || '';
+    const lines = raw.split(/\r?\n/);
+    const res = await window.apiClient.post('/api/v1/moderation/blocklist/lint', { lines });
+    const invalid = (res.items || []).filter(it => !it.ok);
+    const msg = `Lint: ${res.valid_count} valid, ${res.invalid_count} invalid`;
+    const pre = document.getElementById('moderationBlocklist_status'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    window._moderationBlocklistLastLint = res;
+    renderBlocklistInvalidList();
+    if (invalid.length === 0) { if (typeof Toast !== 'undefined' && Toast) Toast.success(msg); } else { if (typeof Toast !== 'undefined' && Toast) Toast.error(msg); }
+  } catch (e) {
+    const pre = document.getElementById('moderationBlocklist_status'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Lint failed');
+  }
+}
+
+function renderBlocklistInvalidList() {
+  const container = document.getElementById('moderationBlocklist_invalidList'); if (!container) return;
+  const onlyInvalid = !!document.getElementById('moderationBlocklist_onlyInvalid')?.checked;
+  const actions = document.getElementById('moderationBlocklist_invalidActions');
+  if (!onlyInvalid) { container.innerHTML = ''; if (actions) actions.style.display = 'none'; return; }
+  const res = window._moderationBlocklistLastLint;
+  if (!res || !Array.isArray(res.items)) { container.innerHTML = '<em>No lint results yet</em>'; return; }
+  const invalid = (res.items || []).filter(it => it && it.ok === false);
+  if (!invalid.length) { container.innerHTML = '<em>No invalid items</em>'; if (actions) actions.style.display = 'none'; return; }
+  let html = '<table class="simple-table"><thead><tr><th>#</th><th>Type</th><th>Error</th><th>Line</th></tr></thead><tbody>';
+  for (const it of invalid) {
+    const idx = typeof it.index === 'number' ? it.index : '';
+    const type = it.pattern_type || '';
+    const err = it.error || 'invalid';
+    const line = (it.line || '').slice(0, 120);
+    html += `<tr>
+      <td>${idx}</td>
+      <td>${Utils.escapeHtml(String(type))}</td>
+      <td class="lint-invalid">${Utils.escapeHtml(String(err))}</td>
+      <td><code>${Utils.escapeHtml(String(line))}</code></td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+  if (actions) actions.style.display = 'block';
+}
+
+async function moderationCopyInvalidBlocklist() {
+  try {
+    const res = window._moderationBlocklistLastLint ? (window._moderationBlocklistLastLint.items || []).filter(it => !it.ok).map(it => String(it.line || '')).join('\n') : '';
+    if (!res) { if (typeof Toast !== 'undefined' && Toast) Toast.error('No invalid items to copy'); return; }
+    const ok = await Utils.copyToClipboard(res);
+    if (ok) { if (typeof Toast !== 'undefined' && Toast) Toast.success('Copied invalid lines'); } else { if (typeof Toast !== 'undefined' && Toast) Toast.error('Copy failed'); }
+  } catch (_) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Copy failed'); }
+}
+
+// Overrides + Tester
+function _buildOverridePayload() {
+  const v = (id) => (document.getElementById(id)?.value ?? '').trim();
+  const maybeBool = (x) => x === '' ? undefined : (x === 'true');
+  const payload = {};
+  const enabled = maybeBool(v('modEnabled'));
+  const inp = maybeBool(v('modInputEnabled'));
+  const outp = maybeBool(v('modOutputEnabled'));
+  const ia = v('modInputAction');
+  const oa = v('modOutputAction');
+  const rr = v('modRedact');
+  const cat = v('modUserCategories');
+  if (enabled !== undefined) payload.enabled = enabled;
+  if (inp !== undefined) payload.input_enabled = inp;
+  if (outp !== undefined) payload.output_enabled = outp;
+  if (ia) payload.input_action = ia;
+  if (oa) payload.output_action = oa;
+  if (rr) payload.redact_replacement = rr;
+  if (cat) payload.categories_enabled = cat;
+  return payload;
+}
+
+async function loadUserOverride() {
+  try {
+    const uid = (document.getElementById('modUserId')?.value || '').trim();
+    if (!uid) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter a user ID'); return; }
+    const res = await window.apiClient.get(`/api/v1/moderation/users/${uid}`);
+    const pre = document.getElementById('moderationOverrides_result'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded override');
+  } catch (e) {
+    const pre = document.getElementById('moderationOverrides_result'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load override');
+  }
+}
+
+async function saveUserOverride() {
+  try {
+    const uid = (document.getElementById('modUserId')?.value || '').trim();
+    if (!uid) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter a user ID'); return; }
+    const payload = _buildOverridePayload();
+    const res = await window.apiClient.put(`/api/v1/moderation/users/${uid}`, payload);
+    const pre = document.getElementById('moderationOverrides_result'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Saved override');
+  } catch (e) {
+    const pre = document.getElementById('moderationOverrides_result'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to save override');
+  }
+}
+
+async function deleteUserOverride() {
+  try {
+    const uid = (document.getElementById('modUserId')?.value || '').trim();
+    if (!uid) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter a user ID'); return; }
+    if (!confirm('Delete override for user ' + uid + '?')) return;
+    const res = await window.apiClient.delete(`/api/v1/moderation/users/${uid}`);
+    const pre = document.getElementById('moderationOverrides_result'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Deleted override');
+  } catch (e) {
+    const pre = document.getElementById('moderationOverrides_result'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to delete override');
+  }
+}
+
+async function moderationListOverrides() {
+  try {
+    const res = await window.apiClient.get('/api/v1/moderation/users');
+    const overrides = (res && res.overrides) || {};
+    const rows = Object.entries(overrides).map(([uid, o]) => ({ uid, ...o }));
+    let html = '<table class="table"><thead><tr><th>User</th><th>enabled</th><th>input_enabled</th><th>output_enabled</th><th>input_action</th><th>output_action</th><th>redact_replacement</th><th>categories_enabled</th><th>Actions</th></tr></thead><tbody>';
+    for (const r of rows) {
+      html += `<tr>
+        <td>${Utils.escapeHtml(String(r.uid))}</td>
+        <td>${String(r.enabled ?? '')}</td>
+        <td>${String(r.input_enabled ?? '')}</td>
+        <td>${String(r.output_enabled ?? '')}</td>
+        <td>${Utils.escapeHtml(String(r.input_action ?? ''))}</td>
+        <td>${Utils.escapeHtml(String(r.output_action ?? ''))}</td>
+        <td>${Utils.escapeHtml(String(r.redact_replacement ?? ''))}</td>
+        <td>${Utils.escapeHtml(String(r.categories_enabled ?? ''))}</td>
+        <td><button class="btn mod-load-editor" data-uid="${Utils.escapeHtml(String(r.uid))}">Load</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    const div = document.getElementById('moderationOverrides_table'); if (div) div.innerHTML = html;
+  } catch (e) {
+    const div = document.getElementById('moderationOverrides_table'); if (div) div.innerHTML = `<pre>${Utils.escapeHtml(JSON.stringify(e.response || e, null, 2))}</pre>`;
+  }
+}
+
+function moderationLoadIntoEditor(uid) {
+  const id = document.getElementById('modUserId'); if (id) id.value = uid;
+  loadUserOverride();
+  if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded override into editor');
+}
+
+async function moderationRunTest() {
+  try {
+    const user_id = (document.getElementById('modTest_user')?.value || '').trim() || null;
+    const phase = document.getElementById('modTest_phase')?.value;
+    const text = document.getElementById('modTest_text')?.value || '';
+    const res = await window.apiClient.post('/api/v1/moderation/test', { user_id, phase, text });
+    const pre = document.getElementById('moderationTester_result'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Test completed');
+  } catch (e) {
+    const pre = document.getElementById('moderationTester_result'); if (pre) pre.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Test failed');
+  }
+}
+
+// ==============================
+// Security Alerts (migrated)
+// ==============================
+async function loadSecurityAlertStatus() {
+  try {
+    const resp = await window.apiClient.makeRequest('GET', '/api/v1/admin/security/alert-status');
+    const pre = document.getElementById('adminSecurityAlerts_response'); if (pre) pre.textContent = JSON.stringify(resp, null, 2);
+    const health = resp.health || 'unknown';
+    const pill = document.getElementById('adminSecurityAlerts_health');
+    if (pill) {
+      pill.textContent = `Health: ${health}`;
+      if (health === 'ok') { pill.style.backgroundColor = '#d1fae5'; pill.style.color = '#065f46'; }
+      else if (health === 'degraded') { pill.style.backgroundColor = '#fef3c7'; pill.style.color = '#92400e'; }
+      else { pill.style.backgroundColor = '#fee2e2'; pill.style.color = '#991b1b'; }
+    }
+    const tbody = document.querySelector('#adminSecurityAlerts_table tbody');
+    if (tbody) {
+      tbody.innerHTML = '';
+      (resp.sinks || []).forEach(sink => {
+        const row = document.createElement('tr');
+
+        const tdSink = document.createElement('td');
+        tdSink.textContent = String(sink?.sink ?? '');
+        row.appendChild(tdSink);
+
+        const tdConfigured = document.createElement('td');
+        tdConfigured.textContent = sink && sink.configured ? 'Yes' : 'No';
+        row.appendChild(tdConfigured);
+
+        const tdMinSeverity = document.createElement('td');
+        tdMinSeverity.textContent = String((sink && sink.min_severity) || resp.min_severity || '');
+        row.appendChild(tdMinSeverity);
+
+        const tdLastStatus = document.createElement('td');
+        const lastStatus = sink && sink.last_status === true ? 'success' : (sink && sink.last_status === false ? 'failure' : 'n/a');
+        tdLastStatus.textContent = lastStatus;
+        row.appendChild(tdLastStatus);
+
+        const tdLastError = document.createElement('td');
+        tdLastError.textContent = String((sink && sink.last_error) || '');
+        row.appendChild(tdLastError);
+
+        const tdBackoff = document.createElement('td');
+        tdBackoff.textContent = String((sink && sink.backoff_until) || '');
+        row.appendChild(tdBackoff);
+
+        tbody.appendChild(row);
+      });
+    }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Security alert status refreshed');
+  } catch (e) {
+    const pre = document.getElementById('adminSecurityAlerts_response'); if (pre) pre.textContent = String(e?.message || e);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load security alert status: ' + (e?.message || e));
+  }
+}
+
+// ==============================
+// Usage (migrated)
+// ==============================
+function _usageQS() {
+  const params = new URLSearchParams();
+  const uid = parseInt(document.getElementById('usage_userId')?.value || '');
+  const start = (document.getElementById('usage_start')?.value || '').trim();
+  const end = (document.getElementById('usage_end')?.value || '').trim();
+  const page = parseInt(document.getElementById('usage_page')?.value || '1', 10);
+  const limit = parseInt(document.getElementById('usage_limit')?.value || '50', 10);
+  if (!isNaN(uid)) params.set('user_id', String(uid));
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  if (page) params.set('page', String(page));
+  if (limit) params.set('limit', String(limit));
+  return params.toString();
+}
+
+function _renderDailyTable(items) {
+  if (!Array.isArray(items) || items.length === 0) return '<p>No data yet.</p>';
+  const showIn = !!document.getElementById('usage_show_bytes_in')?.checked;
+  let html = '<table class="simple-table"><thead><tr><th>User ID</th><th>Day</th><th>Requests</th><th>Errors</th><th>Bytes</th>' + (showIn ? '<th>Bytes In</th>' : '') + '<th>Avg Latency (ms)</th></tr></thead><tbody>';
+  for (const r of items) {
+    html += `<tr>
+      <td>${r.user_id}</td>
+      <td>${r.day}</td>
+      <td>${r.requests}</td>
+      <td>${r.errors}</td>
+      <td>${r.bytes_total}</td>
+      ${showIn ? `<td>${r.bytes_in_total || 0}</td>` : ''}
+      <td>${r.avg_latency_ms || '-'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+async function adminLoadUsageDaily() {
+  const qs = _usageQS();
+  const url = '/api/v1/admin/usage/daily' + (qs ? ('?' + qs) : '');
+  const res = await window.apiClient.get(url);
+  const items = res && res.items ? res.items : [];
+  const summary = document.getElementById('adminUsageDaily_summary'); if (summary) summary.textContent = `Items: ${items.length}`;
+  const table = document.getElementById('adminUsageDaily_table'); if (table) table.innerHTML = _renderDailyTable(items);
+  const raw = document.getElementById('adminUsageDaily_raw'); if (raw) raw.textContent = JSON.stringify(res, null, 2);
+}
+
+function adminDownloadUsageDailyCSV() {
+  const qs = _usageQS();
+  const url = `/api/v1/admin/usage/daily.csv${qs ? ('?' + qs) : ''}`;
+  window.open(url, '_blank');
+}
+
+async function adminLoadUsageTop() {
+  const metric = (document.getElementById('usage_top_metric')?.value || 'requests');
+  const topLimit = parseInt(document.getElementById('usage_top_limit')?.value || '10', 10);
+  const qsBase = _usageQS();
+  const qs = new URLSearchParams(qsBase);
+  qs.set('metric', metric);
+  qs.set('top_limit', String(topLimit));
+  const url = `/api/v1/admin/usage/top?${qs.toString()}`;
+  const res = await window.apiClient.get(url);
+  const items = res && res.items ? res.items : [];
+  const summary = document.getElementById('adminUsageTop_summary'); if (summary) summary.textContent = `Items: ${items.length}`;
+  let html = '<table class="simple-table"><thead><tr><th>User ID</th><th>Requests</th><th>Errors</th><th>Bytes Total</th></tr></thead><tbody>';
+  for (const r of items) {
+    html += `<tr><td>${r.user_id}</td><td>${r.requests}</td><td>${r.errors}</td><td>${r.bytes_total}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  const table = document.getElementById('adminUsageTop_table'); if (table) table.innerHTML = html;
+  const raw = document.getElementById('adminUsageTop_raw'); if (raw) raw.textContent = JSON.stringify(res, null, 2);
+}
+
+function adminDownloadUsageTopCSV() {
+  const metric = (document.getElementById('usage_top_metric')?.value || 'requests');
+  const topLimit = parseInt(document.getElementById('usage_top_limit')?.value || '10', 10);
+  const qsBase = _usageQS();
+  const qs = new URLSearchParams(qsBase);
+  qs.set('metric', metric);
+  qs.set('top_limit', String(topLimit));
+  const url = `/api/v1/admin/usage/top.csv?${qs.toString()}`;
+  window.open(url, '_blank');
+}
+
+async function adminRunUsageAggregate() {
+  const day = (document.getElementById('usage_agg_day')?.value || '').trim();
+  if (!day) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter a day'); return; }
+  const res = await window.apiClient.post('/api/v1/admin/usage/aggregate', { day });
+  const pre = document.getElementById('adminUsageAgg_result'); if (pre) pre.textContent = JSON.stringify(res, null, 2);
 }
 
 function _colorFromLabel(label) {
@@ -496,10 +1018,10 @@ async function adminLoadLLMCharts() {
       _renderLegend('llmLegendProviderMix', provPairs, _colorForProvider);
       _attachLegendToggle('llmLegendProviderMix', 'llmChartProviderMix');
     }
-    Toast.success('LLM charts loaded');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('LLM charts loaded');
   } catch (e) {
     console.error('Failed to load LLM charts', e);
-    Toast.error('Failed to load LLM charts');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load LLM charts');
   }
 }
 // ---------- Admin Users API Keys (row actions) ----------
@@ -508,13 +1030,13 @@ async function admUserKeyRotate(userId, keyId) {
     const res = await window.apiClient.post(`/api/v1/admin/users/${userId}/api-keys/${keyId}/rotate`, { expires_in_days: 365 });
     const out = document.getElementById('adminUserApiKeys_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    if (res && res.key) Toast.success('API key rotated. Copy the new key now.');
-    else Toast.success('API key rotated.');
+    if (res && res.key) { if (typeof Toast !== 'undefined' && Toast) Toast.success('API key rotated. Copy the new key now.'); }
+    else { if (typeof Toast !== 'undefined' && Toast) Toast.success('API key rotated.'); }
     if (typeof window.adminListUserApiKeys === 'function') await window.adminListUserApiKeys();
   } catch (e) {
     const out = document.getElementById('adminUserApiKeys_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to rotate key');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to rotate key');
   }
 }
 
@@ -524,12 +1046,12 @@ async function admUserKeyRevoke(userId, keyId) {
     const res = await window.apiClient.delete(`/api/v1/admin/users/${userId}/api-keys/${keyId}`);
     const out = document.getElementById('adminUserApiKeys_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    Toast.success('API key revoked');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('API key revoked');
     if (typeof window.adminListUserApiKeys === 'function') await window.adminListUserApiKeys();
   } catch (e) {
     const out = document.getElementById('adminUserApiKeys_result');
     if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
-    Toast.error('Failed to revoke key');
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to revoke key');
   }
 }
 
@@ -543,14 +1065,14 @@ function tableHTML(rows, headers) {
 }
 
 async function admCreateOrg() {
-  const name = (document.getElementById('org_name')?.value || '').trim(); if (!name) { Toast.error('Name required'); return; }
+  const name = (document.getElementById('org_name')?.value || '').trim(); if (!name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Name required'); return; }
   const payload = { name, slug: (document.getElementById('org_slug')?.value || '').trim() || null, owner_user_id: document.getElementById('org_owner')?.value ? parseInt(document.getElementById('org_owner').value, 10) : null };
   try {
     const res = await window.apiClient.post('/api/v1/admin/orgs', payload);
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Org created');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Org created');
     await admListOrgs();
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Create failed'); }
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Create failed'); }
 }
 
 async function admListOrgs() {
@@ -560,23 +1082,23 @@ async function admListOrgs() {
     const rows = items.map(x => ({ id: x.id, name: x.name, slug: x.slug, owner_user_id: x.owner_user_id }));
     document.getElementById('adminOrgs_list').innerHTML = tableHTML(rows, ['id','name','slug','owner_user_id']);
     document.getElementById('adminOrgsTeams_result').textContent = 'Loaded orgs';
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('List orgs failed'); }
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('List orgs failed'); }
 }
 
 async function admCreateTeam() {
-  const orgId = parseInt(document.getElementById('team_org')?.value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
-  const name = (document.getElementById('team_name')?.value || '').trim(); if (!name) { Toast.error('Team name required'); return; }
+  const orgId = parseInt(document.getElementById('team_org')?.value || '0', 10); if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID required'); return; }
+  const name = (document.getElementById('team_name')?.value || '').trim(); if (!name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Team name required'); return; }
   const payload = { name, slug: (document.getElementById('team_slug')?.value || '').trim() || null };
   try {
     const res = await window.apiClient.post(`/api/v1/admin/orgs/${orgId}/teams`, payload);
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Team created');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Team created');
     await admListTeams();
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Create team failed'); }
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Create team failed'); }
 }
 
 async function admListTeams() {
-  const orgId = parseInt(document.getElementById('team_org')?.value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
+  const orgId = parseInt(document.getElementById('team_org')?.value || '0', 10); if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID required'); return; }
   try {
     const rows = await window.apiClient.get(`/api/v1/admin/orgs/${orgId}/teams`);
     const items = Array.isArray(rows) ? rows : [];
@@ -588,13 +1110,13 @@ async function admListTeams() {
 
 async function admAddTeamMember() {
   const teamId = parseInt(document.getElementById('m_team')?.value || '0', 10); const userId = parseInt(document.getElementById('m_user')?.value || '0', 10);
-  if (!teamId || !userId) { Toast.error('Team ID and User ID required'); return; }
+  if (!teamId || !userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Team ID and User ID required'); return; }
   const role = (document.getElementById('m_role')?.value || '').trim() || 'member';
   try {
     const res = await window.apiClient.post(`/api/v1/admin/teams/${teamId}/members`, { user_id: userId, role });
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Added team member');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Add member failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Added team member');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Add member failed'); }
 }
 
 async function admListTeamMembers() {
@@ -608,44 +1130,44 @@ async function admListTeamMembers() {
 
 async function admRemoveTeamMember() {
   const teamId = parseInt(document.getElementById('m_team')?.value || '0', 10); const userId = parseInt(document.getElementById('m_user')?.value || '0', 10);
-  if (!teamId || !userId) { Toast.error('Team ID and User ID required'); return; }
+  if (!teamId || !userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Team ID and User ID required'); return; }
   if (!confirm('Remove user ' + userId + ' from team ' + teamId + '?')) return;
   try {
     const res = await window.apiClient.delete(`/api/v1/admin/teams/${teamId}/members/${userId}`);
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Removed team member');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Remove failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Removed team member');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Remove failed'); }
 }
 
 async function admAddOrgMember() {
   const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); const userId = parseInt(document.getElementById('m_user')?.value || '0', 10);
-  if (!orgId || !userId) { Toast.error('Org ID and User ID required'); return; }
+  if (!orgId || !userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID and User ID required'); return; }
   const role = (document.getElementById('m_role')?.value || '').trim() || 'member';
   try {
     const res = await window.apiClient.post(`/api/v1/admin/orgs/${orgId}/members`, { user_id: userId, role });
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Added org member');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Add org member failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Added org member');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Add org member failed'); }
 }
 
 async function admListOrgMembers() {
-  const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
+  const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID required'); return; }
   try {
     const rows = await window.apiClient.get(`/api/v1/admin/orgs/${orgId}/members`);
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(rows, null, 2);
-    Toast.success('Listed org members');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('List org members failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Listed org members');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('List org members failed'); }
 }
 
 async function admUpdateOrgMemberRole() {
   const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); const userId = parseInt(document.getElementById('m_user')?.value || '0', 10);
   const role = (document.getElementById('m_role')?.value || '').trim();
-  if (!orgId || !userId || !role) { Toast.error('Org ID, User ID, and new role required'); return; }
+  if (!orgId || !userId || !role) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID, User ID, and new role required'); return; }
   try {
     const res = await window.apiClient.patch(`/api/v1/admin/orgs/${orgId}/members/${userId}`, { role });
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Updated org member role');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Update role failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Updated org member role');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Update role failed'); }
 }
 
 async function admRemoveOrgMember() {
@@ -660,23 +1182,23 @@ async function admRemoveOrgMember() {
 }
 
 async function admGetOrgWatchCfg() {
-  const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
+  const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID required'); return; }
   try {
     const res = await window.apiClient.get(`/api/v1/admin/orgs/${orgId}/watchlists/settings`);
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Loaded org watchlists settings');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Get settings failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded org watchlists settings');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Get settings failed'); }
 }
 
 async function admSetOrgWatchCfg() {
-  const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); if (!orgId) { Toast.error('Org ID required'); return; }
+  const orgId = parseInt(document.getElementById('m_org')?.value || '0', 10); if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID required'); return; }
   const val = document.getElementById('org_wl_require')?.value;
   const body = { require_include_default: val === '' ? null : (val === 'true') };
   try {
     const res = await window.apiClient.patch(`/api/v1/admin/orgs/${orgId}/watchlists/settings`, body);
     document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Updated org watchlists settings');
-  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Update settings failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Updated org watchlists settings');
+  } catch (e) { document.getElementById('adminOrgsTeams_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Update settings failed'); }
 }
 
 // ---------- Tool Permissions ----------
@@ -687,103 +1209,103 @@ async function tpListPerms() {
     const html = (list.length ? '<ul>' + list.map(p => `<li><code>${esc(p.name)}</code> - ${esc(p.description || '')}</li>`).join('') + '</ul>' : '<p>None</p>');
     document.getElementById('adminToolPermissions_list').innerHTML = html;
     document.getElementById('adminToolPermissions_result').textContent = 'Loaded';
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('List failed'); }
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('List failed'); }
 }
 
 async function tpCreatePerm() {
-  const tool_name = (document.getElementById('tp_name')?.value || '').trim(); if (!tool_name) { Toast.error('Tool name required'); return; }
+  const tool_name = (document.getElementById('tp_name')?.value || '').trim(); if (!tool_name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Tool name required'); return; }
   const description = (document.getElementById('tp_desc')?.value || '').trim() || null;
   try {
     const res = await window.apiClient.post('/api/v1/admin/permissions/tools', { tool_name, description });
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Permission created');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Permission created');
     await tpListPerms();
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Create failed'); }
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Create failed'); }
 }
 
 async function tpDeletePerm() {
-  const name = (document.getElementById('tp_name')?.value || '').trim(); if (!name) { Toast.error('Enter permission name'); return; }
+  const name = (document.getElementById('tp_name')?.value || '').trim(); if (!name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter permission name'); return; }
   if (!confirm('Delete ' + name + '?')) return;
   try {
     const res = await window.apiClient.delete(`/api/v1/admin/permissions/tools/${encodeURIComponent(name)}`);
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Permission deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Permission deleted');
     await tpListPerms();
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Delete failed'); }
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Delete failed'); }
 }
 
 async function tpGrantToRole() {
-  const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); if (!roleId) { Toast.error('Role ID required'); return; }
-  const tool = (document.getElementById('tp_tool')?.value || '').trim(); if (!tool) { Toast.error('Tool required'); return; }
+  const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); if (!roleId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Role ID required'); return; }
+  const tool = (document.getElementById('tp_tool')?.value || '').trim(); if (!tool) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Tool required'); return; }
   try {
     const res = await window.apiClient.post(`/api/v1/admin/roles/${roleId}/permissions/tools`, { tool_name: tool });
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Granted');
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Grant failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Granted');
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Grant failed'); }
 }
 
 async function tpRevokeFromRole() {
-  const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); if (!roleId) { Toast.error('Role ID required'); return; }
-  const tool = (document.getElementById('tp_tool')?.value || '').trim(); if (!tool) { Toast.error('Tool required'); return; }
+  const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); if (!roleId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Role ID required'); return; }
+  const tool = (document.getElementById('tp_tool')?.value || '').trim(); if (!tool) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Tool required'); return; }
   if (!confirm('Revoke ' + tool + ' from role ' + roleId + '?')) return;
   try {
     const res = await window.apiClient.delete(`/api/v1/admin/roles/${roleId}/permissions/tools/${encodeURIComponent(tool)}`);
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Revoked');
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Revoke failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Revoked');
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Revoke failed'); }
 }
 
 async function tpListRoleToolPerms() {
-  const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); if (!roleId) { Toast.error('Role ID required'); return; }
+  const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); if (!roleId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Role ID required'); return; }
   try {
     const rows = await window.apiClient.get(`/api/v1/admin/roles/${roleId}/permissions/tools`);
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(rows || [], null, 2);
-    Toast.success('Listed role tool perms');
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('List failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Listed role tool perms');
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('List failed'); }
 }
 
 async function tpGrantByPrefix() {
   const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); const prefix = (document.getElementById('tp_prefix')?.value || '').trim();
-  if (!roleId || !prefix) { Toast.error('Role ID and prefix required'); return; }
+  if (!roleId || !prefix) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Role ID and prefix required'); return; }
   try {
     const res = await window.apiClient.post(`/api/v1/admin/roles/${roleId}/permissions/tools/prefix/grant`, { prefix });
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(res || [], null, 2);
-    Toast.success('Granted by prefix');
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Grant by prefix failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Granted by prefix');
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Grant by prefix failed'); }
 }
 
 async function tpRevokeByPrefix() {
   const roleId = parseInt(document.getElementById('tp_role')?.value || '0', 10); const prefix = (document.getElementById('tp_prefix')?.value || '').trim();
-  if (!roleId || !prefix) { Toast.error('Role ID and prefix required'); return; }
+  if (!roleId || !prefix) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Role ID and prefix required'); return; }
   if (!confirm('Revoke all tool permissions by prefix from role ' + roleId + '?')) return;
   try {
     const res = await window.apiClient.post(`/api/v1/admin/roles/${roleId}/permissions/tools/prefix/revoke`, { prefix });
     document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(res || {}, null, 2);
-    Toast.success('Revoked by prefix');
-  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Revoke by prefix failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Revoked by prefix');
+  } catch (e) { document.getElementById('adminToolPermissions_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Revoke by prefix failed'); }
 }
 
 // ---------- Rate Limits ----------
 async function rlUpsertRole() {
-  const roleId = parseInt(document.getElementById('rl_role')?.value || '0', 10); if (!roleId) { Toast.error('Role ID required'); return; }
+  const roleId = parseInt(document.getElementById('rl_role')?.value || '0', 10); if (!roleId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Role ID required'); return; }
   const payload = { resource: (document.getElementById('rl_resource')?.value || '').trim(), limit_per_min: document.getElementById('rl_limit')?.value ? parseInt(document.getElementById('rl_limit').value, 10) : null, burst: document.getElementById('rl_burst')?.value ? parseInt(document.getElementById('rl_burst').value, 10) : null };
-  if (!payload.resource) { Toast.error('Resource required'); return; }
+  if (!payload.resource) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Resource required'); return; }
   try {
     const res = await window.apiClient.post(`/api/v1/admin/roles/${roleId}/rate-limits`, payload);
     document.getElementById('adminRateLimits_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Role rate limit updated');
-  } catch (e) { document.getElementById('adminRateLimits_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Upsert failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Role rate limit updated');
+  } catch (e) { document.getElementById('adminRateLimits_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Upsert failed'); }
 }
 
 async function rlUpsertUser() {
-  const userId = parseInt(document.getElementById('rl_user')?.value || '0', 10); if (!userId) { Toast.error('User ID required'); return; }
+  const userId = parseInt(document.getElementById('rl_user')?.value || '0', 10); if (!userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('User ID required'); return; }
   const payload = { resource: (document.getElementById('rl_u_resource')?.value || '').trim(), limit_per_min: document.getElementById('rl_u_limit')?.value ? parseInt(document.getElementById('rl_u_limit').value, 10) : null, burst: document.getElementById('rl_u_burst')?.value ? parseInt(document.getElementById('rl_u_burst').value, 10) : null };
-  if (!payload.resource) { Toast.error('Resource required'); return; }
+  if (!payload.resource) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Resource required'); return; }
   try {
     const res = await window.apiClient.post(`/api/v1/admin/users/${userId}/rate-limits`, payload);
     document.getElementById('adminRateLimits_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('User rate limit updated');
-  } catch (e) { document.getElementById('adminRateLimits_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Upsert failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('User rate limit updated');
+  } catch (e) { document.getElementById('adminRateLimits_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Upsert failed'); }
 }
 
 async function rlReset() {
@@ -797,8 +1319,8 @@ async function rlReset() {
   try {
     const res = await window.apiClient.post('/api/v1/admin/rate-limits/reset', payload);
     document.getElementById('adminRateLimits_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Rate limits reset');
-  } catch (e) { document.getElementById('adminRateLimits_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Reset failed'); }
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Rate limits reset');
+  } catch (e) { document.getElementById('adminRateLimits_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Reset failed'); }
 }
 
 // ---------- Tool Catalog (UI placeholder; HTML added separately) ----------
@@ -809,70 +1331,103 @@ async function tcList() {
     const list = document.getElementById('adminToolCatalog_list');
     if (list) list.innerHTML = tableHTML(items.map(x => ({ id: x.id, name: x.name, org_id: x.org_id, team_id: x.team_id, is_active: x.is_active })), ['id','name','org_id','team_id','is_active']);
     document.getElementById('adminToolCatalog_result').textContent = 'Loaded catalogs';
-  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('List catalogs failed'); }
+  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('List catalogs failed'); }
 }
 
 async function tcCreate() {
-  const name = (document.getElementById('tc_name')?.value || '').trim(); if (!name) { Toast.error('Name required'); return; }
+  const name = (document.getElementById('tc_name')?.value || '').trim(); if (!name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Name required'); return; }
   const description = (document.getElementById('tc_desc')?.value || '').trim() || null;
   const org_id = document.getElementById('tc_org')?.value ? parseInt(document.getElementById('tc_org').value, 10) : null;
   const team_id = document.getElementById('tc_team')?.value ? parseInt(document.getElementById('tc_team').value, 10) : null;
   try {
     const res = await window.apiClient.post('/api/v1/admin/mcp/tool_catalogs', { name, description, org_id, team_id });
     document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Catalog created');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Catalog created');
     await tcList();
-  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Create catalog failed'); }
+  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Create catalog failed'); }
 }
 
 async function tcDelete() {
-  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { Toast.error('Catalog id required'); return; }
+  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Catalog id required'); return; }
   if (!confirm('Delete catalog #' + id + '?')) return;
   try {
     const res = await window.apiClient.delete(`/api/v1/admin/mcp/tool_catalogs/${id}`);
     document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Catalog deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Catalog deleted');
     await tcList();
-  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Delete catalog failed'); }
+  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Delete catalog failed'); }
 }
 
 async function tcListEntries() {
-  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { Toast.error('Catalog id required'); return; }
+  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Catalog id required'); return; }
   try {
     const rows = await window.apiClient.get(`/api/v1/admin/mcp/tool_catalogs/${id}/entries`);
     const items = Array.isArray(rows) ? rows : [];
     const entriesBox = document.getElementById('adminToolCatalog_entries');
     if (entriesBox) entriesBox.innerHTML = tableHTML(items.map(x => ({ tool_name: x.tool_name, module_id: x.module_id ?? '' })), ['tool_name','module_id']);
     document.getElementById('adminToolCatalog_result').textContent = 'Loaded entries';
-  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('List entries failed'); }
+  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('List entries failed'); }
 }
 
 async function tcAddEntry() {
-  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { Toast.error('Catalog id required'); return; }
-  const tool_name = (document.getElementById('tc_tool_name')?.value || '').trim(); if (!tool_name) { Toast.error('tool_name required'); return; }
+  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Catalog id required'); return; }
+  const tool_name = (document.getElementById('tc_tool_name')?.value || '').trim(); if (!tool_name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('tool_name required'); return; }
   const module_id = (document.getElementById('tc_module_id')?.value || '').trim() || null;
   try {
     const res = await window.apiClient.post(`/api/v1/admin/mcp/tool_catalogs/${id}/entries`, { tool_name, module_id });
     document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Entry added');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Entry added');
     await tcListEntries();
-  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Add entry failed'); }
+  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Add entry failed'); }
 }
 
 async function tcDeleteEntry() {
-  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { Toast.error('Catalog id required'); return; }
-  const tool_name = (document.getElementById('tc_tool_name')?.value || '').trim(); if (!tool_name) { Toast.error('tool_name required'); return; }
+  const id = parseInt(document.getElementById('tc_catalog_id')?.value || '0', 10); if (!id) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Catalog id required'); return; }
+  const tool_name = (document.getElementById('tc_tool_name')?.value || '').trim(); if (!tool_name) { if (typeof Toast !== 'undefined' && Toast) Toast.error('tool_name required'); return; }
   if (!confirm('Remove tool ' + tool_name + ' from catalog?')) return;
   try {
     const res = await window.apiClient.delete(`/api/v1/admin/mcp/tool_catalogs/${id}/entries/${encodeURIComponent(tool_name)}`);
     document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(res, null, 2);
-    Toast.success('Entry deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Entry deleted');
     await tcListEntries();
-  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); Toast.error('Delete entry failed'); }
+  } catch (e) { document.getElementById('adminToolCatalog_result').textContent = JSON.stringify(e.response || e, null, 2); if (typeof Toast !== 'undefined' && Toast) Toast.error('Delete entry failed'); }
+}
+
+// ---------- Ephemeral Cleanup Settings ----------
+async function adminLoadCleanupSettings() {
+  try {
+    const resp = await window.apiClient.get('/api/v1/admin/cleanup-settings');
+    const enabledEl = document.getElementById('adminCleanup_enabled');
+    const intervalEl = document.getElementById('adminCleanup_interval');
+    if (enabledEl) enabledEl.checked = !!resp.enabled;
+    if (intervalEl) intervalEl.value = resp.interval_sec || 1800;
+    const out = document.getElementById('adminCleanupSettings_response');
+    if (out) out.textContent = JSON.stringify(resp, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Loaded cleanup settings');
+  } catch (e) {
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load cleanup settings: ' + (e?.message || e));
+  }
+}
+
+async function adminSaveCleanupSettings() {
+  try {
+    const enabled = !!document.getElementById('adminCleanup_enabled')?.checked;
+    const interval = parseInt(document.getElementById('adminCleanup_interval')?.value || '1800', 10);
+    const body = { enabled, interval_sec: interval };
+    const resp = await window.apiClient.post('/api/v1/admin/cleanup-settings', body);
+    const out = document.getElementById('adminCleanupSettings_response');
+    if (out) out.textContent = JSON.stringify(resp, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Saved cleanup settings');
+  } catch (e) {
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to save cleanup settings: ' + (e?.message || e));
+  }
 }
 
 // ---------- Bindings ----------
 function bindAdminAdvanced() {
+  // Users: basic list/create in User Management section
+  document.getElementById('btnAdminUsersList')?.addEventListener('click', () => window.makeRequest && window.makeRequest('adminUsersList', 'GET', '/api/v1/admin/users', 'query'));
+  document.getElementById('btnAdminCreateUser')?.addEventListener('click', adminCreateUser);
   // Virtual keys
   document.getElementById('btnAdmVKList')?.addEventListener('click', admVKList);
   document.getElementById('btnAdmVKCreate')?.addEventListener('click', admVKCreate);
@@ -969,6 +1524,72 @@ function bindAdminAdvanced() {
   document.getElementById('btnTCEntries')?.addEventListener('click', tcListEntries);
   document.getElementById('btnTCAddEntry')?.addEventListener('click', tcAddEntry);
   document.getElementById('btnTCDeleteEntry')?.addEventListener('click', tcDeleteEntry);
+
+  // Moderation: Settings
+  document.getElementById('btnModSettingsLoad')?.addEventListener('click', moderationLoadSettings);
+  document.getElementById('btnModSettingsSave')?.addEventListener('click', moderationSaveSettings);
+
+  // Moderation: Managed
+  document.getElementById('btnModerationLoadManaged')?.addEventListener('click', moderationLoadManaged);
+  document.getElementById('btnModerationRefreshManaged')?.addEventListener('click', moderationRefreshManaged);
+  document.getElementById('btnModerationAppendManaged')?.addEventListener('click', moderationAppendManaged);
+  document.getElementById('btnModerationLintManaged')?.addEventListener('click', moderationLintManaged);
+  document.getElementById('moderationManaged_filter')?.addEventListener('input', renderManagedBlocklist);
+  document.getElementById('moderationManaged_onlyInvalid')?.addEventListener('change', renderManagedBlocklist);
+  document.getElementById('moderationManaged_table')?.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t && t.classList?.contains('mod-managed-del')) {
+      const id = parseInt(t.getAttribute('data-id') || '0', 10);
+      if (id) moderationDeleteManaged(id);
+    }
+  });
+
+  // Moderation: Raw blocklist
+  document.getElementById('btnModerationLoadBlocklist')?.addEventListener('click', moderationLoadBlocklist);
+  document.getElementById('btnModerationLintBlocklist')?.addEventListener('click', moderationLintBlocklist);
+  document.getElementById('btnModerationSaveBlocklist')?.addEventListener('click', moderationSaveBlocklist);
+  document.getElementById('btnModerationCopyInvalidBlocklist')?.addEventListener('click', moderationCopyInvalidBlocklist);
+  document.getElementById('moderationBlocklist_onlyInvalid')?.addEventListener('change', renderBlocklistInvalidList);
+
+  // Moderation: Overrides + Tester
+  document.getElementById('btnModOverrideLoad')?.addEventListener('click', loadUserOverride);
+  document.getElementById('btnModOverrideSave')?.addEventListener('click', saveUserOverride);
+  document.getElementById('btnModOverrideDelete')?.addEventListener('click', deleteUserOverride);
+  document.getElementById('btnModerationListOverrides')?.addEventListener('click', moderationListOverrides);
+  document.getElementById('btnModerationRunTest')?.addEventListener('click', moderationRunTest);
+  document.getElementById('moderationOverrides_list')?.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t && t.classList?.contains('mod-load-editor')) {
+      const uid = t.getAttribute('data-uid');
+      if (uid) moderationLoadIntoEditor(uid);
+    }
+  });
+
+  // Health panel
+  document.getElementById('btnHealthMain')?.addEventListener('click', () => window.makeRequest && window.makeRequest('healthMain','GET','/health','none'));
+  document.getElementById('btnHealthRAG')?.addEventListener('click', () => window.makeRequest && window.makeRequest('healthRAG','GET','/api/v1/rag/health','none'));
+  document.getElementById('btnHealthEmbeddings')?.addEventListener('click', () => window.makeRequest && window.makeRequest('healthEmbeddings','GET','/api/v1/embeddings/health','none'));
+  document.getElementById('btnHealthWebScraping')?.addEventListener('click', () => window.makeRequest && window.makeRequest('healthWebScraping','GET','/api/v1/web-scraping/status','none'));
+
+  // Ephemeral Cleanup Settings
+  document.getElementById('btnAdminCleanupLoad')?.addEventListener('click', adminLoadCleanupSettings);
+  document.getElementById('btnAdminCleanupSave')?.addEventListener('click', adminSaveCleanupSettings);
+
+  // Security alerts
+  document.getElementById('btnSecAlertRefresh')?.addEventListener('click', loadSecurityAlertStatus);
+  setTimeout(() => { try { if (document.getElementById('btnSecAlertRefresh')) loadSecurityAlertStatus(); } catch (_) {} }, 300);
+
+  // Usage
+  document.getElementById('btnUsageLoadDaily')?.addEventListener('click', adminLoadUsageDaily);
+  document.getElementById('btnUsageDownloadDailyCSV')?.addEventListener('click', adminDownloadUsageDailyCSV);
+  document.getElementById('btnUsageTop')?.addEventListener('click', adminLoadUsageTop);
+  document.getElementById('btnUsageDownloadTopCSV')?.addEventListener('click', adminDownloadUsageTopCSV);
+  document.getElementById('btnUsageAggregate')?.addEventListener('click', adminRunUsageAggregate);
+
+  // Admin user simple ops
+  document.getElementById('btnAdminUserGet')?.addEventListener('click', () => window.makeRequest && window.makeRequest('adminUserGet', 'GET', '/api/v1/admin/users/{id}', 'none'));
+  document.getElementById('btnAdminUserUpdate')?.addEventListener('click', () => window.makeRequest && window.makeRequest('adminUserUpdate', 'PUT', '/api/v1/admin/users/{id}', 'json'));
+  document.getElementById('btnAdminUserDelete')?.addEventListener('click', () => { if (confirm('Are you sure you want to delete this user?')) window.makeRequest && window.makeRequest('adminUserDelete','DELETE','/api/v1/admin/users/{id}','none'); });
 }
 
 if (typeof document !== 'undefined') {
@@ -990,6 +1611,8 @@ export default {
   adminAuditDownload, adminAuditDownloadLast24hHighRisk, adminAuditDownloadApiEventsCSV, adminAuditPreviewJSON,
   adminLoadLLMCharts,
   admUserKeyRotate, admUserKeyRevoke,
+  adminLoadCleanupSettings: adminLoadCleanupSettings,
+  adminSaveCleanupSettings: adminSaveCleanupSettings,
   tcList, tcCreate, tcDelete, tcListEntries, tcAddEntry, tcDeleteEntry,
   bindAdminAdvanced,
 };

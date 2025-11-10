@@ -77,3 +77,45 @@ When a key is missing, the individual test will usually skip with a descriptive 
 - Export environment variables in your shell or create a temporary `.env` when running targeted suites.
 - Many integration fixtures automatically set `TEST_MODE=true` and disable rate limiting; you can do the same when writing new tests.
 - Keep heavy toggles disabled by default in CI to control runtime. Enable them locally when validating provider integrations or stress scenarios.
+### Postgres DSN for Tests
+- Preferred: export a full DSN and all tests will use it:
+  - `export TEST_DATABASE_URL=postgresql://USER:PASS@HOST:PORT/DB`
+  - Example for the default dev container: `postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content`
+- If no DSN is set, tests fall back in this order when building connection params:
+  1) Container-style `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` (+ `POSTGRES_TEST_HOST`/`POSTGRES_TEST_PORT` if set)
+  2) `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER`, `TEST_DB_PASSWORD`
+  3) Project defaults (`127.0.0.1:5432`, `tldw_test`, `tldw_user`, `TestPassword123!`)
+- A small helper `tests/helpers/pg_env.py` centralizes this logic. Import `get_pg_env()` or `pg_dsn()` in tests to avoid drift.
+
+## Unified Postgres Fixtures (Auto-Provisioning)
+
+The suite provides unified Postgres fixtures under `tests/_plugins/postgres.py`:
+
+- `pg_server` (session): resolves connection parameters via `tests/helpers/pg_env.py` and ensures reachability. If the target is localhost and not reachable, it will attempt to auto-start a Docker Postgres (`postgres:18`).
+- `pg_temp_db` (function): creates a fresh temporary database for each test via CREATE DATABASE and drops it at teardown. Returns a dict with `host`, `port`, `user`, `password`, `database`, `dsn`.
+- `pg_eval_params` and `pg_database_config`: convenience wrappers used by various tests.
+
+Automatic Docker fallback
+- If the resolved host is local and either:
+  - no Postgres is listening on the target port, or
+  - CREATE DATABASE fails due to insufficient privileges on an existing server,
+  the fixture will attempt to start a local Docker container with the resolved `user/password` and retry. If the primary port is busy but privileges are wrong, the fixture falls back to an alternate port (default `5434`).
+
+Environment toggles
+- `POSTGRES_TEST_DSN` / `JOBS_DB_URL` / `TEST_DATABASE_URL` / `DATABASE_URL`: explicit DSNs (highest precedence for different suites).
+- Container-style parts: `POSTGRES_TEST_HOST`, `POSTGRES_TEST_PORT`, `POSTGRES_TEST_USER`, `POSTGRES_TEST_PASSWORD`, `POSTGRES_TEST_DB`.
+- `TLDW_TEST_NO_DOCKER=1`: disable auto-start; tests will skip (or fail if required) when Postgres is unavailable.
+- `TLDW_TEST_PG_IMAGE` (default `postgres:18`), `TLDW_TEST_PG_CONTAINER_NAME` (default `tldw_postgres_test`): control the auto-started container.
+- `TLDW_TEST_PG_ALT_PORT` (default `5434`): alternate port used when an existing local Postgres is reachable but lacks privileges.
+- `TLDW_TEST_PG_DEBUG=1`: verbose diagnostics from the fixture (resolved DSN, connect errors, fallback attempts).
+- `TLDW_TEST_POSTGRES_REQUIRED=1`: fail instead of skip when Postgres cannot be provisioned.
+
+Minimal commands
+- Install drivers: `pip install -e .[db_postgres]`
+- Let the fixtures provision Postgres automatically: `pytest -q -k "postgres" -rs`
+- Show provisioning details: `TLDW_TEST_PG_DEBUG=1 pytest -q -k "postgres" -rs -s`
+
+Jobs suite notes
+- Jobs tests are gated off by default. Enable them with `RUN_JOBS=1`.
+- Jobs PG tests use `jobs_pg_dsn` (which internally allocates a per-test DB via the unified fixtures). Example:
+  - `RUN_JOBS=1 pytest -q tldw_Server_API/tests/Jobs -k "postgres and ttl" -rs`

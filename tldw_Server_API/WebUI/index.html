@@ -312,6 +312,14 @@
                     <span class="api-status-text">Checking...</span>
                 </div>
                 <span id="dlq-badge" class="badge" title="Total DLQ depth">DLQ: 0</span>
+                <a href="/setup" class="badge" title="Open Setup Wizard" style="text-decoration:none;">Setup</a>
+                <!-- Correlation badges are force-hidden by default to avoid UI clutter. -->
+                <span id="reqid-badge" class="badge" title="Last X-Request-ID" style="display:none; visibility:hidden;">RID: -</span>
+                <span id="trace-badge" class="badge" title="Last traceparent/X-Trace-Id" style="display:none; visibility:hidden;">Trace: -</span>
+                <label id="advanced-toggle-wrapper" class="badge" style="cursor:pointer; user-select:none;">
+                    <input type="checkbox" id="toggle-advanced" style="margin-right:6px; vertical-align:middle;">
+                    <span id="advanced-toggle-label" style="vertical-align:middle;">Show Advanced Panels</span>
+                </label>
                 <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
                     🌙
                 </button>
@@ -335,6 +343,9 @@
         <nav class="top-tab-container" role="navigation" aria-label="Main navigation">
             <!-- Row 1: Core Features -->
             <div class="top-tab-buttons top-tab-row" role="tablist">
+                <button class="top-tab-button" data-toptab="simple" id="top-tab-simple" role="tab" aria-selected="false">
+                    Simple
+                </button>
                 <button class="top-tab-button" data-toptab="general" role="tab" aria-selected="false">
                     General
                 </button>
@@ -352,6 +363,9 @@
                 </button>
                 <button class="top-tab-button" data-toptab="notes" role="tab" aria-selected="false">
                     Notes
+                </button>
+                <button class="top-tab-button" data-toptab="flashcards" role="tab" aria-selected="false">
+                    Flashcards
                 </button>
                 <button class="top-tab-button" data-toptab="watchlists" role="tab" aria-selected="false">
                     Watchlists
@@ -424,7 +438,28 @@
             </div>
         </nav>
 
+        <div id="simple-subtabs" class="sub-tab-row" role="navigation" aria-label="Simple sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabSimpleLanding" role="tab">
+                    Quick Actions
+                </button>
+            </div>
+        </div>
+
         <!-- Sub Level Tab Rows -->
+        <div id="flashcards-subtabs" class="sub-tab-row" role="navigation" aria-label="Flashcards sub-navigation">
+            <div class="sub-tab-buttons" role="tablist">
+                <button class="sub-tab-button" data-content-id="tabFlashcardsManage" data-load-group="flashcards" role="tab">
+                    Manage
+                </button>
+                <button class="sub-tab-button" data-content-id="tabFlashcardsReview" data-load-group="flashcards" role="tab">
+                    Review
+                </button>
+                <button class="sub-tab-button" data-content-id="tabFlashcardsImport" data-load-group="flashcards" role="tab">
+                    Import/Export
+                </button>
+            </div>
+        </div>
         <div id="general-subtabs" class="sub-tab-row" role="navigation" aria-label="General sub-navigation">
             <div class="sub-tab-buttons" role="tablist">
                 <button class="sub-tab-button" data-content-id="tabGlobalSettings" role="tab">
@@ -909,31 +944,38 @@
                                     <button id="toggleApiKeyVisibility" type="button" class="btn btn-secondary btn-sm" title="Show/Hide token">Show</button>
                                     <button id="copyApiKeyBtn" type="button" class="btn btn-secondary btn-sm" title="Copy API token">Copy</button>
                                 </div>
-                                <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
-                            </div>
-                        </div>
+                        <small id="apiKey-help">Auth headers: single-user uses 'X-API-KEY'; multi-user uses 'Authorization: Bearer' (or 'X-API-KEY' if preferred). Contact your administrator for an API token.</small>
                     </div>
+                </div>
+            </div>
 
-                    <div class="columns">
-                        <div class="column">
-                            <div class="form-group">
-                                <label>
-                                    <input type="checkbox" id="preferApiKeyInMultiUser" />
-                                    Prefer X-API-KEY header in multi-user mode (SQLite)
-                                </label>
-                                <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
-                            </div>
-                        </div>
-                        <div class="column">
-                            <div class="form-group">
-                                <label>
-                                    <input type="checkbox" id="includeTokenInCurl" />
-                                    Include auth token in generated cURL commands
-                                </label>
-                                <small>When disabled (default), cURL masks tokens as [REDACTED].</small>
-                            </div>
-                        </div>
+            <div class="columns">
+                <div class="column">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="preferApiKeyInMultiUser" />
+                            Prefer X-API-KEY header in multi-user mode (SQLite)
+                        </label>
+                        <small>When enabled, the WebUI sends X-API-KEY instead of Bearer in multi-user mode when supported.</small>
                     </div>
+                </div>
+                <div class="column">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="includeTokenInCurl" />
+                            Include auth token in generated cURL commands
+                        </label>
+                        <small>When disabled (default), cURL masks tokens as [REDACTED].</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <div class="help-inline" style="font-size: 0.9em; color: var(--color-text-muted);">
+                    Extensions streaming tip: if a browser extension calls the API (including text/event-stream), add its origin to ALLOWED_ORIGINS. See the CORS guidance.
+                    <a href="/webui/CORS-SOLUTION.md#browser-extensions--streaming" target="_blank" rel="noopener">Read CORS & Extensions</a>
+                </div>
+            </div>
 
                     <div class="form-group mt-3">
                         <h3>Quick Actions</h3>
@@ -972,6 +1014,197 @@
                 </div>
             </div>
 
+            <!-- Simple Landing (Quick Actions) -->
+            <div id="tabSimpleLanding" class="tab-content" role="tabpanel">
+                <div class="endpoint-section">
+                    <h2>Quick Actions</h2>
+                    <p class="text-muted">A streamlined panel for common tasks. Toggle "Show Advanced Panels" in the header to access full controls.</p>
+                </div>
+                <div class="endpoint-section" id="simpleChat">
+                    <div class="collapsible-header" data-collapsible="simpleChat">
+                        <div>
+                            <h3>Chat Assistant</h3>
+                            <p class="text-muted" style="margin:4px 0 0;">Full chat experience from the Chat tab, pinned here for quick access.</p>
+                        </div>
+                        <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleChat">Hide</button>
+                    </div>
+                    <div class="collapsible-body" id="simpleChat_body">
+                        <div id="simpleChatPortal" data-chat-host="simple">
+                            <div class="chat-host-placeholder text-muted" data-chat-placeholder>
+                                Loading chat interface…
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="columns">
+                    <!-- Ingest File/URL -->
+                    <div class="column">
+                        <div class="endpoint-section" id="simpleIngest">
+                            <div class="collapsible-header" data-collapsible="simpleIngest">
+                                <h3>Ingest File or URL</h3>
+                                <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleIngest">Hide</button>
+                            </div>
+                            <div class="collapsible-body" id="simpleIngest_body">
+                            <div class="form-group">
+                                <label for="simpleIngest_media_type">Media Type</label>
+                                <select id="simpleIngest_media_type">
+                                    <option value="document">Document</option>
+                                    <option value="pdf">PDF</option>
+                                    <option value="video">Video</option>
+                                    <option value="audio">Audio</option>
+                                    <option value="ebook">eBook</option>
+                                    <option value="web">Web (scrape)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="simpleIngest_url_group">
+                                <label for="simpleIngest_url">URL</label>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="url" id="simpleIngest_url" placeholder="https://example.com/article-or-media" style="flex:1;">
+                                    <button class="btn btn-secondary btn-sm" id="simpleIngest_paste_url" title="Paste from clipboard">Paste</button>
+                                </div>
+                            </div>
+                            <div class="form-group" id="simpleIngest_file_group">
+                                <label for="simpleIngest_file">File</label>
+                                <input type="file" id="simpleIngest_file" multiple aria-describedby="simpleIngest_file_help">
+                                <small id="simpleIngest_file_help">You can select multiple files. Media type auto-detected from extension.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleIngest_model">Analysis Model (optional)</label>
+                                <select id="simpleIngest_model" class="llm-model-select">
+                                    <option value="">Use default</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleIngest_seed">Seed Prompt (optional)</label>
+                                <textarea id="simpleIngest_seed" rows="2" placeholder="Give the analysis a goal or persona for better results"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="simpleIngest_system">System Prompt (optional)</label>
+                                <textarea id="simpleIngest_system" rows="2" placeholder="System instructions to guide analysis"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label title="Run LLM analysis after ingestion (generates notes/summaries)"><input type="checkbox" id="simpleIngest_perform_analysis" checked aria-describedby="simpleIngest_perform_help"> Perform Analysis</label>
+                                <label style="margin-left:12px;" title="Split long content into chunks for better retrieval"><input type="checkbox" id="simpleIngest_chunking" checked aria-describedby="simpleIngest_chunk_help"> Chunk Content</label>
+                                <div class="text-muted text-small" style="margin-top:4px;">
+                                    <span id="simpleIngest_perform_help">Optional: Enable to immediately analyze ingested content.</span>
+                                    <span id="simpleIngest_chunk_help" style="margin-left:12px;">Recommended for large documents and videos.</span>
+                                </div>
+                            </div>
+                            <!-- Web scraping options (visible when Media Type = Web) -->
+                            <div id="simpleIngest_web_opts" style="display:none; border-top:1px dashed var(--color-border); padding-top:8px; margin-top:8px;">
+                                <div class="form-group">
+                                    <label for="simpleIngest_scrape_method">Scrape Method</label>
+                                    <select id="simpleIngest_scrape_method" aria-describedby="simpleIngest_scrape_help" title="How links are traversed and processed">
+                                        <option value="individual">Individual URLs</option>
+                                        <option value="url_level">URL Level</option>
+                                        <option value="recursive_scraping">Recursive Scraping</option>
+                                    </select>
+                                    <small id="simpleIngest_scrape_help">Choose how to follow links. URL Level limits traversal by path depth; Recursive walks links up to Max Depth/Pages.</small>
+                                </div>
+                                <div class="form-group" id="simpleIngest_web_url_group">
+                                    <label for="simpleIngest_web_url">Start URL</label>
+                                    <div style="display:flex; gap:8px; align-items:center;">
+                                        <input type="url" id="simpleIngest_web_url" placeholder="https://example.com/" style="flex:1;">
+                                        <button class="btn btn-secondary btn-sm" id="simpleIngest_paste_web_url" title="Paste from clipboard">Paste</button>
+                                    </div>
+                                </div>
+                                <div class="form-group" id="simpleIngest_url_level_group" style="display:none;">
+                                    <label for="simpleIngest_url_level">URL Level</label>
+                                    <input type="number" id="simpleIngest_url_level" value="2" min="1">
+                                </div>
+                                <div class="columns" id="simpleIngest_recursive_group" style="display:none;">
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label for="simpleIngest_max_pages">Max Pages</label>
+                                            <input type="number" id="simpleIngest_max_pages" value="10" min="1">
+                                        </div>
+                                    </div>
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label for="simpleIngest_max_depth">Max Depth</label>
+                                            <input type="number" id="simpleIngest_max_depth" value="3" min="1">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="columns">
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label for="simpleIngest_crawl_strategy">Crawl Strategy</label>
+                                            <select id="simpleIngest_crawl_strategy">
+                                                <option value="">(default)</option>
+                                                <option value="best_first">best_first</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="column">
+                                        <div class="form-group">
+                                            <label>
+                                                <input type="checkbox" id="simpleIngest_include_external"> Include external links
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="api-button" id="simpleIngest_submit" disabled>Ingest</button>
+                                <button class="btn btn-secondary" id="simpleIngest_clear">Clear</button>
+                                <button class="btn btn-secondary" id="simpleIngest_show_curl" title="Show cURL for this request">Show cURL</button>
+                            </div>
+                            <div id="simpleIngest_job" class="text-small" style="margin-top:8px; display:none;"></div>
+                            <div id="simpleIngest_queue" class="text-small" aria-live="polite" style="margin-top:6px; display:none;"></div>
+                            <h4>Response</h4>
+                            <pre id="simpleIngest_response">---</pre>
+                            <div id="simpleIngest_correlation" class="correlation-snippet" aria-live="polite" style="margin-top:6px; color: var(--color-text-muted); font-size: 0.85em;"></div>
+                            <pre id="simpleIngest_curl" style="display:none;"></pre>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Search content -->
+                    <div class="column">
+                        <div class="endpoint-section" id="simpleSearch">
+                            <div class="collapsible-header" data-collapsible="simpleSearch">
+                                <h3>Search Content</h3>
+                                <button class="btn btn-sm btn-secondary collapsible-toggle-btn" type="button" data-target="simpleSearch">Hide</button>
+                            </div>
+                            <div class="collapsible-body" id="simpleSearch_body">
+                            <div class="form-group">
+                                <label for="simpleSearch_q">Query</label>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="text" id="simpleSearch_q" placeholder="Keywords or phrase" style="flex:1;">
+                                    <button class="btn btn-secondary btn-sm" id="simpleSearch_clear" title="Clear">Clear</button>
+                                </div>
+                            </div>
+                            <div class="columns" style="align-items:flex-end; gap:12px;">
+                                <div class="column">
+                                    <div class="form-group">
+                                        <label for="simpleSearch_rpp">Results per page</label>
+                                        <input type="number" id="simpleSearch_rpp" value="10" min="1" max="100">
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div class="form-group">
+                                        <div class="btn-group">
+                                            <button class="btn btn-secondary" id="simpleSearch_prev" disabled>Prev</button>
+                                            <button class="btn btn-secondary" id="simpleSearch_next" disabled>Next</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div id="simpleSearch_pageinfo" class="text-muted" style="min-width:140px; text-align:right;"></div>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="api-button" id="simpleSearch_run" disabled>Search</button>
+                                <button class="btn btn-secondary" id="simpleSearch_show_curl" title="Show cURL for this request">Show cURL</button>
+                            </div>
+                            <div id="simpleSearch_results" style="margin-top:8px;"></div>
+                            <pre id="simpleSearch_curl" style="display:none;"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- No search results message -->
             <div id="no-search-results">
                 <p>No endpoints match your search.</p>
@@ -983,17 +1216,17 @@
 
     <!-- Load JavaScript files -->
     <script src="js/utils.js"></script>
+    <script src="js/sanitizer.js"></script>
+    <script src="js/safe-dom.js"></script>
     <script src="js/components.js"></script>
     <script src="js/api-client.js"></script>
     <script src="js/endpoint-helper.js"></script>
-    <script src="js/chat-ui.js"></script>
-    <script src="js/streaming-transcription.js"></script> <!-- WebSocket streaming transcription -->
-    <script src="js/tts.js"></script> <!-- TTS functionality -->
-    <script src="js/tts-loader.js"></script> <!-- TTS content loader -->
-    <script src="js/dictionaries.js"></script> <!-- Chat Dictionaries UI -->
-    <script src="js/tab-functions.js"></script> <!-- Load tab functions before main.js -->
-    <script src="js/components_explain.js"></script> <!-- Agentic Explain Panel renderer -->
-    <script src="js/main.js"></script>
+    <script src="js/tab-functions.js"></script> <!-- Keep legacy functions while migrating handlers -->
     <script src="js/legacy-helpers.js"></script>
+    <script src="js/module-loader.js"></script>
+    <script src="js/personalization.js"></script>
+    <script src="js/shared-chat-portal.js"></script>
+    <script src="js/metrics.js"></script>
+    <script src="js/main.js"></script>
 </body>
 </html>

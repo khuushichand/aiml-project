@@ -1,5 +1,17 @@
+"""
+SSE line helpers and provider line normalization.
+
+Highlights:
+- Normalization drops provider control lines (`event:`, `id:`, `retry:`) and comments by default.
+- To preserve provider control lines, set the global env `STREAM_PROVIDER_CONTROL_PASSTHRU=1`
+  or pass `provider_control_passthru=True` to iterators/streams (per-endpoint override).
+- Unknown/dropped control/comment lines are logged at debug level to aid troubleshooting.
+- Use `sse_done()` to emit a single terminal `[DONE]` marker; do not forward provider DONE lines.
+"""
+
 import json
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Callable, Tuple
+from loguru import logger
 
 _SSE_CONTROL_PREFIXES = ("event:", "id:", "retry:")
 
@@ -49,7 +61,12 @@ def is_done_line(line: str) -> bool:
     return line.strip().lower() == "data: [done]"
 
 
-def normalize_provider_line(line: str) -> Optional[str]:
+def normalize_provider_line(
+    line: str,
+    *,
+    provider_control_passthru: bool = False,
+    control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
+) -> Optional[str]:
     """
     Normalize a raw provider SSE line into a chunk we can forward.
 
@@ -64,8 +81,30 @@ def normalize_provider_line(line: str) -> Optional[str]:
     lower = stripped.lower()
     for prefix in _SSE_CONTROL_PREFIXES:
         if lower.startswith(prefix):
+            name, value = stripped.split(":", 1)
+            name = name.strip()
+            value = value.strip()
+            if provider_control_passthru:
+                if control_filter is not None:
+                    try:
+                        mapped = control_filter(name, value)
+                    except Exception:
+                        mapped = (name, value)
+                    if mapped is None:
+                        return None
+                    name, value = mapped
+                # Preserve control line, ensure proper SSE termination
+                return ensure_sse_line(f"{name}: {value}")
+            try:
+                logger.debug(f"Dropping provider control line: {stripped}")
+            except Exception:
+                pass
             return None
     if stripped.startswith(":"):
+        try:
+            logger.debug(f"Dropping provider comment line: {stripped}")
+        except Exception:
+            pass
         return None
 
     if stripped.startswith("data:"):

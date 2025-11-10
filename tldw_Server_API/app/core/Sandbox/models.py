@@ -46,6 +46,12 @@ class RunSpec:
     network_policy: Optional[str] = None
     files_inline: List[tuple[str, bytes]] = field(default_factory=list)
     capture_patterns: List[str] = field(default_factory=list)
+    # Spec 1.1 interactive settings (stdin over WS)
+    interactive: Optional[bool] = None
+    stdin_max_bytes: Optional[int] = None
+    stdin_max_frame_bytes: Optional[int] = None
+    stdin_bps: Optional[int] = None
+    stdin_idle_timeout_sec: Optional[int] = None
 
 
 class RunPhase(str, Enum):
@@ -64,6 +70,7 @@ class RunStatus:
     phase: RunPhase
     spec_version: Optional[str] = None
     runtime: Optional[RuntimeType] = None
+    runtime_version: Optional[str] = None
     base_image: Optional[str] = None
     image_digest: Optional[str] = None
     policy_hash: Optional[str] = None

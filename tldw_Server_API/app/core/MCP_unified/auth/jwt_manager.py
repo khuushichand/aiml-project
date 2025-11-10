@@ -24,9 +24,10 @@ security = HTTPBearer(auto_error=False)
 
 # Password hashing context
 pwd_context = CryptContext(
-    schemes=["bcrypt"],
+    # Use PBKDF2-SHA256 to avoid bcrypt backend constraints while remaining secure
+    schemes=["pbkdf2_sha256"],
     deprecated="auto",
-    bcrypt__rounds=12  # Increased rounds for better security
+    pbkdf2_sha256__rounds=200000,
 )
 
 
@@ -80,7 +81,7 @@ class JWTManager:
         return self.config.jwt_secret_key.get_secret_value()
 
     def hash_password(self, password: str) -> str:
-        """Hash a password using bcrypt"""
+        """Hash a password using PBKDF2-SHA256 (handles long inputs safely)."""
         return pwd_context.hash(password)
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:

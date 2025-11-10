@@ -15,6 +15,9 @@ import hashlib
 class SandboxPolicyConfig:
     default_runtime: RuntimeType = RuntimeType.docker
     network_default: str = "deny_all"  # deny_all | allowlist (allowlist controlled elsewhere)
+    # Opt-in egress allowlist enforcement (runtime dependent; Docker only for now)
+    egress_enforcement: bool = False
+    egress_allowlist: List[str] = field(default_factory=list)
     artifact_ttl_hours: int = 24
     max_upload_mb: int = 64
     max_log_bytes: int = 10 * 1024 * 1024
@@ -54,9 +57,20 @@ class SandboxPolicyConfig:
                 return [t.strip() for t in s.split(',') if t.strip()]
             except Exception:
                 return dv
+        def _get_bool(key: str, dv: bool) -> bool:
+            try:
+                v = getattr(app_settings, key)
+                if isinstance(v, bool):
+                    return v
+                s = str(v).strip().lower()
+                return s in {"1", "true", "yes", "on", "y"}
+            except Exception:
+                return dv
         return cls(
             default_runtime=runtime,
             network_default=network_default,
+            egress_enforcement=_get_bool("SANDBOX_EGRESS_ENFORCEMENT", False),
+            egress_allowlist=_get_list("SANDBOX_EGRESS_ALLOWLIST", []),
             artifact_ttl_hours=_get_int("SANDBOX_ARTIFACT_TTL_HOURS", 24),
             max_upload_mb=_get_int("SANDBOX_MAX_UPLOAD_MB", 64),
             max_log_bytes=_get_int("SANDBOX_MAX_LOG_BYTES", 10 * 1024 * 1024),
@@ -79,11 +93,16 @@ class SandboxPolicy:
     def __init__(self, cfg: Optional[SandboxPolicyConfig] = None) -> None:
         self.cfg = cfg or SandboxPolicyConfig.from_settings()
 
+    class RuntimeUnavailable(Exception):
+        def __init__(self, runtime: RuntimeType) -> None:
+            super().__init__(f"Requested runtime '{runtime.value}' is unavailable")
+            self.runtime = runtime
+
     def select_runtime(self, requested: Optional[RuntimeType], firecracker_available: bool) -> RuntimeType:
-        if requested:
+        if requested is not None:
             if requested == RuntimeType.firecracker and not firecracker_available:
-                logger.info("Firecracker requested but unavailable; falling back to default runtime")
-                return self.cfg.default_runtime
+                # Do not silently fallback; surface unavailability to caller
+                raise SandboxPolicy.RuntimeUnavailable(requested)
             return requested
         return self.cfg.default_runtime
 
@@ -94,10 +113,11 @@ class SandboxPolicy:
         return spec
 
     def apply_to_run(self, spec: RunSpec, firecracker_available: bool) -> RunSpec:
-        spec.runtime = spec.runtime or self.cfg.default_runtime
-        if spec.runtime == RuntimeType.firecracker and not firecracker_available:
-            logger.info("Firecracker selected but unavailable; falling back to default runtime for run")
+        if spec.runtime is None:
             spec.runtime = self.cfg.default_runtime
+        else:
+            # Honor explicit request; surface unavailability
+            spec.runtime = self.select_runtime(spec.runtime, firecracker_available)
         if not spec.network_policy:
             spec.network_policy = self.cfg.network_default
         return spec
@@ -134,6 +154,10 @@ def _canonical_policy_dict(cfg: SandboxPolicyConfig) -> dict:
     material = {
         "default_runtime": cfg.default_runtime.value,
         "network_default": str(cfg.network_default),
+        "egress": {
+            "enforced": bool(cfg.egress_enforcement),
+            "allowlist_count": int(len(cfg.egress_allowlist or [])),
+        },
         "artifact_ttl_hours": int(cfg.artifact_ttl_hours),
         "max_upload_mb": int(cfg.max_upload_mb),
         "max_log_bytes": int(cfg.max_log_bytes),

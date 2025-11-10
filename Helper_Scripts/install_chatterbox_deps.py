@@ -13,6 +13,7 @@ Notes:
   - If you're using a virtualenv, ensure it is activated first.
 """
 import argparse
+import os
 import subprocess
 import sys
 
@@ -51,11 +52,21 @@ def main():
     ap.add_argument("--with-lang", action="store_true", help="install optional multilingual extras")
     args = ap.parse_args()
 
+    # Environment-controlled flags
+    if os.getenv("TLDW_SETUP_SKIP_PIP"):
+        print("[chatterbox] Skipping pip installs: TLDW_SETUP_SKIP_PIP=1")
+        return
+
+    cmd = [sys.executable, "-m", "pip", "install", "-U"]
+    idx = os.getenv('TLDW_SETUP_PIP_INDEX_URL')
+    if idx:
+        cmd += ["--index-url", idx]
+
     # install core deps first
-    run([sys.executable, "-m", "pip", "install", "-U"] + CORE)
+    run(cmd + CORE)
 
     if args.with_lang:
-        run([sys.executable, "-m", "pip", "install", "-U"] + LANG)
+        run(cmd + LANG)
 
     print("\nChatterbox dependencies installed successfully.")
     print("If you will use GPU, ensure the right torch build for your CUDA/ROCm.")

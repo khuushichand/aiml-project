@@ -22,7 +22,7 @@
 - [Current Status](#current-status)
 - [What's New](#whats-new)
 - [Highlights](#highlights)
-- [Feature Status Matrix](#feature-status-matrix)
+- [Feature Status](#feature-status)
 - [Architecture & Repo Layout](#architecture--repo-layout)
 - [Architecture Diagram](#architecture-diagram)
 - [Quickstart](#quickstart)
@@ -32,7 +32,8 @@
 - [Frontend & UI](#frontend--ui)
 - [Documentation & Resources](#documentation--resources)
 - [Deployment](#deployment)
-- [Samples (Quick Links)](#samples-quick-links)
+- [Networking & Limits](#networking--limits)
+- [Monitoring](#monitoring)
 - [Troubleshooting](#troubleshooting)
 - [Contributing & Support](#contributing--support)
 - [Developer Guides](#developer-guides)
@@ -78,6 +79,26 @@ This is a major milestone release that transitions tldw from a Gradio-based appl
 
 See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
+---
+
+### Migrating From Gradio Version (pre-0.1.0)
+- Backup:
+    - `cp -a ./Databases ./Databases.backup`
+- Update configuration:
+    - Copy provider keys to `.env`.
+    - For AuthNZ setup: `cp .env.authnz.template .env && python -m tldw_Server_API.app.core.AuthNZ.initialize`
+- Database migration:
+    - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
+    - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
+    - Optional: `--db-path /path/to/Media_DB_v2.db` if not using defaults
+    - If migrating content to Postgres later, use the tools under `tldw_Server_API/app/core/DB_Management/` (e.g., migration_tools.py)
+- API changes:
+    - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
+- Frontend:
+    - Legacy: /webui
+    - Or integrate directly against the API;
+---
+
 ## Highlights
 
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
@@ -88,150 +109,15 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, batch metrics).
 - MCP Unified: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints.
 
-## Feature Status Matrix
+## Feature Status
 
-<details><summary>Feature Status Matrix Here</summary>
+See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md`.
 
-Legend
-- Working: Stable and actively supported
-- WIP: In active development; APIs or behavior may evolve
-- Experimental: Available behind flags or with caveats; subject to change
+## Networking & Limits
 
-### Admin Reporting
-- HTTP usage (daily): `GET /api/v1/admin/usage/daily`
-- HTTP top users: `GET /api/v1/admin/usage/top`
-- LLM usage log: `GET /api/v1/admin/llm-usage`
-- LLM usage summary: `GET /api/v1/admin/llm-usage/summary` (group_by=`user|provider|model|operation|day`)
-- LLM top spenders: `GET /api/v1/admin/llm-usage/top-spenders`
-- LLM CSV export: `GET /api/v1/admin/llm-usage/export.csv`
-- Grafana dashboard JSON (LLM cost + tokens): `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
- - Grafana dashboard JSON (LLM Daily Spend): `Docs/Deployment/Monitoring/Grafana_LLM_Daily_Spend.json`
-- Prometheus alert rules (daily spend thresholds): `Samples/Prometheus/alerts.yml`
-
-
-### Media Ingestion
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| URLs/files: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki | Working | Unified ingestion + metadata | [docs](Docs/Code_Documentation/Ingestion_Media_Processing.md) · [code](tldw_Server_API/app/api/v1/endpoints/media.py) |
-| yt-dlp downloads + ffmpeg | Working | 1000+ sites via yt-dlp | [code](tldw_Server_API/app/core/Ingestion_Media_Processing/Video/Video_DL_Ingestion_Lib.py) |
-| Adaptive/multi-level chunking | Working | Configurable size/overlap | [docs](Docs/API-related/Chunking_Templates_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/chunking.py) |
-| OCR on PDFs/images | Working | Tesseract baseline; optional dots.ocr/POINTS | [docs](Docs/API-related/OCR_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/ocr.py) |
-| MediaWiki import | Working | Config via YAML | [docs](Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md) · [config](tldw_Server_API/Config_Files/mediawiki_import_config.yaml) |
-| Browser extension capture | WIP | Web capture extension | [docs](Docs/Product/Content_Collections_PRD.md) |
-
-### Audio (STT/TTS)
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| File-based transcription | Working | faster_whisper, NeMo, Qwen2Audio | [docs](Docs/API-related/Audio_Transcription_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/audio.py) |
-| Real-time WS transcription | Working | `WS /api/v1/audio/stream/transcribe` | [docs](Docs/API-related/Audio_Transcription_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/audio.py) |
-| Diarization + VAD | Working | Optional diarization, timestamps | [docs](Docs/Code_Documentation/Ingestion_Pipeline_Audio.md) · [code](tldw_Server_API/app/api/v1/endpoints/audio.py) |
-| TTS (OpenAI-compatible) | Working | Streaming + non-streaming | [docs](tldw_Server_API/app/core/TTS/TTS-README.md) · [code](tldw_Server_API/app/api/v1/endpoints/audio.py) |
-| Voice catalog + management | Working | `GET /api/v1/audio/voices/catalog` | [docs](tldw_Server_API/app/core/TTS/README.md) · [code](tldw_Server_API/app/api/v1/endpoints/audio.py) |
-| Audio jobs queue | Working | Background audio processing | [docs](Docs/API-related/Audio_Jobs_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/audio_jobs.py) |
-
-### RAG & Search
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Full-text search (FTS5) | Working | Fast local search | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
-| Embeddings + ChromaDB | Working | OpenAI-compatible embeddings | [docs](Docs/API-related/Embeddings_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py) |
-| Hybrid BM25 + vector + rerank | Working | Contextual retrieval | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/rag_unified.py) |
-| Vector Stores (OpenAI-compatible) | Working | Chroma/PG adapters | [docs](Docs/API-related/Vector_Stores_Admin_and_Query.md) · [code](tldw_Server_API/app/api/v1/endpoints/vector_stores_openai.py) |
-| Media embeddings ingestion | Working | Create vectors from media | [code](tldw_Server_API/app/api/v1/endpoints/media_embeddings.py) |
-| pgvector backend | Experimental | Optional backend | [code](tldw_Server_API/app/core/RAG/rag_service/vector_stores/) |
-
-### Chat & LLMs
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Chat Completions (OpenAI) | Working | Streaming supported | [docs](Docs/API-related/Chat_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/chat.py) |
-| Function calling / tools | Working | Tool schema validation | [docs](Docs/API-related/Chat_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/chat.py) |
-| Provider integrations (16+) | Working | Commercial + local | [docs](Docs/API-related/Providers_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/llm_providers.py) |
-| Local providers | Working | vLLM, llama.cpp, Ollama, etc. | [docs](tldw_Server_API/app/core/LLM_Calls/README.md) · [code](tldw_Server_API/app/core/LLM_Calls/) |
-| Strict OpenAI compat filter | Working | Filter non-standard keys | [docs](tldw_Server_API/app/core/LLM_Calls/README.md) |
-| Providers listing | Working | `GET /api/v1/llm/providers` | [docs](Docs/API-related/Providers_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/llm_providers.py) |
-| Moderation endpoint | Working | Basic wrappers | [code](tldw_Server_API/app/api/v1/endpoints/moderation.py) |
-
-### Knowledge, Notes, Prompt Studio
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Notes + tagging | Working | Notebook-style notes | [code](tldw_Server_API/app/api/v1/endpoints/notes.py) |
-| Prompt library | Working | Import/export | [code](tldw_Server_API/app/api/v1/endpoints/prompts.py) |
-| Prompt Studio: projects/prompts/tests | Working | Test cases + runs | [docs](Docs/API-related/Prompt_Studio_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/prompt_studio_projects.py) |
-| Prompt Studio: optimization + WS | Working | Live updates | [docs](Docs/API-related/Prompt_Studio_API.md) · [code](tldw_Server_API/app/api/v1/endpoints/prompt_studio_optimization.py) |
-| Character cards & sessions | Working | SillyTavern-compatible | [docs](Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md) · [code](tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py) |
-| Chatbooks import/export | Working | Backup/export | [docs](Docs/API-related/Chatbook_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/chatbooks.py) |
-| Flashcards | Working | Decks/cards, APKG export | [code](tldw_Server_API/app/api/v1/endpoints/flashcards.py) |
-| Reading & highlights | Working | Reading items mgmt | [docs](Docs/Product/Content_Collections_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/reading.py) |
-
-### Evaluations
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| G-Eval | Working | Unified eval API | [docs](Docs/API-related/Evaluations_API_Unified_Reference.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py) |
-| RAG evaluation | Working | Pipeline presets + metrics | [docs](Docs/API-related/RAG-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_rag_pipeline.py) |
-| OCR evaluation (JSON/PDF) | Working | Text + PDF flows | [docs](Docs/API-related/OCR_API_Documentation.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py) |
-| Embeddings A/B tests | Working | Provider/model compare | [docs](Docs/API-related/Evaluations_API_Unified_Reference.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_embeddings_abtest.py) |
-| Response quality & datasets | Working | Datasets CRUD + runs | [docs](Docs/API-related/Evaluations_API_Unified_Reference.md) · [code](tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py) |
-
-### Research & Web Scraping
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Web search (multi-provider) | Working | Google, DDG, Brave, Kagi, Tavily, Searx | [code](tldw_Server_API/app/api/v1/endpoints/research.py) |
-| Aggregation/final answer | Working | Structured answer + evidence | [code](tldw_Server_API/app/api/v1/endpoints/research.py) |
-| Academic paper search | Working | arXiv, BioRxiv/MedRxiv, PubMed/PMC, Semantic Scholar, OSF | [code](tldw_Server_API/app/api/v1/endpoints/paper_search.py) |
-| Web scraping service | Working | Status, jobs, progress, cookies | [docs](Docs/Product/Content_Collections_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
-
-### Connectors (External Sources)
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Google Drive connector | Working | OAuth2, browse/import | [code](tldw_Server_API/app/api/v1/endpoints/connectors.py) |
-| Notion connector | Working | OAuth2, nested blocks→Markdown | [code](tldw_Server_API/app/api/v1/endpoints/connectors.py) |
-| Connector policy + quotas | Working | Org policy, job quotas | [docs](Docs/Product/Content_Collections_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/connectors.py) |
-
-### MCP Unified
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Tool execution APIs + WS | Working | Production MCP with JWT/RBAC | [docs](Docs/MCP/Unified/Developer_Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py) |
-| Catalog management | Working | Admin tool/permission catalogs | [docs](Docs/MCP/Unified/Modules.md) · [code](tldw_Server_API/app/api/v1/endpoints/mcp_catalogs_manage.py) |
-| Status/metrics endpoints | Working | Health + metrics | [docs](Docs/MCP/Unified/System_Admin_Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py) |
-
-### AuthNZ, Security, Admin/Ops
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| Single-user (X-API-KEY) | Working | Simple local deployments | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/auth.py) |
-| Multi-user JWT + RBAC | Working | Users/roles/permissions | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py) |
-| API keys manager | Working | Create/rotate/audit | [docs](Docs/API-related/AuthNZ-API-Guide.md) · [code](tldw_Server_API/app/api/v1/endpoints/admin.py) |
-| Egress + SSRF guards | Working | Centralized guards | [code](tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
-| Audit logging & alerts | Working | Unified audit + alerts | [docs](Docs/API-related/Audit_Configuration.md) · [code](tldw_Server_API/app/api/v1/endpoints/admin.py) |
-| Admin & Ops | Working | Users/orgs/teams, roles/perms, quotas, usage | [docs](Docs/API-related/Admin_Orgs_Teams.md) · [code](tldw_Server_API/app/api/v1/endpoints/admin.py) |
-| Monitoring & metrics | Working | Prometheus text + JSON | [docs](Docs/Deployment/Monitoring/README.md) · [code](tldw_Server_API/app/api/v1/endpoints/metrics.py) |
-
-### Storage, Outputs, Watchlists, Workflows, UI
-
-| Capability | Status | Notes | Links |
-|---|---|---|---|
-| SQLite defaults | Working | Local dev/small deployments | [code](tldw_Server_API/app/core/DB_Management/) |
-| PostgreSQL (AuthNZ, content) | Working | Postgres content mode | [docs](Docs/Published/Deployment/Postgres_Content_Mode.md) |
-| Outputs: templates | Working | Markdown/HTML/MP3 via TTS | [code](tldw_Server_API/app/api/v1/endpoints/outputs_templates.py) |
-| Outputs: artifacts | Working | Persist/list/soft-delete/purge | [code](tldw_Server_API/app/api/v1/endpoints/outputs.py) |
-| Watchlists: sources/groups/tags | Working | CRUD + bulk import | [docs](Docs/Product/Watchlist_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
-| Watchlists: jobs & runs | Working | Schedule, run, run details | [docs](Docs/Product/Watchlist_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
-| Watchlists: templates & OPML | Working | Template store; OPML import/export | [docs](Docs/Product/Watchlist_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/watchlists.py) |
-| Watchlists: notifications | Experimental | Email/chatbook delivery | [docs](Docs/Product/Watchlist_PRD.md) |
-| Workflows engine & scheduler | WIP | Defs CRUD, runs, scheduler | [docs](Docs/Product/Workflows_PRD.md) · [code](tldw_Server_API/app/api/v1/endpoints/workflows.py) |
-| VLM backends listing | Experimental | `/api/v1/vlm/backends` | [code](tldw_Server_API/app/api/v1/endpoints/vlm.py) |
-| Next.js WebUI | Working | Primary client | [code](tldw-frontend/) |
-| Legacy WebUI (/webui) | Working | Feature-frozen legacy | [code](tldw_Server_API/WebUI/) |
-
-</details>
+- HTTP client and TLS/pinning configuration: `tldw_Server_API/Config_Files/README.md` (timeouts, retries, redirects/proxies, JSON limits, TLS min version, cert pinning, SSE/download helpers).
+- Egress/SSRF policy and security middleware: `tldw_Server_API/app/core/Security/README.md`.
+- Resource Governor (rate limits, tokens, streams; Redis backend optional): `tldw_Server_API/app/core/Resource_Governance/README.md`.
 
 
 ## Architecture & Repo Layout
@@ -376,6 +262,14 @@ pip install -e .
 # pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
 # pip install -e ".[dev]"           # tests, linters, tooling
 # pip install -e ".[otel]"          # OpenTelemetry metrics/tracing exporters
+
+# Install pyaudio - needed for audio processing
+# Linux
+sudo apt install python3-pyaudio
+
+#MacOS
+brew install portaudio
+pip install pyaudio
 ```
 2) Configure authentication and providers
 ```bash
@@ -399,13 +293,101 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 Docker Compose
 ```bash
-# Bring up the stack (app + dependencies where applicable)
+# Run from repo root
+
+# Option A) Single-user (SQLite users DB)
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
 
-# Optional proxy overlay examples are available:
+# Option B) Multi-user (Postgres users DB)
+export AUTH_MODE=multi_user
+export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
+# Optional: route Jobs module to Postgres as well
+export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.override.yml up -d --build
+
+# Option C) Dev overlay — enable unified streaming (non-prod)
+# This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
+# Keep disabled in production until validated in your environment.
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
+
+# Check status
+docker compose -f Dockerfiles/docker-compose.yml ps
+docker compose -f Dockerfiles/docker-compose.yml logs -f app
+
+# First-time AuthNZ initialization (inside the running app container)
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize
+
+# Optional: proxy overlays
 #   - Dockerfiles/docker-compose.proxy.yml
 #   - Dockerfiles/docker-compose.proxy-nginx.yml
+
+# Optional: use pgvector + pgbouncer for Postgres
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.pg.yml up -d --build
 ```
+
+Notes
+- Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
+- The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
+- For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
+
+### Supporting Services via Docker
+
+Run only infrastructure services without the app.
+
+Postgres + Redis (base compose)
+```bash
+docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
+```
+
+Prometheus + Grafana (embeddings compose, monitoring profile)
+```bash
+docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+```
+
+All four together
+```bash
+docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
+docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+```
+
+Manage and verify
+```bash
+# Status
+docker compose -f Dockerfiles/docker-compose.yml ps
+docker compose -f Dockerfiles/docker-compose.embeddings.yml ps
+
+# Logs
+docker compose -f Dockerfiles/docker-compose.yml logs -f postgres redis
+docker compose -f Dockerfiles/docker-compose.embeddings.yml logs -f prometheus grafana
+
+# Stop
+docker compose -f Dockerfiles/docker-compose.yml stop postgres redis
+docker compose -f Dockerfiles/docker-compose.embeddings.yml stop prometheus grafana
+
+# Remove
+docker compose -f Dockerfiles/docker-compose.yml down
+docker compose -f Dockerfiles/docker-compose.embeddings.yml down
+```
+
+Ports
+- Postgres: 5432
+- Redis: 6379
+- Prometheus: 9091 (container listens on 9090)
+- Grafana: 3000
+
+Prometheus config
+- Create `Config_Files/prometheus.yml` to define scrape targets. Minimal self-scrape example:
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+See Docs/Operations/monitoring/README.md for examples that scrape the API and worker orchestrator.
 
 Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
 
@@ -498,7 +480,12 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
+- TTS onboarding: `Docs/User_Guides/TTS_Getting_Started.md` – hosted/local provider setup, verification, and troubleshooting
 - Design notes (WIP features): `Docs/Design/` - e.g., `Docs/Design/Custom_Scrapers_Router.md`
+
+### Resource Governor Config
+
+For complete Resource Governor setup and examples (env, DB store bootstrap, YAML policy, middleware, diagnostics, and tests), see `tldw_Server_API/app/core/Resource_Governance/README.md`.
 
 ### OpenAI-Compatible Strict Mode (Local Providers)
 
@@ -511,33 +498,17 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ## Deployment
 
-- Dockerfiles and compose templates live under `Dockerfiles/`.
+- Dockerfiles and compose templates live under `Dockerfiles/` (see `Dockerfiles/README.md`).
 - Reverse proxy samples: `Helper_Scripts/Samples/Nginx/`, `Helper_Scripts/Samples/Caddy/`.
 - Monitoring: `Docs/Deployment/Monitoring/` and `Helper_Scripts/Samples/Grafana/`.
 - Prometheus metrics exposed at `/metrics` and `/api/v1/metrics`.
 - Production hardening: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
 
-## Samples (Quick Links)
+## Monitoring
 
-- Reverse Proxy guide: `Docs/Deployment/Reverse_Proxy_Examples.md`
-- Nginx sample config: `Samples/Nginx/nginx.conf`
-- Traefik sample dynamic config: `Samples/Traefik/traefik-dynamic.yml`
-- Production Hardening Checklist: `Docs/User_Guides/Production_Hardening_Checklist.md`
-- Prometheus alert rules (near-quota): `Samples/Prometheus/alerts.yml`
-- VibeVoice TTS (getting started): `Docs/VIBEVOICE_GETTING_STARTED.md`
- - NeuTTS Air (voice cloning, local): `Docs/STT-TTS/NEUTTS_TTS_SETUP.md`
-
-### Monitoring (Prometheus + Grafana)
-- Prometheus scrape endpoints:
-  - Unauthenticated scrape: `GET /metrics` (Prometheus text)
-  - MCP Prometheus text: `GET /api/v1/mcp/metrics/prometheus`
-- LLM usage dashboard (cost + tokens):
-  - Import JSON: `Docs/Deployment/Monitoring/Grafana_LLM_Cost_Top_Providers.json`
-  - Panels included:
-    - Cost rate by provider: `sum by (provider) (rate(llm_cost_dollars[$__rate_interval]))`
-    - Top 5 providers by cost (range): `topk(5, sum by (provider) (increase(llm_cost_dollars[$__range])))`
-    - Token rate by provider and type: `sum by (provider, type) (rate(llm_tokens_used_total[$__rate_interval]))`
-  - Set Prometheus datasource UID to `prometheus` or edit to match your setup.
+- Monitoring docs and setup: `Docs/Deployment/Monitoring/README.md`
+- Grafana dashboards and samples: `Helper_Scripts/Samples/Grafana/README.md`
+- Prometheus scrape endpoints: `GET /metrics` and `GET /api/v1/mcp/metrics/prometheus`
 
 ### PostgreSQL Content Mode
 
@@ -586,76 +557,8 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ---
 
 
-### More Detailed explanation of this project (tldw_project)
-<details>
-<summary>**What is this Project? (Extended) - Click-Here**</summary>
-
-### What is this Project?
-- **What it is now:**
-  - A tool that can ingest: audio, videos, articles, free form text, documents, and books as text into a personal, database, so that you can then search and chat with it at any time.
-    - (+ act as a nice way of creating your personal 'media' database, a personal digital library with search!)
-  - And of course, this is all open-source/free, with the idea being that this can massively help people in their efforts of research and learning.
-    - I don't plan to pivot and turn this into a commercial project. I do plan to make a server version of it, with the potential for offering a hosted version of it, and am in the process of doing so. The hosted version will be 95% the same, missing billing and similar from the open source branch.
-    - I'd like to see this project be used in schools, universities, and research institutions, or anyone who wants to keep a record of what they've consumed and be able to search and ask questions about it.
-    - I believe that this project can be a great tool for learning and research, and I'd like to see it develop to a point where it could be reasonably used as such.
-    - In the meantime, if you don't care about data ownership or privacy, https://notebooklm.google/ is a good alternative that works and is free.
-- **Where its headed:**
-  - Act as a Multi-Purpose Research tool. The idea being that there is so much data one comes across, and we can store it all as text. (with tagging!)
-  - Imagine, if you were able to keep a copy of every talk, research paper or article you've ever read, and have it at your fingertips at a moments notice.
-  - Now, imagine if you could ask questions about that data/information(LLM), and be able to string it together with other pieces of data, to try and create sense of it all (RAG)
-  - Basically a [cheap foreign knockoff](https://tvtropes.org/pmwiki/pmwiki.php/Main/ShoddyKnockoffProduct) [`Young Lady's Illustrated Primer`](https://en.wikipedia.org/wiki/The_Diamond_Age) that you'd buy from some [shady dude in a van at a swap meet](https://tvtropes.org/pmwiki/pmwiki.php/Main/TheLittleShopThatWasntThereYesterday).
-    * Some food for thought: https://notes.andymatuschak.org/z9R3ho4NmDFScAohj3J8J3Y
-    * I say this recognizing the inherent difficulties in replicating such a device and acknowledging the current limitations of technology.
-  - This is a free-time project, so I'm not going to be able to work on it all the time, but I do have some ideas for where I'd like to take it.
-    - I view this as a personal tool I'll ideally continue to use for some time until something better/more suited to my needs comes along.
-    - Until then, I plan to continue working on this project and improving as much as possible.
-    - If I can't get a "Young Lady's Illustrated Primer" in the immediate, I'll just have to hack together some poor imitation of one....
-</details>
-
----
-
-
-### Local Models I recommend
-<details>
-<summary>**Local Models I Can Recommend - Click-Here**</summary>
-
-### Local Models I recommend
-- These are just the 'standard smaller' models I recommend, there are many more out there, and you can use any of them with this project.
-  - One should also be aware that people create 'fine-tunes' and 'merges' of existing models, to create new models that are more suited to their needs.
-  - This can result in models that may be better at some tasks but worse at others, so it's important to test and see what works best for you.
-- FIXME (Qwen3-4B-Instruct-2507, Mistral-Nemo-Instruct-2407-GGUF, Qwen3-30B-A3B-Instruct-2507)
-
-For commercial API usage for use with this project: Latest Anthropic/ChatGPT/Gemini Models.
-Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.
-That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.
-You are just a stepping stone to their goals.
-
-From @nrose 05/08/2024 on Threads:
-```
-No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
-  No. For efficiency.
-Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth.
-The model declines over time, then the optimization makes it somewhat better, then in a sort of
-  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then
-  trim down over time, so they can train the next big model… etc etc.
-None of these companies exist to provide AI services in 2024. They’re only doing it to finance the
- things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
-  and become a hidden monopoly like the oil and electric companies.
-2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some
-  directional income
-```
-
-As an update to this, looking back a year, it still stands true, and I would only change that you're less likely to insult the model at this point. (As long as you're not using sonnet...)
-</details>
-
----
-
-
-### <a name="helpful"></a> Helpful Terms and Things to Know
-<details>
-<summary>**Helpful things to know - Click-Here**</summary>
-
-### Helpful things to know
+### More Detailed Explanation & Background
+See `Docs/About.md` for the extended project background, vision, and notes.
 - https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5049562
 - Purpose of this section is to help bring awareness to certain concepts and terms that are used in the field of AI/ML/NLP, as well as to provide some resources for learning more about them.
 - Also because some of those things are extremely relevant and important to know if you care about accuracy and the effectiveness of the LLMs you're using.
@@ -748,8 +651,8 @@ GNU General Public License v3.0 - see `LICENSE` for details.
 
 
 ### Security Disclosures
-1. Information disclosure via developer print debugging statement in `chat_functions.py` - Thank you to @luca-ing for pointing this out!
-    - Fixed in commit: `8c2484a`
+See `SECURITY.md` for reporting guidelines and disclosures.
+
 
 ---
 
@@ -759,12 +662,12 @@ tldw_server started as a tool to transcribe and summarize YouTube videos but has
 
 Long-term vision: Building towards a personal AI research assistant inspired by "The Young Lady's Illustrated Primer" from Neal Stephenson's "The Diamond Age" - a tool that helps you learn and research at your own pace.
 
----
-
 ### Getting Help
 - API Documentation: `http://localhost:8000/docs`
 - GitHub Issues: [Report bugs or request features](https://github.com/rmusser01/tldw_server/issues)
-- Discussions: [Community forum(for now)](https://github.com/rmusser01/tldw_server/discussions)
+- Discussions: [Community forum](https://github.com/rmusser01/tldw_server/discussions)
+
+
 
 ---
 
@@ -788,3 +691,20 @@ Roadmap & WIP
 Privacy & Security
 - Self-hosted by design; no telemetry or data collection
 - Users own and control their data; see hardening guide for production
+- Metrics & Grafana
+  - Emitted metrics (core):
+    - `rg_decisions_total{category,scope,backend,result,policy_id}` — allow/deny decisions per category/scope/backend
+    - `rg_denials_total{category,scope,reason,policy_id}` — denial events by reason (e.g., `insufficient_capacity`)
+    - `rg_refunds_total{category,scope,reason,policy_id}` — refund events from commit/refund paths
+    - `rg_concurrency_active{category,scope,policy_id}` — active stream/job leases (gauge)
+  - Cardinality guard:
+    - By default, metrics DO NOT include `entity` labels to avoid high-cardinality pitfalls. If you truly need per-entity sampling, gate it behind `RG_METRICS_ENTITY_LABEL=true` and ensure hashing/masking is applied upstream.
+  - Quick Grafana panel examples:
+    - Allow vs Deny over time (per category):
+      - Query: `sum by (category, result) (rate(rg_decisions_total[5m]))`
+    - Denials by scope (top N):
+      - Query: `topk(5, sum by (scope) (rate(rg_denials_total[5m])))`
+    - Refund activity (tokens):
+      - Query: `sum by (policy_id) (rate(rg_refunds_total{category="tokens"}[5m]))`
+    - Active streams (per scope):
+      - Query: `avg by (scope) (rg_concurrency_active{category="streams"})`

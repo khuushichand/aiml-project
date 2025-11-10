@@ -137,10 +137,18 @@ def _compute_next_backoff(attempts: int) -> int:
 
 async def _attempt_delivery(client: httpx.AsyncClient, url: str, payload: Dict[str, Any], timeout: float) -> Tuple[bool, Optional[str]]:
     try:
-        resp = await client.post(url, json=payload, timeout=timeout)
+        # Use centralized afetch to enforce egress and retries
+        from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+        policy = RetryPolicy()
+        resp = await afetch(method="POST", url=url, client=client, json=payload, timeout=timeout, retry=policy)
         if resp.status_code < 400:
             return True, None
-        return False, f"status={resp.status_code}: {resp.text[:200]}"
+        # Consume body text safely
+        try:
+            body_text = resp.text[:200]
+        except Exception:
+            body_text = ""
+        return False, f"status={resp.status_code}: {body_text}"
     except Exception as e:  # network or other error
         return False, str(e)
 
@@ -175,7 +183,8 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
 
     # Create client directly from httpx so test monkeypatch can inject a dummy AsyncClient.
     # Avoid passing kwargs to support simple fakes.
-    async with httpx.AsyncClient() as client:  # type: ignore[call-arg]
+    from tldw_Server_API.app.core.http_client import create_async_client
+    async with create_async_client() as client:  # type: ignore[call-arg]
         while not stop_event.is_set():
             try:
                 rows = db.list_webhook_dlq_due(limit=batch)

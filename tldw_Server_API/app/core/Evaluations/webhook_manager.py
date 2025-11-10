@@ -9,7 +9,6 @@ import json
 import hmac
 import hashlib
 import asyncio
-import httpx
 import aiohttp
 import os
 from datetime import datetime, timedelta, timezone
@@ -448,8 +447,8 @@ class WebhookManager:
     ) -> List[Dict[str, Any]]:
         """Get active webhooks for user and event."""
         # In TEST_MODE, ignore event filtering to maximize delivery determinism
-        import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+        from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+        if _is_test_mode():
             with self.db_adapter.transaction():
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, secret, retry_count, timeout_seconds
@@ -486,8 +485,8 @@ class WebhookManager:
                 })
 
             # In TEST_MODE, if no event-specific webhooks found, fall back to all active webhooks for the user
-            import os as _os
-            if not webhooks and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+            if not webhooks and _is_test_mode():
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, secret, retry_count, timeout_seconds
                     FROM webhook_registrations
@@ -503,7 +502,8 @@ class WebhookManager:
                     })
 
             # Final safety: in TEST_MODE, if still no webhooks for this user, try all active webhooks
-            if not webhooks and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+            from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+            if not webhooks and _is_test_mode():
                 rows = self.db_adapter.fetch_all("""
                     SELECT id, url, secret, retry_count, timeout_seconds
                     FROM webhook_registrations
@@ -536,10 +536,8 @@ class WebhookManager:
         import socket
         # In tests, we both skip DNS validation and prefer aiohttp so that
         # aioresponses can intercept requests deterministically.
-        testing_env = (
-            os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
-            or "PYTEST_CURRENT_TEST" in os.environ
-        )
+        from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+        testing_env = (_is_test_mode() or "PYTEST_CURRENT_TEST" in os.environ)
         skip_dns = testing_env
         if not skip_dns:
             try:
@@ -635,18 +633,12 @@ class WebhookManager:
                 except Exception:
                     pass
 
-                if use_aiohttp:
-                    import aiohttp
-                    timeout = aiohttp.ClientTimeout(total=min(5, int(webhook.get("timeout_seconds", 30))))
-                    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-                        async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
-                            status_code = resp.status
-                            response_text = await resp.text()
-                else:
-                    async with httpx.AsyncClient(timeout=webhook["timeout_seconds"], follow_redirects=False) as client:
-                        resp = await client.post(url, content=payload_json, headers=headers)
-                        status_code = resp.status_code
-                        response_text = getattr(resp, "text", "")
+                # Always use aiohttp for deliveries (test harness uses aioresponses)
+                timeout = aiohttp.ClientTimeout(total=min(5, int(webhook.get("timeout_seconds", 30))))
+                async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+                    async with session.post(url, data=payload_json, headers=headers, allow_redirects=False) as resp:
+                        status_code = resp.status
+                        response_text = await resp.text()
 
                 response_time = (datetime.now() - start_time).total_seconds() * 1000
                 if not isinstance(response_text, str):
@@ -1055,5 +1047,70 @@ class WebhookManager:
             }
 
 
-# Global instance
-webhook_manager = WebhookManager()
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def get_webhook_manager() -> "WebhookManager":
+    """Lazily construct a singleton WebhookManager."""
+    return WebhookManager()
+
+
+class _LazyWebhookManagerProxy:
+    """A lightweight proxy that lazily initializes the real manager on first use."""
+
+    def __getattr__(self, name):
+        mgr = get_webhook_manager()
+        return getattr(mgr, name)
+
+    def __call__(self, *args, **kwargs):
+        return get_webhook_manager()(*args, **kwargs)
+
+
+# Backwards-compatible accessor used by tests and modules
+webhook_manager = _LazyWebhookManagerProxy()
+
+
+def shutdown_webhook_manager_if_initialized() -> None:
+    """Shutdown the webhook manager if it has been created; no-op otherwise.
+
+    Cancels any background retry task and clears the lazy cache to allow
+    reinitialization in subsequent runs.
+    """
+    try:
+        info = get_webhook_manager.cache_info()  # type: ignore[attr-defined]
+        if (getattr(info, "hits", 0) or getattr(info, "misses", 0)):
+            mgr = get_webhook_manager()
+            try:
+                task = getattr(mgr, "_retry_task", None)
+                if task is not None:
+                    try:
+                        # Best effort cancellation for asyncio Task
+                        task.cancel()
+                    except Exception:
+                        pass
+                # Close any underlying DB adapter to avoid leaking closed connections across tests
+                try:
+                    adapter = getattr(mgr, "db_adapter", None)
+                    if adapter is not None:
+                        try:
+                            adapter.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            finally:
+                try:
+                    # Also reset the global DB adapter so future lazy managers
+                    # do not reuse a closed connection across test lifecycles.
+                    try:
+                        from tldw_Server_API.app.core.Evaluations.db_adapter import close_database_adapter as _close_db
+                        _close_db()
+                    except Exception:
+                        pass
+                    get_webhook_manager.cache_clear()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+    except Exception:
+        # Never raise during teardown
+        pass

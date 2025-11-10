@@ -1,13 +1,13 @@
 # PRD: Code Interpreter Sandbox & LSP
 
 Owner: tldw_server Core Team
-Status: v0.2
-Last updated: 2025-10-28
+Status: v0.3
+Last updated: 2025-11-03
 
 ## Table of Contents
 - [Revision History](#revision-history)
 - [1) Summary](#1-summary)
- - [Implementation Status (v0.2)](#implementation-status-v02)
+ - [Implementation Status (v0.3)](#implementation-status-v03)
  - [1) Summary](#1-summary)
 - [2) Problem Statement](#2-problem-statement)
 - [3) Goals and Non-Goals](#3-goals-and-non-goals)
@@ -43,7 +43,7 @@ Last updated: 2025-10-28
 
 Build a secure, configurable code execution service that lets users, agents, and workflows run untrusted code snippets and full applications in isolated sandboxes. Provide an IDE-friendly LSP integration to surface diagnostics, logs, and results inline. Support both Docker containers (Linux/macOS/Windows hosts) and Firecracker microVMs (Linux-only) to balance broad compatibility with stronger isolation where available.
 
-## Implementation Status (v0.2)
+## Implementation Status (v0.3)
 
 Implemented
 - Endpoints: POST `/sessions` (idempotent), POST `/sessions/{id}/files` (safe extract + caps), POST `/runs` (idempotent; oneOf session vs one‑shot), GET `/runs/{id}` (includes `policy_hash` and `resource_usage`), GET `/runtimes` (caps including queue fields), artifacts list and single‑range download, POST `/runs/{id}/cancel` (TERM→grace→KILL).
@@ -55,17 +55,30 @@ Implemented
 - Admin API: list and details implemented; includes `resource_usage`, `policy_hash`, and `image_digest` when available.
 - Metrics: counters/histograms with `reason` label (e.g., `startup_timeout`, `execution_timeout`); WS heartbeats/disconnects/log truncations and queue drop metrics.
 
-Not yet (planned v0.3 unless noted)
-- Interactive runs over WS stdin and related limits (`stdin_*`).
-- Signed WS URLs tokens + `resume_from_seq` behavior; current servers may return unsigned `log_stream_url` (use auth headers).
-- Egress allowlist policy (domain/IP/CIDR with DNS pinning).
-- Firecracker runner.
-- Persistent shared store (Postgres/Redis) and cluster‑wide admin aggregates; current backends: memory (default) or SQLite.
-- `/runtimes` capability flags (`interactive_supported`, `egress_allowlist_supported`) and top‑level `store_mode` field.
+Spec 1.1 additions now implemented
+- Interactive runs over WS stdin (`interactive` + `stdin_*` caps); optional and policy‑gated.
+- WS signed URL validation (HMAC token + exp) and resume via `from_seq` query param; `resume_from_seq` hint in POST `/runs`.
+- Runtimes discovery now includes `interactive_supported`, `egress_allowlist_supported`, and `store_mode`.
+- Persistent store backend: `SANDBOX_STORE_BACKEND=cluster` (Postgres) with `store_mode=cluster` in discovery.
+- Optional Redis fan‑out for cross‑worker WS streaming; health endpoint reports Redis status and ping.
+- Public and authenticated sandbox health endpoints.
+- Error semantics: 409 idempotency returns `prior_id`, `key`, `prior_created_at`; 503 `runtime_unavailable` includes the failing `details.runtime`.
+
+Update: Egress Allowlist & DNS Pinning (v0.3)
+- Added helpers to harden allowlist parsing and make DNS pinning explicit:
+  - `expand_allowlist_to_targets(...)` now supports CIDR, IPs, hostnames, wildcard prefixes (`*.example.com`) and suffix tokens (`.example.com`), promoting resolved A records to `/32` CIDRs.
+  - `pin_dns_map(...)` returns `{ host -> [IPs] }` for observability.
+  - `refresh_egress_rules(container_ip, raw_allowlist, label, ...)` revokes labeled rules then reapplies pinned `ACCEPT` targets followed by a `DROP` for the container IP.
+  - Rules are labeled for later cleanup; falls back from `iptables-restore` to iterative `iptables` if needed.
+
+Not yet (planned or in progress)
+- Egress allowlist enforcement and DNS pinning (capability flag present; enforcement WIP).
+- Firecracker runner: real execution parity (scaffold implemented).
+- Additional admin aggregates for cluster mode.
 
 Clarifications
 - Artifact downloads: single‑range supported; multi‑range returns 416.
-- `supported_spec_versions`: default advertises `["1.0"]`; spec 1.1 fields are documented for v0.3.
+- `supported_spec_versions`: servers may advertise `["1.0","1.1"]`; 1.1 is backward‑compatible and adds optional fields/capabilities.
 
 Primary use cases:
 - Validate LLM-generated code safely, before running it locally.
@@ -361,11 +374,11 @@ See Timeouts & Defaults under Content Types & Limits for consolidated rules.
 - Semantics:
   - Minor (1.x): backward-compatible; server may accept a range (e.g., `1.0`-`1.2`).
   - Major (2.0): potentially breaking; server rejects unsupported majors with `invalid_spec_version`.
-- Discovery: GET `/runtimes` includes `supported_spec_versions` (e.g., `["1.0"]` in v0.2; future versions may add `"1.1"`).
+- Discovery: GET `/runtimes` includes `supported_spec_versions` (e.g., `["1.0","1.1"]`).
 - Validation errors include `details.supported` with accepted versions.
  - Config: Controlled via `SANDBOX_SUPPORTED_SPEC_VERSIONS` (comma- or JSON-list). The server validates `spec_version` against this list and rejects mismatches with `invalid_spec_version` including `details.supported` and `details.provided`.
 
-  v0.3 (Spec 1.1 additions — Finalized)
+  v0.3 (Spec 1.1 additions — Implemented)
   - Backward‑compatible: 1.1 only adds optional fields; 1.0 clients remain supported.
   - POST `/runs` optional fields:
     - `interactive` (bool; default false)
@@ -377,7 +390,10 @@ See Timeouts & Defaults under Content Types & Limits for consolidated rules.
   - GET `/runtimes` capability flags:
     - `interactive_supported` (bool)
     - `egress_allowlist_supported` (bool)
-    - `store_mode` (string: `memory|sqlite|postgres|redis`)
+    - `store_mode` (string: `memory|sqlite|cluster`)
+  - WebSocket:
+    - Signed URL tokens (HMAC) with `token` and `exp` query params are validated when enabled.
+    - Resume logs via `?from_seq=<N>`; buffered frames are replayed starting at `N` when available.
 
 ### Runtime Limits Normalization
 
@@ -1055,7 +1071,6 @@ Feature Discovery Payload (example)
 ```
 GET /api/v1/sandbox/runtimes
 {
-  "store_mode": "memory",
   "runtimes": [
     {
       "name": "docker",
@@ -1072,7 +1087,10 @@ GET /api/v1/sandbox/runtimes
       "queue_ttl_sec": 120,
       "workspace_cap_mb": 256,
       "artifact_ttl_hours": 24,
-      "supported_spec_versions": ["1.0"],
+      "supported_spec_versions": ["1.0", "1.1"],
+      "interactive_supported": false,
+      "egress_allowlist_supported": false,
+      "store_mode": "memory",
       "notes": null
     },
     {
@@ -1087,16 +1105,20 @@ GET /api/v1/sandbox/runtimes
       "queue_ttl_sec": 120,
       "workspace_cap_mb": 256,
       "artifact_ttl_hours": 24,
-      "supported_spec_versions": ["1.0"],
+      "supported_spec_versions": ["1.0", "1.1"],
       "interactive_supported": false,
       "egress_allowlist_supported": false,
+      "store_mode": "memory",
       "notes": "Direct Firecracker; enable on supported Linux hosts"
     }
   ]
 }
 ```
-Note: v0.3 may add capability flags like `interactive_supported` and
-`egress_allowlist_supported` per runtime when those features are enabled.
+Note: Capability flags now include `interactive_supported`, `egress_allowlist_supported`, and a per‑runtime `store_mode` indicating the active store backend.
+
+Health & Readiness
+- Authenticated: `GET /api/v1/sandbox/health` returns store mode + connectivity timing and Redis fan‑out status with ping.
+- Public: `GET /api/v1/sandbox/health/public` returns the same payload without requiring authentication (intended for probes).
 
 Egress Allowlist (v0.3)
 - Opt-in policy; deny_all remains default. Applied per run/session. Server-wide policy may narrow but not widen per-run allowlists.

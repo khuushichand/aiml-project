@@ -21,40 +21,138 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      # No registry login required for public Docker Hub images used below
+      - name: Generate Python SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          # Install CycloneDX Python tooling. Newer releases expose the `cyclonedx-py` CLI,
+          # older ones expose `cyclonedx-bom`. We support both.
+          python -m pip install -q cyclonedx-bom
+
+          gen_from_requirements() {
+            local req="$1"
+            echo "Generating Python SBOM from ${req}"
+
+            # Try modern CLI first: cyclonedx-py requirements -i <file>
+            if command -v cyclonedx-py >/dev/null 2>&1; then
+              echo "Using cyclonedx-py"
+              if cyclonedx-py requirements -i "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+              echo "cyclonedx-py failed; will try fallbacks"
+            fi
+
+            # Module invocation for modern CLI
+            if python - <<'PY'
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)
+PY
+            then
+              echo "Using python -m cyclonedx_py"
+              if python -m cyclonedx_py requirements -i "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+              echo "python -m cyclonedx_py failed; trying legacy CLI"
+            fi
+
+            # Legacy CLI: cyclonedx-bom -r <file>
+            if command -v cyclonedx-bom >/dev/null 2>&1; then
+              echo "Using cyclonedx-bom (legacy)"
+              if cyclonedx-bom -r "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+              echo "cyclonedx-bom failed; trying legacy module"
+            fi
+
+            # Legacy module invocation
+            if python - <<'PY'
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec('cyclonedx_bom') else 1)
+PY
+            then
+              echo "Using python -m cyclonedx_bom (legacy)"
+              if python -m cyclonedx_bom -r "$req" -o sbom-python.cdx.json; then
+                return 0
+              fi
+            fi
+
+            echo "All Python SBOM generation strategies failed" >&2
+            return 1
+          }
+
+          if [ -f tldw_Server_API/requirements.txt ]; then
+            gen_from_requirements tldw_Server_API/requirements.txt
+          elif [ -f requirements.txt ]; then
+            gen_from_requirements requirements.txt
+          else
+            echo "No requirements file found; cannot generate SBOM" >&2
+            exit 1
+          fi
+
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Generate Python SBOM from pyproject (cdxgen)
+      - name: Generate Node SBOM (CycloneDX NPM)
         run: |
-          if [ -f pyproject.toml ]; then \
-            npx @appthreat/cdxgen -t python -o sbom-python.cdx.json; \
+          if [ -f package-lock.json ]; then \
+            npx -y @cyclonedx/cyclonedx-npm --output-file sbom-node.cdx.json; \
+          elif [ -f tldw-frontend/package-lock.json ]; then \
+            (cd tldw-frontend && npx -y @cyclonedx/cyclonedx-npm --output-file ../sbom-node.cdx.json); \
+          else \
+            echo "No package-lock.json found; skipping Node SBOM"; \
           fi
 
-      - name: Generate SBOM (CycloneDX JSON)
-        uses: anchore/sbom-action@8e94d75ddd33f69f691467e42275782e4bfefe84 # v0.20.9
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: sbom.cdx.json
-          upload-artifact: true
-          artifact-name: sbom-cyclonedx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Validate SBOM (CycloneDX CLI - pinned)
-        id: validate_cli_pinned
+      - name: Resolve CycloneDX CLI digest
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/cyclonedx/cyclonedx-cli:0.30.0"
+          echo "Resolving digest for ${ref}"
+          # Prefer buildx imagetools; fallback to manifest inspect if needed
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then \
+            digest=$(docker buildx imagetools inspect "$ref" | awk '/^Digest:/ {print $2; exit}'); \
+          else \
+            digest=$(docker manifest inspect "$ref" | jq -r '.manifests[0].digest' || true); \
+          fi
+          if [ -z "${digest:-}" ] || ! echo "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then \
+            echo "Failed to resolve digest for $ref"; \
+            exit 1; \
+          fi
+          echo "CDX_CLI_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "Resolved digest: $digest"
+
+      - name: Merge SBOMs (CycloneDX CLI)
+        run: |
+          set -euo pipefail
+          if [ -f sbom-python.cdx.json ] && [ -f sbom-node.cdx.json ]; then \
+            docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST} \
+              merge --input-files sbom-python.cdx.json sbom-node.cdx.json --output-file sbom.cdx.json; \
+          elif [ -f sbom-python.cdx.json ]; then \
+            cp sbom-python.cdx.json sbom.cdx.json; \
+          elif [ -f sbom-node.cdx.json ]; then \
+            cp sbom-node.cdx.json sbom.cdx.json; \
+          else \
+            echo "No SBOMs generated"; \
+            exit 1; \
+          fi
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+
+      - name: Validate SBOM (CycloneDX CLI - pinned digest)
         if: ${{ hashFiles('sbom.cdx.json') != '' }}
         continue-on-error: true
-        uses: docker://cyclonedx/cyclonedx-cli:0.30.0
-        with:
-          args: >-
-            validate --input-file sbom.cdx.json
-
-      - name: Validate SBOM (CycloneDX CLI - pinned fallback)
-        if: ${{ hashFiles('sbom.cdx.json') != '' && steps.validate_cli_pinned.outcome == 'failure' }}
-        uses: docker://cyclonedx/cyclonedx-cli:0.29.1
-        with:
-          args: >-
+        run: |
+          docker run --rm -v "$PWD":/work -w /work ghcr.io/cyclonedx/cyclonedx-cli@${CDX_CLI_DIGEST} \
             validate --input-file sbom.cdx.json

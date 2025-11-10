@@ -20,11 +20,7 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 # --- Pydantic Models for OpenAI Chat Completion Request ---
 # Based on https://platform.openai.com/docs/api-reference/chat/create
 
-# In TEST_MODE default to local-llm to avoid external dependencies
-if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") and not os.getenv("DEFAULT_LLM_PROVIDER"):
-    DEFAULT_LLM_PROVIDER = "local-llm"
-else:
-    DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai")  # Default if not set
+DEFAULT_LLM_PROVIDER = "openai"
 model_config = ConfigDict(extra="allow", from_attributes=True)
 
 # Config Loading
@@ -40,6 +36,30 @@ except Exception:
 # Use load_and_log_configs which returns a proper dict
 from tldw_Server_API.app.core.config import load_and_log_configs
 _config = load_and_log_configs() or {}
+
+def _config_default_llm_provider(config_data: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(config_data, dict):
+        return None
+    for section in ("llm_api_settings", "API"):
+        section_data = config_data.get(section)
+        if isinstance(section_data, dict):
+            default_api = section_data.get("default_api")
+            if isinstance(default_api, str):
+                candidate = default_api.strip()
+                if candidate:
+                    return candidate
+    return None
+
+_cfg_default_provider = _config_default_llm_provider(_config)
+_env_default_provider = os.getenv("DEFAULT_LLM_PROVIDER")
+_test_mode_enabled = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+
+if _cfg_default_provider:
+    DEFAULT_LLM_PROVIDER = _cfg_default_provider
+elif _env_default_provider:
+    DEFAULT_LLM_PROVIDER = _env_default_provider
+elif _test_mode_enabled:
+    DEFAULT_LLM_PROVIDER = "local-llm"
 
 def _get_setting(env_var, section, key, default=""):
     env_value = os.getenv(env_var)

@@ -91,17 +91,21 @@ class PostgreSQLConnectionPool(ConnectionPool):
         self._free: List[Any] = []
         self._max = max(1, int(config.pool_size or 10))
 
-        dsn = (
-            f"host={config.pg_host or 'localhost'} "
-            f"port={config.pg_port or 5432} "
-            f"dbname={config.pg_database or 'tldw'} "
-            f"user={config.pg_user or 'tldw_user'} "
-            f"password={config.pg_password or ''} "
-            f"sslmode={config.pg_sslmode or 'prefer'} "
-            f"connect_timeout={config.connect_timeout or 10}"
-        )
-
-        self._dsn = dsn
+        # Prefer an explicit connection string when provided (e.g. DATABASE_URL)
+        # Fall back to composing a DSN from individual pg_* fields
+        if getattr(config, "connection_string", None):
+            self._dsn = str(config.connection_string)
+        else:
+            dsn = (
+                f"host={config.pg_host or 'localhost'} "
+                f"port={config.pg_port or 5432} "
+                f"dbname={config.pg_database or 'tldw'} "
+                f"user={config.pg_user or 'tldw_user'} "
+                f"password={config.pg_password or ''} "
+                f"sslmode={config.pg_sslmode or 'prefer'} "
+                f"connect_timeout={config.connect_timeout or 10}"
+            )
+            self._dsn = dsn
         self._use_psycopg_pool = psycopg_pool is not None
         if self._use_psycopg_pool:
             # Create a psycopg_pool.ConnectionPool with sane production defaults
@@ -622,15 +626,19 @@ class PostgreSQLBackend(DatabaseBackend):
             # Keep message for compatibility with existing tests
             raise DatabaseError("psycopg2 is not installed")
 
-        dsn = (
-            f"host={self.config.pg_host or 'localhost'} "
-            f"port={self.config.pg_port or 5432} "
-            f"dbname={self.config.pg_database or 'tldw'} "
-            f"user={self.config.pg_user or 'tldw_user'} "
-            f"password={self.config.pg_password or ''} "
-            f"sslmode={self.config.pg_sslmode or 'prefer'} "
-            f"connect_timeout={self.config.connect_timeout or 10}"
-        )
+        # Match pool initialization precedence: prefer explicit connection_string when present.
+        if getattr(self.config, "connection_string", None):
+            dsn = str(self.config.connection_string)
+        else:
+            dsn = (
+                f"host={self.config.pg_host or 'localhost'} "
+                f"port={self.config.pg_port or 5432} "
+                f"dbname={self.config.pg_database or 'tldw'} "
+                f"user={self.config.pg_user or 'tldw_user'} "
+                f"password={self.config.pg_password or ''} "
+                f"sslmode={self.config.pg_sslmode or 'prefer'} "
+                f"connect_timeout={self.config.connect_timeout or 10}"
+            )
         conn = psycopg.connect(dsn)
         conn.row_factory = dict_row
         try:

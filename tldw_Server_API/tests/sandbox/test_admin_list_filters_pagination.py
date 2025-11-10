@@ -10,8 +10,8 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.Sandbox.models import RunStatus, RunPhase, RuntimeType
 
 
-def _client() -> TestClient:
-    os.environ.setdefault("TEST_MODE", "1")
+def _client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("TEST_MODE", "1")
     # Use in-memory store by default (already defaulted in config)
     return TestClient(app)
 
@@ -46,7 +46,7 @@ def test_admin_list_filters_and_pagination(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         # Seed 3 runs: two with d1 digest, one with d2
         _seed_run("r1", 1, "d1", 300)
         _seed_run("r2", 1, "d1", 200)
@@ -87,7 +87,7 @@ def test_admin_list_filter_by_user_and_phase(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
-    with _client() as client:
+    with _client(monkeypatch) as client:
         # Seed runs for two users and phases
         _seed_run("u1_ok", 1, "d1", 300, phase="completed")
         _seed_run("u2_fail", 2, "d1", 200, phase="failed")
@@ -105,5 +105,30 @@ def test_admin_list_filter_by_user_and_phase(monkeypatch):
         assert "u2_fail" not in ids
         # Ensure totals align with filter (should be exactly 1 for this dataset)
         assert j.get("total") == 1
+
+    app.dependency_overrides.clear()
+
+
+def test_admin_list_sort_asc_desc(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+    app.dependency_overrides[get_request_user] = _admin_user_dep
+
+    with _client(monkeypatch) as client:
+        # Seed runs with precise ordering gaps
+        _seed_run("s_desc_1", 1, "dA", 500)
+        _seed_run("s_desc_2", 1, "dA", 300)
+        _seed_run("s_desc_3", 1, "dA", 100)
+
+        # Descending (default): newest first -> s_desc_3 first
+        r_desc = client.get("/api/v1/sandbox/admin/runs", params={"image_digest": "dA", "limit": 3, "offset": 0, "sort": "desc"})
+        assert r_desc.status_code == 200
+        ids_desc = [it["id"] for it in r_desc.json().get("items", [])]
+        assert ids_desc[:1] == ["s_desc_3"]
+
+        # Ascending: oldest first -> s_desc_1 first
+        r_asc = client.get("/api/v1/sandbox/admin/runs", params={"image_digest": "dA", "limit": 3, "offset": 0, "sort": "asc"})
+        assert r_asc.status_code == 200
+        ids_asc = [it["id"] for it in r_asc.json().get("items", [])]
+        assert ids_asc[:1] == ["s_desc_1"]
 
     app.dependency_overrides.clear()

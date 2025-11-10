@@ -1,0 +1,386 @@
+from __future__ import annotations
+
+"""
+Minimal ASGI middleware that derives a policy_id from route tags or path and
+calls the Resource Governor before and after handlers.
+
+This is a thin adapter for Stage 1/2 validation and can be replaced by a
+full-featured middleware later.
+"""
+
+import os
+import re
+import uuid
+from typing import Any, Callable, Awaitable, Optional
+
+from loguru import logger
+from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from .governor import RGRequest
+from .deps import derive_entity_key, derive_client_ip
+
+
+class RGSimpleMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        # Compile simple path matchers from stub mapping
+        self._compiled_map: list[tuple[re.Pattern[str], str]] = []
+
+    async def _ensure_loader_matches_env(self, request: Request) -> None:
+        """Ensure app.state.rg_policy_loader reflects current RG_POLICY_PATH.
+
+        Tests may change RG_POLICY_PATH between runs while reusing the same
+        FastAPI app instance. This helper refreshes the loader if the source
+        path differs from the current env so that route_map lookups work.
+        """
+        try:
+            env_path = os.getenv("RG_POLICY_PATH")
+            if not env_path:
+                return
+            loader = getattr(request.app.state, "rg_policy_loader", None)
+            snap = None
+            try:
+                snap = loader.get_snapshot() if loader else None
+            except Exception:
+                snap = None
+            current_path = str(getattr(snap, "source_path", "")) if snap else None
+            if (loader is None) or (snap is None) or (current_path and str(current_path) != str(env_path)):
+                from .policy_loader import PolicyLoader, PolicyReloadConfig
+                # Respect reload flags from env for consistency
+                reload_enabled = (os.getenv("RG_POLICY_RELOAD_ENABLED", "true").lower() in {"1", "true", "yes"})
+                interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
+                new_loader = PolicyLoader(env_path, PolicyReloadConfig(enabled=reload_enabled, interval_sec=interval))
+                await new_loader.load_once()
+                request.app.state.rg_policy_loader = new_loader
+                request.app.state.rg_policy_store = "file"
+        except Exception:
+            # Best-effort only; never block the request
+            pass
+
+    def _init_route_map(self, request: Request) -> None:
+        try:
+            loader = getattr(request.app.state, "rg_policy_loader", None)
+            if not loader:
+                return
+            snap = loader.get_snapshot()
+            route_map = getattr(snap, "route_map", {}) or {}
+            by_path = dict(route_map.get("by_path") or {})
+            compiled = []
+            for pat, pol in by_path.items():
+                # Convert simple "/api/v1/chat/*" to regex
+                pat = str(pat)
+                if pat.endswith("*"):
+                    regex = re.escape(pat[:-1]) + ".*"
+                else:
+                    regex = re.escape(pat) + "$"
+                compiled.append((re.compile(regex), str(pol)))
+            self._compiled_map = compiled
+        except Exception as e:
+            logger.debug(f"RGSimpleMiddleware: route_map init skipped: {e}")
+
+    def _derive_policy_id(self, request: Request) -> Optional[str]:
+        # Prefer path-based routing (works even before route resolution)
+        try:
+            loader = getattr(request.app.state, "rg_policy_loader", None)
+            snap = loader.get_snapshot() if loader else None
+            route_map = getattr(snap, "route_map", {}) or {}
+            by_path = dict(route_map.get("by_path") or {})
+            path = request.url.path or "/"
+            # Simple wildcard matching: prefix* → startswith(prefix), else exact
+            for pat, pol in by_path.items():
+                pat = str(pat)
+                if pat.endswith("*"):
+                    if path.startswith(pat[:-1]):
+                        return str(pol)
+                else:
+                    if path == pat:
+                        return str(pol)
+        except Exception:
+            pass
+
+        # Fallback to tag-based routing (may not be available early in ASGI pipeline)
+        try:
+            by_tag = {}
+            loader = getattr(request.app.state, "rg_policy_loader", None)
+            snap = loader.get_snapshot() if loader else None
+            route_map = getattr(snap, "route_map", {}) or {}
+            by_tag = dict(route_map.get("by_tag") or {})
+        except Exception:
+            by_tag = {}
+        try:
+            route = request.scope.get("route")
+            tags = list(getattr(route, "tags", []) or [])
+            for t in tags:
+                if t in by_tag:
+                    return str(by_tag[t])
+        except Exception:
+            pass
+        # Heuristic fallback by path segments for common endpoints
+        try:
+            p = request.url.path or "/"
+            if p.startswith("/api/v1/chat/") or p == "/api/v1/chat/completions":
+                return "chat.default"
+            if p.startswith("/api/v1/audio/"):
+                return "audio.default"
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _derive_entity(request: Request) -> str:
+        """Derive the RG entity key for this request.
+
+        Enforcement details:
+        - Prefer auth-derived scopes (user/api_key) as implemented in deps.derive_entity_key.
+        - Fall back to IP only when safe: derive_client_ip honors RG_TRUSTED_PROXIES (CIDRs)
+          and RG_CLIENT_IP_HEADER, otherwise uses request.client.host.
+
+        The resolved client IP is also attached to request.state.rg_client_ip for
+        downstream diagnostics.
+        """
+        try:
+            # Always compute and attach normalized client IP for diagnostics
+            request.state.rg_client_ip = derive_client_ip(request)
+        except Exception:
+            # best-effort only
+            pass
+        return derive_entity_key(request)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive=receive)
+        # Make sure loader (and its route_map) tracks current env path
+        await self._ensure_loader_matches_env(request)
+        # If governor not initialized, lazily create one using loader + backend env
+        gov = getattr(request.app.state, "rg_governor", None)
+        if gov is None:
+            try:
+                loader = getattr(request.app.state, "rg_policy_loader", None)
+                if loader is not None:
+                    backend = (os.getenv("RG_BACKEND", "memory").strip().lower() or "memory")
+                    if backend == "redis":
+                        from .governor_redis import RedisResourceGovernor as _RG
+                        request.app.state.rg_governor = _RG(policy_loader=loader)
+                    else:
+                        from .governor import MemoryResourceGovernor as _RG
+                        request.app.state.rg_governor = _RG(policy_loader=loader)
+                    gov = request.app.state.rg_governor
+            except Exception:
+                gov = None
+        if gov is None:
+            await self.app(scope, receive, send)
+            return
+
+        policy_id = self._derive_policy_id(request)
+        if not policy_id:
+            await self.app(scope, receive, send)
+            return
+
+        # Build RG request. Always include 'requests'. Optionally include tokens/streams
+        entity = self._derive_entity(request)
+        op_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        cats: dict[str, dict[str, int]] = {"requests": {"units": 1}}
+        try:
+            # Back off when endpoint-level tokens accounting is enabled
+            endpoint_tokens = os.getenv("RG_ENDPOINT_ENFORCE_TOKENS", "").lower() in {"1", "true", "yes"}
+            mw_tokens = os.getenv("RG_MIDDLEWARE_ENFORCE_TOKENS", "").lower() in {"1", "true", "yes"}
+            if mw_tokens and not endpoint_tokens:
+                cats["tokens"] = {"units": 1}
+        except Exception:
+            pass
+        try:
+            if os.getenv("RG_MIDDLEWARE_ENFORCE_STREAMS", "").lower() in {"1", "true", "yes"}:
+                cats["streams"] = {"units": 1}
+        except Exception:
+            pass
+        rg_req = RGRequest(entity=entity, categories=cats, tags={"policy_id": policy_id, "endpoint": request.url.path})
+
+        try:
+            decision, handle_id = await gov.reserve(rg_req, op_id=op_id)
+        except Exception as e:
+            logger.debug(f"RGSimpleMiddleware reserve error: {e}")
+            await self.app(scope, receive, send)
+            return
+
+        if not decision.allowed:
+            retry_after = int(decision.retry_after or 1)
+            # Map basic rate-limit headers for compatibility
+            # Extract per-category details if available
+            categories = {}
+            try:
+                categories = dict((decision.details or {}).get("categories") or {})
+            except Exception:
+                categories = {}
+            # Choose a primary category for header mapping: prefer requests, else tokens, else streams/jobs
+            primary = None
+            if "requests" in categories and not (categories.get("requests") or {}).get("allowed", True):
+                primary = "requests"
+            elif "tokens" in categories and not (categories.get("tokens") or {}).get("allowed", True):
+                primary = "tokens"
+            elif "streams" in categories and not (categories.get("streams") or {}).get("allowed", True):
+                primary = "streams"
+            else:
+                # fallback to requests for compatibility
+                primary = "requests"
+
+            # Use the primary category to derive base headers
+            prim_cat = categories.get(primary) or {}
+            limit = int(prim_cat.get("limit") or 0)
+            if not limit:
+                # Fallback to policy rpm for deny headers when decision omitted limit
+                try:
+                    loader = getattr(request.app.state, "rg_policy_loader", None)
+                    if loader is not None and policy_id:
+                        pol = loader.get_policy(policy_id) or {}
+                        if primary == "requests":
+                            limit = int((pol.get("requests") or {}).get("rpm") or 0)
+                        elif primary == "tokens":
+                            limit = int((pol.get("tokens") or {}).get("per_min") or 0)
+                        elif primary in ("streams", "jobs"):
+                            limit = int((pol.get(primary) or {}).get("max_concurrent") or 0)
+                except Exception:
+                    limit = 0
+
+            resp = JSONResponse({
+                "error": "rate_limited",
+                "policy_id": policy_id,
+                "retry_after": retry_after,
+            }, status_code=429)
+            resp.headers["Retry-After"] = str(retry_after)
+            # Generic X-RateLimit-* headers use the primary category's limit and retry
+            if limit:
+                resp.headers["X-RateLimit-Limit"] = str(limit)
+                resp.headers["X-RateLimit-Remaining"] = "0"
+                resp.headers["X-RateLimit-Reset"] = str(retry_after)
+            # Tokens per-minute headers if tokens is the denying category
+            if primary == "tokens":
+                try:
+                    loader = getattr(request.app.state, "rg_policy_loader", None)
+                    if loader is not None:
+                        pol = loader.get_policy(policy_id) or {}
+                        per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                        if per_min > 0:
+                            resp.headers["X-RateLimit-PerMinute-Limit"] = str(per_min)
+                            resp.headers["X-RateLimit-PerMinute-Remaining"] = "0"
+                            resp.headers["X-RateLimit-Tokens-Remaining"] = "0"
+                except Exception:
+                    pass
+            await resp(scope, receive, send)
+            return
+
+        # Allowed; run handler with header injection wrapper and then commit in finally
+        # Prepare success-path rate-limit headers (using precise peek when available)
+        try:
+            _cats = dict((decision.details or {}).get("categories") or {})
+        except Exception:
+            _cats = {}
+        _req_cat = _cats.get("requests") or {}
+        _limit = int(_req_cat.get("limit") or 0)
+        # Determine categories to peek for precise Remaining/Reset
+        _categories_to_peek = list(_cats.keys()) or ["requests"]
+
+        async def _send_wrapped(message):
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers") or [])
+                try:
+                    # Try to get accurate remaining/reset via governor.peek
+                    peek = getattr(gov, "peek_with_policy", None)
+                    peek_result = None
+                    if callable(peek):
+                        try:
+                            peek_result = await peek(entity, _categories_to_peek, policy_id)
+                        except Exception:
+                            peek_result = None
+                    # requests headers (compat)
+                    # Fallback to policy rpm if decision did not include limit
+                    eff_limit = _limit
+                    if not eff_limit:
+                        try:
+                            loader = getattr(request.app.state, "rg_policy_loader", None)
+                            if loader is not None and policy_id:
+                                pol = loader.get_policy(policy_id) or {}
+                                eff_limit = int((pol.get("requests") or {}).get("rpm") or 0)
+                        except Exception:
+                            eff_limit = 0
+                    if eff_limit:
+                        headers.append((b"x-ratelimit-limit", str(eff_limit).encode()))
+                    req_remaining = None
+                    req_reset = None
+                    if isinstance(peek_result, dict):
+                        rinfo = peek_result.get("requests") or {}
+                        if rinfo.get("remaining") is not None:
+                            req_remaining = int(rinfo.get("remaining"))
+                        if rinfo.get("reset") is not None:
+                            req_reset = int(rinfo.get("reset"))
+                    if req_remaining is None and eff_limit:
+                        req_remaining = max(0, eff_limit - 1)
+                    if req_reset is None:
+                        req_reset = 0
+                    if eff_limit:
+                        headers.append((b"x-ratelimit-remaining", str(req_remaining).encode()))
+                        headers.append((b"x-ratelimit-reset", str(req_reset).encode()))
+
+                    # If additional categories are present (e.g., tokens), set namespaced headers
+                    if isinstance(peek_result, dict):
+                        # Compute overall reset as max across categories for compatibility
+                        try:
+                            resets = [int((peek_result.get(c) or {}).get("reset") or 0) for c in _categories_to_peek]
+                            overall_reset = max(resets) if resets else req_reset
+                            if overall_reset is not None and overall_reset > req_reset and _limit:
+                                # override generic reset with stricter value
+                                headers = [(k, v) for (k, v) in headers if k != b"x-ratelimit-reset"]
+                                headers.append((b"x-ratelimit-reset", str(overall_reset).encode()))
+                        except Exception:
+                            pass
+                        # Tokens headers (presence required; use fallback when peek lacks remaining)
+                        tinfo = peek_result.get("tokens") or {}
+                        tokens_remaining_val = None
+                        try:
+                            if tinfo.get("remaining") is not None:
+                                tokens_remaining_val = int(tinfo.get("remaining") or 0)
+                        except Exception:
+                            tokens_remaining_val = None
+                        # If we later enforce tokens category, expose per-minute headers too when policy defines per_min
+                        try:
+                            loader = getattr(request.app.state, "rg_policy_loader", None)
+                            if loader is not None:
+                                pol = loader.get_policy(policy_id) or {}
+                                per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                                if per_min > 0:
+                                    headers.append((b"x-ratelimit-perminute-limit", str(per_min).encode()))
+                                    # Prefer peek-based remaining, else coarse fallback (per_min - 1)
+                                    if tinfo.get("remaining") is not None:
+                                        headers.append((b"x-ratelimit-perminute-remaining", str(int(tinfo.get("remaining") or 0)).encode()))
+                                    else:
+                                        headers.append((b"x-ratelimit-perminute-remaining", str(max(0, per_min - 1)).encode()))
+                                    # Ensure X-RateLimit-Tokens-Remaining is always present
+                                    if tokens_remaining_val is None:
+                                        tokens_remaining_val = max(0, per_min - 1)
+                        except Exception:
+                            # best-effort only
+                            pass
+                        # Emit tokens-remaining header even when per_min is 0 (fallback to 0)
+                        if tokens_remaining_val is None:
+                            tokens_remaining_val = 0
+                        headers.append((b"x-ratelimit-tokens-remaining", str(int(tokens_remaining_val)).encode()))
+                except Exception:
+                    pass
+                message = {**message, "headers": headers}
+            await send(message)
+
+        response = None
+        try:
+            response = await self.app(scope, receive, _send_wrapped)
+        finally:
+            try:
+                if handle_id:
+                    await gov.commit(handle_id, actuals=None)
+            except Exception as e:
+                logger.debug(f"RGSimpleMiddleware commit error: {e}")
+
+        return response

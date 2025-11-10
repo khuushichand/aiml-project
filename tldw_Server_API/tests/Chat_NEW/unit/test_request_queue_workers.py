@@ -27,13 +27,26 @@ async def test_concurrent_processing_non_streaming():
         )
         return await fut
 
-    t0 = time.time()
+    # Measure concurrent execution time with high-resolution clock
+    t0 = time.perf_counter()
     res = await asyncio.gather(submit_job(1), submit_job(2))
-    elapsed = time.time() - t0
+    elapsed = time.perf_counter() - t0
 
     assert all("idx" in r for r in res)
-    # With 2 workers and 0.2s per job, elapsed should be < 0.35s if concurrent
-    assert elapsed < 0.35, f"Jobs did not run concurrently, elapsed={elapsed:.3f}s"
+    # Absolute assertion (relaxed to tolerate normal jitter)
+    # With 2 workers and 0.2s per job, expect < 0.40s if concurrent
+    assert elapsed < 0.40, f"Jobs did not run concurrently (abs), elapsed={elapsed:.3f}s"
+
+    # Relative assertion against a sequential baseline (two 0.2s sleeps)
+    base_t0 = time.perf_counter()
+    time.sleep(0.2)
+    time.sleep(0.2)
+    baseline = time.perf_counter() - base_t0
+    # Require at least a 30% speedup vs sequential
+    assert elapsed < 0.7 * baseline, (
+        f"Jobs did not run concurrently enough (rel), elapsed={elapsed:.3f}s, "
+        f"baseline={baseline:.3f}s"
+    )
 
     await q.stop()
 

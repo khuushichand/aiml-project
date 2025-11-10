@@ -7,13 +7,10 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 
 @pytest.mark.pg_integration
 def test_tool_catalogs_postgres_list_filter(monkeypatch):
-    # Build Postgres DSN from CI env
-    host = os.getenv("POSTGRES_TEST_HOST", "127.0.0.1")
-    port = os.getenv("POSTGRES_TEST_PORT", "5432")
-    db = os.getenv("POSTGRES_TEST_DB", "tldw_content")
-    user = os.getenv("POSTGRES_TEST_USER", "tldw")
-    pwd = os.getenv("POSTGRES_TEST_PASSWORD", "tldw")
-    dsn = f"postgresql://{user}:{pwd}@{host}:{port}/{db}"
+    # Build Postgres DSN via centralized helper
+    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+    _pg = get_pg_env()
+    dsn = _pg.dsn
 
     # Configure server for PG AuthNZ DB, but keep single_user mode for simple auth
     os.environ["DATABASE_URL"] = dsn

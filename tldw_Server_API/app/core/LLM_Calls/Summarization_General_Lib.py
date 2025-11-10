@@ -23,9 +23,8 @@ import time
 from typing import Optional, Union, Generator, Any, Dict, List, Callable
 #
 # 3rd-Party Imports
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+# Removed legacy requests/HTTPAdapter/Retry usage; centralized http client is used elsewhere
+from tldw_Server_API.app.core.http_client import fetch_json, fetch, create_client, RetryPolicy
 #
 # Import Local
 from tldw_Server_API.app.core.Chunking import (
@@ -626,17 +625,7 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
             payload["temperature"] = temp
 
         # --- Retry Logic --- (Copied from original, seems reasonable)
-        session = requests.Session()
-        retry_count = loaded_config_data.get('openai_api', {}).get('api_retries', 3)
-        retry_delay = loaded_config_data.get('openai_api', {}).get('api_retry_delay', 1) # Using 1s default backoff factor
-        retry_strategy = Retry(
-            total=retry_count,
-            backoff_factor=retry_delay,
-            status_forcelist=[429, 500, 502, 503, 504], # Added 500
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter) # Mount for http too if needed
+        # Centralized client/retry will be used below
 
         api_url = loaded_config_data.get('openai_api', {}).get('api_base_url', 'https://api.openai.com/v1') + '/chat/completions'
 
@@ -647,44 +636,51 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
         if isinstance(timeout_value, str):
             timeout_value = float(timeout_value)
 
-        response = session.post(
-            api_url,
-            headers=headers,
-            json=payload,
-            stream=streaming,
-            timeout=timeout_value  # Use numeric timeout
-        )
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-
         if streaming:
             logging.debug("OpenAI: Processing streaming response.")
             def stream_generator():
+                client = create_client()
                 try:
-                    for line in response.iter_lines():
-                        line = line.decode("utf-8").strip()
-                        if not line: continue
-                        if line.startswith("data: "):
-                            data_str = line[len("data: "):]
-                            if data_str == "[DONE]": break
-                            try:
-                                data_json = json.loads(data_str)
-                                chunk = data_json["choices"][0]["delta"].get("content", "")
-                                yield chunk
-                            except json.JSONDecodeError:
-                                logging.error(f"OpenAI Stream: Error decoding JSON: {data_str}")
+                    with client.stream("POST", api_url, headers=headers, json=payload, timeout=timeout_value) as resp:
+                        if resp.status_code >= 400:
+                            yield f"Error during streaming: HTTP {resp.status_code}"
+                            return
+                        for line in resp.iter_lines():
+                            if not line:
                                 continue
-                            except (KeyError, IndexError) as e:
-                                logging.error(f"OpenAI Stream: Unexpected structure: {data_str} - Error: {e}")
+                            s = line.decode("utf-8") if isinstance(line, (bytes, bytearray)) else str(line)
+                            s = s.strip()
+                            if not s:
                                 continue
+                            if s.startswith("data: "):
+                                data_str = s[len("data: "):]
+                                if data_str == "[DONE]":
+                                    break
+                                try:
+                                    data_json = json.loads(data_str)
+                                    chunk = data_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                    if chunk:
+                                        yield chunk
+                                except json.JSONDecodeError:
+                                    logging.error(f"OpenAI Stream: Error decoding JSON: {data_str}")
+                                    continue
+                                except Exception as e:
+                                    logging.error(f"OpenAI Stream: Unexpected structure: {data_str} - Error: {e}")
+                                    continue
                 except Exception as stream_error:
-                     logging.error(f"OpenAI Stream: Error during streaming: {stream_error}", exc_info=True)
-                     yield f"Error during streaming: {stream_error}" # Yield error in stream
+                    logging.error(f"OpenAI Stream: Error during streaming: {stream_error}", exc_info=True)
+                    yield f"Error during streaming: {stream_error}"
                 finally:
-                     response.close() # Ensure connection is closed
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
             logging.debug("OpenAI: Processing non-streaming response.")
-            response_data = response.json()
+            policy = RetryPolicy(attempts=int(loaded_config_data.get('openai_api', {}).get('api_retries', 3)) + 1,
+                                 backoff_base_ms=int(float(loaded_config_data.get('openai_api', {}).get('api_retry_delay', 1)) * 1000))
+            response_data = fetch_json(method="POST", url=api_url, headers=headers, json=payload, timeout=timeout_value, retry=policy)
             if 'choices' in response_data and len(response_data['choices']) > 0 and 'message' in response_data['choices'][0] and 'content' in response_data['choices'][0]['message']:
                 summary = response_data['choices'][0]['message']['content'].strip()
                 logging.debug("OpenAI: Summarization successful (non-streaming).")
@@ -693,17 +689,16 @@ def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, sys
                 logging.warning(f"OpenAI: Summary not found in response: {response_data}")
                 return "Error: OpenAI Summary not found in response."
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logging.error(f"OpenAI: API request failed: {str(e)}", exc_info=True)
-        # Try to get more detailed error from response
-        if hasattr(e, 'response') and e.response is not None:
+        # Try to get more detailed error from response when available
+        if hasattr(e, 'response') and getattr(e, 'response') is not None:
             try:
-                error_detail = e.response.json()
+                error_detail = getattr(e, 'response').json()
                 logging.error(f"OpenAI: API error details: {error_detail}")
             except Exception as parse_err:
                 logging.debug(f"OpenAI error JSON parse failed: error={parse_err}")
         return f"Error: OpenAI API request failed: {str(e)}"
-    except Exception as e:
         logging.error(f"OpenAI: Unexpected error: {str(e)}", exc_info=True)
         return f"Error: OpenAI unexpected error: {str(e)}"
 
@@ -794,100 +789,73 @@ def summarize_with_anthropic(api_key, input_data, custom_prompt_arg, temp=None, 
             "system": system_message
         }
 
-        for attempt in range(max_retries):
-            try:
-                # Create a session
-                session = requests.Session()
-
-                # Load config values
-                retry_count = loaded_config_data['anthropic_api']['api_retries']
-                retry_delay = loaded_config_data['anthropic_api']['api_retry_delay']
-
-                # Configure the retry strategy
-                retry_strategy = Retry(
-                    total=retry_count,  # Total number of retries
-                    backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                    status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-                )
-
-                # Create the adapter
-                adapter = HTTPAdapter(max_retries=retry_strategy)
-
-                # Mount adapters for both HTTP and HTTPS
-                session.mount("http://", adapter)
-                session.mount("https://", adapter)
-                logging.debug("Anthropic: Posting request to API")
-                response = requests.post(
-                    'https://api.anthropic.com/v1/messages',
-                    headers=headers,
-                    json=data,
-                    stream=streaming
-                )
-
-                # Check if the status code indicates success
-                if response.status_code == 200:
-                    if streaming:
-                        # Handle streaming response
-                        def stream_generator():
-                            collected_text = ""
-                            event_type = None
-                            for line in response.iter_lines():
-                                line = line.decode('utf-8').strip()
-                                if line == '':
-                                    continue
-                                if line.startswith('event:'):
-                                    event_type = line[len('event:'):].strip()
-                                elif line.startswith('data:'):
-                                    data_str = line[len('data:'):].strip()
-                                    if data_str == '[DONE]':
-                                        break
-                                    try:
-                                        data_json = json.loads(data_str)
-                                        if event_type == 'content_block_delta' and data_json.get('type') == 'content_block_delta':
-                                            delta = data_json.get('delta', {})
-                                            text_delta = delta.get('text', '')
-                                            collected_text += text_delta
+        # Centralized client usage
+        api_url = 'https://api.anthropic.com/v1/messages'
+        # Restore timeout lost during refactor; support both 'timeout' and 'api_timeout' keys
+        try:
+            timeout = float(loaded_config_data['anthropic_api'].get('timeout', loaded_config_data['anthropic_api'].get('api_timeout', 120)) or 120)
+        except Exception:
+            timeout = 120.0
+        if streaming:
+            def stream_generator():
+                client = create_client()
+                try:
+                    with client.stream("POST", api_url, headers=headers, json=data, timeout=timeout) as resp:
+                        if resp.status_code >= 400:
+                            yield f"Error: Anthropic HTTP {resp.status_code}"
+                            return
+                        event_type = None
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            s = line.decode('utf-8') if isinstance(line, (bytes, bytearray)) else str(line)
+                            s = s.strip()
+                            if not s:
+                                continue
+                            if s.startswith('event:'):
+                                event_type = s[len('event:'):].strip()
+                            elif s.startswith('data:'):
+                                data_str = s[len('data:'):].strip()
+                                if data_str == '[DONE]':
+                                    break
+                                try:
+                                    data_json = json.loads(data_str)
+                                    if event_type == 'content_block_delta' and data_json.get('type') == 'content_block_delta':
+                                        delta = data_json.get('delta', {})
+                                        text_delta = delta.get('text', '')
+                                        if text_delta:
                                             yield text_delta
-                                    except json.JSONDecodeError:
-                                        logging.error(f"Anthropic: Error decoding JSON from line: {line}")
-                                        continue
-                            # Optionally, return the full collected text at the end
-                            # yield collected_text
-                        return stream_generator()
-                    else:
-                        # Non-streaming response
-                        logging.debug("Anthropic: Post submittal successful")
-                        response_data = response.json()
-                        try:
-                            # Extract the assistant's reply from the 'content' field
-                            content_blocks = response_data.get('content', [])
-                            summary = ''
-                            for block in content_blocks:
-                                if block.get('type') == 'text':
-                                    summary += block.get('text', '')
-                            summary = summary.strip()
-                            logging.debug("Anthropic: Summarization successful")
-                            logging.debug(f"Anthropic: Summary (first 500 chars): {summary[:500]}...")
-                            return summary
-                        except Exception as e:
-                            logging.debug("Anthropic: Unexpected data in response")
-                            logging.error(f"Unexpected response format from Anthropic API: {response.text}")
-                            return None
-                elif response.status_code == 500:  # Handle internal server error specifically
-                    logging.debug("Anthropic: Internal server error")
-                    logging.error("Internal server error from API. Retrying may be necessary.")
-                    time.sleep(retry_delay)
-                else:
-                    logging.debug(f"Anthropic: Failed to summarize, status code {response.status_code}: {response.text}")
-                    logging.error(f"Failed to process summary, status code {response.status_code}: {response.text}")
-                    return None
-
-            except requests.RequestException as e:
-                logging.error(f"Anthropic: Network error during attempt {attempt + 1}/{max_retries}: {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                else:
-                    return f"Anthropic: Network error: {str(e)}"
+                                except json.JSONDecodeError:
+                                    logging.error(f"Anthropic: Error decoding JSON from line: {s}")
+                                    continue
+                except Exception as e:
+                    logging.error(f"Anthropic stream error: {e}")
+                    yield f"Error: {e}"
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+            return stream_generator()
+        else:
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['anthropic_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['anthropic_api'].get('api_retry_delay', 1)) * 1000),
+            )
+            response_data = fetch_json(method="POST", url=api_url, headers=headers, json=data, timeout=timeout, retry=policy)
+            try:
+                content_blocks = response_data.get('content', [])
+                summary = ''
+                for block in content_blocks:
+                    if block.get('type') == 'text':
+                        summary += block.get('text', '')
+                summary = summary.strip()
+                logging.debug("Anthropic: Summarization successful")
+                logging.debug(f"Anthropic: Summary (first 500 chars): {summary[:500]}...")
+                return summary
+            except Exception:
+                logging.debug("Anthropic: Unexpected data in response")
+                return None
     except FileNotFoundError as e:
         logging.error(f"Anthropic: File not found: {input_data}")
         return f"Anthropic: File not found: {input_data}"
@@ -982,101 +950,67 @@ def summarize_with_cohere(api_key, input_data, custom_prompt_arg, temp=None, sys
         }
 
         if streaming:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['cohere_api']['api_retries']
-            retry_delay = loaded_config_data['cohere_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            logging.debug("Cohere: Submitting streaming request to API endpoint")
-            response = session.post(
-                'https://api.cohere.ai/v1/chat',
-                headers=headers,
-                json=data,
-                stream=True  # Enable response streaming
-            )
-            response.raise_for_status()
-
+            # Centralized client stream (no auto-retry after first byte)
+            timeout_value = float(loaded_config_data['cohere_api'].get('api_timeout', 120) or 120)
             def stream_generator():
-                for line in response.iter_lines():
-                    if line:
-                        decoded_line = line.decode('utf-8').strip()
-                        try:
-                            data_json = json.loads(decoded_line)
-                            if 'response' in data_json:
-                                chunk = data_json['response']
-                                yield chunk
-                            elif 'token' in data_json:
-                                # For token-based streaming (if applicable)
-                                chunk = data_json['token']
-                                yield chunk
-                            elif 'text' in data_json:
-                                # For text-based streaming
-                                chunk = data_json['text']
-                                yield chunk
+                client = create_client()
+                try:
+                    with client.stream('POST', 'https://api.cohere.ai/v1/chat', headers=headers, json=data, timeout=timeout_value) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            decoded_line = line.decode('utf-8').strip()
+                            # Cohere may emit plain JSON lines or SSE style with `data:` prefix
+                            if decoded_line.startswith('data:'):
+                                payload = decoded_line[len('data:'):].strip()
                             else:
-                                logging.debug(f"Cohere: Unhandled streaming data: {data_json}")
-                        except json.JSONDecodeError:
-                            logging.error(f"Cohere: Error decoding JSON from line: {decoded_line}")
-                            continue
-
+                                payload = decoded_line
+                            try:
+                                data_json = json.loads(payload)
+                                if 'token' in data_json and isinstance(data_json['token'], dict):
+                                    chunk = data_json['token'].get('text', '')
+                                    if chunk:
+                                        yield chunk
+                                elif 'response' in data_json:
+                                    chunk = data_json['response']
+                                    if chunk:
+                                        yield chunk
+                                elif 'text' in data_json:
+                                    chunk = data_json['text']
+                                    if chunk:
+                                        yield chunk
+                                else:
+                                    logging.debug(f"Cohere: Unhandled streaming data: {data_json}")
+                            except json.JSONDecodeError:
+                                logging.error(f"Cohere: Error decoding JSON from line: {decoded_line}")
+                                continue
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['cohere_api']['api_retries']
-            retry_delay = loaded_config_data['cohere_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
             logging.debug("Cohere: Submitting request to API endpoint")
-            response = session.post('https://api.cohere.ai/v1/chat', headers=headers, json=data)
-            response_data = response.json()
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['cohere_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['cohere_api'].get('api_retry_delay', 1)) * 1000),
+            )
+            timeout_value = float(loaded_config_data['cohere_api'].get('api_timeout', 120) or 120)
+            response_data = fetch_json(method='POST', url='https://api.cohere.ai/v1/chat', headers=headers, json=data, timeout=timeout_value, retry=policy)
             logging.debug(f"API Response Data: {response_data}")
-
-            if response.status_code == 200:
-                if 'text' in response_data:
-                    summary = response_data['text'].strip()
-                    logging.debug("Cohere: Summarization successful")
-                    return summary
-                elif 'response' in response_data:
-                    # Adjust if the API returns 'response' field instead of 'text'
-                    summary = response_data['response'].strip()
-                    logging.debug("Cohere: Summarization successful")
-                    return summary
-                else:
-                    logging.error("Cohere: Expected data not found in API response.")
-                    return "Cohere: Expected data not found in API response."
+            if 'text' in response_data:
+                summary = str(response_data['text']).strip()
+                logging.debug("Cohere: Summarization successful")
+                return summary
+            elif 'response' in response_data:
+                summary = str(response_data['response']).strip()
+                logging.debug("Cohere: Summarization successful")
+                return summary
             else:
-                logging.error(f"Cohere: API request failed with status code {response.status_code}: {response.text}")
-                return f"Cohere: API request failed: {response.text}"
+                logging.error("Cohere: Expected data not found in API response.")
+                return "Cohere: Expected data not found in API response."
 
     except Exception as e:
         logging.error(f"Cohere: Error in processing: {str(e)}", exc_info=True)
@@ -1169,99 +1103,54 @@ def summarize_with_groq(api_key, input_data, custom_prompt_arg, temp=None, syste
 
         logging.debug("Groq: Submitting request to API endpoint")
         if streaming:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['groq_api']['api_retries']
-            retry_delay = loaded_config_data['groq_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            response = session.post(
-                'https://api.groq.com/openai/v1/chat/completions',
-                headers=headers,
-                json=data,
-                stream=True  # Enable response streaming
-            )
-            response.raise_for_status()
-
+            timeout_value = float(loaded_config_data['groq_api'].get('api_timeout', 120) or 120)
             def stream_generator():
-                collected_messages = ""
-                for line in response.iter_lines():
-                    line = line.decode("utf-8").strip()
-
-                    if line == "":
-                        continue
-
-                    if line.startswith("data: "):
-                        data_str = line[len("data: "):]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            chunk = data_json["choices"][0]["delta"].get("content", "")
-                            collected_messages += chunk
-                            yield chunk
-                        except json.JSONDecodeError:
-                            logging.error(f"Groq: Error decoding JSON from line: {line}")
-                            continue
-                # Optionally, you can return the full collected message at the end
-                # yield collected_messages
-
+                client = create_client()
+                try:
+                    with client.stream(
+                        'POST', 'https://api.groq.com/openai/v1/chat/completions', headers=headers, json=data, timeout=timeout_value
+                    ) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            line_str = line.decode('utf-8').strip()
+                            if not line_str.startswith('data: '):
+                                continue
+                            data_str = line_str[len('data: '):]
+                            if data_str == '[DONE]':
+                                break
+                            try:
+                                data_json = json.loads(data_str)
+                                chunk = data_json.get('choices', [{}])[0].get('delta', {}).get('content', '')
+                                if chunk:
+                                    yield chunk
+                            except json.JSONDecodeError:
+                                logging.error(f"Groq: Error decoding JSON from line: {line_str}")
+                                continue
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['groq_api']['api_retries']
-            retry_delay = loaded_config_data['groq_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['groq_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['groq_api'].get('api_retry_delay', 1)) * 1000),
             )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            response = session.post(
-                'https://api.groq.com/openai/v1/chat/completions',
-                headers=headers,
-                json=data
+            timeout_value = float(loaded_config_data['groq_api'].get('api_timeout', 120) or 120)
+            response_data = fetch_json(
+                method='POST', url='https://api.groq.com/openai/v1/chat/completions', headers=headers, json=data, timeout=timeout_value, retry=policy
             )
-
-            response_data = response.json()
             logging.debug(f"API Response Data: {response_data}")
-
-            if response.status_code == 200:
-                if 'choices' in response_data and len(response_data['choices']) > 0:
-                    summary = response_data['choices'][0]['message']['content'].strip()
-                    logging.debug("Groq: Summarization successful")
-                    return summary
-                else:
-                    logging.error("Groq: Expected data not found in API response.")
-                    return "Groq: Expected data not found in API response."
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                summary = response_data['choices'][0]['message']['content'].strip()
+                logging.debug("Groq: Summarization successful")
+                return summary
             else:
-                logging.error(f"Groq: API request failed with status code {response.status_code}: {response.text}")
-                return f"Groq: API request failed: {response.text}"
+                logging.error("Groq: Expected data not found in API response.")
+                return "Groq: Expected data not found in API response."
 
     except Exception as e:
         logging.error(f"Groq: Error in processing: {str(e)}", exc_info=True)
@@ -1269,7 +1158,6 @@ def summarize_with_groq(api_key, input_data, custom_prompt_arg, temp=None, syste
 
 
 def summarize_with_openrouter(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False,):
-    import requests
     import json
     global openrouter_model, openrouter_api_key
     try:
@@ -1302,7 +1190,7 @@ def summarize_with_openrouter(api_key, input_data, custom_prompt_arg, temp=None,
             logging.error("OpenRouter: No valid API key available")
             raise ValueError("No valid Anthropic API key available")
     except Exception as e:
-        logging.error("OpenRouter: Error in processing: {str(e)}")
+        logging.error(f"OpenRouter: Error in processing: {str(e)}")
         return f"OpenRouter: Error occurred while processing config file with OpenRouter: {str(e)}"
 
     logging.debug("OpenRouter: Using configured API key")
@@ -1339,137 +1227,85 @@ def summarize_with_openrouter(api_key, input_data, custom_prompt_arg, temp=None,
         system_message = "You are a helpful AI assistant who does whatever the user requests."
 
     if streaming:
-        try:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['openrouter_api']['api_retries']
-            retry_delay = loaded_config_data['openrouter_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            logging.debug("OpenRouter: Submitting streaming request to API endpoint")
-            # Make streaming request
-            response = session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {openrouter_api_key}",
-                    "Accept": "text/event-stream",  # Important for streaming
-                },
-                data=json.dumps({
-                    "model": openrouter_model,
-                    "messages": [
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": openrouter_prompt}
-                    ],
-                    #"max_tokens": 4096,
-                    #"top_p": 1.0,
-                    "temperature": temp,
-                    "stream": True
-                }),
-                stream=True  # Enable streaming in requests
-            )
-
-            if response.status_code == 200:
-                full_response = ""
-                # Process the streaming response
-                for line in response.iter_lines():
-                    if line:
-                        # Remove "data: " prefix and parse JSON
-                        line = line.decode('utf-8')
-                        if line.startswith('data: '):
-                            json_str = line[6:]  # Remove "data: " prefix
-                            if json_str.strip() == '[DONE]':
-                                break
-                            try:
-                                json_data = json.loads(json_str)
-                                if 'choices' in json_data and len(json_data['choices']) > 0:
-                                    delta = json_data['choices'][0].get('delta', {})
-                                    if 'content' in delta:
-                                        content = delta['content']
-                                        # Removed console printing for consistency; accumulate in buffer only
-                                        full_response += content
-                            except json.JSONDecodeError:
-                                continue
-
-                logging.debug("openrouter: Streaming completed successfully")
-                return full_response.strip()
-            else:
-                error_msg = f"openrouter: Streaming API request failed with status code {response.status_code}: {response.text}"
-                logging.error(error_msg)
-                return error_msg
-
-        except Exception as e:
-            error_msg = f"openrouter: Error occurred while processing stream: {str(e)}"
-            logging.error(error_msg)
-            return error_msg
+        logging.debug("OpenRouter: Submitting streaming request to API endpoint")
+        timeout_value = float(loaded_config_data['openrouter_api'].get('api_timeout', 120) or 120)
+        def stream_or_collect():
+            client = create_client()
+            try:
+                with client.stream(
+                    'POST',
+                    'https://openrouter.ai/api/v1/chat/completions',
+                    headers={"Authorization": f"Bearer {openrouter_api_key}", "Accept": "text/event-stream"},
+                    json={
+                        "model": openrouter_model,
+                        "messages": [
+                            {"role": "system", "content": system_message},
+                            {"role": "user", "content": openrouter_prompt}
+                        ],
+                        "stream": True,
+                        "temperature": temp,
+                    },
+                    timeout=timeout_value,
+                ) as response:
+                    response.raise_for_status()
+                    full_response = ""
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            s = line.decode('utf-8').strip()
+                        except Exception:
+                            continue
+                        if not s.startswith('data: '):
+                            continue
+                        payload = s[len('data: '):]
+                        if payload == '[DONE]':
+                            break
+                        try:
+                            j = json.loads(payload)
+                            delta = j.get('choices', [{}])[0].get('delta', {})
+                            content = delta.get('content', '')
+                            if content:
+                                full_response += content
+                        except json.JSONDecodeError:
+                            continue
+                    return full_response.strip()
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        return stream_or_collect()
     else:
         try:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['openrouter_api']['api_retries']
-            retry_delay = loaded_config_data['openrouter_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['openrouter_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['openrouter_api'].get('api_retry_delay', 1)) * 1000),
             )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            logging.debug("OpenRouter: Submitting request to API endpoint")
-            response = session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {openrouter_api_key}",
-                },
-                data=json.dumps({
+            timeout_value = float(loaded_config_data['openrouter_api'].get('api_timeout', 120) or 120)
+            response_data = fetch_json(
+                method='POST',
+                url='https://openrouter.ai/api/v1/chat/completions',
+                headers={"Authorization": f"Bearer {openrouter_api_key}"},
+                json={
                     "model": openrouter_model,
                     "messages": [
                         {"role": "system", "content": system_message},
                         {"role": "user", "content": openrouter_prompt}
                     ],
-                    #"max_tokens": 4096,
-                    #"top_p": 1.0,
                     "temperature": temp,
-                    #"stream": streaming
-                })
+                },
+                timeout=timeout_value,
+                retry=policy,
             )
-
-            response_data = response.json()
-            logging.debug(f"API Response Data: {response_data}", )
-
-            if response.status_code == 200:
-                if 'choices' in response_data and len(response_data['choices']) > 0:
-                    summary = response_data['choices'][0]['message']['content'].strip()
-                    logging.debug("openrouter: Summarization successful")
-                    return summary
-                else:
-                    logging.error("openrouter: Expected data not found in API response.")
-                    return "openrouter: Expected data not found in API response."
+            logging.debug(f"API Response Data: {response_data}")
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                summary = response_data['choices'][0]['message']['content'].strip()
+                logging.debug("openrouter: Summarization successful")
+                return summary
             else:
-                logging.error(f"openrouter:  API request failed with status code {response.status_code}: {response.text}")
-                return f"openrouter: API request failed: {response.text}"
+                logging.error("openrouter: Expected data not found in API response.")
+                return "openrouter: Expected data not found in API response."
         except Exception as e:
             logging.error(f"openrouter: Error in processing: {str(e)}")
             return f"openrouter: Error occurred while processing summary with openrouter: {str(e)}"
@@ -1547,34 +1383,18 @@ def summarize_with_huggingface(api_key, input_data, custom_prompt_arg, temp=None
 
         logging.debug("HuggingFace: Submitting request...")
         if streaming:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['huggingface_api']['api_retries']
-            retry_delay = loaded_config_data['huggingface_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            response = session.post(API_URL, headers=headers, json=data_payload, stream=True)
-            response.raise_for_status()
-
+            timeout_value = float(loaded_config_data['huggingface_api'].get('api_timeout', 120) or 120)
             def stream_generator():
-                for line in response.iter_lines():
-                    if line:
-                        decoded_line = line.decode('utf-8').strip()
-                        if decoded_line.startswith('data:'):
+                client = create_client()
+                try:
+                    with client.stream('POST', API_URL, headers=headers, json=data_payload, timeout=timeout_value) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            decoded_line = line.decode('utf-8').strip()
+                            if not decoded_line.startswith('data:'):
+                                continue
                             data_str = decoded_line[len('data:'):].strip()
                             if data_str == '[DONE]':
                                 break
@@ -1582,59 +1402,41 @@ def summarize_with_huggingface(api_key, input_data, custom_prompt_arg, temp=None
                                 data_json = json.loads(data_str)
                                 if 'token' in data_json:
                                     token_text = data_json['token'].get('text', '')
-                                    yield token_text
+                                    if token_text:
+                                        yield token_text
                                 elif 'generated_text' in data_json:
-                                    # Some models may send the full generated text
                                     generated_text = data_json['generated_text']
-                                    yield generated_text
+                                    if generated_text:
+                                        yield generated_text
                                 else:
                                     logging.debug(f"HuggingFace: Unhandled streaming data: {data_json}")
                             except json.JSONDecodeError:
                                 logging.error(f"HuggingFace: Error decoding JSON from line: {decoded_line}")
                                 continue
-                # Optionally, yield the final collected text
-                # yield collected_text
-
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['huggingface_api']['api_retries']
-            retry_delay = loaded_config_data['huggingface_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['huggingface_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['huggingface_api'].get('api_retry_delay', 1)) * 1000),
             )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            response = session.post(API_URL, headers=headers, json=data_payload)
-
-            if response.status_code == 200:
-                response_json = response.json()
-                logging.debug(f"HuggingFace: Response JSON: {response_json}")
-                if isinstance(response_json, dict) and 'generated_text' in response_json:
-                    chat_response = response_json['generated_text'].strip()
-                elif isinstance(response_json, list) and len(response_json) > 0 and 'generated_text' in response_json[0]:
-                    chat_response = response_json[0]['generated_text'].strip()
-                else:
-                    logging.error("HuggingFace: Expected 'generated_text' in response")
-                    return "HuggingFace: Expected 'generated_text' in API response."
-
-                logging.debug("HuggingFace: Summarization successful")
-                return chat_response
+            timeout_value = float(loaded_config_data['huggingface_api'].get('api_timeout', 120) or 120)
+            response_json = fetch_json(method='POST', url=API_URL, headers=headers, json=data_payload, timeout=timeout_value, retry=policy)
+            logging.debug(f"HuggingFace: Response JSON: {response_json}")
+            if isinstance(response_json, dict) and 'generated_text' in response_json:
+                chat_response = str(response_json['generated_text']).strip()
+            elif isinstance(response_json, list) and len(response_json) > 0 and 'generated_text' in response_json[0]:
+                chat_response = str(response_json[0]['generated_text']).strip()
             else:
-                logging.error(f"HuggingFace: Summarization failed with status code {response.status_code}: {response.text}")
-                return f"HuggingFace: Failed to process summary. Status code: {response.status_code}"
+                logging.error("HuggingFace: Expected 'generated_text' in response")
+                return "HuggingFace: Expected 'generated_text' in API response."
+
+            logging.debug("HuggingFace: Summarization successful")
+            return chat_response
 
     except Exception as e:
         logging.error(f"HuggingFace: Error in processing: {str(e)}", exc_info=True)
@@ -1719,26 +1521,6 @@ def summarize_with_deepseek(api_key, input_data, custom_prompt_arg, temp=None, s
         }
 
         if streaming:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['deepseek_api']['api_retries']
-            retry_delay = loaded_config_data['deepseek_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
             logging.debug("DeepSeek: Posting streaming request")
             response = session.post(
                 'https://api.deepseek.com/chat/completions',
@@ -1749,66 +1531,49 @@ def summarize_with_deepseek(api_key, input_data, custom_prompt_arg, temp=None, s
             response.raise_for_status()
 
             def stream_generator():
-                collected_text = ""
-                for line in response.iter_lines():
-                    if line:
-                        decoded_line = line.decode('utf-8').strip()
-                        if decoded_line == '':
-                            continue
-                        if decoded_line.startswith('data: '):
+                client = create_client()
+                try:
+                    with client.stream('POST', 'https://api.deepseek.com/chat/completions', headers=headers, json=data, timeout=float(loaded_config_data['deepseek_api'].get('api_timeout', 120) or 120)) as response2:
+                        response2.raise_for_status()
+                        for line in response2.iter_lines():
+                            if not line:
+                                continue
+                            decoded_line = line.decode('utf-8').strip()
+                            if decoded_line == '':
+                                continue
+                            if not decoded_line.startswith('data: '):
+                                continue
                             data_str = decoded_line[len('data: '):]
                             if data_str == '[DONE]':
                                 break
                             try:
                                 data_json = json.loads(data_str)
-                                delta_content = data_json['choices'][0]['delta'].get('content', '')
-                                collected_text += delta_content
-                                yield delta_content
+                                delta_content = data_json.get('choices', [{}])[0].get('delta', {}).get('content', '')
+                                if delta_content:
+                                    yield delta_content
                             except json.JSONDecodeError:
                                 logging.error(f"DeepSeek: Error decoding JSON from line: {decoded_line}")
                                 continue
                             except KeyError as e:
                                 logging.error(f"DeepSeek: Key error: {str(e)} in line: {decoded_line}")
                                 continue
-                yield collected_text
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['deepseek_api']['api_retries']
-            retry_delay = loaded_config_data['deepseek_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
+            from tldw_Server_API.app.core.http_client import fetch_json
             logging.debug("DeepSeek: Posting request")
-            response = session.post('https://api.deepseek.com/chat/completions', headers=headers, json=data)
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if 'choices' in response_data and len(response_data['choices']) > 0:
-                    summary = response_data['choices'][0]['message']['content'].strip()
-                    logging.debug("DeepSeek: Summarization successful")
-                    return summary
-                else:
-                    logging.warning("DeepSeek: Summary not found in the response data")
-                    return "DeepSeek: Summary not available"
+            response_data = fetch_json(method='POST', url='https://api.deepseek.com/chat/completions', headers=headers, json=data, timeout=float(loaded_config_data['deepseek_api'].get('api_timeout', 120) or 120), retry=RetryPolicy(attempts=int(loaded_config_data['deepseek_api'].get('api_retries', 3)) + 1, backoff_base_ms=int(float(loaded_config_data['deepseek_api'].get('api_retry_delay', 1)) * 1000)))
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                summary = response_data['choices'][0]['message']['content'].strip()
+                logging.debug("DeepSeek: Summarization successful")
+                return summary
             else:
-                logging.error(f"DeepSeek: Summarization failed with status code {response.status_code}")
-                logging.error(f"DeepSeek: Error response: {response.text}")
-                return f"DeepSeek: Failed to process summary. Status code: {response.status_code}"
+                logging.warning("DeepSeek: Summary not found in the response data")
+                return "DeepSeek: Summary not available"
     except Exception as e:
         logging.error(f"DeepSeek: Error in processing: {str(e)}", exc_info=True)
         return f"DeepSeek: Error occurred while processing summary: {str(e)}"
@@ -1893,109 +1658,58 @@ def summarize_with_mistral(api_key, input_data, custom_prompt_arg, temp=None, sy
         }
 
         if streaming:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['mistral_api']['api_retries']
-            retry_delay = loaded_config_data['mistral_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
             logging.debug("Mistral: Posting streaming request")
-            response = session.post(
-                'https://api.mistral.ai/v1/chat/completions',
-                headers=headers,
-                json=data,
-                stream=True
-            )
-            response.raise_for_status()
-
             def stream_generator():
-                collected_text = ""
-                for line in response.iter_lines():
-                    if line:
-                        decoded_line = line.decode('utf-8').strip()
-                        if decoded_line == '':
-                            continue
-                        try:
-                            # Assuming the response is in SSE format
-                            if decoded_line.startswith('data:'):
-                                data_str = decoded_line[len('data:'):].strip()
-                                if data_str == '[DONE]':
-                                    break
+                client = create_client()
+                try:
+                    with client.stream('POST', 'https://api.mistral.ai/v1/chat/completions', headers=headers, json=data, timeout=float(loaded_config_data['mistral_api'].get('api_timeout', 120) or 120)) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            decoded_line = line.decode('utf-8').strip()
+                            if decoded_line == '':
+                                continue
+                            if not decoded_line.startswith('data:'):
+                                continue
+                            data_str = decoded_line[len('data:'):].strip()
+                            if data_str == '[DONE]':
+                                break
+                            try:
                                 data_json = json.loads(data_str)
                                 if 'choices' in data_json and len(data_json['choices']) > 0:
                                     delta_content = data_json['choices'][0]['delta'].get('content', '')
-                                    collected_text += delta_content
-                                    yield delta_content
+                                    if delta_content:
+                                        yield delta_content
                                 else:
                                     logging.error(f"Mistral: Unexpected data format: {data_json}")
                                     continue
-                            else:
-                                # Handle other event types if necessary
+                            except json.JSONDecodeError:
+                                logging.error(f"Mistral: Error decoding JSON from line: {decoded_line}")
                                 continue
-                        except json.JSONDecodeError:
-                            logging.error(f"Mistral: Error decoding JSON from line: {decoded_line}")
-                            continue
-                        except KeyError as e:
-                            logging.error(f"Mistral: Key error: {str(e)} in line: {decoded_line}")
-                            continue
-                # Optionally, you can return the full collected text at the end
-                # yield collected_text
+                            except KeyError as e:
+                                logging.error(f"Mistral: Key error: {str(e)} in line: {decoded_line}")
+                                continue
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['mistral_api']['api_retries']
-            retry_delay = loaded_config_data['mistral_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
+            policy = RetryPolicy(
+                attempts=int(loaded_config_data['mistral_api'].get('api_retries', 3)) + 1,
+                backoff_base_ms=int(float(loaded_config_data['mistral_api'].get('api_retry_delay', 1)) * 1000),
             )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            logging.debug("Mistral: Posting non-streaming request")
-            response = session.post(
-                'https://api.mistral.ai/v1/chat/completions',
-                headers=headers,
-                json=data
-            )
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if 'choices' in response_data and len(response_data['choices']) > 0:
-                    summary = response_data['choices'][0]['message']['content'].strip()
-                    logging.debug("Mistral: Summarization successful")
-                    return summary
-                else:
-                    logging.warning("Mistral: Summary not found in the response data")
-                    return "Mistral: Summary not available"
+            timeout_value = float(loaded_config_data['mistral_api'].get('api_timeout', 120) or 120)
+            response_data = fetch_json(method='POST', url='https://api.mistral.ai/v1/chat/completions', headers=headers, json=data, timeout=timeout_value, retry=policy)
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                summary = response_data['choices'][0]['message']['content'].strip()
+                logging.debug("Mistral: Summarization successful")
+                return summary
             else:
-                logging.error(f"Mistral: Summarization failed with status code {response.status_code}")
-                logging.error(f"Mistral: Error response: {response.text}")
-                return f"Mistral: Failed to process summary. Status code: {response.status_code}"
+                logging.warning("Mistral: Summary not found in the response data")
+                return "Mistral: Summary not available"
     except Exception as e:
         logging.error(f"Mistral: Error in processing: {str(e)}", exc_info=True)
         return f"Mistral: Error occurred while processing summary: {str(e)}"
@@ -2087,103 +1801,57 @@ def summarize_with_google(api_key, input_data, custom_prompt_arg, temp=None, sys
         }
 
         if streaming:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['google_api']['api_retries']
-            retry_delay = loaded_config_data['google_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            logging.debug("Google: Posting streaming request")
-            response = session.post(
-                'https://generativelanguage.googleapis.com/v1beta/openai/',
-                headers=headers,
-                json=data,
-                stream=True
-            )
-            response.raise_for_status()
-
             def stream_generator():
-                for line in response.iter_lines():
-                    if line:
-                        decoded_line = line.decode('utf-8').strip()
-                        if decoded_line == '':
-                            continue
-                        if decoded_line.startswith('data: '):
+                client = create_client()
+                try:
+                    with client.stream('POST', 'https://generativelanguage.googleapis.com/v1beta/openai/', headers=headers, json=data, timeout=float(loaded_config_data['google_api'].get('api_timeout', 120) or 120)) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            if not line:
+                                continue
+                            decoded_line = line.decode('utf-8').strip()
+                            if decoded_line == '':
+                                continue
+                            if not decoded_line.startswith('data: '):
+                                continue
                             data_str = decoded_line[len('data: '):]
                             if data_str == '[DONE]':
                                 break
                             try:
                                 data_json = json.loads(data_str)
-                                chunk = data_json["choices"][0]["delta"].get("content", "")
-                                yield chunk
+                                chunk = data_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                if chunk:
+                                    yield chunk
                             except json.JSONDecodeError:
                                 logging.error(f"Google: Error decoding JSON from line: {decoded_line}")
                                 continue
                             except KeyError as e:
                                 logging.error(f"Google: Key error: {str(e)} in line: {decoded_line}")
                                 continue
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
             return stream_generator()
         else:
-            # Create a session
-            session = requests.Session()
-
-            # Load config values
-            retry_count = loaded_config_data['google_api']['api_retries']
-            retry_delay = loaded_config_data['google_api']['api_retry_delay']
-
-            # Configure the retry strategy
-            retry_strategy = Retry(
-                total=retry_count,  # Total number of retries
-                backoff_factor=retry_delay,  # A delay factor (exponential backoff)
-                status_forcelist=[429, 502, 503, 504],  # Status codes to retry on
-            )
-
-            # Create the adapter
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-
-            # Mount adapters for both HTTP and HTTPS
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
             logging.debug("Google: Posting request")
-            response = session.post('https://generativelanguage.googleapis.com/v1beta/openai/', headers=headers, json=data)
-
-            if response.status_code == 200:
-                response_data = response.json()
-                if 'choices' in response_data and len(response_data['choices']) > 0:
-                    summary = response_data['choices'][0]['message']['content'].strip()
-                    logging.debug("Google: Summarization successful")
-                    logging.debug(f"Google: Summary (first 500 chars): {summary[:500]}...")
-                    return summary
-                else:
-                    logging.warning("Google: Summary not found in the response data")
-                    return "Google: Summary not available"
+            from tldw_Server_API.app.core.http_client import fetch_json
+            response_data = fetch_json(method='POST', url='https://generativelanguage.googleapis.com/v1beta/openai/', headers=headers, json=data, timeout=float(loaded_config_data['google_api'].get('api_timeout', 120) or 120), retry=RetryPolicy(attempts=int(loaded_config_data['google_api'].get('api_retries', 3)) + 1, backoff_base_ms=int(float(loaded_config_data['google_api'].get('api_retry_delay', 1)) * 1000)))
+            if 'choices' in response_data and len(response_data['choices']) > 0:
+                summary = response_data['choices'][0]['message']['content'].strip()
+                logging.debug("Google: Summarization successful")
+                logging.debug(f"Google: Summary (first 500 chars): {summary[:500]}...")
+                return summary
             else:
-                logging.error(f"Google: Summarization failed with status code {response.status_code}")
-                logging.error(f"Google: Error response: {response.text}")
-                return f"Google: Failed to process summary. Status code: {response.status_code}"
+                logging.warning("Google: Summary not found in the response data")
+                return "Google: Summary not available"
     except json.JSONDecodeError as e:
         logging.error(f"Google: Error decoding JSON: {str(e)}", exc_info=True)
         return f"Google: Error decoding JSON input: {str(e)}"
-    except requests.RequestException as e:
+    except Exception as e:
         logging.error(f"Google: Error making API request: {str(e)}", exc_info=True)
         return f"Google: Error making API request: {str(e)}"
-    except Exception as e:
-        logging.error(f"Google: Unexpected error: {str(e)}", exc_info=True)
-        return f"Google: Unexpected error occurred: {str(e)}"
 
 def summarize_with_mock_llm(text_to_summarize: str, custom_prompt_arg: Optional[str], api_key: Optional[str] = None, temp: Optional[float] = None, system_message: Optional[str] = None, streaming: bool = False):
     """

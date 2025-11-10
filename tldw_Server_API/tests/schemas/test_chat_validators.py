@@ -297,7 +297,7 @@ class TestValidateModelName:
     def test_valid_model_names(self):
         """Test valid model names."""
         assert validate_model_name("gpt-4") == "gpt-4"
-        assert validate_model_name("claude-3-opus") == "claude-3-opus"
+        assert validate_model_name("claude-opus-4.1") == "claude-opus-4.1"
         assert validate_model_name("llama2_70b") == "llama2_70b"
 
     def test_none_value(self):

@@ -21,7 +21,7 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from fastapi import HTTPException
-from tldw_Server_API.app.core.http_client import create_client as create_http_client
+
 
 
 def _ensure_placeholder_enabled():
@@ -116,22 +116,20 @@ async def process_documents(
                 else:
                     logging.warning(f"[file_security] non-strict: Egress check error: {_e}")
 
-            # Use centralized HTTP client (trust_env=False, sane timeouts)
-            with create_http_client(timeout=60) as client:
-                r = client.get(url, headers=headers)
-                r.raise_for_status()
+            # Validate with HEAD before download (size/MIME)
+            from tldw_Server_API.app.core.http_client import fetch as http_fetch, download as http_download, RetryPolicy
 
-            # Basic size/MIME guardrails
+            head = http_fetch(method="HEAD", url=url, headers=headers, timeout=60)
             try:
                 max_bytes = int(os.getenv("DOC_DOWNLOAD_MAX_BYTES", "52428800"))  # 50 MB default
-                cl = r.headers.get('content-length')
+                cl = head.headers.get('content-length')
                 if cl and cl.isdigit() and int(cl) > max_bytes:
                     if _file_security_strict():
                         raise RuntimeError("Document too large")
                     else:
                         logging.warning("[file_security] non-strict: Document exceeds size; continuing")
                 allowed_mimes = [s.strip() for s in (os.getenv("DOC_DOWNLOAD_ALLOWED_MIME", "text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/html").split(",")) if s.strip()]
-                ct = r.headers.get('content-type', '')
+                ct = head.headers.get('content-type', '')
                 if allowed_mimes and ct:
                     mt = ct.split(';', 1)[0].strip().lower()
                     if not any(mt == a or (a.endswith('/*') and mt.startswith(a[:-1])) for a in allowed_mimes):
@@ -145,13 +143,22 @@ async def process_documents(
                 else:
                     logging.warning(f"[file_security] non-strict: guard error {str(_guard)}; continuing")
 
-            # Create a temp file name with the same extension if possible
-            basename = os.path.basename(url).split("?")[0]  # strip query
+            # Create a temp file name with the same extension if possible and stream to file
+            basename = os.path.basename(url).split("?")[0]
             ext = os.path.splitext(basename)[1] or ".bin"
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                tmp.write(r.content)
-                temp_files.append(tmp.name)
-                return tmp.name
+            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            try:
+                http_download(url=url, dest=tmp_path, headers=headers, retry=RetryPolicy())
+                temp_files.append(tmp_path)
+                return tmp_path
+            except Exception as e:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                raise RuntimeError(f"Download from '{url}' failed: {e}")
         except Exception as e:
             raise RuntimeError(f"Download from '{url}' failed: {str(e)}")
 

@@ -11,10 +11,11 @@ from loguru import logger as logging
 import os
 import time
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Callable
 #
 # 3rd-party Libraries
 import requests
+import httpx
 from loguru import logger
 #
 # Local Imports
@@ -104,6 +105,9 @@ def chat_api_call(
     extra_body: Optional[Dict[str, Any]] = None,
     # Optional preloaded config to reduce repeated IO in hot paths
     app_config: Optional[Dict[str, Any]] = None,
+    # Testing hooks
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
     ):
     """
     Acts as a unified dispatcher to call various LLM API providers.
@@ -202,6 +206,8 @@ def chat_api_call(
         'extra_headers': extra_headers,
         'extra_body': extra_body,
         'app_config': app_config,
+        'http_client_factory': http_client_factory,
+        'http_fetcher': http_fetcher,
     }
 
     for generic_param_name, provider_param_name in params_map.items():
@@ -277,6 +283,9 @@ def chat_api_call(
     except requests.exceptions.RequestException as e:
         logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
         raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+    except httpx.RequestError as e:
+        logging.error(f"Network error (httpx) connecting to {endpoint_lower}: {e}", exc_info=False)
+        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
     except (ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError, ChatConfigurationError, ChatProviderError,
             ChatAPIError) as e_chat_direct:
         # This catches cases where the handler itself has already processed an error
@@ -331,6 +340,8 @@ async def chat_api_call_async(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
 ):
     """Async dispatcher that prefers async handlers when available; otherwise falls back to thread exec.
 
@@ -367,6 +378,8 @@ async def chat_api_call_async(
         'extra_headers': extra_headers,
         'extra_body': extra_body,
         'app_config': app_config,
+        'http_client_factory': http_client_factory,
+        'http_fetcher': http_fetcher,
     }
     call_kwargs: Dict[str, Any] = {}
     for generic_param_name, provider_param_name in params_map.items():

@@ -43,9 +43,7 @@
             </div>
         </div>
 
-        <button class="api-button" onclick="makeRequest('adminUsersList', 'GET', '/api/v1/admin/users', 'query')">
-            List Users
-        </button>
+        <button class="api-button" id="btnAdminUsersList">List Users</button>
 
         <h3>cURL Command:</h3>
         <pre id="adminUsersList_curl">---</pre>
@@ -84,38 +82,13 @@
             </div>
         </div>
 
-        <button class="api-button" onclick="adminCreateUser()">Create User</button>
+        <button class="api-button" id="btnAdminCreateUser">Create User</button>
 
         <h3>Response:</h3>
         <pre id="adminUserRegister_response">---</pre>
     </div>
 
-    <script>
-        async function adminCreateUser() {
-            const username = document.getElementById('adminReg_username').value.trim();
-            const email = document.getElementById('adminReg_email').value.trim();
-            const password = document.getElementById('adminReg_password').value;
-            const registration_code = document.getElementById('adminReg_code').value.trim() || null;
-            if (!username || !email || !password) {
-                Toast.error('Username, email, and password are required');
-                return;
-            }
-            try {
-                const res = await apiClient.post('/api/v1/auth/register', {
-                    username, email, password, registration_code
-                });
-                document.getElementById('adminUserRegister_response').textContent = JSON.stringify(res, null, 2);
-                if (res && res.api_key) {
-                    Toast.success('User created. API key returned below. Copy and store it securely.');
-                } else {
-                    Toast.success('User created.');
-                }
-            } catch (e) {
-                document.getElementById('adminUserRegister_response').textContent = JSON.stringify(e.response || e, null, 2);
-                Toast.error('Failed to create user');
-            }
-        }
-</script>
+
 
     <div class="endpoint-section" id="adminRegistrationCodes">
         <h2>
@@ -529,6 +502,8 @@
             <div id="monitoringAlerts_recent"></div>
         </div>
 
+        <!-- inline script removed: now handled by js/admin-rbac-monitoring.js -->
+        <!--
         <script>
             async function monitoringListWatchlists() {
                 try {
@@ -891,6 +866,7 @@
                 if (startSel && startSel.value === 'true') { window._monAlertsTick = 'auto'; applyAutoAlerts(true); }
             })();
         </script>
+        -->
         <div class="endpoint-section" id="monitoringNotifications">
             <h2>
                 <span class="endpoint-method get">GET/PUT/POST</span>
@@ -1023,6 +999,8 @@
             <div id="monitoringNotif_recent"></div>
         </div>
 
+        <!-- inline script removed: now handled by js/admin-rbac-monitoring.js -->
+        <!--
         <script>
         async function monitoringLoadNotifSettings() {
             try {
@@ -1275,6 +1253,7 @@
                 }
             })();
         </script>
+        -->
     </div>
 
     <!-- LLM Usage Charts -->
@@ -1387,8 +1366,8 @@
             </div>
         </div>
         <div class="btn-group">
-            <button class="api-button" onclick="moderationLoadSettings()">Load</button>
-            <button class="api-button" onclick="moderationSaveSettings()">Save</button>
+            <button class="api-button" id="btnModSettingsLoad">Load</button>
+            <button class="api-button" id="btnModSettingsSave">Save</button>
             <label style="margin-left:12px;">
                 <input type="checkbox" id="modSettings_persist" /> Persist to file
             </label>
@@ -1397,6 +1376,8 @@
         <pre id="moderationSettings_status">---</pre>
     </div>
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         async function moderationLoadSettings() {
             try {
@@ -1432,6 +1413,7 @@
             }
         }
     </script>
+    -->
     <div class="endpoint-section" id="moderationBlocklistManaged">
         <h2>
             <span class="endpoint-method get">GET/POST/DELETE</span>
@@ -1448,10 +1430,10 @@
             <div class="column">
                 <div class="form-group">
                     <label for="moderationManaged_filter">Filter:</label>
-                    <input id="moderationManaged_filter" type="text" placeholder="Search patterns..." oninput="renderManagedBlocklist()" />
+                    <input id="moderationManaged_filter" type="text" placeholder="Search patterns..." />
                     <div style="margin-top:6px;">
                         <label style="font-size:0.9em; color:#666;">
-                            <input id="moderationManaged_onlyInvalid" type="checkbox" onchange="renderManagedBlocklist()" />
+                            <input id="moderationManaged_onlyInvalid" type="checkbox" />
                             Only invalid
                         </label>
                     </div>
@@ -1463,15 +1445,15 @@
                     <input id="moderationManaged_newLine" type="text" placeholder="/secret\\d+/ or literal" />
                 </div>
                 <div class="btn-group">
-                    <button class="api-button" onclick="moderationAppendManaged()">Append</button>
-                    <button class="api-button" onclick="moderationLintManaged()">Lint</button>
+                    <button class="api-button" id="btnModerationAppendManaged">Append</button>
+                    <button class="api-button" id="btnModerationLintManaged">Lint</button>
                 </div>
             </div>
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="moderationLoadManaged()">Load</button>
-            <button class="api-button" onclick="moderationRefreshManaged()">Refresh</button>
+            <button class="api-button" id="btnModerationLoadManaged">Load</button>
+            <button class="api-button" id="btnModerationRefreshManaged">Refresh</button>
         </div>
 
         <div id="moderationManaged_table"></div>
@@ -1483,6 +1465,8 @@
         <pre id="moderationManaged_status">---</pre>
     </div>
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         window._moderationManaged = { version: '', items: [] };
         window._moderationManagedLint = {}; // id -> lint item
@@ -1601,6 +1585,7 @@
             }
         }
     </script>
+    -->
     <div class="endpoint-section" id="moderationBlocklist">
         <h2>
             <span class="endpoint-method get">GET/PUT</span>
@@ -1614,9 +1599,9 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="moderationLoadBlocklist()">Load</button>
-            <button class="api-button" onclick="moderationLintBlocklist()">Lint</button>
-            <button class="api-button" onclick="moderationSaveBlocklist()">Save</button>
+            <button class="api-button" id="btnModerationLoadBlocklist">Load</button>
+            <button class="api-button" id="btnModerationLintBlocklist">Lint</button>
+            <button class="api-button" id="btnModerationSaveBlocklist">Save</button>
         </div>
 
         <div id="moderationBlocklist_legend" style="font-size: 0.9em; color: #666; margin-top: 6px;">
@@ -1626,7 +1611,7 @@
 
         <div style="margin-top:6px;">
             <label style="font-size:0.9em; color:#666;">
-                <input id="moderationBlocklist_onlyInvalid" type="checkbox" onchange="renderBlocklistInvalidList()" />
+                <input id="moderationBlocklist_onlyInvalid" type="checkbox" />
                 Only invalid (from last lint)
             </label>
         </div>
@@ -1635,10 +1620,12 @@
         <pre id="moderationBlocklist_status">---</pre>
         <div id="moderationBlocklist_invalidList" style="margin-top:8px;"></div>
         <div id="moderationBlocklist_invalidActions" class="btn-group" style="display:none; margin-top:6px;">
-            <button class="btn btn-secondary" onclick="moderationCopyInvalidBlocklist()">Copy invalid lines</button>
+            <button class="btn btn-secondary" id="btnModerationCopyInvalidBlocklist">Copy invalid lines</button>
         </div>
     </div>
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         async function moderationLoadBlocklist() {
             try {
@@ -1741,6 +1728,7 @@
             }
         }
     </script>
+    -->
 
     <div class="endpoint-section" id="moderationOverrides">
         <h2>
@@ -1807,9 +1795,9 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="loadUserOverride()">Load</button>
-            <button class="api-button" onclick="saveUserOverride()">Save</button>
-            <button class="api-button" onclick="deleteUserOverride()">Delete</button>
+            <button class="api-button" id="btnModOverrideLoad">Load</button>
+            <button class="api-button" id="btnModOverrideSave">Save</button>
+            <button class="api-button" id="btnModOverrideDelete">Delete</button>
         </div>
 
         <h3>Result:</h3>
@@ -1823,11 +1811,13 @@
         </h2>
         <p>List all configured per-user overrides and load one into the editor above.</p>
         <div class="btn-group">
-            <button class="api-button" onclick="moderationListOverrides()">Load List</button>
+            <button class="api-button" id="btnModerationListOverrides">Load List</button>
         </div>
         <div id="moderationOverrides_table"></div>
     </div>
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         async function moderationListOverrides() {
             try {
@@ -1861,6 +1851,7 @@
             Toast.success('Loaded override into editor');
         }
     </script>
+    -->
 
     <div class="endpoint-section" id="moderationTester">
         <h2>
@@ -1890,12 +1881,14 @@
             <textarea id="modTest_text" rows="4" placeholder="Enter sample text to test..."></textarea>
         </div>
         <div class="btn-group">
-            <button class="api-button" onclick="moderationRunTest()">Test</button>
+            <button class="api-button" id="btnModerationRunTest">Test</button>
         </div>
         <h3>Result:</h3>
         <pre id="moderationTester_result">---</pre>
     </div>
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         async function moderationRunTest() {
             try {
@@ -1911,7 +1904,10 @@
             }
         }
     </script>
+    -->
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         function _buildOverridePayload() {
             const v = (id) => (document.getElementById(id)?.value ?? '').trim();
@@ -1975,6 +1971,7 @@
             }
         }
     </script>
+    -->
     </div>
 
     <div class="endpoint-section" id="adminUserGet">
@@ -1989,7 +1986,7 @@
             <input type="text" id="adminUserGet_id" placeholder="user123">
         </div>
 
-        <button class="api-button" onclick="makeRequest('adminUserGet', 'GET', '/api/v1/admin/users/{id}', 'none')">
+        <button class="api-button" id="btnAdminUserGet">
             Get User
         </button>
 
@@ -2079,6 +2076,8 @@
         <div id="adminUserApiKeys_audit"></div>
     </div>
 
+    <!-- inline script removed: now handled by js/admin-advanced.js -->
+    <!--
     <script>
         function _getAdminUserId() {
             const v = document.getElementById('adminApiKeys_userId').value;
@@ -2248,6 +2247,7 @@
             }
         }
     </script>
+    -->
 
     <div class="endpoint-section" id="adminUserUpdate">
         <h2>
@@ -2275,7 +2275,7 @@
 }</textarea>
         </div>
 
-        <button class="api-button" onclick="makeRequest('adminUserUpdate', 'PUT', '/api/v1/admin/users/{id}', 'json')">
+        <button class="api-button" id="btnAdminUserUpdate">
             Update User
         </button>
 
@@ -2298,7 +2298,7 @@
             <input type="text" id="adminUserDelete_id" placeholder="user123">
         </div>
 
-        <button class="api-button btn-danger" onclick="if(confirm('Are you sure you want to delete this user?')) makeRequest('adminUserDelete', 'DELETE', '/api/v1/admin/users/{id}', 'none')">
+        <button class="api-button btn-danger" id="btnAdminUserDelete">
             Delete User
         </button>
 
@@ -2364,7 +2364,7 @@
         <h2>AuthNZ Security Alerts</h2>
         <p>Inspect delivery configuration, per-sink thresholds, and recent dispatch health.</p>
         <div class="btn-group">
-            <button class="btn btn-primary" onclick="loadSecurityAlertStatus()">
+            <button class="btn btn-primary" id="btnSecAlertRefresh">
                 Refresh Status
             </button>
         </div>
@@ -2388,56 +2388,7 @@
         </div>
         <h3>Raw Response:</h3>
         <pre id="adminSecurityAlerts_response">---</pre>
-        <script>
-            async function loadSecurityAlertStatus() {
-                try {
-                    const resp = await apiClient.makeRequest('GET', '/api/v1/admin/security/alert-status');
-                    document.getElementById('adminSecurityAlerts_response').textContent = JSON.stringify(resp, null, 2);
-                    const health = resp.health || 'unknown';
-                    const pill = document.getElementById('adminSecurityAlerts_health');
-                    pill.textContent = `Health: ${health}`;
-                    if (health === 'ok') {
-                        pill.style.backgroundColor = '#d1fae5';
-                        pill.style.color = '#065f46';
-                    } else if (health === 'degraded') {
-                        pill.style.backgroundColor = '#fef3c7';
-                        pill.style.color = '#92400e';
-                    } else {
-                        pill.style.backgroundColor = '#fee2e2';
-                        pill.style.color = '#991b1b';
-                    }
 
-                    const tbody = document.querySelector('#adminSecurityAlerts_table tbody');
-                    tbody.innerHTML = '';
-                    (resp.sinks || []).forEach(sink => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${sink.sink}</td>
-                            <td>${sink.configured ? 'Yes' : 'No'}</td>
-                            <td>${sink.min_severity || resp.min_severity}</td>
-                            <td>${sink.last_status === true ? 'success' : sink.last_status === false ? 'failure' : 'n/a'}</td>
-                            <td>${sink.last_error || ''}</td>
-                            <td>${sink.backoff_until || ''}</td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-
-                    Toast.success('Security alert status refreshed');
-                } catch (e) {
-                    document.getElementById('adminSecurityAlerts_response').textContent = String(e?.message || e);
-                    Toast.error('Failed to load security alert status: ' + (e?.message || e));
-                }
-            }
-
-            // Auto-refresh when the tab is first shown
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => {
-                    setTimeout(loadSecurityAlertStatus, 200);
-                });
-            } else {
-                setTimeout(loadSecurityAlertStatus, 200);
-            }
-        </script>
     </div>
 
     <div class="endpoint-section" id="adminSystemStatus">
@@ -2445,16 +2396,16 @@
         <p>Monitor system health and status across all services.</p>
 
         <div class="btn-group">
-            <button class="btn btn-primary" onclick="makeRequest('healthMain', 'GET', '/health', 'none')">
+            <button class="btn btn-primary" id="btnHealthMain">
                 Main Health Check
             </button>
-            <button class="btn btn-primary" onclick="makeRequest('healthRAG', 'GET', '/api/v1/rag/health', 'none')">
+            <button class="btn btn-primary" id="btnHealthRAG">
                 RAG Health
             </button>
-            <button class="btn btn-primary" onclick="makeRequest('healthEmbeddings', 'GET', '/api/v1/embeddings/health', 'none')">
+            <button class="btn btn-primary" id="btnHealthEmbeddings">
                 Embeddings Health
             </button>
-            <button class="btn btn-primary" onclick="makeRequest('healthWebScraping', 'GET', '/api/v1/web-scraping/status', 'none')">
+            <button class="btn btn-primary" id="btnHealthWebScraping">
                 Web Scraping Status
             </button>
         </div>
@@ -2481,37 +2432,12 @@
             </div>
         </div>
         <div class="btn-group">
-            <button class="btn btn-primary" onclick="loadCleanupSettings()">Load Settings</button>
-            <button class="btn btn-primary" onclick="saveCleanupSettings()">Save Settings</button>
+            <button class="btn btn-primary" id="btnAdminCleanupLoad">Load Settings</button>
+            <button class="btn btn-primary" id="btnAdminCleanupSave">Save Settings</button>
         </div>
         <h3>Result:</h3>
         <pre id="adminCleanupSettings_response">---</pre>
-        <script>
-            async function loadCleanupSettings() {
-                try {
-                    const resp = await apiClient.makeRequest('GET', '/api/v1/admin/cleanup-settings');
-                    document.getElementById('adminCleanup_enabled').checked = !!resp.enabled;
-                    document.getElementById('adminCleanup_interval').value = resp.interval_sec || 1800;
-                    document.getElementById('adminCleanupSettings_response').textContent = JSON.stringify(resp, null, 2);
-                    Toast.success('Loaded cleanup settings');
-                } catch (e) {
-                    Toast.error('Failed to load cleanup settings: ' + (e?.message || e));
-                }
-            }
-            async function saveCleanupSettings() {
-                try {
-                    const body = {
-                        enabled: document.getElementById('adminCleanup_enabled').checked,
-                        interval_sec: parseInt(document.getElementById('adminCleanup_interval').value, 10)
-                    };
-                    const resp = await apiClient.makeRequest('POST', '/api/v1/admin/cleanup-settings', { body });
-                    document.getElementById('adminCleanupSettings_response').textContent = JSON.stringify(resp, null, 2);
-                    Toast.success('Saved cleanup settings');
-                } catch (e) {
-                    Toast.error('Failed to save cleanup settings: ' + (e?.message || e));
-                }
-            }
-        </script>
+        <!-- inline script removed: now handled by js/admin-advanced.js -->
     </div>
 </div>
 
@@ -2555,8 +2481,8 @@
         </div>
 
         <div class="btn-group">
-            <button class="api-button" onclick="adminLoadUsageDaily()">Load Daily</button>
-            <button class="api-button" onclick="adminDownloadUsageDailyCSV()">Download Daily CSV</button>
+            <button class="api-button" id="btnUsageLoadDaily">Load Daily</button>
+            <button class="api-button" id="btnUsageDownloadDailyCSV">Download Daily CSV</button>
             <label style="margin-left:10px; display:inline-flex; align-items:center; gap:6px;">
                 <input type="checkbox" id="usage_show_bytes_in" /> Show Bytes In
             </label>
@@ -2567,8 +2493,8 @@
                 <option value="bytes_in_total">bytes_in_total</option>
                 <option value="errors">errors</option>
             </select>
-            <button class="api-button" onclick="adminLoadUsageTop()">Top Users</button>
-            <button class="api-button" onclick="adminDownloadUsageTopCSV()">Download Top CSV</button>
+            <button class="api-button" id="btnUsageTop">Top Users</button>
+            <button class="api-button" id="btnUsageDownloadTopCSV">Download Top CSV</button>
         </div>
 
         <h3>Daily Usage</h3>
@@ -2592,12 +2518,14 @@
             </div>
             <div class="column">
                 <div class="btn-group" style="margin-top: 20px;">
-                    <button class="api-button" onclick="adminRunUsageAggregate()">Aggregate</button>
+                    <button class="api-button" id="btnUsageAggregate">Aggregate</button>
                 </div>
             </div>
         </div>
         <pre id="adminUsageAgg_result">---</pre>
 
+        <!-- inline script removed: now handled by js/admin-advanced.js -->
+        <!--
         <script>
             function _usageQS() {
                 const params = new URLSearchParams();
@@ -2755,6 +2683,7 @@
                 }
             }
         </script>
+        -->
     </div>
 </div>
 

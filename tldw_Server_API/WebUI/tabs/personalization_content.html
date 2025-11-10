@@ -5,9 +5,9 @@
     <p class="text-muted">Opt-in and basic profile. This preview allows viewing and tweaking weights and adding a memory.</p>
 
     <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-      <button class="btn btn-primary" onclick="(async () => { const j = await apiClient.makeRequest('GET','/api/v1/personalization/profile'); document.getElementById('persProfile').textContent = JSON.stringify(j,null,2); })()">View Profile</button>
-      <button class="btn" onclick="(async () => { await apiClient.makeRequest('POST','/api/v1/personalization/opt-in',{ body: { enabled: true } }); alert('Opted in'); })()">Opt-In</button>
-      <button class="btn btn-danger" onclick="(async () => { await apiClient.makeRequest('POST','/api/v1/personalization/purge'); alert('Purge requested'); })()">Purge</button>
+      <button class="btn btn-primary" data-action="pers-view-profile">View Profile</button>
+      <button class="btn" data-action="pers-opt-in">Opt-In</button>
+      <button class="btn btn-danger" data-action="pers-purge">Purge</button>
     </div>
 
     <pre id="persProfile" class="json-viewer" style="max-height:240px; overflow:auto; background: var(--color-surface-alt);"></pre>
@@ -18,11 +18,7 @@
       <label>beta<input id="persBeta" type="number" step="0.05" min="0" max="1" value="0.6" style="width:90px"></label>
       <label>gamma<input id="persGamma" type="number" step="0.05" min="0" max="1" value="0.2" style="width:90px"></label>
       <label>half-life (days)<input id="persHalf" type="number" step="1" min="1" max="180" value="14" style="width:110px"></label>
-      <button class="btn" onclick="(async () => {
-        const body = { alpha: parseFloat(persAlpha.value), beta: parseFloat(persBeta.value), gamma: parseFloat(persGamma.value), recency_half_life_days: parseInt(persHalf.value||'14') };
-        await apiClient.makeRequest('POST','/api/v1/personalization/preferences',{ body });
-        alert('Preferences updated');
-      })()">Save</button>
+      <button class="btn" data-action="pers-save">Save</button>
     </div>
 
     <h3>Add Memory</h3>
@@ -30,13 +26,8 @@
       <input id="memContent" type="text" placeholder="Memory content" style="flex:1; min-width:260px;">
       <input id="memTags" type="text" placeholder="tags (comma separated)" style="min-width:220px;">
       <label><input id="memPinned" type="checkbox"> pinned</label>
-      <button class="btn" onclick="(async () => {
-        const tags = (memTags.value||'').split(',').map(s=>s.trim()).filter(Boolean);
-        const payload = { id: 'tmp', type: 'semantic', content: memContent.value||'', pinned: memPinned.checked, tags: tags.length? tags : null };
-        const j = await apiClient.makeRequest('POST','/api/v1/personalization/memories',{ body: payload });
-        alert('Added memory: '+ j.id);
-      })()">Add</button>
-      <button class="btn" onclick="(async () => { const j = await apiClient.makeRequest('GET','/api/v1/personalization/memories'); document.getElementById('memList').textContent = JSON.stringify(j,null,2); })()">List</button>
+      <button class="btn" data-action="pers-add-memory">Add</button>
+      <button class="btn" data-action="pers-list-memories">List</button>
     </div>
 
     <pre id="memList" class="json-viewer" style="max-height:240px; overflow:auto; background: var(--color-surface-alt);"></pre>

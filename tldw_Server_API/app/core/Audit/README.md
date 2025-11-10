@@ -1,12 +1,23 @@
 # Audit Module
 
-## Purpose
+## 1. Current Feature Set
+
+- Unified, async audit logging across AuthNZ, RAG, Evaluations, Workflows, and public APIs
+- Common schema with event categories/types, severity, context, risk score, and optional PII redaction
+- Buffered writes with size/interval/high‑risk flush triggers, daily aggregates and retention cleanup
+- CSV/JSON/JSONL export with optional streaming for large datasets; count endpoint for pagination
+- Per‑user or shared audit databases; fallback JSONL queue for resilience on flush failures
+- Test‑friendly behavior (background loops disabled in TEST_MODE)
+
+## 2. Technical Details of Features
+
+### Purpose
 The audit module provides a single, async-friendly service for capturing security,
 compliance, and operational events across the tldw_server backend. It unifies audit
 logging for AuthNZ, RAG, Evaluations, Workflows, and API surfaces, enforcing a
 common schema, risk scoring, and optional PII redaction before data is persisted.
 
-## Key Components
+### Key Components
 - `AuditEventCategory` / `AuditEventType` / `AuditSeverity` - canonical enums that
   describe high-level categories, fine-grained event IDs, and severity levels.
 - `AuditContext` - request/session metadata (IDs, IP, UA, method, endpoint, etc.)
@@ -20,7 +31,7 @@ common schema, risk scoring, and optional PII redaction before data is persisted
 - `UnifiedAuditService` - the async facade that buffers, flushes, exports, and
   rotates audit data. It owns lifecycle management, schema creation, and stats.
 
-## Storage & Schema
+### Storage & Schema
 - Default DB lives at `Databases/unified_audit.db` (configurable via constructor).
 - Schema consists of `audit_events` and `audit_daily_stats`. The service applies
   WAL/JOURNAL pragmas for better concurrency and creates indexes on category,
@@ -30,7 +41,7 @@ common schema, risk scoring, and optional PII redaction before data is persisted
 - On repeated flush failures, surplus events are persisted to
   `Databases/audit_fallback_queue.jsonl` for later replay.
 
-## Runtime Model
+### Runtime Model
 - **Buffer & flush**: Events are appended to an in-memory buffer protected by an
   `asyncio.Lock`. Flushes happen when the buffer reaches `buffer_size`, when a
   high-risk event (>=`AUDIT_HIGH_RISK_SCORE`, default `70`) arrives, or on the
@@ -46,7 +57,7 @@ common schema, risk scoring, and optional PII redaction before data is persisted
 - **Risk**: High scores increment `stats["high_risk_events"]` and emit warnings via
   `loguru`, making it easy to pipe alerts into structured logging or metrics.
 
-## Typical Usage
+### Typical Usage
 ```python
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     UnifiedAuditService, AuditEventType, AuditContext
@@ -87,7 +98,7 @@ The service exposes `export_events(...)` (CSV/JSONL), `get_daily_stats(...)`,
 `app/api/v1/endpoints/audit.py`. Keep export code async (it uses the same pooled
 connection and locks) to avoid blocking the event loop.
 
-## Configuration Surface
+### Configuration Surface
 | Setting | Description |
 | --- | --- |
 | `AUDIT_HIGH_RISK_SCORE` | Threshold for immediate flush/log alerts (default `70`). |
@@ -100,7 +111,23 @@ connection and locks) to avoid blocking the event loop.
 Constructor kwargs (`retention_days`, `buffer_size`, `flush_interval`, `enable_pii_detection`,
 `enable_risk_scoring`, `db_path`) override global settings per instance.
 
-## Integration Guidelines
+## 3. Developer Guide for Contributors
+
+### Related Endpoints
+- Router (mounted under `/api/v1`):
+  - Export audit events `/audit/export`: tldw_Server_API/app/api/v1/endpoints/audit.py:104
+  - Count audit events `/audit/count`: tldw_Server_API/app/api/v1/endpoints/audit.py:217
+
+### Related Schemas
+- The public endpoints are query-driven and stream JSON/CSV; core types defined in service:
+  - tldw_Server_API/app/core/Audit/unified_audit_service.py:1
+
+### Related Tests (selection)
+- Postgres membership flows produce audit events: tldw_Server_API/tests/AuthNZ_Postgres/test_admin_membership_audit_team_pg.py:12
+- Admin audit log access and listing: tldw_Server_API/tests/AuthNZ/integration/test_auth_comprehensive.py:475
+- Health checks summarize audit risk: tldw_Server_API/tests/Health/test_security_health_thresholds.py:21
+
+### Integration Guidelines
 1. **Per-user instances**: AuthNZ uses per-user caches keyed by user ID; reuse that
    pattern when per-tenant isolation is required. Avoid global singletons unless
    you truly need cross-tenant aggregation.
@@ -115,7 +142,7 @@ Constructor kwargs (`retention_days`, `buffer_size`, `flush_interval`, `enable_p
 5. **Flushing during shutdown**: Call `await audit.stop()` inside FastAPI shutdown
    hooks or worker termination handlers to flush the buffer and close the pool.
 
-## Testing & Tooling
+### Testing & Tooling
 - Unit and integration tests live under `tldw_Server_API/tests/Audit/` plus modules
   that depend on auditing (AuthNZ, Embeddings, etc.). Run
   `python -m pytest tldw_Server_API/tests/Audit -v` after modifying core logic.
@@ -124,7 +151,7 @@ Constructor kwargs (`retention_days`, `buffer_size`, `flush_interval`, `enable_p
 - When adding new risk heuristics or PII patterns, extend the corresponding tests
   to lock behaviour and prevent regressions.
 
-## Extensibility Tips
+### Extensibility Tips
 - Add new `AuditEventType` values for clearly defined actions; keep namespaced
   (e.g., `workflows.job.started`) to avoid collisions.
 - Prefer deriving categories automatically in `_determine_category()`; add to the
@@ -134,7 +161,7 @@ Constructor kwargs (`retention_days`, `buffer_size`, `flush_interval`, `enable_p
 - For external sinks (SIEM, queue streams, etc.), hook into `flush()` by extending
   the service or by subscribing to the fallback JSONL queue in a background worker.
 
-## Contribution Checklist
+### Contribution Checklist
 1. Update or add tests in `tests/Audit` (and dependent modules) for behaviour changes.
 2. Document new settings or event types in this README and in `Docs/` if they affect
    end users or operators.
