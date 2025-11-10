@@ -73,7 +73,7 @@ This is a major milestone release that transitions tldw from a Gradio-based appl
 - FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
 - Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
 - MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
-- Next.js web client (`tldw-frontend`) as the primary UI; integrated WebUI remains for compatibility
+- New WebUI (Current is a WIP placeholder, expect it to be wonky/broken)
 - Strict OpenAI compatibility mode for local/self-hosted providers
 - PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
 

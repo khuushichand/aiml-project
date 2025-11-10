@@ -8,9 +8,9 @@ Additionally, we relax Character-Chat rate limits for this package to avoid
 flakiness in tests that incidentally hit persona chat endpoints.
 """
 
-# Note: pytest_plugins must be declared only in the top-level conftest.
-# Isolated Chat fixtures are registered in the repository’s root
-# conftest.py to satisfy pytest>=8 requirements.
+# Note: Global plugin registration is configured in pyproject.toml under
+# [tool.pytest.ini_options]. This avoids pytest>=8 restrictions on using
+# `pytest_plugins` in non-top-level conftest files.
 
 import pytest
 
