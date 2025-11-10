@@ -14,7 +14,8 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
 )
 
-# Patchable via monkeypatch: tests replace module symbol _hc_create_client
+# Expose a patchable factory for tests; production uses the centralized client
+http_client_factory = _hc_create_client
 
 
 class QwenAdapter(ChatProvider):
@@ -64,10 +65,10 @@ class QwenAdapter(ChatProvider):
         # - Otherwise, if legacy callable is monkeypatched, prefer legacy path
         if os.getenv("PYTEST_CURRENT_TEST"):
             try:
-                # If our bound alias differs from the module's factory, tests patched it
+                # If our exposed factory differs from the module's default, tests patched it
                 from tldw_Server_API.app.core import http_client as _hc_mod
                 _default_factory = getattr(_hc_mod, "create_client", None)
-                if _default_factory is not None and _hc_create_client is not _default_factory:
+                if _default_factory is not None and http_client_factory is not _default_factory:
                     return True
                 # Otherwise, if legacy callable is monkeypatched, allow legacy path
                 from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
@@ -161,7 +162,7 @@ class QwenAdapter(ChatProvider):
             payload["stream"] = False
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
-                with _hc_create_client(timeout=resolved_timeout) as client:
+                with http_client_factory(timeout=resolved_timeout) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
@@ -191,7 +192,7 @@ class QwenAdapter(ChatProvider):
             payload["stream"] = True
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
-                with _hc_create_client(timeout=resolved_timeout) as client:
+                with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         seen_done = False

@@ -956,7 +956,8 @@ async def qwen_chat_handler_async(
     **kwargs: Any,
 ):
     from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_qwen as _legacy_qwen
-    # Honor monkeypatched legacy callable in tests even if adapters are enabled
+    # Honor monkeypatched legacy callable only when the legacy function itself
+    # is patched (module/name indicates tests), not merely because tests run.
     try:
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_qwen", None)
@@ -964,8 +965,7 @@ async def qwen_chat_handler_async(
             _modname = getattr(_patched, "__module__", "") or ""
             _fname = getattr(_patched, "__name__", "") or ""
             if (
-                os.getenv("PYTEST_CURRENT_TEST")
-                or _modname.startswith("tldw_Server_API.tests")
+                _modname.startswith("tldw_Server_API.tests")
                 or _modname.startswith("tests")
                 or ".tests." in _modname
                 or _fname.startswith("_fake")
