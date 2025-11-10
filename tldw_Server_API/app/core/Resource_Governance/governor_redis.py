@@ -100,6 +100,14 @@ class RedisResourceGovernor(ResourceGovernor):
         # Requests acceptance tracker per (ns, policy, entity) to harden burst behavior
         self._requests_accept_window: Dict[Tuple[str, str, str], Tuple[float, int, int]] = {}
         ensure_rg_metrics_registered()
+        # Pin a metrics registry reference at construction time to avoid
+        # writing to a different registry instance if modules reload in tests.
+        try:
+            from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get
+            self._reg_ref = _get()
+        except Exception:
+            self._reg_ref = None
+
         # Stub delegate (memory governor) for in-memory client path
         try:
             self._stub_delegate = MemoryResourceGovernor(policy_loader=policy_loader, time_source=time_source, backend_label="redis-stub")
@@ -115,14 +123,18 @@ class RedisResourceGovernor(ResourceGovernor):
             pass
 
     def _reg(self):
-        """Return the global metrics registry instance, or None if unavailable.
+        """Return a pinned metrics registry instance, if available.
 
-        Using a lazy import prevents issues when this module is imported before
-        metrics are fully available in test contexts.
+        We capture the registry in __init__ to ensure all increments target the
+        same instance across the lifetime of this governor. If unavailable at
+        construction time, attempt a best-effort lazy load once here.
         """
+        if getattr(self, "_reg_ref", None) is not None:
+            return self._reg_ref
         try:
             from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get
-            return _get()
+            self._reg_ref = _get()
+            return self._reg_ref
         except Exception:
             return None
 
@@ -1941,6 +1953,56 @@ class RedisResourceGovernor(ResourceGovernor):
             "last_used_tokens_lua": bool(self._last_used_tokens_lua) if self._last_used_tokens_lua is not None else None,
             "last_used_multi_lua": bool(self._last_used_multi_lua) if self._last_used_multi_lua is not None else None,
         }
+
+    async def test_force_clear_windows(self, policy_id: str, categories: Optional[list[str]] = None) -> None:
+        """Test-only helper to force-clear window ZSETs for a policy.
+
+        Intended to be called in property tests when using FakeTime≈0.0 to
+        guarantee a clean slate for sliding-window keys in the in-memory stub
+        or a local Redis instance.
+
+        Args:
+            policy_id: Policy identifier whose window keys should be cleared.
+            categories: Optional list of categories to clear (defaults to
+                        ["requests", "tokens"]). Others are ignored.
+        """
+        try:
+            now = float(self._time())
+        except Exception:
+            now = 0.0
+        # Only act when tests are likely using FakeTime near zero to avoid
+        # destructive behavior in real executions.
+        if now >= 1.0:
+            return
+
+        cats = list(categories or ["requests", "tokens"])
+        try:
+            client = await self._client_get()
+        except Exception:
+            return
+
+        # Delete any ZSET window keys in real/stub client
+        for cat in cats:
+            if cat not in ("requests", "tokens"):
+                continue
+            pattern = f"{self._keys.ns}:win:{policy_id}:{cat}:*"
+            try:
+                _cur, keys = await client.scan(0, match=pattern, count=1000)
+            except Exception:
+                keys = []
+            for k in keys or []:
+                try:
+                    await client.delete(k)
+                except Exception:
+                    pass
+
+        # Best-effort: clear in-memory mirrors for leases/windows if any remain
+        try:
+            to_drop_stub = [k for k in list(self._stub_windows.keys()) if k.startswith(f"{self._keys.ns}:stub:{policy_id}:")]
+            for k in to_drop_stub:
+                self._stub_windows.pop(k, None)
+        except Exception:
+            pass
     async def _maybe_test_purge_windows_once(self, *, policy_id: str, categories: Dict[str, Any], now: float) -> None:
         """When FakeTime is near zero, clear any prior window keys for this policy
         exactly once to avoid cross-run contamination. Does nothing after the

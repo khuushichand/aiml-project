@@ -274,7 +274,7 @@ db = MediaDatabase(db_path="path/to/media.db", client_id="api_client")
 - **Async Operations**: For I/O-bound tasks
 
 ### Deployment Considerations
-- **Docker**: See `tldw_Server_API/Dockerfiles/`
+- **Docker**: See `Dockerfiles/`
 - **Environment**: Linux, macOS, Windows supported
 - **Auth Modes**: Single-user (X-API-KEY) and multi-user (JWT)
 - **Backup**: Built-in DB backup/exports (Chatbooks)

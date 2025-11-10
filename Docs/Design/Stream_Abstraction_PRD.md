@@ -534,7 +534,7 @@ Stage 3 — Chat SSE Pilot Integration
 
 Environment
 - Use dev/staging with unified streams enabled:
-  - Compose overlay: `-f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml`
+  - Compose overlay: `-f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml`
   - or export `STREAMS_UNIFIED=1` in the environment prior to starting the API.
 - Ensure provider keys are set for at least two providers (e.g., OpenAI and Groq).
 - Optional: behind reverse proxies/CDNs, set `STREAM_HEARTBEAT_MODE=data`.

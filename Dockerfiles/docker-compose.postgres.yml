@@ -33,8 +33,8 @@ volumes:
 #   1) Export matching DATABASE_URL for the app:
 #      export DATABASE_URL=postgresql://tldw_user:TestPassword123!@localhost:5432/tldw_users
 #   2) Start Postgres:
-#      docker compose -f tldw_Server_API/Dockerfiles/docker-compose.postgres.yml up -d
+#      docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
 #   3) Check health:
-#      docker compose -f tldw_Server_API/Dockerfiles/docker-compose.postgres.yml ps
+#      docker compose -f Dockerfiles/docker-compose.postgres.yml ps
 #   4) Stop:
-#      docker compose -f tldw_Server_API/Dockerfiles/docker-compose.postgres.yml down
+#      docker compose -f Dockerfiles/docker-compose.postgres.yml down

@@ -25,9 +25,9 @@ yarn dev -p 8080
 
 Open [http://localhost:8080](http://localhost:8080) with your browser.
 
-Unified streaming (dev)
-- To exercise the unified SSE/WS streaming in the backend, start the API with the dev overlay:
-  `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Dockerfiles/docker-compose.dev.yml up -d --build`
+ Unified streaming (dev)
+ - To exercise the unified SSE/WS streaming in the backend, start the API with the dev overlay:
+   `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
   and set `NEXT_PUBLIC_API_URL` to `http://127.0.0.1:8000`.
 
 You can start editing the page by modifying `pages/index.tsx`. The page auto-updates as you edit the file.

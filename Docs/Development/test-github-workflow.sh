@@ -20,7 +20,7 @@ run_docker_test() {
     # Build and run the Docker container
     docker build \
         --build-arg PYTHON_VERSION=$python_version \
-        -f test-workflow/Dockerfile.ubuntu \
+        -f Dockerfiles/Dockerfile.Ubuntu \
         -t tldw-test:py$python_version \
         .
 

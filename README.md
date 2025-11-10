@@ -50,10 +50,10 @@ The long-term vision is a personal research assistant inspired by The Young Lady
 
 ## Current Status
 
-### Status: Version 0.1.0 published - tldw_server is now in beta
+### Status: Version 0.1.4 published - tldw_server is now in beta
 - Expect bugs, and random issues.
 - Please report any found/encountered.
-- CI/CD reporting green is Top priority next to bug squashing.
+- CI/CD reporting green/bug squashing is current Top priority next to getting the webui working properly.
 
 ## Version 0.1.0 - API-First Architecture (Complete rebuild from Gradio PoC)
 
@@ -73,7 +73,7 @@ This is a major milestone release that transitions tldw from a Gradio-based appl
 - FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
 - Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
 - MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
-- Next.js web client (`tldw-frontend`) as the primary UI; integrated WebUI remains for compatibility
+- New WebUI (Current is a WIP placeholder, expect it to be wonky/broken)
 - Strict OpenAI compatibility mode for local/self-hosted providers
 - PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
 
