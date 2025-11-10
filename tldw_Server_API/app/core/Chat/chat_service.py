@@ -127,7 +127,7 @@ def parse_provider_model_for_metrics(
 ) -> Tuple[str, str]:
     """Parse provider and model for metrics logging without mutating request_data.
 
-    Accepts model strings like "anthropic/claude-3-opus" and an optional
+    Accepts model strings like "anthropic/claude-opus-4.1" and an optional
     api_provider on the request, falling back to the server default.
 
     Returns (provider, model_for_metrics).

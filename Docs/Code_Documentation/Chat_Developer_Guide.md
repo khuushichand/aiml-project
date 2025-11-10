@@ -64,7 +64,7 @@ Related:
 - At app startup, `main.py` seeds the `provider_manager` from `provider_config.API_CALL_HANDLERS` to avoid drift with the endpoint mappings.
 
 Provider selection notes:
-- Requests may specify models with a provider prefix (e.g., `anthropic/claude-3-opus`). The endpoint extracts the provider and model automatically.
+- Requests may specify models with a provider prefix (e.g., `anthropic/claude-opus-4.1`). The endpoint extracts the provider and model automatically.
 - Provider fallback is available via `provider_manager`; controlled by `[Chat-Module].enable_provider_fallback` (disabled by default for stability).
 
 ### Adding a Provider (Checklist)
@@ -85,7 +85,7 @@ Provider selection notes:
   - `logprobs/top_logprobs` relationships
   - Tool definitions size limits
   - Request size limits (`MAX_REQUEST_SIZE`), see `chat_validators.py`
-  - Model strings with provider prefixes like `anthropic/claude-3-opus` (provider extracted automatically)
+  - Model strings with provider prefixes like `anthropic/claude-opus-4.1` (provider extracted automatically)
   - Image inputs on user messages via `image_url` content parts (expects data URI with base64; validated/sanitized)
 
 ## Error Handling

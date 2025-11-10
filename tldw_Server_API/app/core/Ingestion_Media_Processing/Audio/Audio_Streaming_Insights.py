@@ -280,7 +280,7 @@ class LiveMeetingInsights:
         if not model:
             default_models = {
                 "openai": "gpt-4o-mini",
-                "anthropic": "claude-3-haiku-20240307",
+                "anthropic": "claude-haiku-4.5",
                 "groq": "mixtral-8x7b-32768",
                 "cohere": "command-r-plus",
                 "mistral": "mistral-large-latest",

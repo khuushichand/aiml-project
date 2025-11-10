@@ -2188,7 +2188,7 @@ def chat_with_anthropic(
 
     logging.debug("Anthropic: Using configured API key")
 
-    current_model = model or anthropic_config.get('model', 'claude-3-haiku-20240307')
+    current_model = model or anthropic_config.get('model', 'claude-haiku-4.5')
     current_temp = temp if temp is not None else _safe_cast(anthropic_config.get('temperature'), float, 0.7)
     current_top_p = topp
     current_top_k = topk
