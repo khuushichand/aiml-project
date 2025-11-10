@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from loguru import logger
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -142,6 +143,29 @@ class DeepSeekAdapter(ChatProvider):
             payload["logit_bias"] = request.get("logit_bias")
         return payload
 
+    def _payload_meta(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a sanitized summary of the payload for logging.
+
+        Avoids logging raw message content or secrets. Only includes counts/flags.
+        """
+        meta: Dict[str, Any] = {}
+        try:
+            meta["model"] = payload.get("model")
+            meta["stream"] = bool(payload.get("stream"))
+            msgs = payload.get("messages") or []
+            meta["messages_count"] = len(msgs) if isinstance(msgs, list) else 0
+            meta["has_tools"] = bool(payload.get("tools"))
+            if payload.get("tool_choice") is not None:
+                # Only surface that tool_choice is present; not its full content
+                meta["tool_choice_present"] = True
+            # Common numeric knobs (if present)
+            for k in ("temperature", "top_p", "max_tokens"):
+                if payload.get(k) is not None:
+                    meta[k] = payload.get(k)
+        except Exception:
+            pass
+        return meta
+
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         if self._use_native_http():
             api_key = request.get("api_key")
@@ -153,10 +177,33 @@ class DeepSeekAdapter(ChatProvider):
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
+                    logger.debug(
+                        "DeepSeekAdapter.chat POST {} with meta {}",
+                        url,
+                        self._payload_meta(payload),
+                    )
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
             except Exception as e:
+                # Try to log upstream response text if available
+                try:
+                    import httpx  # type: ignore
+                    if isinstance(e, getattr(httpx, "HTTPStatusError", ())):
+                        r = getattr(e, "response", None)
+                        status = getattr(r, "status_code", "?")
+                        text = ""
+                        try:
+                            text = (r.text or "")[:500]
+                        except Exception:
+                            text = "<unreadable>"
+                        logger.error(
+                            "DeepSeekAdapter.chat upstream error {}: {}",
+                            status,
+                            text,
+                        )
+                except Exception:
+                    pass
                 raise self.normalize_error(e)
 
         kwargs = self._to_handler_args(request)
@@ -167,8 +214,10 @@ class DeepSeekAdapter(ChatProvider):
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
             fname = getattr(fn, "__name__", "") or ""
-            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
+            # Only honor an explicitly monkeypatched test helper to avoid recursion.
+            if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
                 return fn(**kwargs)  # type: ignore[misc]
+        # Fallback to the preserved legacy implementation to avoid adapter recursion under pytest
         return _legacy.legacy_chat_with_deepseek(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
@@ -182,6 +231,11 @@ class DeepSeekAdapter(ChatProvider):
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
+                    logger.debug(
+                        "DeepSeekAdapter.stream POST {} with meta {}",
+                        url,
+                        self._payload_meta(payload),
+                    )
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         seen_done = False
@@ -204,6 +258,24 @@ class DeepSeekAdapter(ChatProvider):
                             yield tail
                 return
             except Exception as e:
+                # Try to log upstream response text if available
+                try:
+                    import httpx  # type: ignore
+                    if isinstance(e, getattr(httpx, "HTTPStatusError", ())):
+                        r = getattr(e, "response", None)
+                        status = getattr(r, "status_code", "?")
+                        text = ""
+                        try:
+                            text = (r.text or "")[:500]
+                        except Exception:
+                            text = "<unreadable>"
+                        logger.error(
+                            "DeepSeekAdapter.stream upstream error {}: {}",
+                            status,
+                            text,
+                        )
+                except Exception:
+                    pass
                 raise self.normalize_error(e)
 
         kwargs = self._to_handler_args(request)
@@ -213,7 +285,7 @@ class DeepSeekAdapter(ChatProvider):
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
             fname = getattr(fn, "__name__", "") or ""
-            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
+            if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
                 return fn(**kwargs)  # type: ignore[misc]
         return _legacy.legacy_chat_with_deepseek(**kwargs)
 

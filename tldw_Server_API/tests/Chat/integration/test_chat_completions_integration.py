@@ -292,6 +292,13 @@ def resolve_test_model_from_catalog(provider_name: str) -> str:
         # Return empty to let server-side config decide (or require env override)
         return ""
 
+    # Prefer a stable chat model for DeepSeek regardless of pricing sort.
+    # DeepSeek's coder model can behave differently; use chat for general tests.
+    if provider_name == "deepseek":
+        for m in chat_models:
+            if (m or "").lower().strip() == "deepseek-chat":
+                return "deepseek-chat"
+
     # Prefer concrete ids (-latest, dated suffixes, context sizes) when available
     def _looks_concrete(mid: str) -> bool:
         ml = (mid or "").lower()

@@ -547,6 +547,14 @@ def legacy_chat_with_deepseek(
         top_logprobs: Optional[int] = None,
         presence_penalty: Optional[float] = None,
         frequency_penalty: Optional[float] = None,
+        # Accept OpenAI-style extras for compatibility with adapter callers
+        response_format: Optional[Dict[str, Any]] = None,
+        n: Optional[int] = None,
+        user: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
     # Call the preserved legacy implementation directly
@@ -565,6 +573,13 @@ def legacy_chat_with_deepseek(
         top_logprobs=top_logprobs,
         presence_penalty=presence_penalty,
         frequency_penalty=frequency_penalty,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        custom_prompt_arg=custom_prompt_arg,
         app_config=app_config,
     )
 

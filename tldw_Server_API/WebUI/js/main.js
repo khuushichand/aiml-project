@@ -1106,12 +1106,12 @@ class WebUI {
                         await this.preloadAllEndpointsForSearch();
                         this.searchPreloaded = true;
                         if (typeof Toast !== 'undefined' && Toast) {
-                            if (typeof Toast !== 'undefined' && Toast) Toast.success('All endpoints loaded for search');
+                            Toast.success('All endpoints loaded for search');
                         }
                     }
                 } catch (e) {
                     if (typeof Toast !== 'undefined' && Toast) {
-                        if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load endpoints');
+                        Toast.error('Failed to load endpoints');
                     }
                 }
             });
