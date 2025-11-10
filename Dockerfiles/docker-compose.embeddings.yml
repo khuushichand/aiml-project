@@ -2,7 +2,6 @@
 # Docker Compose configuration for the embeddings job infrastructure
 # This extends the main application with Redis and worker services
 
-version: '3.8'
 
 services:
   # Redis for job queues and caching
