@@ -206,13 +206,19 @@ class WebUI {
 
     // Observe DOM insertions and migrate inline handlers quickly to avoid CSP blocks
     installCSPGuard() {
-        const migrateNode = (node) => {
+        // Track already-migrated elements to avoid repeated work
+        const migratedElements = new WeakSet();
+
+        const migrateNode = (node, force = false) => {
             try {
+                if (!node || node.nodeType !== 1) return;
+                if (!force && migratedElements.has(node)) return;
                 if (window.WebUISanitizer && typeof window.WebUISanitizer.migrateInlineHandlers === 'function') {
                     window.WebUISanitizer.migrateInlineHandlers(node);
                 } else {
                     this.migrateInlineHandlers(node);
                 }
+                migratedElements.add(node);
             } catch (_) {}
         };
         try {
@@ -224,7 +230,8 @@ class WebUI {
                         m.addedNodes && m.addedNodes.forEach((n) => { if (n && n.nodeType === 1) migrateNode(n); });
                     } else if (m.type === 'attributes') {
                         if (m.attributeName && m.attributeName.startsWith('on')) {
-                            migrateNode(m.target);
+                            // Force re-migration when inline handlers change
+                            migrateNode(m.target, true);
                         }
                     }
                 }
@@ -232,14 +239,34 @@ class WebUI {
             mo.observe(target, { subtree: true, childList: true, attributes: true, attributeFilter: ['onclick','onchange','oninput','onsubmit','onkeydown','onkeyup','onload','onerror'] });
             this._cspGuardObserver = mo;
         } catch (_) {}
-        // Capture-phase guard for common events: migrate then continue
-        const events = ['click','change','input','submit','keydown','keyup','dblclick','focus','blur','mouseenter','mouseleave','mouseover','mouseout','mouseup','mousedown','contextmenu','drag','dragstart','dragend','dragover','drop'];
-        events.forEach((evt) => {
+        // Bubble-phase guard for essential interactions only
+        const essentialEvents = ['click', 'change', 'submit', 'input', 'keydown', 'keyup'];
+
+        const handleEvent = (e) => {
+            const path = (e.composedPath && e.composedPath()) || [];
+            for (const el of path) {
+                if (el && el.nodeType === 1) migrateNode(el);
+            }
+        };
+
+        // Simple debounce for high-frequency events (typing/input)
+        const makeDebounced = (fn, wait = 60) => {
+            let t;
+            return (e) => {
+                if (t) clearTimeout(t);
+                t = setTimeout(() => fn(e), wait);
+            };
+        };
+        const debouncedInput = makeDebounced(handleEvent, 60);
+        const debouncedKeydown = makeDebounced(handleEvent, 60);
+
+        essentialEvents.forEach((evt) => {
             try {
-                document.addEventListener(evt, (e) => {
-                    const path = (e.composedPath && e.composedPath()) || []; // includes ancestors
-                    path.forEach((el) => { if (el && el.nodeType === 1) migrateNode(el); });
-                }, true);
+                const handler = (evt === 'input') ? debouncedInput
+                              : (evt === 'keydown') ? debouncedKeydown
+                              : handleEvent;
+                // Use bubble phase to reduce overhead vs capture
+                document.addEventListener(evt, handler, false);
             } catch (_) {}
         });
     }
@@ -696,11 +723,21 @@ class WebUI {
     }
 
     // Remove all <script> tags and migrate inline on* handlers using shared sanitizer
+    // Fail-safe: never return unsanitized HTML. If sanitizer is unavailable or
+    // throws, drop content and optionally log.
     sanitizeInlineHandlersAndScripts(html) {
-        try { return (WebUISanitizerRef && typeof WebUISanitizerRef.sanitizeInlineHandlersAndScripts === 'function')
-            ? WebUISanitizerRef.sanitizeInlineHandlersAndScripts(html)
-            : String(html);
-        } catch (_) { return String(html); }
+        try {
+            if (WebUISanitizerRef && typeof WebUISanitizerRef.sanitizeInlineHandlersAndScripts === 'function') {
+                return WebUISanitizerRef.sanitizeInlineHandlersAndScripts(html);
+            }
+            // Sanitizer missing; fail safe by returning empty string
+            console.error('WebUISanitizerRef.sanitizeInlineHandlersAndScripts unavailable; dropping potentially unsafe HTML.');
+            return '';
+        } catch (e) {
+            // Sanitization failed; fail safe by returning empty string
+            console.error('sanitizeInlineHandlersAndScripts failed; dropping potentially unsafe HTML.', e);
+            return '';
+        }
     }
 
     // Convert inline event attributes (onclick, onchange, etc.) to proper listeners
