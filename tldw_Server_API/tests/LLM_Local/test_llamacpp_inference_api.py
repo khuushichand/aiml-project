@@ -46,7 +46,7 @@ def test_llamacpp_inference_happy_path(llamacpp_client, monkeypatch):
             }
 
     import tldw_Server_API.app.api.v1.endpoints.llamacpp as lp
-    monkeypatch.setattr(lp, "llm_manager", _Mgr())
+    monkeypatch.setattr(lp, "llm_manager", _Mgr(), raising=False)
 
     payload = {
         "model": "ignored-by-server",
@@ -60,4 +60,3 @@ def test_llamacpp_inference_happy_path(llamacpp_client, monkeypatch):
     body = r.json()
     assert body["model"] == "mock.gguf"
     assert body["choices"][0]["message"]["content"] == "hi"
-

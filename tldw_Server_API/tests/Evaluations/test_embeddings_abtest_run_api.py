@@ -7,19 +7,20 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def evals_client() -> Tuple[TestClient, dict]:
-    """Provide TestClient with evaluations routes enabled and X-API-KEY headers."""
+    """Provide a minimal FastAPI app mounting the evaluations router directly.
+
+    Avoid main.py route gating by including the router here.
+    """
     os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
-    # Enable evaluations route regardless of global test gating
-    cur = os.getenv("ROUTES_ENABLE", "")
-    parts = [p.strip().lower() for p in cur.replace(" ", ",").split(",") if p.strip()]
-    for k in ("evaluations",):
-        if k not in parts:
-            parts.append(k)
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
+    os.environ.setdefault("TEST_MODE", "true")
 
+    from fastapi import FastAPI
+    from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as evals_router
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    from tldw_Server_API.app.main import app
+
+    app = FastAPI()
+    app.include_router(evals_router, prefix="/api/v1")
 
     api_key = get_settings().SINGLE_USER_API_KEY
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
@@ -63,7 +64,7 @@ def test_run_embeddings_abtest_synchronous_success(evals_client, monkeypatch):
         }
     }
     # Request should complete synchronously in TESTING mode
-    r = client.post("/api/v1/embeddings/abtest/mytest/run", json=payload, headers=headers)
+    r = client.post("/api/v1/evaluations/embeddings/abtest/mytest/run", json=payload, headers=headers)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["test_id"] == "mytest"
@@ -71,4 +72,3 @@ def test_run_embeddings_abtest_synchronous_success(evals_client, monkeypatch):
     # In TESTING env this should be completed
     if body["status"] == "completed":
         assert body.get("progress", {}).get("phase") == 1.0
-
