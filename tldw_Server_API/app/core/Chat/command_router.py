@@ -22,6 +22,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+import asyncio
 from typing import Callable, Dict, Optional, Tuple, List
 
 from loguru import logger
@@ -266,6 +267,91 @@ def dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> 
         return CommandResult(ok=False, command=cmd, content=f"Command /{cmd} failed: {e}", metadata={"error": "exception"})
 
 
+async def async_dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> CommandResult:
+    """Async variant of dispatch_command that uses TokenBucket.consume() safely.
+
+    Mirrors dispatch_command behavior but awaits the bucket's consume method to
+    respect its asyncio.Lock and prevent race conditions under concurrency.
+    """
+    cmd = command.lower()
+    spec = _registry.get(cmd)
+    if not spec:
+        return CommandResult(ok=False, command=cmd, content=f"Unknown command: /{cmd}", metadata={"error": "unknown_command"})
+
+    # RBAC: optional enforcement via env flag
+    rbac_enforced = _cfg_bool("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
+    if rbac_enforced and spec.required_permission:
+        permitted = False
+        details = {"checked": True, "required_permission": spec.required_permission}
+        try:
+            if is_single_user_mode():
+                permitted = True
+            else:
+                if ctx.auth_user_id is not None:
+                    permitted = bool(_user_has_permission(int(ctx.auth_user_id), spec.required_permission))
+                else:
+                    permitted = False
+        except Exception:
+            permitted = False
+        if not permitted:
+            log_counter("chat_command_error", labels={"command": cmd, "reason": "permission_denied"})
+            try:
+                increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "permission_denied"})
+                increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "denied"})
+            except Exception:
+                pass
+            details.update({"permitted": False})
+            return CommandResult(
+                ok=False,
+                command=cmd,
+                content=f"Permission denied for /{cmd}",
+                metadata={"error": "permission_denied", **details},
+            )
+
+    # Per-user per-command rate limiting (safe, lock-respecting)
+    bucket = _acquire_bucket(ctx.user_id, cmd)
+    allowed = await bucket.consume(1)
+    if not allowed:
+        log_counter("chat_command_error", labels={"command": cmd, "reason": "rate_limited"})
+        try:
+            increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "rate_limited"})
+            increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "rate_limited"})
+        except Exception:
+            pass
+        return CommandResult(
+            ok=False,
+            command=cmd,
+            content=f"Command /{cmd} is rate limited. Please try again shortly.",
+            metadata={"error": "rate_limited"},
+        )
+
+    try:
+        res = spec.handler(ctx, args)
+        if asyncio.iscoroutine(res):  # future-proof if handlers become async
+            res = await res  # type: ignore[assignment]
+        # annotate result metadata with RBAC info when applicable
+        if rbac_enforced and spec.required_permission:
+            try:
+                res.metadata = {**(res.metadata or {}), "rbac": {"checked": True, "required_permission": spec.required_permission, "permitted": True}}
+            except Exception:
+                pass
+        log_counter("chat_command_invoked", labels={"command": cmd})
+        try:
+            increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "success"})
+        except Exception:
+            pass
+        return res
+    except Exception as e:
+        logger.error(f"Error executing /{cmd}: {e}", exc_info=True)
+        log_counter("chat_command_error", labels={"command": cmd, "reason": "exception"})
+        try:
+            increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "exception"})
+            increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "error"})
+        except Exception:
+            pass
+        return CommandResult(ok=False, command=cmd, content=f"Command /{cmd} failed: {e}", metadata={"error": "exception"})
+
+
 # -----------------------------
 # Built-in command handlers
 # -----------------------------
@@ -302,8 +388,12 @@ def _weather_handler(ctx: CommandContext, args: Optional[str]) -> CommandResult:
     location = (args or "").strip()
     if not location:
         location = _cfg_str("DEFAULT_LOCATION", "default_location", "").strip()
-    # Importing the module ensures test monkeypatches to weather_providers.get_weather_client apply
-    client = weather_providers.get_weather_client()
+    # Obtain client via test seam so monkeypatches take effect
+    try:
+        client = get_weather_client(ctx)
+    except TypeError:
+        # Backward-compatible: some tests patch a zero-arg seam
+        client = get_weather_client()
     try:
         result = client.get_current(location=location or None)
         if result.ok:
@@ -319,7 +409,7 @@ register_command("time", "Show the current time (optional TZ).", _time_handler, 
 register_command("weather", "Show current weather for a location.", _weather_handler, required_permission="chat.commands.weather")
 
 # --- Test seam helpers ---
-def get_weather_client():
+def get_weather_client(ctx: Optional[CommandContext] = None):
     """Thin wrapper to allow tests to monkeypatch the weather client at the router level.
 
     Tests expect to patch command_router.get_weather_client; delegate to the

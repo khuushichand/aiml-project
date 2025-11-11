@@ -10,3 +10,12 @@ repos:
       - id: debug-statements
       - id: detect-private-key
       - id: check-merge-conflict
+  - repo: local
+    hooks:
+      - id: guard-legacy-complete-nonempty-body
+        name: Guard non-empty legacy /complete bodies in tests
+        entry: python3 Helper_Scripts/checks/guard_no_nonempty_legacy_complete.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit, push]

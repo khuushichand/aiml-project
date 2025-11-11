@@ -150,6 +150,18 @@ Soft delete a character (marks as deleted but preserves data).
 
 ---
 
+### Deprecated: Legacy Completion Endpoint
+
+The legacy endpoint `POST /api/v1/chats/{chat_id}/complete` is deprecated.
+
+- The request body is no longer supported. Sending a non-empty body now returns `422 Unprocessable Entity`.
+- Deprecation headers are sent with responses: `Deprecation: true`, a `Sunset` date ~90 days from release, and a `Link` header pointing to the successor endpoint.
+- Please migrate to one of the following:
+  - `POST /api/v1/chats/{chat_id}/complete-v2` to execute a completion (with optional persistence and streaming).
+  - `POST /api/v1/chats/{chat_id}/completions` to prepare chat messages for the unified Chat API (`/api/v1/chat/completions`).
+
+---
+
 ## Chat Session Management
 
 ### Create Chat Session

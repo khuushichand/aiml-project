@@ -441,3 +441,45 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}-py3.12
           path: coverage.xml
+
+  character-chat-rate-limits:
+    name: Character Chat Rate-Limits (TEST_MODE=0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [full-suite-linux]
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: '0'
+      DISABLE_HEAVY_STARTUP: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python and deps (uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Ensure pytest-asyncio installed
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+
+      - name: Run Character_Chat rate-limit tests with TEST_MODE=0
+        shell: bash
+        run: |
+          echo "TEST_MODE currently set to: ${TEST_MODE}"
+          pytest -q --maxfail=1 --disable-warnings -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/Character_Chat -rs
+      - name: Run Character_Chat_NEW rate-limit tests with TEST_MODE=0
+        shell: bash
+        run: |
+          echo "TEST_MODE currently set to: ${TEST_MODE}"
+          pytest -q --maxfail=1 --disable-warnings -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/Character_Chat_NEW -rs

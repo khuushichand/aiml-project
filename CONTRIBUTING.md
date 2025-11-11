@@ -115,3 +115,14 @@ Tips
 ----
 
 To run a subset of tests: `pytest Tests/test_your_test.py`
+
+Character Chat rate-limit tests
+-------------------------------
+
+Some Character Chat tests verify rate limiting behavior and expect limits to be enforced. Many fixtures set `TEST_MODE=true` by default, which disables rate limiting for general stability. To run the rate-limit checks accurately, temporarily override the environment:
+
+```
+TEST_MODE=0 pytest -q tldw_Server_API/tests/Character_Chat -k "rate_limit or max_messages or complete" -rs
+```
+
+CI runs a dedicated job that executes Character_Chat tests with `TEST_MODE=0` to catch regressions in limit enforcement.

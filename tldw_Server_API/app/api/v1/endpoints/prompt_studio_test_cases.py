@@ -814,12 +814,31 @@ async def get_csv_import_template(
 @router.post("/run")
 async def run_test_cases_simple(
     payload: RunTestCasesSimpleRequest,
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user)
 ) -> Dict[str, Any]:
     manager = TestCaseManager(db)
     prompt_id = int(payload.prompt_id)
     test_case_ids = payload.test_case_ids or []
     model = payload.model or "gpt-3.5-turbo"
+    # Enforce access to the prompt's project before running tests
+    project_id: Optional[int] = None
+    # Prefer explicit project_id from payload for compatibility with older clients/tests
+    if getattr(payload, "project_id", None):
+        try:
+            project_id = int(payload.project_id)  # type: ignore[attr-defined]
+        except Exception:
+            project_id = None
+    if project_id is None:
+        # Fallback: resolve project via prompt record
+        try:
+            prompt_row = db.get_prompt(prompt_id)
+            project_id = int(prompt_row["project_id"]) if prompt_row and "project_id" in prompt_row else None
+        except Exception:
+            project_id = None
+    if project_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Prompt {prompt_id} not found or no project context")
+    await require_project_access(project_id, user_context=user_context, db=db)
     results = await manager.run_batch_tests(prompt_id=prompt_id, test_case_ids=test_case_ids, model=model)
     return {"results": results}
 

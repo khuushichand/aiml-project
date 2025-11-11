@@ -76,6 +76,9 @@ When a key is missing, the individual test will usually skip with a descriptive 
 ## Tips
 - Export environment variables in your shell or create a temporary `.env` when running targeted suites.
 - Many integration fixtures automatically set `TEST_MODE=true` and disable rate limiting; you can do the same when writing new tests.
+- Character_Chat rate-limit tests: run with `TEST_MODE=0` to exercise real limits. Example:
+  - `TEST_MODE=0 pytest -q tldw_Server_API/tests/Character_Chat -k "rate_limit or max_messages or complete" -rs`
+  - CI includes a dedicated job that runs the Character_Chat suite with `TEST_MODE=0` to catch regressions.
 - Keep heavy toggles disabled by default in CI to control runtime. Enable them locally when validating provider integrations or stress scenarios.
 ### Postgres DSN for Tests
 - Preferred: export a full DSN and all tests will use it:

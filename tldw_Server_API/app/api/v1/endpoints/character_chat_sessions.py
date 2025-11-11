@@ -15,6 +15,8 @@ from fastapi import (
     Query,
     Path,
     status,
+    Body,
+    Response,
 
 )
 from fastapi.responses import StreamingResponse
@@ -362,12 +364,27 @@ async def get_chat_context(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving chat context")
 
 
-@router.post("/{chat_id}/complete", summary="Legacy completion endpoint with simple rate limit", tags=["Chat Sessions"])
+@router.post(
+    "/{chat_id}/complete",
+    summary="Legacy completion endpoint with simple rate limit",
+    tags=["Chat Sessions"],
+    deprecated=True,
+    description=(
+        "DEPRECATED: The request body for this endpoint is ignored and will be rejected in a future release. "
+        "Call this endpoint without a body. Prefer /{chat_id}/completions or /{chat_id}/complete-v2."
+    ),
+)
 async def complete_chat_legacy(
     chat_id: str = Path(..., description="Chat session ID"),
-    payload: Dict[str, Any] = None,
+    body: Optional[Dict[str, Any]] = Body(
+        default=None,
+        description=(
+            "DEPRECATED: Request body is ignored. This parameter will be removed and non-empty bodies will be rejected (422) in a future release."
+        ),
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
+    response: Response = None,
 ):
     """Legacy completion endpoint used by tests to validate rate limiting.
 
@@ -385,6 +402,34 @@ async def complete_chat_legacy(
         # Per-minute completion limiter (global per-user)
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_chat_completion_rate(current_user.id)
+
+        # Deprecation headers for clients; also used if we reject a non-empty body
+        sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
+        try:
+            from datetime import datetime, timedelta, timezone as _tz
+            sunset = (datetime.now(_tz.utc) + timedelta(days=90)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        except Exception:
+            pass
+        dep_headers = {
+            "Deprecation": "true",
+            "Sunset": sunset,
+            "Link": "</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
+        }
+        try:
+            if response is not None:
+                for k, v in dep_headers.items():
+                    response.headers[k] = v
+        except Exception:
+            pass
+
+        # If a non-empty body was provided, reject with 422 and include deprecation headers
+        if isinstance(body, dict) and body:
+            logger.warning("Legacy /complete rejected non-empty body; clients must omit the request body.")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Request body is deprecated and must be omitted. Use /{chat_id}/complete-v2 or /{chat_id}/completions.",
+                headers=dep_headers,
+            )
 
         # Test-mode throttle: 5 requests per second per (user, chat)
         key = f"{current_user.id}:{chat_id}"

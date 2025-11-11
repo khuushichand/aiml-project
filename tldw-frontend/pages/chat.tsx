@@ -7,7 +7,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 import '@chatui/core/dist/index.css';
-import { Composer, Message, MessageList, type MessageProps } from '@chatui/core';
+import { Composer, Message, MessageList, type MessageProps } from "@chatui/core";
 
 interface LLMProvider {
   name: string;
@@ -80,7 +80,27 @@ export default function ChatPage() {
   }, []);
 
   const webAssetBase = useMemo(() => {
-    try { return getApiBaseUrl().replace(/\/(api|API)\/v\d+$/,''); } catch { return 'http://127.0.0.1:8000'; }
+    // Prefer explicit env override for flexibility across environments
+    const envBase = (process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || '').toString().trim();
+    if (envBase) {
+      return envBase.replace(/\/$/, '');
+    }
+    // Derive from API base URL if available (strip trailing /api/vN)
+    try {
+      const apiBase = getApiBaseUrl();
+      if (apiBase && typeof apiBase === 'string') {
+        const host = apiBase.replace(/\/(api|API)\/v\d+$/, '');
+        if (host) return host;
+      }
+    } catch {}
+    // Fallback to browser origin when running client-side
+    try {
+      if (typeof window !== 'undefined' && window.location?.origin) {
+        return window.location.origin;
+      }
+    } catch {}
+    // Final fallback for local development
+    return 'http://127.0.0.1:8000';
   }, []);
   const providerIconUrl = useCallback((prov?: string) => {
     if (!prov) return '';
@@ -169,19 +189,20 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  const sendMessage = async () => {
-    if (!composerText.trim() || sending) return;
-    show({ title: 'Sending message…', variant: 'info' });
-    const newUi = [...uiMessages, { role: 'user', text: composerText.trim() } as UiMessage, { role: 'assistant', text: '' } as UiMessage];
-    setUiMessages(newUi);
-    setComposerText('');
-    setSending(true);
+    const sendMessage = async (messageText?: string) => {
+    const text = messageText ?? composerText;
+        if (!text.trim() || sending) return;
+        show({ title: 'Sending message…', variant: 'info' });
+        const newUi = [...uiMessages, { role: 'user', text: text.trim() } as UiMessage, { role: 'assistant', text: '' } as UiMessage];
+        setUiMessages(newUi);
+        setComposerText('');
+        setSending(true);
 
     try {
       let payload: any = {
         model,
         stream,
-        save_to_db: !!saveToDb,
+        save_to_db: saveToDb,
         messages: newUi
           .filter((m) => m.role !== 'system' && !m.error)
           .map((m) => ({ role: m.role, content: m.text || '' })),
@@ -475,8 +496,8 @@ export default function ChatPage() {
 
   const onComposerSend = async (data: { text: string }) => {
     if (!data?.text) return;
-    setComposerText(data.text);
-    await sendMessage();
+    setComposerText('');
+    await sendMessage(data.text);
   };
 
   return (

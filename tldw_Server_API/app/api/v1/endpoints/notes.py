@@ -55,6 +55,78 @@ from tldw_Server_API.app.core.config import settings as core_settings
 
 router = APIRouter()
 
+# --- Title options helper -----------------------------------------------------
+def _field_supplied(model_obj: Any, field_name: str) -> bool:
+    """Return True if the incoming model explicitly supplied the field.
+
+    Works across Pydantic v2 (model_fields_set) and v1 (__fields_set__).
+    Falls back to checking a best-effort dump with exclude_unset.
+    """
+    try:
+        s = getattr(model_obj, "model_fields_set", None)
+        if isinstance(s, set):
+            return field_name in s
+    except Exception:
+        pass
+    try:
+        s = getattr(model_obj, "__fields_set__", None)  # pydantic v1
+        if isinstance(s, set):
+            return field_name in s
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat as _dump
+        data = _dump(model_obj, exclude_unset=True)
+        return field_name in (data or {})
+    except Exception:
+        return False
+
+
+def _build_title_opts(note_in: Any) -> TitleGenOptions:
+    """Build TitleGenOptions from request payload with sane defaults and clamping.
+
+    - Strategy: use client-provided value if supplied; otherwise fall back to default setting.
+    - LLM gating: downgrade to heuristic when LLM strategies are disabled.
+    - Max length: coerce to int, default 250, clamp to [min_len, max_len_bound].
+    """
+    # Resolve strategy honoring client intent when provided
+    default_strategy = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+    if _field_supplied(note_in, "title_strategy"):
+        strategy = getattr(note_in, "title_strategy", default_strategy) or default_strategy
+    else:
+        strategy = default_strategy
+
+    # Apply LLM enabled gate after resolving strategy
+    if strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
+        strategy = "heuristic"
+
+    # Resolve and clamp max length
+    try:
+        raw_len = getattr(note_in, "title_max_len", None)
+        max_len_val = int(raw_len) if raw_len is not None else 250
+    except Exception:
+        max_len_val = 250
+    try:
+        max_bound = int(core_settings.get("NOTES_TITLE_MAX_LEN", 1000))
+        if max_bound <= 0:
+            max_bound = 1000
+    except Exception:
+        max_bound = 1000
+    min_bound = 10
+    if max_len_val < min_bound:
+        max_len_val = min_bound
+    if max_len_val > max_bound:
+        max_len_val = max_bound
+
+    opts = TitleGenOptions()
+    opts.strategy = strategy
+    opts.max_len = max_len_val
+    try:
+        opts.language = getattr(note_in, "language", None)
+    except Exception:
+        opts.language = None
+    return opts
+
 # --- Helper for Exception Handling (largely the same) ---
 def handle_db_errors(e: Exception, entity_type: str = "resource"):
     if isinstance(e, HTTPException):  # If it's already an HTTPException, re-raise
@@ -208,16 +280,7 @@ async def create_note(
         if not effective_title:
             if getattr(note_in, "auto_title", False):
                 try:
-                    _strategy = getattr(note_in, "title_strategy", "heuristic")
-                    _default = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
-                    if _strategy == "heuristic" and _default != "heuristic":
-                        _strategy = _default
-                    if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
-                        _strategy = "heuristic"
-                    opts = TitleGenOptions()
-                    opts.strategy = _strategy
-                    opts.max_len = getattr(note_in, "title_max_len", 250) or 250
-                    opts.language = getattr(note_in, "language", None)
+                    opts = _build_title_opts(note_in)
                     effective_title = generate_note_title(
                         note_in.content,
                         options=opts,
@@ -782,16 +845,7 @@ async def suggest_note_title(
                                 detail="Rate limit exceeded for notes.title.suggest",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
 
-        _strategy = payload.title_strategy
-        _default = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
-        if _strategy == "heuristic" and _default != "heuristic":
-            _strategy = _default
-        if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
-            _strategy = "heuristic"
-        opts = TitleGenOptions()
-        opts.strategy = _strategy
-        opts.max_len = payload.title_max_len
-        opts.language = payload.language
+        opts = _build_title_opts(payload)
         title = generate_note_title(payload.content, options=opts)
         return TitleSuggestResponse(title=title)
     except HTTPException:
@@ -842,16 +896,7 @@ async def bulk_create_notes(
             if not effective_title:
                 if getattr(item, "auto_title", False):
                     try:
-                        _strategy = getattr(item, "title_strategy", "heuristic")
-                        _default = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
-                        if _strategy == "heuristic" and _default != "heuristic":
-                            _strategy = _default
-                        if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
-                            _strategy = "heuristic"
-                        opts = TitleGenOptions()
-                        opts.strategy = _strategy
-                        opts.max_len = getattr(item, "title_max_len", 250) or 250
-                        opts.language = getattr(item, "language", None)
+                        opts = _build_title_opts(item)
                         effective_title = generate_note_title(
                             item.content,
                             options=opts,

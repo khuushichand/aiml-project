@@ -5,10 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
     
-## [Unreleased (placeholder for copy/paste)]
+## [Unreleased]
 
-### Added
-- F
+### Deprecated
+- Character Chat legacy completion endpoint `POST /api/v1/chats/{chat_id}/complete` is deprecated.
+  - The request body is no longer supported. Non-empty bodies now return `422 Unprocessable Entity`.
+  - The route is marked `deprecated` in the OpenAPI schema and returns deprecation headers (`Deprecation: true`, `Sunset`, `Link` to successor endpoint).
+  - Successor endpoints:
+    - `POST /api/v1/chats/{chat_id}/complete-v2` for execution (with optional persistence/streaming).
+    - `POST /api/v1/chats/{chat_id}/completions` to prepare messages for `/api/v1/chat/completions`.
+
+### Notes for Operators
+- If clients still post bodies to the legacy endpoint, they will start receiving `422` after this change. Migrate clients to the successor endpoints above.
 
 
 
@@ -42,5 +50,4 @@ and this project adheres to Some kind of Versioning
 - Version 0.1
 ### Fixed 
 - Use of gradio
-
 

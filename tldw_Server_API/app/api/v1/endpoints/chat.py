@@ -1082,7 +1082,7 @@ async def create_chat_completion(
             logger.warning(f"Input validation error: {e}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        # Slash command handling and audit logging (before input moderation)
+        # Slash command handling: compute, moderate, then optionally inject
         try:
             if command_router.commands_enabled() and request_data and request_data.messages:
                 # Locate the most recent user message text
@@ -1116,7 +1116,7 @@ async def create_chat_completion(
                                 'character_id': request_data.character_id,
                             },
                         )
-                        result = command_router.dispatch_command(ctx, cmd_name, cmd_args)
+                        result = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
                         inj_mode = command_router.get_injection_mode()
                         override = getattr(request_data, 'slash_command_injection_mode', None)
                         if isinstance(override, str) and override.lower() in {"system", "preface", "replace"}:
@@ -1130,65 +1130,126 @@ async def create_chat_completion(
                             'rbac': (result.metadata or {}).get('rbac') if hasattr(result, 'metadata') else None,
                             'conversation_id': request_data.conversation_id,
                         }
-                        # Audit the command execution
+                        # Prepare content for injection and run input moderation on it
+                        content_text = f"[/{cmd_name}] {result.content}"
+                        moderated_content_text = content_text
+                        inj_mod = {
+                            'action': 'pass',
+                            'blocked': False,
+                            'category': None,
+                            'pattern': None,
+                            'redacted': False,
+                        }
+                        try:
+                            moderation = get_moderation_service()
+                            # Determine effective policy for this user/client
+                            req_user_id = None
+                            try:
+                                if request is not None and hasattr(request, "state"):
+                                    req_user_id = getattr(request.state, "user_id", None)
+                            except Exception:
+                                req_user_id = None
+                            policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+                            action, redacted, matched, category = moderation.evaluate_action(content_text, policy, 'input')
+                            if action and action != 'pass':
+                                inj_mod['action'] = action
+                                inj_mod['category'] = category
+                                inj_mod['pattern'] = matched
+                                if action == 'redact' and isinstance(redacted, str):
+                                    moderated_content_text = redacted
+                                    inj_mod['redacted'] = True
+                                elif action == 'block':
+                                    inj_mod['blocked'] = True
+                            # Track moderation for metrics
+                            try:
+                                metrics.track_moderation_input(str(req_user_id or client_id), inj_mod['action'], category=(inj_mod.get('category') or "default"))
+                            except Exception:
+                                pass
+                            # Audit moderation decision
+                            try:
+                                if audit_service and context:
+                                    import asyncio as _asyncio
+                                    _asyncio.create_task(
+                                        audit_service.log_event(
+                                            event_type=AuditEventType.SECURITY_VIOLATION,
+                                            context=context,
+                                            action="moderation.input",
+                                            result=("failure" if inj_mod['blocked'] else "success"),
+                                            metadata={"phase": "input", "action": inj_mod['action'], "pattern": inj_mod.get('pattern'), "category": inj_mod.get('category')},
+                                        )
+                                    )
+                            except Exception:
+                                pass
+                        except Exception as _mod_err:
+                            logger.debug(f"Slash command moderation step skipped due to error: {_mod_err}")
+
+                        # Update injection metadata with moderation outcome prior to audit logging
+                        try:
+                            inj_meta['moderation'] = inj_mod
+                            if inj_mod.get('blocked'):
+                                inj_meta['result_ok'] = False
+                        except Exception:
+                            pass
+
+                        # Audit the command execution (with moderation outcome attached)
                         try:
                             if audit_service and context:
                                 await audit_service.log_event(
                                     event_type=AuditEventType.API_REQUEST,
                                     context=context,
                                     action="chat.command.executed",
-                                    result=("success" if result.ok else "failure"),
+                                    result=("success" if (result.ok and not inj_mod.get('blocked')) else "failure"),
                                     metadata=inj_meta,
                                 )
                         except Exception as _ae:
                             logger.debug(f"Slash command audit log skipped: {_ae}")
 
-                        # Mutate request messages for injection
-                        content_text = f"[/{cmd_name}] {result.content}"
-                        if inj_mode == 'preface':
-                            # Prefix the user's message
-                            if isinstance(request_data.messages[last_user_idx].content, str):
-                                rest = (cmd_args or '').strip()
-                                new_user_text = (f"[/{cmd_name}] {result.content}\n\n{rest}" if rest else f"[/{cmd_name}] {result.content}")
-                                request_data.messages[last_user_idx].content = new_user_text
+                        # Mutate request messages for injection (use moderated/sanitized text) when not blocked
+                        if not inj_mod.get('blocked'):
+                            if inj_mode == 'preface':
+                                # Prefix the user's message
+                                if isinstance(request_data.messages[last_user_idx].content, str):
+                                    rest = (cmd_args or '').strip()
+                                    new_user_text = (f"{moderated_content_text}\n\n{rest}" if rest else f"{moderated_content_text}")
+                                    request_data.messages[last_user_idx].content = new_user_text
+                                else:
+                                    parts = request_data.messages[last_user_idx].content
+                                    for part in parts:
+                                        if getattr(part, 'type', None) == 'text':
+                                            rest = (cmd_args or '').strip()
+                                            part.text = (f"{moderated_content_text}\n\n{rest}" if rest else f"{moderated_content_text}")
+                                            break
+                            elif inj_mode == 'replace':
+                                # Replace the user's message entirely with the command result
+                                if isinstance(request_data.messages[last_user_idx].content, str):
+                                    request_data.messages[last_user_idx].content = moderated_content_text
+                                else:
+                                    parts = request_data.messages[last_user_idx].content
+                                    for part in parts:
+                                        if getattr(part, 'type', None) == 'text':
+                                            part.text = moderated_content_text
+                                            break
                             else:
-                                parts = request_data.messages[last_user_idx].content
-                                for part in parts:
-                                    if getattr(part, 'type', None) == 'text':
-                                        rest = (cmd_args or '').strip()
-                                        part.text = (f"[/{cmd_name}] {result.content}\n\n{rest}" if rest else f"[/{cmd_name}] {result.content}")
-                                        break
-                        elif inj_mode == 'replace':
-                            # Replace the user's message entirely with the command result
-                            if isinstance(request_data.messages[last_user_idx].content, str):
-                                request_data.messages[last_user_idx].content = content_text
-                            else:
-                                parts = request_data.messages[last_user_idx].content
-                                for part in parts:
-                                    if getattr(part, 'type', None) == 'text':
-                                        part.text = content_text
-                                        break
-                        else:
-                            # System injection and strip the command from user text
-                            if isinstance(request_data.messages[last_user_idx].content, str):
-                                request_data.messages[last_user_idx].content = (cmd_args or '').strip()
-                            else:
-                                parts = request_data.messages[last_user_idx].content
-                                for part in parts:
-                                    if getattr(part, 'type', None) == 'text':
-                                        part.text = (cmd_args or '').strip()
-                                        break
-                            try:
-                                from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionSystemMessageParam
-                                sys_msg = ChatCompletionSystemMessageParam(role='system', content=content_text, name='system-command')
-                                # Attach metadata if possible
+                                # System injection and strip the command from user text
+                                if isinstance(request_data.messages[last_user_idx].content, str):
+                                    request_data.messages[last_user_idx].content = (cmd_args or '').strip()
+                                else:
+                                    parts = request_data.messages[last_user_idx].content
+                                    for part in parts:
+                                        if getattr(part, 'type', None) == 'text':
+                                            part.text = (cmd_args or '').strip()
+                                            break
                                 try:
-                                    setattr(sys_msg, 'metadata', {'tldw_injection': inj_meta})
+                                    from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionSystemMessageParam
+                                    sys_msg = ChatCompletionSystemMessageParam(role='system', content=moderated_content_text, name='system-command')
+                                    # Attach metadata if possible
+                                    try:
+                                        setattr(sys_msg, 'metadata', {'tldw_injection': inj_meta, 'moderation': inj_mod})
+                                    except Exception:
+                                        pass
+                                    request_data.messages.append(sys_msg)
                                 except Exception:
-                                    pass
-                                request_data.messages.append(sys_msg)
-                            except Exception:
-                                request_data.messages.append({'role': 'system', 'content': content_text, 'name': 'system-command', 'metadata': {'tldw_injection': inj_meta}})
+                                    request_data.messages.append({'role': 'system', 'content': moderated_content_text, 'name': 'system-command', 'metadata': {'tldw_injection': inj_meta, 'moderation': inj_mod}})
         except Exception as _cmd_err:
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
 
@@ -3054,16 +3115,23 @@ async def generate_document(
     except InputError as e:
         logger.warning(f"Input error generating document: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
     except ChatAPIError as e:
         logger.error(f"API error generating document: {e}")
-        _msg = str(e) or getattr(e, "message", None) or type(e).__name__
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_msg)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail = "The chat service provider is currently unavailable."
+        )
+
     except HTTPException:
         raise
+
     except Exception as e:
         logger.error(f"Unexpected error generating document: {e}", exc_info=True)
-        _msg = str(e) or getattr(e, "message", None) or type(e).__name__
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=_msg)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail = "An unexpected internal server error occurred."
+        )
 
 
 @router.get(

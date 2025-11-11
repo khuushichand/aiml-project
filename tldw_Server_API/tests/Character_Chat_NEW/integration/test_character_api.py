@@ -845,7 +845,8 @@ class TestRateLimiting:
         for i in range(10):
             response = test_client.post(
                 f"/api/v1/chats/{chat_id}/complete",
-                json={'message': f'Message {i}'},
+                # Legacy endpoint body is deprecated and ignored; send empty body to avoid 422
+                json={},
                 headers=auth_headers
             )
             responses.append(response)
