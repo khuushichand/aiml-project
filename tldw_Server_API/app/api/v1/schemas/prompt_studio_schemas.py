@@ -86,6 +86,16 @@ class EvaluationList(BaseModel):
     limit: int = Field(..., ge=1, description="Page limit")
     offset: int = Field(..., ge=0, description="Page offset")
 
+
+# Simple execute request for prompts (compat endpoint)
+class ExecutePromptSimpleRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    prompt_id: int
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    provider: Optional[str] = Field(default="openai")
+    model: Optional[str] = Field(default="gpt-3.5-turbo")
+
 ########################################################################################################################
 # Optimization Schemas
 

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.sse import sse_data, sse_done
 # Import legacy implementations under explicit names to avoid recursion when
 # top-level names become adapter-backed wrappers.
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
@@ -828,8 +829,8 @@ async def anthropic_chat_handler_async(
                     msg = getattr(norm, 'message', msg) or msg
                 except Exception:
                     pass
-                yield f"data: {{\"error\":{{\"message\":\"{msg.replace('\\', '\\\\').replace('"', '\\"')}\",\"type\":\"qwen_stream_error\"}}}}\n\n"
-                yield "data: [DONE]\n\n"
+                yield sse_data({"error": {"message": msg, "type": "qwen_stream_error"}})
+                yield sse_done()
         return _guarded_astream()
     return await adapter.achat(request)
 
@@ -1131,9 +1132,8 @@ async def qwen_chat_handler_async(
                 except Exception:
                     pass
                 # Emit one error frame followed by [DONE]
-                safe = msg.replace("\\", "\\\\").replace('"', '\\"')
-                yield f"data: {{\"error\":{{\"message\":\"{safe}\",\"type\":\"qwen_stream_error\"}}}}\n\n"
-                yield "data: [DONE]\n\n"
+                yield sse_data({"error": {"message": msg, "type": "qwen_stream_error"}})
+                yield sse_done()
         return _guarded_astream()
     return await adapter.achat(request)
 

@@ -12,7 +12,7 @@ Stage 4 scope:
 Env flags:
 - CHAT_COMMANDS_ENABLED: '1' to enable (default: off)
 - CHAT_COMMANDS_RATE_LIMIT: per-user RPM per command (default: 10)
-- CHAT_COMMAND_INJECTION_MODE: 'system' or 'preface' (default: 'system')
+- CHAT_COMMAND_INJECTION_MODE: 'system', 'preface', or 'replace' (default: 'system')
 - DEFAULT_LOCATION: fallback location for /weather (default: '')
 """
 
@@ -103,7 +103,11 @@ def commands_enabled() -> bool:
 
 def get_injection_mode() -> str:
     mode = _cfg_str("CHAT_COMMAND_INJECTION_MODE", "injection_mode", "system").lower().strip()
-    return mode if mode in {"system", "preface"} else "system"
+    # Supported modes:
+    # - system: inject result as a separate system message
+    # - preface: preface the user's message with the command result
+    # - replace: replace the user's message content with the command result
+    return mode if mode in {"system", "preface", "replace"} else "system"
 
 
 def _per_command_rpm() -> int:

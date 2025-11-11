@@ -144,10 +144,11 @@ async def list_llamacpp_models_endpoint():
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 
+from tldw_Server_API.app.api.v1.schemas.llamacpp_schemas import LlamaCppInferenceRequest
+
+
 @router.post("/llamacpp/inference", summary="Run inference with Llama.cpp")
-async def run_llamacpp_inference_endpoint(
-        payload: Dict[str, Any] = Body(..., description="OpenAI compatible payload (messages, temperature, etc.)")
-):
+async def run_llamacpp_inference_endpoint(payload: LlamaCppInferenceRequest):
     """
     Runs inference using the currently loaded Llama.cpp model.
     Payload should be OpenAI compatible (e.g., include 'messages' list).
@@ -167,7 +168,7 @@ async def run_llamacpp_inference_endpoint(
             backend="llamacpp",
             model_name_or_path=current_model,  # Contextual
             prompt=None,  # Assuming payload contains 'messages'
-            **payload  # Pass the entire payload dict as kwargs
+            **payload.to_kwargs(),  # Pass validated payload as kwargs (extras allowed)
         )
         return result
     except (ServerError, InferenceError) as e:

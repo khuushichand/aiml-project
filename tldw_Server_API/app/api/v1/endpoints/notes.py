@@ -33,7 +33,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     NoteKeywordLinkResponse, KeywordsForNoteResponse, NotesForKeywordResponse,
     DetailResponse,
     NoteBulkCreateRequest, NoteBulkCreateItemResult, NoteBulkCreateResponse,
-    NotesListResponse, NotesExportResponse,
+    NotesListResponse, NotesExportResponse, NotesExportRequest,
     TitleSuggestRequest, TitleSuggestResponse,
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
@@ -681,7 +681,7 @@ async def export_notes(
     tags=["notes"]
 )
 async def export_notes_post(
-        payload: Dict[str, Any] = Body(..., description="Export request with note_ids and optional format"),
+        payload: NotesExportRequest,
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
@@ -697,11 +697,9 @@ async def export_notes_post(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.export",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
-        note_ids = payload.get("note_ids") or []
-        include_keywords = bool(payload.get("include_keywords", False))
-        fmt = str(payload.get("format", "json")).lower()
-        if not isinstance(note_ids, list) or not all(isinstance(n, str) for n in note_ids):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="note_ids must be a list of strings")
+        note_ids = payload.note_ids
+        include_keywords = bool(payload.include_keywords)
+        fmt = str(payload.format).lower()
 
         results: List[Dict[str, Any]] = []
         for nid in note_ids:

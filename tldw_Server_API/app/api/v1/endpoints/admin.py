@@ -51,6 +51,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RateLimitResetRequest,
     RateLimitResetResponse,
     NotesTitleSettingsUpdate,
+    AdminCleanupSettingsUpdate,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -1080,16 +1081,13 @@ async def get_cleanup_settings() -> Dict[str, Any]:
 
 
 @router.post("/cleanup-settings")
-async def set_cleanup_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def set_cleanup_settings(payload: AdminCleanupSettingsUpdate) -> Dict[str, Any]:
     """Set cleanup worker settings (enabled, interval_sec)."""
     try:
-        if "enabled" in payload:
-            app_settings["EPHEMERAL_CLEANUP_ENABLED"] = bool(payload["enabled"])  # type: ignore[index]
-        if "interval_sec" in payload:
-            val = int(payload["interval_sec"])  # type: ignore[index]
-            if val < 60 or val > 604800:
-                raise HTTPException(status_code=400, detail="interval_sec must be between 60 and 604800")
-            app_settings["EPHEMERAL_CLEANUP_INTERVAL_SEC"] = val  # type: ignore[index]
+        if payload.enabled is not None:
+            app_settings["EPHEMERAL_CLEANUP_ENABLED"] = bool(payload.enabled)
+        if payload.interval_sec is not None:
+            app_settings["EPHEMERAL_CLEANUP_INTERVAL_SEC"] = int(payload.interval_sec)
         enabled = bool(app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
         interval = int(app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", 1800))
         return {"enabled": enabled, "interval_sec": interval}

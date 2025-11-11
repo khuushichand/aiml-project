@@ -1118,6 +1118,9 @@ async def create_chat_completion(
                         )
                         result = command_router.dispatch_command(ctx, cmd_name, cmd_args)
                         inj_mode = command_router.get_injection_mode()
+                        override = getattr(request_data, 'slash_command_injection_mode', None)
+                        if isinstance(override, str) and override.lower() in {"system", "preface", "replace"}:
+                            inj_mode = override.lower()
                         inj_meta = {
                             'command': cmd_name,
                             'args': cmd_args,
@@ -1154,6 +1157,16 @@ async def create_chat_completion(
                                     if getattr(part, 'type', None) == 'text':
                                         rest = (cmd_args or '').strip()
                                         part.text = (f"[/{cmd_name}] {result.content}\n\n{rest}" if rest else f"[/{cmd_name}] {result.content}")
+                                        break
+                        elif inj_mode == 'replace':
+                            # Replace the user's message entirely with the command result
+                            if isinstance(request_data.messages[last_user_idx].content, str):
+                                request_data.messages[last_user_idx].content = content_text
+                            else:
+                                parts = request_data.messages[last_user_idx].content
+                                for part in parts:
+                                    if getattr(part, 'type', None) == 'text':
+                                        part.text = content_text
                                         break
                         else:
                             # System injection and strip the command from user text

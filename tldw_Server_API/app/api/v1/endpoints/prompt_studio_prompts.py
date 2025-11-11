@@ -25,6 +25,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
     StandardResponse, ListResponse
 )
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_schemas import ExecutePromptSimpleRequest
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
     PromptCreate, PromptUpdate, PromptResponse, PromptVersion,
     SignatureCreate, SignatureUpdate, SignatureResponse,
@@ -324,15 +325,15 @@ async def list_prompts_simple(
 # Simple execute endpoint used by tests
 @router.post("/execute")
 async def execute_prompt_simple(
-    payload: Dict[str, Any],
+    payload: ExecutePromptSimpleRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> Dict[str, Any]:
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor import PromptExecutor
     executor = PromptExecutor(db)
-    prompt_id = int(payload.get("prompt_id", 0))
-    inputs = payload.get("inputs") or {}
-    provider = payload.get("provider", "openai")
-    model = payload.get("model", "gpt-3.5-turbo")
+    prompt_id = int(payload.prompt_id)
+    inputs = payload.inputs or {}
+    provider = payload.provider or "openai"
+    model = payload.model or "gpt-3.5-turbo"
     # Support both async executor (normal) and sync mocks in tests
     maybe = executor.execute(prompt_id, inputs=inputs, provider=provider, model=model)
     try:

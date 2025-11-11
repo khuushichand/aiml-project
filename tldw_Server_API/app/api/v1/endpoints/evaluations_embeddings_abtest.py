@@ -26,6 +26,7 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     EmbeddingsABTestResultsResponse,
     EmbeddingsABTestResultSummary,
     ArmSummary,
+    EmbeddingsABTestRunRequest,
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     run_abtest_full,
@@ -101,7 +102,7 @@ async def create_embeddings_abtest(
 )
 async def run_embeddings_abtest(
     test_id: str,
-    payload: Dict[str, Any],
+    payload: EmbeddingsABTestRunRequest,
     background_tasks: BackgroundTasks,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
@@ -131,8 +132,7 @@ async def run_embeddings_abtest(
     from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
         EmbeddingsABTestConfig, ABTestChunking,
     )
-    raw_cfg = payload.get("config") if isinstance(payload, dict) else None
-    cfg = EmbeddingsABTestConfig.model_validate(raw_cfg or {})
+    cfg = payload.config
     if getattr(cfg, 'chunking', None) is None:
         try:
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)

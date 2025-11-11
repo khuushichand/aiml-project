@@ -59,13 +59,13 @@ Tip: For deterministic tests when random helpers are enabled, set `TEMPLATES_RAN
 
 ## 2) Slash Commands
 
-Slash commands run before messages reach the LLM. Results are injected as a system message (default) or prefixed to the user’s text.
+Slash commands run before messages reach the LLM. Results are injected as a system message (default), prefixed to the user’s text, or can fully replace the user’s text.
 
 Enabled via:
 ```ini
 [Chat-Commands]
 commands_enabled = true
-injection_mode = system   # or: preface
+injection_mode = system   # or: preface | replace
 commands_rate_limit = 10  # per-user per-command RPM
 require_permissions = false
 default_location =        # fallback for /weather
@@ -80,6 +80,11 @@ Preface-mode example:
 - Mode: `injection_mode = preface`
 - Final user message text: `[/time] Current time (America/Los_Angeles): 2025-11-10 20:15:00`
   - If arguments are present, they are appended after a blank line: `[/time] ...\n\nAmerica/Los_Angeles`.
+
+Replace-mode example:
+- Input (user): `/weather Boston`
+- Mode: `injection_mode = replace`
+- Final user message text sent to the model: `[/weather] Boston: 42°F, clear skies`
 
 Discovery endpoint:
 - `GET /api/v1/chat/commands` → list of commands with `name`, `description`, and `required_permission` (RBAC filtered if enabled).

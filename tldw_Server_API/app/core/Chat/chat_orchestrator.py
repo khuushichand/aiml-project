@@ -550,12 +550,17 @@ def chat(
                 cmd_res = command_router.dispatch_command(ctx, cmd_name, cmd_args)
                 if cmd_res.ok:
                     injection_mode = command_router.get_injection_mode()
-                    # Remove the slash command from user text; keep args for user payload if any
-                    message = (cmd_args or "").strip()
+                    # Start with the args-only message (command token removed)
+                    base_args = (cmd_args or "").strip()
                     if injection_mode == "preface":
                         prefix = f"[/{cmd_name}] {cmd_res.content}\n\n"
-                        message = f"{prefix}{message}" if message else prefix.strip()
-                    else:
+                        message = f"{prefix}{base_args}" if base_args else prefix.strip()
+                    elif injection_mode == "replace":
+                        # Replace the user's message content with the command result
+                        # Include the marker for traceability, consistent with preface
+                        message = f"[/{cmd_name}] {cmd_res.content}".strip()
+                    else:  # default: system injection
+                        message = base_args
                         injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
                 else:
                     # On error, provide a short system injection so the model has context; strip the command from user text

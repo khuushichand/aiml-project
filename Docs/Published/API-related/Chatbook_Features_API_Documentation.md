@@ -916,6 +916,11 @@ For users migrating from the TUI application:
 
 Discovery endpoint for slash commands that run before LLM dispatch (e.g., `/time`, `/weather`).
 
+Injection behavior (configurable):
+- `CHAT_COMMAND_INJECTION_MODE=system` (default): insert command result as a separate `system` message and strip the `/command` token from the user's text.
+- `CHAT_COMMAND_INJECTION_MODE=preface`: prefix the user's text with the command result.
+- `CHAT_COMMAND_INJECTION_MODE=replace`: replace the user's text entirely with the command result.
+
 ### List Commands (New)
 GET `/api/v1/chat/commands`
 

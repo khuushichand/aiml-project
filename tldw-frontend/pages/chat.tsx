@@ -32,6 +32,8 @@ type UiMessage = {
   tool?: { name?: string; id?: string; content?: string };
   provider?: string;
   model?: string;
+  // Flag messages that are UI-only errors; excluded from API payloads
+  error?: boolean;
 };
 
 type SessionItem = { id: string; title: string; model: string; created_at: string };
@@ -62,6 +64,15 @@ export default function ChatPage() {
   const [currentModelOnly, setCurrentModelOnly] = useState<string | undefined>(undefined);
   const [scrollLock, setScrollLock] = useState(false);
   const [showJump, setShowJump] = useState(false);
+  const [slashMode, setSlashMode] = useState<'system'|'preface'|'replace'>(() => {
+    try {
+      const s = localStorage.getItem('tldw-slash-mode');
+      const v = (s || '').toLowerCase();
+      return (v === 'preface' || v === 'replace') ? (v as any) : 'system';
+    } catch {
+      return 'system';
+    }
+  });
   const chatListRef = useRef<HTMLDivElement | null>(null);
   const suppressAutoScrollRef = useRef(false);
   const onStopStream = useCallback(() => {
@@ -101,6 +112,9 @@ export default function ChatPage() {
     } catch {}
   };
   useEffect(() => { loadRecentModels(); }, []);
+  useEffect(() => {
+    try { localStorage.setItem('tldw-slash-mode', slashMode); } catch {}
+  }, [slashMode]);
 
   const startNewChat = () => {
     setConversationId(null);
@@ -169,10 +183,11 @@ export default function ChatPage() {
         stream,
         save_to_db: !!saveToDb,
         messages: newUi
-          .filter((m) => m.role !== 'system')
+          .filter((m) => m.role !== 'system' && !m.error)
           .map((m) => ({ role: m.role, content: m.text || '' })),
       };
       try { const extra = JSON.parse(advanced || '{}'); if (extra && typeof extra === 'object') payload = { ...payload, ...extra }; } catch {}
+      payload.slash_command_injection_mode = slashMode;
       if (conversationId) payload.conversation_id = conversationId;
       const body = JSON.stringify(payload);
 
@@ -262,7 +277,10 @@ export default function ChatPage() {
         show({ title: 'Response ready', variant: 'success' });
       }
     } catch (e: any) {
-      setUiMessages((prev) => [...prev, { role: 'system', text: `Error: ${e.message || e}` } as UiMessage]);
+      setUiMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: `Error: ${e.message || e}`, error: true } as UiMessage,
+      ]);
       show({ title: 'Chat error', description: e?.message || 'Failed', variant: 'danger' });
     } finally {
       setSending(false);
@@ -549,6 +567,18 @@ export default function ChatPage() {
                   <option value="balanced">Balanced</option>
                   <option value="precise">Precise</option>
                   <option value="json">JSON Mode</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Slash Command Injection</label>
+                <select
+                  className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  value={slashMode}
+                  onChange={(e) => setSlashMode(e.target.value as any)}
+                >
+                  <option value="system">System (separate)</option>
+                  <option value="preface">Preface user</option>
+                  <option value="replace">Replace user</option>
                 </select>
               </div>
               <div className="sm:col-span-2">

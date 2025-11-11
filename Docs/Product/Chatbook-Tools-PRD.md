@@ -86,7 +86,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 ### 5.4 Slash Commands
 - Command router with simple registry: `register('/weather', fn)`, `register('/time', fn)`.
 - Hook in `tldw_Server_API/app/core/Chat/chat_orchestrator.py` prior to dictionary processing. If message matches `^/(\w+)(?:\s+(.*))?$`, resolve and execute.
-- Injection mode: Prefer injecting the result as a separate `system` message part to keep user message intact and to simplify moderation/auditing; allow opt-in behavior to preface user text. Controlled by `CHAT_COMMAND_INJECTION_MODE=system|preface` (default `system`).
+- Injection mode: Prefer injecting the result as a separate `system` message part to keep user message intact and to simplify moderation/auditing; allow opt-in behavior to preface user text; optionally replace the user's message entirely with the command result. Controlled by `CHAT_COMMAND_INJECTION_MODE=system|preface|replace` (default `system`).
 - Location resolution priority: request-provided lat/long > user profile location > `DEFAULT_LOCATION` config. No IP-based geolocation is used unless explicitly enabled by `ALLOW_IP_GEOLOCATION=true` with a configured `GEO_PROVIDER`.
 - Weather provider: requires configured API key; otherwise `/weather` returns a short “weather unavailable” notice. Provider calls use HTTPX, strict timeouts, and are fully mockable in tests.
 - Rate limiting: Reuse the existing chat rate limiter with per-command sub-buckets; enforce per-user and global caps.
@@ -187,7 +187,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
  - `TEMPLATES_RANDOM_SEED` (optional, for deterministic tests; request-scoped seed takes precedence in test mode)
  - `TEMPLATE_DEFAULT_TZ`, `TEMPLATE_DEFAULT_LOCALE` (fallbacks; locale currently unused unless Babel is enabled)
  - `CHAT_COMMANDS_MAX_CHARS` (int, default 300; max size for injected system part; larger results are truncated)
- - `CHAT_COMMAND_INJECTION_MODE` (`system`|`preface`, default `system`)
+ - `CHAT_COMMAND_INJECTION_MODE` (`system`|`preface`|`replace`, default `system`)
  - `WEATHER_UNITS` (`metric`|`imperial`, default `metric`), `WEATHER_LANG` (default `en`)
  - `ALLOW_IP_GEOLOCATION` (bool, default false), `GEO_PROVIDER` (optional; none used unless configured)
 

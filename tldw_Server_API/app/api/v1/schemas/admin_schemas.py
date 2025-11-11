@@ -457,5 +457,19 @@ class NotesTitleSettingsUpdate(BaseModel):
     default_strategy: Optional[Literal['heuristic', 'llm', 'llm_fallback']] = Field(default=None)
 
 #
+# Cleanup worker settings (admin)
+
+class AdminCleanupSettingsUpdate(BaseModel):
+    """Update payload for ephemeral cleanup worker settings.
+
+    - enabled: turn cleanup worker on/off
+    - interval_sec: run interval in seconds (60..604800)
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: Optional[bool] = Field(default=None)
+    interval_sec: Optional[int] = Field(default=None, ge=60, le=604800)
+
+#
 ## End of admin_schemas.py
 #######################################################################################################################

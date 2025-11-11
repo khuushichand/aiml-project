@@ -24,7 +24,5 @@ def test_get_and_set_notes_title_settings(client_user_only: TestClient):
         "/api/v1/admin/notes/title-settings",
         json={"default_strategy": "invalid"},
     )
-    assert r3.status_code == 400
-     )
-     assert r3.status_code == 400
-
+    # Pydantic schema Literal enforces valid values -> 422 Unprocessable Entity
+    assert r3.status_code == 422, r3.text

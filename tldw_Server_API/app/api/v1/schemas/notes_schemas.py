@@ -169,6 +169,19 @@ class NotesExportResponse(BaseModel):
     exported_at: str
 
 
+class NotesExportRequest(BaseModel):
+    """Export request for selected notes.
+
+    Accepts explicit note IDs and optional flags for including keywords and
+    selecting the output format.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    note_ids: List[str] = Field(..., description="List of note IDs to export")
+    include_keywords: bool = Field(default=False)
+    format: Literal['json', 'csv'] = Field(default='json')
+
+
 # --- Title Suggestion Schemas ---
 class TitleSuggestRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=5000000, description="Source content of the note")

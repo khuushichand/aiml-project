@@ -26,7 +26,8 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import StandardResponse, ListResponse
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_test import (
     TestCaseCreate, TestCaseUpdate, TestCaseResponse, TestCaseBulkCreate,
-    TestCaseImportRequest, TestCaseExportRequest, TestCaseGenerateRequest
+    TestCaseImportRequest, TestCaseExportRequest, TestCaseGenerateRequest,
+    RunTestCasesSimpleRequest,
 )
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     get_prompt_studio_db, get_prompt_studio_user, require_project_access, require_project_write_access,
@@ -812,15 +813,13 @@ async def get_csv_import_template(
 # Compatibility: run test cases endpoint returning {"results": [...]}
 @router.post("/run")
 async def run_test_cases_simple(
-    payload: Dict[str, Any],
+    payload: RunTestCasesSimpleRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> Dict[str, Any]:
     manager = TestCaseManager(db)
-    prompt_id = int(payload.get("prompt_id", 0))
-    test_case_ids = payload.get("test_case_ids") or []
-    # Convert to ints if they are strings
-    test_case_ids = [int(t) if isinstance(t, str) and t.isdigit() else t for t in test_case_ids]
-    model = payload.get("model", "gpt-3.5-turbo")
+    prompt_id = int(payload.prompt_id)
+    test_case_ids = payload.test_case_ids or []
+    model = payload.model or "gpt-3.5-turbo"
     results = await manager.run_batch_tests(prompt_id=prompt_id, test_case_ids=test_case_ids, model=model)
     return {"results": results}
 

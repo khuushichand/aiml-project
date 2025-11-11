@@ -380,22 +380,22 @@ async def export_keywords_api(
     dependencies=[Depends(verify_token)]
 )
 async def legacy_create_prompt(
-    payload: dict = Body(...),
+    payload: schemas.LegacyPromptCreateRequest = Body(...),
     Token: str = Header(None, description="Authentication token."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
-        name = payload.get("name")
-        author = payload.get("author")
+        name = payload.name
+        author = payload.author
         # Legacy tests use "content" instead of details
-        details = payload.get("content") or payload.get("details")
-        keywords = payload.get("keywords") or []
+        details = payload.effective_details
+        keywords = payload.keywords or []
         p_id, _uuid, _msg = db.add_prompt(
             name=name,
             author=author,
             details=details,
-            system_prompt=payload.get("system_prompt"),
-            user_prompt=payload.get("user_prompt"),
+            system_prompt=payload.system_prompt,
+            user_prompt=payload.user_prompt,
             keywords=keywords,
             overwrite=False,
         )
@@ -529,19 +529,17 @@ async def list_all_prompts(
     dependencies=[Depends(verify_token)]
 )
 async def create_prompt_compat(
-    payload: dict = Body(...),
+    payload: schemas.CreatePromptCompatRequest = Body(...),
     Token: str = Header(None, description="Authentication token."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
-        name = payload.get("name")
-        author = payload.get("author")
-        details = payload.get("details", payload.get("content"))
-        system_prompt = payload.get("system_prompt")
-        user_prompt = payload.get("user_prompt")
-        keywords = payload.get("keywords") or []
-        if not isinstance(keywords, list):
-            keywords = []
+        name = payload.name
+        author = payload.author
+        details = payload.effective_details
+        system_prompt = payload.system_prompt
+        user_prompt = payload.user_prompt
+        keywords = payload.keywords or []
 
         prompt_id, _uuid, _msg = db.add_prompt(
             name=name,
@@ -712,12 +710,12 @@ def _get_collections_store():
     dependencies=[Depends(verify_token)]
 )
 async def create_collection(
-    payload: dict = Body(...),
+    payload: schemas.PromptCollectionCreateRequest = Body(...),
     Token: str = Header(None, description="Authentication token.")
 ):
-    name = payload.get("name")
-    description = payload.get("description")
-    prompt_ids = payload.get("prompt_ids") or []
+    name = payload.name
+    description = payload.description
+    prompt_ids = payload.prompt_ids or []
     store = _get_collections_store()
     cid = store["next_id"]
     store["next_id"] += 1

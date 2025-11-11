@@ -113,3 +113,37 @@ class SyncLogEntryResponse(BaseModel):
 #
 # End of prompts_schemas.py
 #######################################################################################################################
+
+# --- Legacy/compat request models (for endpoints using simple payloads) ---
+
+class LegacyPromptCreateRequest(BaseModel):
+    """Legacy payload for creating prompts.
+
+    Supports both 'details' and legacy 'content'.
+    """
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+
+    name: Optional[str] = None
+    author: Optional[str] = None
+    details: Optional[str] = None
+    content: Optional[str] = None
+    system_prompt: Optional[str] = None
+    user_prompt: Optional[str] = None
+    keywords: List[str] = Field(default_factory=list)
+
+    @property
+    def effective_details(self) -> Optional[str]:
+        return self.details if (self.details and self.details.strip()) else self.content
+
+
+class CreatePromptCompatRequest(LegacyPromptCreateRequest):
+    """Alias for legacy create payload (compat route)."""
+    pass
+
+
+class PromptCollectionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    name: str
+    description: Optional[str] = None
+    prompt_ids: List[int] = Field(default_factory=list)

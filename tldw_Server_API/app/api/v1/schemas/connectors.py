@@ -68,3 +68,25 @@ class ConnectorPolicy(BaseModel):
     allowed_notion_workspaces: List[str] = Field(default_factory=list)
     denied_notion_workspaces: List[str] = Field(default_factory=list)
     quotas_per_role: Dict[str, Dict[str, int]] = Field(default_factory=dict, description="e.g., {role: {max_jobs_per_day: N}}")
+
+
+# Request models
+
+class ConnectorSourceCreateRequest(BaseModel):
+    """Create a new connector source to import/sync from."""
+    model_config = dict(extra='forbid')
+
+    account_id: int
+    provider: Literal["drive", "notion"]
+    remote_id: str
+    type: Literal["folder", "page", "database", "link"]
+    path: Optional[str] = None
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ConnectorSourcePatchRequest(BaseModel):
+    """Patch a connector source."""
+    model_config = dict(extra='forbid')
+
+    enabled: Optional[bool] = None
+    options: Optional[Dict[str, Any]] = None
