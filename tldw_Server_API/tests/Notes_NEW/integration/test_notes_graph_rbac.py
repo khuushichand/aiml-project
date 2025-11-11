@@ -28,6 +28,8 @@ def client_with_user_override(monkeypatch):
     with TestClient(fastapi_app) as client:
         yield client
     fastapi_app.dependency_overrides.clear()
+    # Ensure global settings cache is cleared so later tests aren't affected
+    reset_settings()
 
 
 def _make_token(scope: str) -> str:
@@ -75,4 +77,3 @@ def test_graph_write_allows_with_correct_scope(client_with_user_override: TestCl
     assert resp.status_code == 200
     payload = resp.json()
     assert payload.get("status") == "stub"
-

@@ -832,13 +832,19 @@ def load_settings():
                 (str(_cp.get('Notes', 'title_llm_enabled', fallback='false')).strip().lower() in {"1", "true", "yes", "on"})
                 if _cp and hasattr(_cp, 'get') and _cp.has_section('Notes') else False
             )
-        ))(os.getenv('NOTES_TITLE_LLM_ENABLED'), load_comprehensive_config()),
+        ))(
+            os.getenv('NOTES_TITLE_LLM_ENABLED') or os.getenv('NOTE_TITLE_LLM_ENABLED'),
+            load_comprehensive_config(),
+        ),
         "NOTES_TITLE_DEFAULT_STRATEGY": (lambda _env, _cp: (
             _env.strip().lower() if isinstance(_env, str) else (
                 str(_cp.get('Notes', 'title_default_strategy', fallback='heuristic')).strip().lower()
                 if _cp and hasattr(_cp, 'get') and _cp.has_section('Notes') else 'heuristic'
             )
-        ))(os.getenv('NOTES_TITLE_DEFAULT_STRATEGY'), load_comprehensive_config()),
+        ))(
+            os.getenv('NOTES_TITLE_DEFAULT_STRATEGY') or os.getenv('NOTE_TITLE_DEFAULT_STRATEGY'),
+            load_comprehensive_config(),
+        ),
         "SANDBOX_BACKGROUND_EXECUTION": SANDBOX_BACKGROUND_EXECUTION,
         "SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB": SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB,
         "SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB": SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB,

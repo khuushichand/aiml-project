@@ -214,13 +214,13 @@ async def create_note(
                         _strategy = _default
                     if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
                         _strategy = "heuristic"
+                    opts = TitleGenOptions()
+                    opts.strategy = _strategy
+                    opts.max_len = getattr(note_in, "title_max_len", 250) or 250
+                    opts.language = getattr(note_in, "language", None)
                     effective_title = generate_note_title(
                         note_in.content,
-                        options=TitleGenOptions(
-                            strategy=_strategy,
-                            max_len=getattr(note_in, "title_max_len", 250) or 250,
-                            language=getattr(note_in, "language", None),
-                        ),
+                        options=opts,
                     )
                 except Exception as gen_err:
                     logger.warning(f"Auto-title generation failed, falling back: {gen_err}")
@@ -790,11 +790,10 @@ async def suggest_note_title(
             _strategy = _default
         if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
             _strategy = "heuristic"
-        opts = TitleGenOptions(
-            strategy=_strategy,
-            max_len=payload.title_max_len,
-            language=payload.language,
-        )
+        opts = TitleGenOptions()
+        opts.strategy = _strategy
+        opts.max_len = payload.title_max_len
+        opts.language = payload.language
         title = generate_note_title(payload.content, options=opts)
         return TitleSuggestResponse(title=title)
     except HTTPException:
@@ -851,13 +850,13 @@ async def bulk_create_notes(
                             _strategy = _default
                         if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
                             _strategy = "heuristic"
+                        opts = TitleGenOptions()
+                        opts.strategy = _strategy
+                        opts.max_len = getattr(item, "title_max_len", 250) or 250
+                        opts.language = getattr(item, "language", None)
                         effective_title = generate_note_title(
                             item.content,
-                            options=TitleGenOptions(
-                                strategy=_strategy,
-                                max_len=getattr(item, "title_max_len", 250) or 250,
-                                language=getattr(item, "language", None),
-                            ),
+                            options=opts,
                         )
                     except Exception as gen_err:
                         logger.warning(f"[Bulk] Auto-title generation failed, falling back: {gen_err}")

@@ -187,9 +187,15 @@ export default function ChatPage() {
           acc += delta;
           setUiMessages((prev) => {
             const updated = [...prev];
-            const lastIdx = updated.length - 1;
-            if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
-              updated[lastIdx] = { ...updated[lastIdx], text: acc } as UiMessage;
+            // Find the most recent assistant message from the end
+            let idx = -1;
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i]?.role === 'assistant') { idx = i; break; }
+            }
+            if (idx >= 0) {
+              updated[idx] = { ...(updated[idx] as UiMessage), text: acc } as UiMessage;
+            } else {
+              updated.push({ role: 'assistant', text: acc } as UiMessage);
             }
             return updated;
           });
@@ -584,9 +590,15 @@ export default function ChatPage() {
                         <div className="mt-2 text-right">
                           <button
                             className="inline-flex items-center rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
-                            onClick={() => setComposerText(`Re-run tool: ${name}`)}
+                            aria-label="Mention tool in chat"
+                            title="Mention tool in chat"
+                            onClick={() => setComposerText((prev: string) => {
+                              const mention = `[tool:${name}]`;
+                              const base = typeof prev === 'string' ? prev : '';
+                              return base && base.trim().length ? `${base} ${mention}` : mention;
+                            })}
                           >
-                            Re-run
+                            Mention in chat
                           </button>
                         </div>
                       </div>
