@@ -14,6 +14,7 @@ Dashboards to load (copy into `/var/lib/grafana/dashboards` in your Grafana cont
 - `Docs/Deployment/Monitoring/mcp-dashboard.json`
 - `Docs/Deployment/Monitoring/web-scraping-dashboard.json`
 - `Docs/Deployment/Monitoring/streaming-dashboard.json`
+ - `Docs/Deployment/Monitoring/chatbook-tools-dashboard.json`
 
 Docker Compose snippet:
 

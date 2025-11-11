@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+import os
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, date, timezone
+from typing import Any, Callable, Dict, Mapping, Optional
+
+from loguru import logger
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from jinja2.sandbox import SandboxedEnvironment
+from jinja2 import StrictUndefined, nodes
+
+try:  # Python 3.9+
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover - fallback for older environments
+    ZoneInfo = None  # type: ignore
+
+
+# -----------------------------
+# Dataclasses and Options
+# -----------------------------
+
+
+@dataclass
+class TemplateEnv:
+    timezone: str = "UTC"
+    locale: Optional[str] = None  # Reserved for future use (Babel)
+
+
+@dataclass
+class TemplateContext:
+    user: Optional[Mapping[str, Any]] = None
+    chat: Optional[Mapping[str, Any]] = None
+    request_meta: Optional[Mapping[str, Any]] = None
+    env: TemplateEnv = field(default_factory=TemplateEnv)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TemplateOptions:
+    allow_random: bool = False
+    allow_external_calls: bool = False
+    max_output_chars: int = 2000
+    timeout_ms: int = 250
+    random_seed: Optional[int] = None
+
+
+from tldw_Server_API.app.core.config import load_comprehensive_config
+
+
+def options_from_env() -> TemplateOptions:
+    def _truthy(name: str, default: bool = False) -> bool:
+        val = os.getenv(name)
+        if val is None:
+            return default
+        return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _int(name: str, default: int) -> int:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        try:
+            return int(str(raw))
+        except Exception:
+            return default
+
+    seed_env = os.getenv("TEMPLATES_RANDOM_SEED")
+    seed = None
+    try:
+        if seed_env is not None and str(seed_env).strip() != "":
+            seed = int(str(seed_env))
+    except Exception:
+        seed = None
+
+    # Fallback to config.txt when env not set
+    cp = None
+    try:
+        cp = load_comprehensive_config()
+    except Exception:
+        cp = None
+
+    def _cfg_bool(section: str, key: str, default: bool) -> bool:
+        if cp and cp.has_section(section):
+            try:
+                raw = cp.get(section, key, fallback=str(default))
+                return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+            except Exception:
+                return default
+        return default
+
+    def _cfg_int(section: str, key: str, default: int) -> int:
+        if cp and cp.has_section(section):
+            try:
+                return int(str(cp.get(section, key, fallback=str(default))))
+            except Exception:
+                return default
+        return default
+
+    return TemplateOptions(
+        allow_random=_truthy("CHAT_DICT_TEMPLATES_ALLOW_RANDOM", _cfg_bool("Chat-Templating", "allow_random", False)),
+        allow_external_calls=_truthy("TEMPLATES_ALLOW_EXTERNAL_CALLS", _cfg_bool("Chat-Templating", "allow_external_calls", False)),
+        max_output_chars=_int("MAX_TEMPLATE_OUTPUT_CHARS", _cfg_int("Chat-Templating", "max_output_chars", 2000)),
+        timeout_ms=_int("TEMPLATE_RENDER_TIMEOUT_MS", _cfg_int("Chat-Templating", "render_timeout_ms", 250)),
+        random_seed=seed,
+    )
+
+
+# -----------------------------
+# Jinja Environment (Sandboxed)
+# -----------------------------
+
+
+def _build_env() -> SandboxedEnvironment:
+    env = SandboxedEnvironment(autoescape=False, undefined=StrictUndefined)
+
+    # Add minimal custom filter: slugify
+    def _slugify(s: Any) -> str:
+        t = str(s or "")
+        t = t.strip().lower()
+        t = re.sub(r"[^a-z0-9\-\_\s]+", "", t)
+        t = re.sub(r"[\s\_]+", "-", t)
+        t = re.sub(r"\-+", "-", t)
+        return t.strip("-")
+
+    env.filters["slugify"] = _slugify
+    return env
+
+
+_ENV = _build_env()
+
+
+# -----------------------------
+# Safe Helpers
+# -----------------------------
+
+
+def _tzinfo(tz_name: Optional[str]) -> Any:
+    if not tz_name:
+        return timezone.utc
+    if ZoneInfo is None:
+        # Fallback: naive UTC when zoneinfo not available
+        return timezone.utc
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return timezone.utc
+
+
+def _fn_now(fmt: str = "%Y-%m-%d", tz: Optional[str] = None) -> str:
+    tzinfo = _tzinfo(tz)
+    return datetime.now(tz=tzinfo).strftime(fmt)
+
+
+def _fn_today(fmt: str = "%Y-%m-%d") -> str:
+    return date.today().strftime(fmt)
+
+
+def _fn_iso_now(tz: Optional[str] = None) -> str:
+    tzinfo = _tzinfo(tz)
+    return datetime.now(tz=tzinfo).isoformat()
+
+
+def _sanitize_user(user_raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not user_raw:
+        return {}
+    return {
+        "id": user_raw.get("id"),
+        "display_name": user_raw.get("display_name") or user_raw.get("name"),
+    }
+
+
+class _RandomFacade:
+    def __init__(self, seed: Optional[int] = None):
+        import random as _random  # local import to avoid global state surprises
+
+        self._random = _random.Random()
+        if seed is not None:
+            try:
+                self._random.seed(seed)
+            except Exception:
+                pass
+
+    def randint(self, a: int, b: int) -> int:
+        return self._random.randint(a, b)
+
+    def choice(self, seq: Any) -> Any:
+        # Convert Mapping/Set to list for determinism
+        if isinstance(seq, dict):
+            seq = list(seq.values())
+        elif isinstance(seq, set):
+            seq = list(seq)
+        return self._random.choice(list(seq))
+
+
+# -----------------------------
+# AST Validation (Expression-only)
+# -----------------------------
+
+
+_DISALLOWED_NODE_TYPES = {
+    nodes.For,
+    nodes.If,
+    nodes.Macro,
+    nodes.Block,
+    nodes.Import,
+    nodes.FromImport,
+    nodes.Include,
+    nodes.Assign,
+    nodes.AssignBlock,
+    nodes.CallBlock,
+    nodes.FilterBlock,
+    nodes.Extends,
+    nodes.With,
+    nodes.ScopedEvalContextModifier,
+}
+
+
+def _validate_expression_only(template_src: str) -> None:
+    try:
+        ast = _ENV.parse(template_src)
+    except Exception as e:
+        # Parsing errors propagate to caller (handled as template_parse_error)
+        raise e
+
+    def _walk(n: nodes.Node) -> None:
+        if isinstance(n, tuple(_DISALLOWED_NODE_TYPES)):
+            raise ValueError(f"Forbidden construct in template: {type(n).__name__}")
+        for child in n.iter_child_nodes():
+            _walk(child)
+
+    _walk(ast)
+
+
+# -----------------------------
+# Render Entry Point
+# -----------------------------
+
+
+class TemplateRenderError(Exception):
+    pass
+
+
+def render(text: str, ctx: TemplateContext, options: Optional[TemplateOptions] = None) -> str:
+    """Render `text` with a sandboxed environment and strict guards.
+
+    On any error or guard violation, logs and returns the original `text`.
+    """
+    if not isinstance(text, str) or text == "":
+        return text
+
+    opts = options or options_from_env()
+
+    # Determine metrics source
+    metrics_source = "unknown"
+    try:
+        metrics_source = str((ctx.extra or {}).get("_metrics_source", "unknown"))
+    except Exception:
+        metrics_source = "unknown"
+
+    # Validate expression-only template
+    try:
+        _validate_expression_only(text)
+    except Exception as e:
+        logger.debug(f"template_parse_error/expression_only: {e}")
+        try:
+            increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "parse"})
+        except Exception:
+            pass
+        return text
+
+    # Build helper functions and variables exposed to the template
+    # Functions are provided via the render context so they can be gated per-call.
+    helpers: Dict[str, Any] = {
+        "now": _fn_now,
+        "today": _fn_today,
+        "iso_now": _fn_iso_now,
+        "now_tz": lambda fmt="%Y-%m-%d", tz="UTC": _fn_now(fmt=fmt, tz=tz),
+        # Built-in string helpers also exist as Jinja filters, but provide callables too
+        "upper": lambda s: str(s).upper(),
+        "lower": lambda s: str(s).lower(),
+        "title": lambda s: str(s).title(),
+    }
+
+    # Random helpers gated
+    if opts.allow_random:
+        rnd = _RandomFacade(seed=opts.random_seed)
+        helpers.update({
+            "randint": rnd.randint,
+            "choice": rnd.choice,
+        })
+
+    # Optional user() callable returns a sanitized view
+    safe_user = _sanitize_user(ctx.user)
+    helpers["user"] = (lambda _u=safe_user: lambda: dict(_u))()
+
+    # Collect variables for rendering
+    render_vars: Dict[str, Any] = {}
+    render_vars.update(helpers)
+
+    # Provide a minimal env block
+    render_vars["env"] = {"timezone": ctx.env.timezone, "locale": ctx.env.locale}
+
+    # Expose extra variables directly
+    if ctx.extra:
+        for k, v in ctx.extra.items():
+            # Avoid clobbering helper names
+            if k not in render_vars:
+                render_vars[k] = v
+
+    # Perform render with guardrails
+    start = time.monotonic()
+    try:
+        tmpl = _ENV.from_string(text)
+        output = tmpl.render(render_vars)
+    except Exception as e:
+        logger.debug(f"template_render_failure: {e}")
+        try:
+            increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "exception"})
+        except Exception:
+            pass
+        return text
+    finally:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if elapsed_ms > opts.timeout_ms:
+            logger.debug(
+                f"template_render_timeout: elapsed_ms={elapsed_ms} > timeout_ms={opts.timeout_ms}"
+            )
+            try:
+                increment_counter("template_render_timeout_total", labels={"source": metrics_source})
+            except Exception:
+                pass
+        try:
+            observe_histogram("template_render_duration_seconds", value=float(elapsed_ms) / 1000.0, labels={"source": metrics_source})
+        except Exception:
+            pass
+
+    if not isinstance(output, str):
+        try:
+            output = str(output)
+        except Exception:
+            return text
+
+    if len(output) > opts.max_output_chars:
+        logger.debug(
+            f"template_output_too_large: size={len(output)} cap={opts.max_output_chars}"
+        )
+        try:
+            increment_counter("template_output_truncated_total", labels={"source": metrics_source})
+        except Exception:
+            pass
+        return output[: opts.max_output_chars]
+
+    try:
+        increment_counter("template_render_success_total", labels={"source": metrics_source})
+    except Exception:
+        pass
+    return output

@@ -49,6 +49,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 
 ### 5.1 Template Variables
 - Engine: Jinja2 SandboxedEnvironment with curated globals/filters; StrictUndefined; expression-only mode (no loops/macros/blocks); no raw Python exposure. Autoescape disabled (plaintext).
+- Expression-only enforcement: renderer validates the parsed Jinja AST against an allowlist of expression nodes (e.g., Name, Const, Call, Filter, Getitem, Getattr) and rejects any non-expression/control nodes (e.g., Block, For, Macro, Assign, Import).
 - Functions (initial set):
   - Date/time: `now(fmt='%Y-%m-%d')`, `today(fmt)`, `iso_now()`, `now_tz(fmt='%Y-%m-%d', tz='UTC')`
   - Text filters: `upper(s)`, `lower(s)`, `title(s)`, `slugify(s)`
@@ -56,17 +57,19 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
   - User context: `user()` → `{ id, display_name }` only (no email/tokens)
   - Optional provider plug-in: `weather(city=None)` (disabled by default; requires provider config)
 - Context source: TemplateContext capturing `user`, `chat` (character, conv), `request_meta` (ip/location if provided), `env` (timezone/locale), `extra`.
-- Timezone/locale: Default tz/locale from user profile (if available) or server config; Chatbooks may override via manifest metadata (see 5.3).
+- Timezone handling: Use `zoneinfo` for timezone resolution with defaults from user profile (if available) or server config. Locale-aware formatting is deferred for now (no Babel requirement); Chatbooks may still specify `metadata.template_timezone`. `metadata.template_locale` is accepted but ignored unless Babel is installed and explicitly enabled later.
 - Auto-detection: If a replacement contains `{{` or `{%`, it is treated as a template when feature flag is on.
 - Failure behavior: On template errors, log and fall back to the original text, never blocking chat. Enforce `MAX_TEMPLATE_OUTPUT_CHARS` and per-render timeout.
 
 ### 5.2 Usage in Chat Dictionaries
 - Injection point: render per match in `apply_replacement_once` within `tldw_Server_API/app/core/Chat/chat_dictionary.py`.
-  - Regex entries: use `subn(lambda m: render(entry.content, context | { 'match': m }))`; allow `{{ match.group(1) }}` and named groups `{{ match.group('name') }}`.
+  - Regex entries: use `subn(lambda m: render(entry.content, context | { 'match': m }))`.
+    - Safety: templates receive a SafeMatch wrapper (not raw `re.Match`) exposing only `group(idx|name)`, `groups()`, `groupdict()`, `start()`, and `end()`.
+    - Allow `{{ match.group(1) }}` and named groups `{{ match.group('name') }}` via the SafeMatch API.
   - Literal entries: expose `matched_text` for the current replacement: `render(entry.content, context | { 'matched_text': matched })`.
   - Optimization: If no template syntax is present in `entry.content`, perform a fast direct replacement.
 - Flags:
-  - `CHAT_DICT_TEMPLATES_ENABLED` (default: true)
+  - `CHAT_DICT_TEMPLATES_ENABLED` (see Configuration; default false in initial rollout)
   - `CHAT_DICT_TEMPLATES_ALLOW_RANDOM` (default: false)
   - `TEMPLATES_ALLOW_EXTERNAL_CALLS` (default: false; required for `weather()`)
 - Dictionary-level optional `enable_templates` override (default auto-detect using template syntax).
@@ -78,22 +81,22 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
   - `metadata.template_defaults`: dict of default context values
   - `metadata.template_timezone`: e.g., `"UTC"` or `"America/New_York"`
   - `metadata.template_locale`: e.g., `"en_US"`
-- Import/export never executes networked template functions unless explicitly allowed by config.
+- Import/export never executes networked template functions unless explicitly allowed by config (disabled by default via `TEMPLATES_ALLOW_EXTERNAL_CALLS=false`).
 
 ### 5.4 Slash Commands
 - Command router with simple registry: `register('/weather', fn)`, `register('/time', fn)`.
 - Hook in `tldw_Server_API/app/core/Chat/chat_orchestrator.py` prior to dictionary processing. If message matches `^/(\w+)(?:\s+(.*))?$`, resolve and execute.
-- Injection mode: Prefer injecting the result as a separate `system` message part to keep user message intact and to simplify moderation/auditing; configurable to preface user text if desired.
-- Location resolution priority: request-provided lat/long > user profile location > `DEFAULT_LOCATION` config.
+- Injection mode: Prefer injecting the result as a separate `system` message part to keep user message intact and to simplify moderation/auditing; allow opt-in behavior to preface user text. Controlled by `CHAT_COMMAND_INJECTION_MODE=system|preface` (default `system`).
+- Location resolution priority: request-provided lat/long > user profile location > `DEFAULT_LOCATION` config. No IP-based geolocation is used unless explicitly enabled by `ALLOW_IP_GEOLOCATION=true` with a configured `GEO_PROVIDER`.
 - Weather provider: requires configured API key; otherwise `/weather` returns a short “weather unavailable” notice. Provider calls use HTTPX, strict timeouts, and are fully mockable in tests.
-- Rate limiting: Reuse the existing chat rate limiter with a sub-bucket for commands, or a dedicated limiter invoked prior to execution; enforce per-user and global caps.
+- Rate limiting: Reuse the existing chat rate limiter with per-command sub-buckets; enforce per-user and global caps.
 - RBAC: Commands are permission-gated (e.g., `chat.commands.invoke:/weather`); discovery is filtered per user permissions.
 - Discovery endpoint: `GET /api/v1/chat/commands` returns available commands and brief help (see 7.1 for response fields).
 
 ### 5.5 Validation (Chat Dictionaries)
 - CLI and API validator with checks:
   - Schema shape vs `tldw_Server_API/app/api/v1/schemas/chat_dictionary_schemas.py`
-  - Regex compilation for `type=regex`, with safe-regex heuristics and compile-time timeouts to flag catastrophic backtracking risks
+  - Regex validation for `type=regex`, with safe-regex heuristics and optional match-time timeouts (when the third-party `regex` module is available) to flag catastrophic backtracking risks
   - Template dry-run parse using the sandbox; unknown functions/filters → warnings/errors; enforce expression-only mode
   - Duplicates, empty patterns, invalid probabilities, max_replacements bounds
 - Outputs structured report with `errors` (code, field, message), `warnings`, `suggested_fixes`, and `entry_stats` (regex/literal counts).
@@ -139,30 +142,22 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
   {
     "commands": [
       {
-        "name": "/time",
-        "description": "Show current time",
-        "usage": "/time [tz]",
-        "args": [{"name": "tz", "required": false}],
-        "requires_api_key": false,
-        "rate_limit": "user:10/min",
-        "rbac_required": null
+        "name": "time",
+        "description": "Show the current time (optional TZ).",
+        "required_permission": "chat.commands.time"
       },
       {
-        "name": "/weather",
-        "description": "Show weather (city or auto)",
-        "usage": "/weather [city]",
-        "args": [{"name": "city", "required": false}],
-        "requires_api_key": true,
-        "rate_limit": "user:5/min",
-        "rbac_required": "chat.commands.invoke:/weather"
+        "name": "weather",
+        "description": "Show current weather for a location.",
+        "required_permission": "chat.commands.weather"
       }
     ]
   }
-  - The list is filtered per user permissions (RBAC) and deployment configuration.
+  - The list is filtered per user permissions (RBAC) and deployment configuration. When RBAC is enabled, only commands the user can invoke are returned; each entry still includes `required_permission` for client display.
 
 ### 7.2 Validate Dictionary
 - Method/Path: `POST /api/v1/chat/dictionaries/validate`
-- Request: `{ "dictionary": { ... }, "schema_version": 1, "strict": false }`
+- Request: `{ "data": { ... }, "schema_version": 1, "strict": false }`
 - Response:
   - {
       "ok": true,
@@ -170,7 +165,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
       "errors": [
         {"code": "regex_invalid", "field": "entries[3].pattern", "message": "Unclosed group"}
       ],
-      "warnings": ["unknown function: weather"],
+      "warnings": [{"code": "template_unknown_function", "field": "replacement", "message": "Unknown function: weather"}],
       "entry_stats": { "total": 25, "regex": 5, "literal": 20 },
       "suggested_fixes": ["escape '.' in pattern 2"]
     }
@@ -178,16 +173,23 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 
 ## 8. Configuration
 
-- `CHAT_DICT_TEMPLATES_ENABLED` (bool, default true)
+- `CHAT_DICT_TEMPLATES_ENABLED` (bool, default false initially; flipped to true after bake-in)
 - `CHAT_DICT_TEMPLATES_ALLOW_RANDOM` (bool, default false)
 - `TEMPLATES_ALLOW_EXTERNAL_CALLS` (bool, default false)
 - `CHAT_COMMANDS_ENABLED` (bool, default true)
-- `CHAT_COMMANDS_RATE_LIMIT` (e.g., `user:10/minute, global:100/minute`)
+- Rate limits (reuse existing limiter semantics):
+  - `CHAT_COMMANDS_RATE_LIMIT_USER` (e.g., `10/min`)
+  - `CHAT_COMMANDS_RATE_LIMIT_GLOBAL` (e.g., `100/min`)
 - `DEFAULT_LOCATION` (string, optional, e.g., `"San Francisco, CA"`)
 - Weather provider: `WEATHER_PROVIDER`, `OPENWEATHER_API_KEY`, timeouts/retry knobs
- - `MAX_TEMPLATE_OUTPUT_CHARS` (int, hard cap on rendered output length)
- - `TEMPLATES_RANDOM_SEED` (optional, for deterministic tests; or request-scoped seed header in test mode)
- - `TEMPLATE_DEFAULT_TZ`, `TEMPLATE_DEFAULT_LOCALE` (fallbacks when user/manifest does not specify)
+ - `MAX_TEMPLATE_OUTPUT_CHARS` (int, default 2000; hard cap on rendered output length)
+ - `TEMPLATE_RENDER_TIMEOUT_MS` (int, default 250)
+ - `TEMPLATES_RANDOM_SEED` (optional, for deterministic tests; request-scoped seed takes precedence in test mode)
+ - `TEMPLATE_DEFAULT_TZ`, `TEMPLATE_DEFAULT_LOCALE` (fallbacks; locale currently unused unless Babel is enabled)
+ - `CHAT_COMMANDS_MAX_CHARS` (int, default 300; max size for injected system part; larger results are truncated)
+ - `CHAT_COMMAND_INJECTION_MODE` (`system`|`preface`, default `system`)
+ - `WEATHER_UNITS` (`metric`|`imperial`, default `metric`), `WEATHER_LANG` (default `en`)
+ - `ALLOW_IP_GEOLOCATION` (bool, default false), `GEO_PROVIDER` (optional; none used unless configured)
 
 ## 9. Security & Privacy
 
@@ -198,10 +200,22 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 
 ## 10. Observability
 
-- Metrics counters/histograms:
-  - `template_render_success`, `template_render_failure`
-  - `chat_command_invoked`, `chat_command_error`, `chat_command_timeout`
-  - Validator: `dict_validator_runs`, `dict_validator_errors`
+- Metrics counters/histograms (registry names):
+  - Templates
+    - `template_render_success_total{source=dict|chatbook}`
+    - `template_render_failure_total{source=dict|chatbook,reason=parse|exception}`
+    - `template_render_timeout_total{source=dict|chatbook}`
+    - `template_output_truncated_total{source=dict|chatbook}`
+    - `template_render_duration_seconds{source=dict|chatbook}` (histogram)
+  - Commands
+    - `chat_command_invoked_total{command,status=success|error|rate_limited|denied}`
+    - `chat_command_errors_total{command,reason=exception|permission_denied|rate_limited}`
+    - Legacy log counters remain (`chat_command_invoked`, `chat_command_error`) for log-based dashboards.
+  - Validator
+    - `chat_dictionary_validate_requests_total{strict}`
+    - `chat_dictionary_validate_errors_total{code}`
+    - `chat_dictionary_validate_warnings_total{code}`
+    - `chat_dictionary_validate_duration_seconds{strict}` (histogram)
 - Loguru structured logs around failures and timeouts.
 
 ## 11. Performance & Limits
@@ -209,14 +223,16 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 - Template render cost is O(text length) and negligible; enforce a max render time and output size (configurable hardcaps) to remain safe.
 - Commands enforce:
   - Max concurrency per user
-  - Per-invocation timeout (e.g., 1–2s)
-  - Bounded result size (short summaries)
+  - Per-invocation timeout (defaults: `/time` 100ms, `/weather` 1500ms)
+  - Bounded result size (short summaries; truncated to `CHAT_COMMANDS_MAX_CHARS`)
 
 ## 12. Error Handling
 
 - Template rendering errors: log + fallback to original text.
 - Moderation ordering: Command-injected context is added as a separate `system` message part and does not pass through user-input moderation. It is logged and audited with explicit system-origin metadata; output moderation may be applied per deployment policy.
+  - Moderation ordering note: Injected system parts bypass user-input moderation but still get logged and audited. Downstream output moderation can still apply per policy.
 - Command errors/timeouts: prepend a short notice (optional) or silently skip; never block the chat flow. `/weather` yields a short “weather unavailable” notice when provider is not configured.
+- Audit metadata on injected parts includes: `{ origin: 'system', cmd: '/name', duration_ms, status: 'success'|'fallback'|'error' }`. Injected content is truncated to `CHAT_COMMANDS_MAX_CHARS`.
 - Validator: returns structured errors; Chatbooks import surfaces warnings and rejects only in strict mode or on fatals.
 
 ## 13. Testing Strategy
@@ -249,7 +265,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 
 ## 15. Backward Compatibility & Migration
 
-- Default behavior remains unchanged: templates are a no-op unless flags are enabled or template syntax is present.
+- Default behavior remains unchanged: templates are a no-op unless flags are enabled or template syntax is present. Initial rollout ships with templating disabled by default; after bake-in, default may be flipped on.
 - Slash command router only acts for messages beginning with `/`.
 - No changes required to existing dictionaries or chatbooks unless adopting new features.
 
@@ -317,12 +333,14 @@ Each error/warning includes `code`, `field`, and `message`. Common codes:
 - max_replacements_invalid: Invalid max_replacements (negative or exceeds limit).
 - regex_invalid: Regex failed to compile.
 - regex_unsafe: Pattern exhibits catastrophic backtracking risk (heuristic check).
-- regex_timeout: Regex validation exceeded compile-time budget.
+- regex_timeout: Regex validation exceeded match-time budget (only when optional `regex` module is available).
 - template_parse_error: Template failed to parse (expression-only mode).
 - template_forbidden_construct: Non-expression or blocked syntax used (e.g., loops, macros, blocks).
+- template_undefined_name: Template referenced an undefined variable, function, or filter (StrictUndefined).
 - template_unknown_function: Unknown function or filter referenced.
 - template_external_calls_disabled: External function used but external calls are disabled.
 - template_output_too_large: Rendered output exceeds MAX_TEMPLATE_OUTPUT_CHARS.
+- dictionary_entry_too_large: Single dictionary entry exceeds configured size limit.
 - dictionary_too_large: Dictionary exceeds configured entry/size limits.
 
 Warnings typically reuse the same codes with reduced severity (e.g., `template_unknown_function`) when the issue can be tolerated under non-strict mode. The response payload includes `errors`, `warnings`, `entry_stats`, and `suggested_fixes` for actionable remediation.
@@ -341,7 +359,7 @@ This implementation plan breaks delivery into clear engineering stages with flag
 - Config
   - Wire flags into central config: `CHAT_DICT_TEMPLATES_ENABLED`, `CHAT_DICT_TEMPLATES_ALLOW_RANDOM`, `TEMPLATES_ALLOW_EXTERNAL_CALLS`, `MAX_TEMPLATE_OUTPUT_CHARS`, `TEMPLATE_DEFAULT_TZ`, `TEMPLATE_DEFAULT_LOCALE`, `TEMPLATES_RANDOM_SEED`
 - Tests
-  - Unit: `tests/Chat_NEW/unit/test_template_renderer.py`
+  - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_template_renderer.py`
     - Rendering basics, timezone, locale, strict undefined, output cap, timeout, random gating and deterministic seeding
 - Acceptance
   - All helper functions behave; sandbox rejects forbidden constructs; no side effects or global state
@@ -357,7 +375,7 @@ This implementation plan breaks delivery into clear engineering stages with flag
 - Config
   - Respect `CHAT_DICT_TEMPLATES_ENABLED` and random/external flags
 - Tests
-  - Unit: `tests/Chat_NEW/unit/test_chat_dictionary_templates.py`
+  - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_chat_dictionary_templates.py`
     - Regex groups and named groups work; literal matched_text works; disabled flag is no-op
 - Acceptance
   - No change in behavior when feature flag off; measurable performance impact near-zero on non-templated entries
@@ -366,10 +384,10 @@ This implementation plan breaks delivery into clear engineering stages with flag
 - Files
   - Add: `tldw_Server_API/app/core/Chat/validate_dictionary.py`
     - Public function `validate_dictionary(data, schema_version, strict=False)` returning structured report
-    - CLI entrypoint: `python -m tldw_Server_API.app.core.Chat.validate_dictionary --file <path> [--strict]`
-    - Safe-regex heuristics + compile timeout; template parse in expression-only mode
+    - CLI entrypoint: `python -m tldw_Server_API.app.core.Chat.validate_dictionary --file <path> [--strict]` (optional console script alias `tldw-dict-validate`)
+    - Safe-regex heuristics + optional match-time timeout using the third-party `regex` module (if installed); template parse in expression-only mode
 - Tests
-  - Unit: `tests/Chat_NEW/unit/test_dictionary_validator.py`
+  - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_dictionary_validator.py`
     - Schema violations, regex invalid/unsafe/timeout, template parse errors, warnings in non-strict mode
 - Acceptance
   - CLI produces JSON summary with error taxonomy and exits non-zero in strict failures
@@ -386,11 +404,11 @@ This implementation plan breaks delivery into clear engineering stages with flag
     - Execute command; inject result as a separate `system` message part (preferred) or preface user text (config)
     - Tag injected part with metadata for auditing
 - Config
-  - `CHAT_COMMANDS_ENABLED`, `CHAT_COMMANDS_RATE_LIMIT`, `DEFAULT_LOCATION`, weather provider keys/timeouts
+  - `CHAT_COMMANDS_ENABLED`, `CHAT_COMMANDS_RATE_LIMIT_USER`, `CHAT_COMMANDS_RATE_LIMIT_GLOBAL`, `DEFAULT_LOCATION`, weather provider keys/timeouts
 - Tests
-  - Unit: `tests/Chat_NEW/unit/test_command_router.py`
+  - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py`
     - Parsing, RBAC gating, rate limiting, timeouts; `/weather` w/ mock provider; system-part injection
-  - Integration: `tests/Chat_NEW/integration/test_chat_commands_injection.py`
+  - Integration: `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_injection.py`
 - Acceptance
   - Commands execute or degrade gracefully; no blocking on provider failures; moderation ordering preserved
 
@@ -415,7 +433,7 @@ This implementation plan breaks delivery into clear engineering stages with flag
   - Feature flags correctly gate behavior; metrics present; documentation synced with implementation
 
 ### Rollout & Backout
-- Default flags: templating enabled (safe by default), commands enabled (weather off without key), validator available via CLI; API validator added in Stage 5
+- Default flags: templating disabled initially (flip on after bake-in), commands enabled (weather off without key), validator available via CLI; API validator added in Stage 5
 - Backout: disable via flags; code paths preserve legacy behavior when off
 
 ### Ownership & Review

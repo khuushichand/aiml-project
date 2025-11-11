@@ -487,9 +487,11 @@ async def import_chatbook(
                     )
                 except Exception:
                     pass
+                warnings_out = result if isinstance(result, list) else None
                 return ImportChatbookResponse(
                     success=True,
-                    message=message
+                    message=message,
+                    warnings=warnings_out
                 )
         else:
             raise HTTPException(status_code=400, detail=message)

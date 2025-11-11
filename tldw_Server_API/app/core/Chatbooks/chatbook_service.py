@@ -1205,6 +1205,7 @@ class ChatbookService:
             return True, f"Import job started: {job_id}", job_id
         else:
             # Run synchronously (wrapped in executor for async compatibility)
+            # Return (success, message, warnings)
             return await asyncio.to_thread(
                 self._import_chatbook_sync,
                 file_path, content_selections,
@@ -1220,7 +1221,7 @@ class ChatbookService:
         prefix_imported: bool,
         import_media: bool,
         import_embeddings: bool
-    ) -> Tuple[bool, str, None]:
+    ) -> Tuple[bool, str, Optional[List[str]]]:
         """
         Synchronously import a chatbook.
         """
@@ -1351,16 +1352,16 @@ class ChatbookService:
                 message = f"Successfully imported {import_status.successful_items}/{import_status.total_items} items"
                 if import_status.skipped_items > 0:
                     message += f" ({import_status.skipped_items} skipped)"
-                return True, message, None
+                return True, message, list(import_status.warnings or [])
             elif import_status.total_items == 0:
                 # No items to import is not an error
-                return True, "Import completed: No items to import", None
+                return True, "Import completed: No items to import", list(import_status.warnings or [])
             elif import_status.skipped_items > 0:
                 # All items were skipped (e.g., due to conflicts)
-                return True, f"Import completed: All {import_status.skipped_items} items were skipped", None
+                return True, f"Import completed: All {import_status.skipped_items} items were skipped", list(import_status.warnings or [])
             else:
                 logger.debug(f"Import failed: No items were successfully imported or skipped")
-                return False, "No items were imported", None
+                return False, "No items were imported", list(import_status.warnings or [])
 
         except Exception as e:
             logger.error(f"Error importing chatbook: {e}")
@@ -2833,6 +2834,54 @@ class ChatbookService:
                     dict_name = self._generate_unique_name(dict_name, "dictionary")
                     dict_data['name'] = dict_name
 
+                # Validate dictionary entries (structure + regex/template lint)
+                try:
+                    from ..Chat.validate_dictionary import validate_dictionary as _validate_dict
+
+                    # Normalize entries for validator shape
+                    raw_entries = dict_data.get('entries') or []
+                    norm_entries: list[dict[str, Any]] = []
+                    for e in raw_entries:
+                        if not isinstance(e, dict):
+                            continue
+                        typ_val = e.get('type')
+                        if not typ_val:
+                            typ_val = 'regex' if bool(e.get('is_regex')) else 'literal'
+                        patt = e.get('pattern') or e.get('key_pattern') or e.get('key') or ''
+                        repl = e.get('replacement') or e.get('content') or ''
+                        prob = e.get('probability', 1.0)
+                        try:
+                            prob = float(prob)
+                        except Exception:
+                            prob = 1.0
+                        norm_entries.append({
+                            'type': str(typ_val).lower(),
+                            'pattern': str(patt),
+                            'replacement': str(repl),
+                            'probability': prob,
+                            'max_replacements': int(e.get('max_replacements', 0) or 0),
+                        })
+
+                    vres = _validate_dict({'name': dict_name, 'entries': norm_entries}, schema_version=1, strict=False)
+                    if vres.errors:
+                        # Accumulate warning summary; optionally enforce strict rejection
+                        codes = sorted({err.get('code', 'unknown') for err in vres.errors})
+                        status.warnings.append(
+                            f"Dictionary '{dict_name}' validation found errors: {', '.join(codes)}"
+                        )
+                        if os.getenv('CHATBOOKS_IMPORT_DICT_STRICT', '').strip().lower() in {'1','true','yes','on'}:
+                            status.failed_items += 1
+                            # Skip importing this dictionary entirely
+                            continue
+                    if vres.warnings:
+                        wc = sorted({w.get('code', 'warn') for w in vres.warnings})
+                        status.warnings.append(
+                            f"Dictionary '{dict_name}' validation warnings: {', '.join(wc)}"
+                        )
+                except Exception as _ve:
+                    # Non-fatal: surface as a warning and continue with import
+                    status.warnings.append(f"Dictionary '{dict_name}' validation failed: {_ve}")
+
                 # Create dictionary
                 new_dict_id = dict_service.create_dictionary(
                     dict_name,
@@ -2843,13 +2892,27 @@ class ChatbookService:
                 if new_dict_id:
                     # Import entries
                     for entry in dict_data.get('entries', []):
+                        # Support both legacy and current export shapes
+                        pat = entry.get('key_pattern') or entry.get('pattern') or entry.get('key')
+                        repl = entry.get('replacement') or entry.get('content')
+                        if pat is None or repl is None:
+                            continue
+                        is_regex = bool(entry.get('is_regex')) or (str(entry.get('type', '')).lower() == 'regex')
+                        # probability in DB is stored as float 0..1; accept either 0..1 or 0..100 here
+                        p_raw = entry.get('probability', 1.0)
+                        try:
+                            pf = float(p_raw)
+                            if pf > 1.0:
+                                pf = max(0.0, min(1.0, pf / 100.0))
+                        except Exception:
+                            pf = 1.0
                         dict_service.add_entry(
                             new_dict_id,
-                            entry['key_pattern'],
-                            entry['replacement'],
-                            entry.get('is_regex', False),
-                            entry.get('probability', 100),
-                            entry.get('max_replacements', 1)
+                            str(pat),
+                            str(repl),
+                            is_regex,
+                            pf,
+                            int(entry.get('max_replacements', 1) or 1)
                         )
                     status.successful_items += 1
                 else:

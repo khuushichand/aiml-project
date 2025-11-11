@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import (
     process_user_input,
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.config import load_and_log_configs
 #
 ####################################################################################################
@@ -531,6 +532,36 @@ def chat(
         if not isinstance(selected_parts, (list, tuple)):
             selected_parts = [selected_parts] if selected_parts else []
 
+        # Parse slash-commands before dictionary processing
+        injected_command_system_text: Optional[str] = None
+        original_message = message
+        if command_router.commands_enabled() and isinstance(message, str):
+            parsed = command_router.parse_slash_command(message)
+            if parsed:
+                cmd_name, cmd_args = parsed
+                # Build minimal context; user_identifier may be None
+                auth_user_int = None
+                try:
+                    if llm_user_identifier is not None:
+                        auth_user_int = int(llm_user_identifier)  # best-effort parse for RBAC
+                except Exception:
+                    auth_user_int = None
+                ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
+                cmd_res = command_router.dispatch_command(ctx, cmd_name, cmd_args)
+                if cmd_res.ok:
+                    injection_mode = command_router.get_injection_mode()
+                    # Remove the slash command from user text; keep args for user payload if any
+                    message = (cmd_args or "").strip()
+                    if injection_mode == "preface":
+                        prefix = f"[/{cmd_name}] {cmd_res.content}\n\n"
+                        message = f"{prefix}{message}" if message else prefix.strip()
+                    else:
+                        injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                else:
+                    # On error, provide a short system injection so the model has context; strip the command from user text
+                    message = (cmd_args or "").strip()
+                    injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+
         # Process message with Chat Dictionary (text only for now)
         processed_text_message = message
         if chatdict_entries and message:
@@ -632,6 +663,26 @@ def chat(
             final_text_for_current_message = f"{custom_prompt}\n\n{final_text_for_current_message}"
 
         final_text_for_current_message = f"{rag_text_prefix}{final_text_for_current_message}".strip()
+
+        # Inject command result as a separate system message when configured
+        if injected_command_system_text:
+            # Enrich with audit metadata (non-visible) for downstream logging/adapters that preserve message fields
+            _cmd_meta = {
+                "source": "slash_command",
+                "command": cmd_name if 'cmd_name' in locals() else None,
+                "args": cmd_args if 'cmd_args' in locals() else None,
+                "mode": command_router.get_injection_mode(),
+                "result_ok": True if 'cmd_res' in locals() and getattr(cmd_res, 'ok', False) else False,
+                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if 'cmd_res' in locals() else None,
+                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if 'cmd_res' in locals() else None,
+            }
+            msg_obj = {
+                "role": "system",
+                "name": "system-command",
+                "content": [{"type": "text", "text": injected_command_system_text}],
+                "metadata": {"tldw_injection": _cmd_meta},
+            }
+            llm_messages_payload.append(msg_obj)
 
         if final_text_for_current_message:
             current_user_content_parts.append({"type": "text", "text": final_text_for_current_message})

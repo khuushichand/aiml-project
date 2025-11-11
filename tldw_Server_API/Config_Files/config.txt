@@ -65,6 +65,49 @@ history_messages_limit = 20
 # Ordering for loaded history: asc (oldest first) or desc (newest first). Default: desc.
 history_messages_order = desc
 
+[Chat-Commands]
+# Enable slash commands (env: CHAT_COMMANDS_ENABLED)
+commands_enabled = false
+
+# Injection behavior for command results: 'system' (separate system message) or 'preface' (prepend to user text)
+# env: CHAT_COMMAND_INJECTION_MODE
+injection_mode = system
+
+# Per-user, per-command requests per minute (RPM) limit
+# env: CHAT_COMMANDS_RATE_LIMIT
+commands_rate_limit = 10
+
+# Enforce RBAC permissions on commands (env: CHAT_COMMANDS_REQUIRE_PERMISSIONS)
+require_permissions = false
+
+# Fallback default location for /weather when no args provided (env: DEFAULT_LOCATION)
+default_location =
+
+[Chat-Templating]
+# Enable templating in chat dictionaries and chatbooks (env: CHAT_DICT_TEMPLATES_ENABLED)
+enable_templates = false
+
+# Allow random helpers in templates (env: CHAT_DICT_TEMPLATES_ALLOW_RANDOM)
+allow_random = false
+
+# Allow external calls from templates (e.g., weather()) (env: TEMPLATES_ALLOW_EXTERNAL_CALLS)
+allow_external_calls = false
+
+# Hard cap on rendered output length (env: MAX_TEMPLATE_OUTPUT_CHARS)
+max_output_chars = 2000
+
+# Per-render timeout in milliseconds (env: TEMPLATE_RENDER_TIMEOUT_MS)
+render_timeout_ms = 250
+
+# Default timezone for template functions like now_tz (env: TEMPLATE_DEFAULT_TZ)
+default_timezone = UTC
+
+# Default locale (reserved; currently not used unless Babel is enabled) (env: TEMPLATE_DEFAULT_LOCALE)
+default_locale =
+
+# Optional deterministic seeding for random helpers in tests (env: TEMPLATES_RANDOM_SEED)
+random_seed =
+
 [Character-Chat]
 CHARACTER_RATE_LIMIT_OPS = 100
 CHARACTER_RATE_LIMIT_WINDOW = 3600

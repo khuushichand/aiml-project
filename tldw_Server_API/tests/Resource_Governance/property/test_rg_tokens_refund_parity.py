@@ -32,6 +32,8 @@ async def test_tokens_refund_parity_and_steady_no_denials(per_min, first_units, 
     ft = FakeTime(0.0)
     ns = "rg_p_tok_refund"
     rg = RedisResourceGovernor(policy_loader=_Loader(), time_source=ft, ns=ns)
+    # Ensure a clean slate for sliding-window keys when FakeTime≈0.0
+    await rg.test_force_clear_windows(policy_id="p")
     e = "user:tokp"
 
     # Reserve first batch

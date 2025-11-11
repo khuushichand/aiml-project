@@ -86,6 +86,37 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/chat-completions
+  - id: chat.commands.list
+    description: List available chat slash commands and brief descriptions.
+    resource_tags:
+      - chat
+      - commands
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-commands-list
+  - id: chat.dictionaries.validate
+    description: Validate chat dictionary payloads for schema, regex safety, and template checks.
+    resource_tags:
+      - chat
+      - dictionaries
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/chat-dictionaries-validate
   - id: audio.speech
     description: Generate speech audio from text using TTS providers.
     resource_tags:
@@ -405,6 +436,84 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/scheduler-workflows-admin-rescan
+  - id: notes
+    description: Generic token scope bucket for Notes APIs (search, CRUD, graph).
+    resource_tags:
+      - notes
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/notes
+  - id: notes.graph.read
+    description: Read note graphs and neighbors.
+    resource_tags:
+      - notes
+      - graph
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/notes-graph-read
+  - id: notes.graph.write
+    description: Create or delete manual note links.
+    resource_tags:
+      - notes
+      - graph
+      - links
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/notes-graph-write
+  - id: notes.graph.suggest
+    description: Suggest candidate graph links (LLM/heuristic).
+    resource_tags:
+      - notes
+      - graph
+      - suggest
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/notes-graph-suggest
+  - id: notes.title.suggest
+    description: Suggest note titles via heuristic/LLM.
+    resource_tags:
+      - notes
+      - titles
+    sensitivity_tier: low
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/notes-title-suggest
 feature_flags:
   - id: media_ingest_beta
     description: Enables new media ingestion pipeline with enhanced metadata extraction.

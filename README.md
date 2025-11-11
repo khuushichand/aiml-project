@@ -510,6 +510,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Media: `POST /api/v1/media/process` - ingest/process media (URLs/files)
 - Media Search: `GET /api/v1/media/search` - search ingested content
 - Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
+- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands
+- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary
 - Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings
 - RAG: `POST /api/v1/rag/search` - unified RAG search
 - Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription
@@ -782,4 +784,3 @@ See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy an
     * Terry Pratchett
 - `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
     * Richard Feynman
-

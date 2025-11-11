@@ -159,6 +159,14 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from fastapi.encoders import jsonable_encoder
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Chat import command_router
+from tldw_Server_API.app.api.v1.schemas.chat_commands_schemas import ChatCommandsListResponse, ChatCommandInfo
+from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
+    ValidateDictionaryRequest,
+    ValidateDictionaryResponse,
+    ValidationIssue,
+)
+from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -177,6 +185,12 @@ _config = load_comprehensive_config()
 _chat_config = {}
 if _config and _config.has_section('Chat-Module'):
     _chat_config = dict(_config.items('Chat-Module'))
+_chat_commands_config = {}
+if _config and _config.has_section('Chat-Commands'):
+    try:
+        _chat_commands_config = dict(_config.items('Chat-Commands'))
+    except Exception:
+        _chat_commands_config = {}
 
 # Use centralized image limits/utilities (config-aware)
 MAX_TEXT_LENGTH: int = int(_chat_config.get('max_text_length_per_message', 400000))
@@ -186,6 +200,17 @@ MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10)
 MAX_BASE64_BYTES: int = get_max_base64_bytes()
 # Provider fallback setting - disabled by default for production stability
 ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
+
+# Chat-Commands feature toggles (env overrides take priority)
+def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
+    v = os.getenv(env_name)
+    if isinstance(v, str) and v.strip():
+        return v.strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        raw = _chat_commands_config.get(cfg_key) if _chat_commands_config else None
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"} if raw is not None else fallback
+    except Exception:
+        return fallback
 
 # Feature flag: queued execution of chat calls via workers (default disabled)
 _env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
@@ -266,6 +291,121 @@ async def _decrement_active_request(user_id: str) -> None:
                 _active_request_counts.pop(user_id, None)
             else:
                 _active_request_counts[user_id] = current - 1
+
+# ------------------------------------------------------------------------------------
+# New Endpoints: Chat Commands discovery and Dictionary Validation
+# ------------------------------------------------------------------------------------
+
+@router.get(
+    "/commands",
+    response_model=ChatCommandsListResponse,
+    summary="List available slash commands",
+    description=(
+        "Returns available chat slash commands with their descriptions."
+        " When permission enforcement is enabled, commands requiring a permission"
+        " are filtered by the current user's privileges in multi-user mode."
+    ),
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.commands.list")),
+        Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.commands.list")),
+    ],
+)
+async def list_chat_commands(
+    current_user: User = Depends(get_request_user),
+):
+    # If commands are globally disabled, return empty list for discoverability
+    if not command_router.commands_enabled():
+        return ChatCommandsListResponse(commands=[])
+
+    # Determine if RBAC filtering is enforced
+    require_perms = _cfg_bool_cmds("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
+
+    if not require_perms or is_single_user_mode():
+        # Include required_permission metadata from the registry even if not filtering
+        reg = getattr(command_router, "_registry", {})
+        items = []
+        if isinstance(reg, dict) and reg:
+            for name, spec in reg.items():  # type: ignore
+                items.append(
+                    ChatCommandInfo(
+                        name=name,
+                        description=getattr(spec, "description", name),
+                        required_permission=getattr(spec, "required_permission", None),
+                    )
+                )
+        else:
+            for c in command_router.list_commands():
+                items.append(
+                    ChatCommandInfo(
+                        name=c.get("name", ""),
+                        description=c.get("description", ""),
+                        required_permission=None,
+                    )
+                )
+        return ChatCommandsListResponse(commands=items)
+
+    # Permission-filtered list using registry metadata
+    items: list[ChatCommandInfo] = []
+    try:
+        # Access registry for permission metadata (conventionally private, stable enough for internal use)
+        reg = getattr(command_router, "_registry", {})
+        for name, spec in reg.items():  # type: ignore
+            perm = getattr(spec, "required_permission", None)
+            if not perm or user_has_permission(int(getattr(current_user, "id", 0) or 0), perm):
+                items.append(
+                    ChatCommandInfo(
+                        name=name,
+                        description=getattr(spec, "description", name),
+                        required_permission=perm,
+                    )
+                )
+    except Exception:
+        # Fallback: unfiltered list if registry not accessible
+        for c in command_router.list_commands():
+            items.append(
+                ChatCommandInfo(
+                    name=c.get("name", ""),
+                    description=c.get("description", ""),
+                    required_permission=None,
+                )
+            )
+
+    return ChatCommandsListResponse(commands=items)
+
+
+@router.post(
+    "/dictionaries/validate",
+    response_model=ValidateDictionaryResponse,
+    summary="Validate a chat dictionary payload",
+    description=(
+        "Validates a chat dictionary JSON payload and returns a structured report"
+        " including errors, warnings, and basic entry statistics."
+    ),
+    tags=["chat"],
+    responses={
+        status.HTTP_200_OK: {"description": "Validation report produced successfully"},
+        status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Invalid request schema"},
+    },
+    dependencies=[
+        Depends(rbac_rate_limit("chat.dictionaries.validate")),
+        Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.dictionaries.validate")),
+    ],
+)
+async def validate_chat_dictionary(
+    req: ValidateDictionaryRequest = Body(...),
+):
+    """Run server-side validation for a chat dictionary, returning taxonomy-aligned results."""
+    result = _validate_dictionary(req.data, schema_version=req.schema_version, strict=req.strict)
+    # Convert validator result into response model
+    return ValidateDictionaryResponse(
+        ok=result.ok,
+        schema_version=result.schema_version,
+        errors=[ValidationIssue(**e) for e in result.errors],
+        warnings=[ValidationIssue(**w) for w in result.warnings],
+        entry_stats=result.entry_stats,
+        suggested_fixes=result.suggested_fixes,
+    )
 
 # --- Helper Functions ---
 
@@ -942,6 +1082,103 @@ async def create_chat_completion(
             logger.warning(f"Input validation error: {e}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+        # Slash command handling and audit logging (before input moderation)
+        try:
+            if command_router.commands_enabled() and request_data and request_data.messages:
+                # Locate the most recent user message text
+                last_user_idx = None
+                last_text = None
+                for idx in range(len(request_data.messages) - 1, -1, -1):
+                    m = request_data.messages[idx]
+                    if getattr(m, 'role', None) == 'user':
+                        if isinstance(m.content, str):
+                            last_text = m.content
+                            last_user_idx = idx
+                            break
+                        elif isinstance(m.content, list):
+                            for part in m.content:
+                                if getattr(part, 'type', None) == 'text' and isinstance(getattr(part, 'text', None), str):
+                                    last_text = part.text
+                                    last_user_idx = idx
+                                    break
+                            if last_user_idx is not None:
+                                break
+                if last_user_idx is not None and isinstance(last_text, str):
+                    parsed = command_router.parse_slash_command(last_text)
+                    if parsed:
+                        cmd_name, cmd_args = parsed
+                        ctx = command_router.CommandContext(
+                            user_id=str(getattr(current_user, 'id', 'anonymous')),
+                            auth_user_id=int(getattr(current_user, 'id', 0)) if getattr(current_user, 'id', None) is not None else None,
+                            request_meta={
+                                'endpoint': '/chat/completions',
+                                'conversation_id': request_data.conversation_id,
+                                'character_id': request_data.character_id,
+                            },
+                        )
+                        result = command_router.dispatch_command(ctx, cmd_name, cmd_args)
+                        inj_mode = command_router.get_injection_mode()
+                        inj_meta = {
+                            'command': cmd_name,
+                            'args': cmd_args,
+                            'mode': inj_mode,
+                            'result_ok': bool(result.ok),
+                            'error': (result.metadata or {}).get('error') if hasattr(result, 'metadata') else None,
+                            'rbac': (result.metadata or {}).get('rbac') if hasattr(result, 'metadata') else None,
+                            'conversation_id': request_data.conversation_id,
+                        }
+                        # Audit the command execution
+                        try:
+                            if audit_service and context:
+                                await audit_service.log_event(
+                                    event_type=AuditEventType.API_REQUEST,
+                                    context=context,
+                                    action="chat.command.executed",
+                                    result=("success" if result.ok else "failure"),
+                                    metadata=inj_meta,
+                                )
+                        except Exception as _ae:
+                            logger.debug(f"Slash command audit log skipped: {_ae}")
+
+                        # Mutate request messages for injection
+                        content_text = f"[/{cmd_name}] {result.content}"
+                        if inj_mode == 'preface':
+                            # Prefix the user's message
+                            if isinstance(request_data.messages[last_user_idx].content, str):
+                                rest = (cmd_args or '').strip()
+                                new_user_text = (f"[/{cmd_name}] {result.content}\n\n{rest}" if rest else f"[/{cmd_name}] {result.content}")
+                                request_data.messages[last_user_idx].content = new_user_text
+                            else:
+                                parts = request_data.messages[last_user_idx].content
+                                for part in parts:
+                                    if getattr(part, 'type', None) == 'text':
+                                        rest = (cmd_args or '').strip()
+                                        part.text = (f"[/{cmd_name}] {result.content}\n\n{rest}" if rest else f"[/{cmd_name}] {result.content}")
+                                        break
+                        else:
+                            # System injection and strip the command from user text
+                            if isinstance(request_data.messages[last_user_idx].content, str):
+                                request_data.messages[last_user_idx].content = (cmd_args or '').strip()
+                            else:
+                                parts = request_data.messages[last_user_idx].content
+                                for part in parts:
+                                    if getattr(part, 'type', None) == 'text':
+                                        part.text = (cmd_args or '').strip()
+                                        break
+                            try:
+                                from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ChatCompletionSystemMessageParam
+                                sys_msg = ChatCompletionSystemMessageParam(role='system', content=content_text, name='system-command')
+                                # Attach metadata if possible
+                                try:
+                                    setattr(sys_msg, 'metadata', {'tldw_injection': inj_meta})
+                                except Exception:
+                                    pass
+                                request_data.messages.append(sys_msg)
+                            except Exception:
+                                request_data.messages.append({'role': 'system', 'content': content_text, 'name': 'system-command', 'metadata': {'tldw_injection': inj_meta}})
+        except Exception as _cmd_err:
+            logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
+
         # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
             moderation = get_moderation_service()
@@ -1562,7 +1799,7 @@ async def create_chat_completion(
                     status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
                 client_detail = (
-                    str(e_chat) if db_status < 500 else "A database error occurred. Please try again later."
+                    (str(e_chat) or type(e_chat).__name__) if db_status < 500 else "A database error occurred. Please try again later."
                 )
                 raise HTTPException(status_code=db_status, detail=client_detail)
             # Handle legacy chat library exceptions robustly, even if class identity differs.
@@ -1617,8 +1854,8 @@ async def create_chat_completion(
             )
             # Standardize error messages - never expose internal details for 5xx errors
             if err_status < 500:
-                # Client errors can have more detail
-                client_detail = getattr(e_chat, 'message', str(e_chat))
+                # Client errors can have more detail; ensure non-empty
+                client_detail = getattr(e_chat, 'message', None) or str(e_chat) or type(e_chat).__name__
             else:
                 # Server errors should be generic
                 if err_status == 502:
@@ -2806,12 +3043,14 @@ async def generate_document(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ChatAPIError as e:
         logger.error(f"API error generating document: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+        _msg = str(e) or getattr(e, "message", None) or type(e).__name__
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_msg)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected error generating document: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        _msg = str(e) or getattr(e, "message", None) or type(e).__name__
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=_msg)
 
 
 @router.get(

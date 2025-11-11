@@ -468,6 +468,13 @@ else:
         _HAS_ITEMS = False
     # Notes / Prompts
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
+    # Notes Graph (stub, RBAC-wired)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.notes_graph import router as notes_graph_router
+        _HAS_NOTES_GRAPH = True
+    except Exception as _ng_err:
+        logger.warning(f"Notes Graph endpoints unavailable; skipping import: {_ng_err}")
+        _HAS_NOTES_GRAPH = False
     from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
     # Prompt Studio (guarded)
     try:
@@ -2163,6 +2170,8 @@ OPENAPI_TAGS = [
     {"name": "media-embeddings", "description": "Generate embeddings for uploaded/ingested media.",
      "externalDocs": {"description": "Embeddings docs", "url": _ext_url("/docs-static/Embeddings/Embeddings-Documentation.md")}},
     {"name": "notes", "description": "Notes and knowledge management."},
+    {"name": "notes-graph", "description": "Graph of notes, tags, and sources.",
+     "externalDocs": {"description": "Graphing PRD", "url": _ext_url("/docs-static/Design/Graphing-Notes-PRD.md")}},
     {"name": "prompts", "description": "Prompt library management (import/export).",
      "externalDocs": {"description": "Prompts design", "url": _ext_url("/docs-static/Design/Prompts.md")}},
     {"name": "prompt-studio", "description": "Projects, prompts, tests, optimization, and background jobs (experimental).",
@@ -3376,6 +3385,8 @@ else:
     except Exception as _e:
         logger.warning(f"Legacy subscriptions shim not available: {_e}")
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    if _HAS_NOTES_GRAPH:
+        _include_if_enabled("notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])  # /api/v1/notes/graph
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     if _HAS_READING_HIGHLIGHTS:
         _include_if_enabled("reading-highlights", reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
