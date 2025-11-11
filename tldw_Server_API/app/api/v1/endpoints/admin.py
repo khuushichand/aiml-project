@@ -1109,14 +1109,15 @@ async def get_notes_title_settings() -> Dict[str, Any]:
     try:
         llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
         default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+    except Exception as e:
+        logger.error(f"Failed to get notes title settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get notes title settings") from e
+    else:
         return {
             "llm_enabled": llm_enabled,
             "default_strategy": default_strategy,
             "strategies": ["heuristic", "llm", "llm_fallback"],
         }
-    except Exception as e:
-        logger.error(f"Failed to get notes title settings: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get notes title settings")
 
 
 @router.post("/notes/title-settings")
