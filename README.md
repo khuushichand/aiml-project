@@ -20,52 +20,72 @@
 
 - [Overview](#overview)
 - [Current Status](#current-status)
+  - [Roadmap](#roadmap)
 - [What's New](#whats-new)
+  - [Privacy](#privacy)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
+- [Networking & Limits](#networking--limits)
 - [Architecture & Repo Layout](#architecture--repo-layout)
 - [Architecture Diagram](#architecture-diagram)
 - [Quickstart](#quickstart)
 - [Usage Examples](#usage-examples)
 - [Key Endpoints](#key-endpoints)
 - [Running Tests](#running-tests)
-- [Frontend & UI](#frontend--ui)
 - [Documentation & Resources](#documentation--resources)
+  - [Resource Governor Config](#resource-governor-config)
+  - [OpenAI-Compatible Strict Mode (Local Providers)](#openai-compatible-strict-mode-local-providers)
 - [Deployment](#deployment)
-- [Networking & Limits](#networking--limits)
 - [Monitoring](#monitoring)
+  - [PostgreSQL Content Mode](#postgresql-content-mode)
 - [Troubleshooting](#troubleshooting)
 - [Contributing & Support](#contributing--support)
 - [Developer Guides](#developer-guides)
+  - [Ingestion & Media Processing Docs](#ingestion--media-processing-docs)
+  - [More Detailed Explanation & Background](#more-detailed-explanation--background)
+  - [Local Models I recommend](#local-models-i-recommend)
 - [License](#license)
 - [Credits](#credits)
 - [About](#about)
-- [Roadmap & Privacy](#roadmap--privacy)
+  - [Getting Help](#getting-help)
+  - [Security Disclosures](#security-disclosures)
+  - [Project Guidelines](#project-guidelines)
 
 ## Overview
+- **tldw_server** is an open-source research multi-tool / backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more. 
+- It consists of a FastAPI API-first server architecture backed by SQLite or Postgres depending on user choice, with OpenAI-compatible Chat and Audio APIs, a unified RAG pipeline, knowledge management, and integrations with local or hosted LLM providers (with cost/usage tracking).
+- The long-term vision is a personal research assistant inspired by The Young Lady’s Illustrated Primer-helping people learn, reason about, and retain what they watch or read.
 
-tldw_server (Too Long; Didn’t Watch Server) is an open-source backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, and document sources. It exposes a FastAPI-first architecture with OpenAI-compatible Chat and Audio APIs, a unified RAG pipeline, knowledge management, and integrations with local or hosted LLM providers.
-
-The long-term vision is a personal research assistant inspired by The Young Lady’s Illustrated Primer-helping people learn, reason about, and retain what they watch or read.
 
 ## Current Status
+
+<details>
+<summary> Current Project Status/Latest Release Details Here  - Click-Here</summary>
 
 ### Status: Version 0.1.4 published - tldw_server is now in beta
 - Expect bugs, and random issues.
 - Please report any found/encountered.
 - CI/CD reporting green/bug squashing is current Top priority next to getting the webui working properly.
 
-## Version 0.1.0 - API-First Architecture (Complete rebuild from Gradio PoC)
+#### Active Work-In-Progres (not in order)
+Active Work-in-Progress/Current focus Tracker (not-in-order)
+- Workflows, 
+- browser extension (tldw_Assistant), 
+- Resource Governance Module
+- Unified Admin Dashboard
+- TTS Modules (Kokoro, higgs, dia, vibevoice)
+- Watchlists,
+- Collections(Read-it-later)
+- basic WebUI 
+- Documentation
 
-This is a major milestone release that transitions tldw from a Gradio-based application to a robust FastAPI backend:
-
-- **API-First Design**: Full RESTful API with OpenAPI documentation
-- **Stable Core**: Production-ready media processing and analysis
-- **Extensive Features**: 14+ endpoint categories with 100+ operations
-- **OpenAI Compatible**: Drop-in replacement for chat completions (Chat Proxy Server)
-- **Gradio Deprecated**: The Gradio UI remains available but is no longer maintained/part of this project.
-- **tldw_Chatbook**: Has become a separate standalone application
-- Active WIP: workflow automation, browser extensions, writing helpers, and research providers.
+### Roadmap
+Roadmap(not in order)
+- Browser extension for direct web capture (WIP)
+- Sandboxed code execution
+- Speech-to-Speech pipeline for (near) real time chatting
+- See the Issues tag 'Enhancements' or 'Feature Add'
+- Documentation
 
 
 ## What's New
@@ -79,6 +99,29 @@ This is a major milestone release that transitions tldw from a Gradio-based appl
 
 See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
+
+### Privacy
+Privacy & Security
+- Self-hosted by design; no telemetry or data collection
+- Users own and control their data; see hardening guide for production
+- Metrics & Grafana <FIXME/UPDATE>
+  - Emitted metrics (core):
+    - `rg_decisions_total{category,scope,backend,result,policy_id}` — allow/deny decisions per category/scope/backend
+    - `rg_denials_total{category,scope,reason,policy_id}` — denial events by reason (e.g., `insufficient_capacity`)
+    - `rg_refunds_total{category,scope,reason,policy_id}` — refund events from commit/refund paths
+    - `rg_concurrency_active{category,scope,policy_id}` — active stream/job leases (gauge)
+  - Cardinality guard:
+    - By default, metrics DO NOT include `entity` labels to avoid high-cardinality pitfalls. If you truly need per-entity sampling, gate it behind `RG_METRICS_ENTITY_LABEL=true` and ensure hashing/masking is applied upstream.
+  - Quick Grafana panel examples:
+    - Allow vs Deny over time (per category):
+      - Query: `sum by (category, result) (rate(rg_decisions_total[5m]))`
+    - Denials by scope (top N):
+      - Query: `topk(5, sum by (scope) (rate(rg_denials_total[5m])))`
+    - Refund activity (tokens):
+      - Query: `sum by (policy_id) (rate(rg_refunds_total{category="tokens"}[5m]))`
+    - Active streams (per scope):
+      - Query: `avg by (scope) (rg_concurrency_active{category="streams"})`
+  - 
 ---
 
 ### Migrating From Gradio Version (pre-0.1.0)
@@ -99,15 +142,19 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
     - Or integrate directly against the API;
 ---
 
+</details>
+
 ## Highlights
 
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; metadata extraction; configurable chunking.
-- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; OpenAI-compatible TTS and local Kokoro ONNX.
-- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings.
+- Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
+- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; TTS: OpenAI-compatible TTS supporting ElevenLabs, OpenAI and locally: kokoro, Higgs, Dia, VibeVoice.
+- Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings. 50+ optional parameters available for tuning.
 - Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists.
-- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export.
-- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, batch metrics).
-- MCP Unified: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints.
+- Knowledge management: notes, prompt library, character cards, soft-delete with recovery, Chatbooks import/export. (Support for import/edit/export of .apkg files - anki)
+- Prompt Studio & evaluations: projects, prompt testing/optimization, unified evaluation APIs (G-Eval, RAG, batch metrics). Full evaluations and prompt management.
+- MCP Server: production MCP with JWT/RBAC, tool execution, WebSockets, metrics, and health endpoints. Use existing tools or add your own using a handy guide. Setup tool categories and collections, allowing for easier context management.
+
 
 ## Feature Status
 
@@ -123,7 +170,7 @@ See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md
 ## Architecture & Repo Layout
 
 <details>
-<summary> Architecture & Repo Layout Here </summary>
+<summary> Architecture & Repo Layout Here - Click-Here</summary>
 
 ```text
 <repo_root>/
@@ -154,7 +201,7 @@ See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md
 ```
 
 Notes
-- The FastAPI app serves a legacy UI at `/webui`; new features target the Next.js client.
+- The FastAPI app serves a 'simple' UI at `/webui`; there is also a WIP Next.js client.
 - SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
 
 
@@ -246,6 +293,9 @@ flowchart LR
 
 ## Quickstart
 
+<details>
+<summary>Project Quickstart/Get started in less than 5 minutes(maybe) - Click-Here</summary>
+
 Prerequisites
 - Python 3.11+ (3.12/3.13 supported)
 - ffmpeg (for audio/video pipelines)
@@ -329,9 +379,14 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
 - The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
-- For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
+  - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
+
+</details>
 
 ### Supporting Services via Docker
+
+<details>
+<summary> Current Project Status/Latest Release Details Here - Click-Here</summary>
 
 Run only infrastructure services without the app.
 
@@ -391,7 +446,13 @@ See Docs/Operations/monitoring/README.md for examples that scrape the API and wo
 
 Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
 
+</details>
+
+
 ## Usage Examples
+
+<details>
+<summary>Usage Examples - Click-Here</summary>
 
 Use the single-user API key with the `X-API-KEY` header.
 
@@ -440,8 +501,11 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   -F "file=@sample.wav" -F "model=whisper-1"
 ```
+</details>
 
 ## Key Endpoints
+<details>
+<summary>Key Endpoints - Click-Here</summary>
 
 - Media: `POST /api/v1/media/process` - ingest/process media (URLs/files)
 - Media Search: `GET /api/v1/media/search` - search ingested content
@@ -461,17 +525,18 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Providers: `GET /api/v1/llm/providers` - provider/models list
 - MCP: `GET /api/v1/mcp/status` - MCP server status
 
+</details>
+
 ## Running Tests
+
+<details>
+<summary>Running Tests - Click-Here</summary>
 
 - `python -m pytest -v` - full test suite (skips heavy optional suites by default).
 - `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
 
-## Frontend & UI
-
-- The actively developed Next.js client lives in `tldw-frontend` (see its README for setup/build).
-- The FastAPI backend serves a legacy UI at `/webui`; it is stable but feature-frozen.
 
 ## Documentation & Resources
 
@@ -515,6 +580,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 - Content DBs (Media, ChaChaNotes, Workflows) can run on Postgres.
 - See: `Docs/Published/Deployment/Postgres_Content_Mode.md`, `Docs/Published/Deployment/Postgres_Migration_Guide.md`, and `Docs/Published/Deployment/Postgres_Backups.md`.
 
+</details>
 
 ## Troubleshooting
 
@@ -554,11 +620,14 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 </details>
 
----
+-------------------
 
 
 ### More Detailed Explanation & Background
-See `Docs/About.md` for the extended project background, vision, and notes.
+<details>
+<summary>More Detailed Explanation & Background - Click-Here</summary>
+
+- See `Docs/About.md` for the extended project background, vision, and notes.
 - https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5049562
 - Purpose of this section is to help bring awareness to certain concepts and terms that are used in the field of AI/ML/NLP, as well as to provide some resources for learning more about them.
 - Also because some of those things are extremely relevant and important to know if you care about accuracy and the effectiveness of the LLMs you're using.
@@ -622,8 +691,44 @@ See `Docs/About.md` for the extended project background, vision, and notes.
 
 </details>
 
-### Project Guidelines
-See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy and contribution guidelines.
+
+----------------------
+
+### Local Models I recommend
+
+<details>
+<summary>Local Models I Can Recommend - Click-Here</summary>
+
+- These are just the 'standard smaller' models I recommend, there are many more out there, and you can use any of them with this project.
+  - One should also be aware that people create 'fine-tunes' and 'merges' of existing models, to create new models that are more suited to their needs.
+  - This can result in models that may be better at some tasks but worse at others, so it's important to test and see what works best for you.
+- Mistral Nemo Instruct 2407 - https://huggingface.co/QuantFactory/Mistral-Nemo-Instruct-2407-GGUF
+- Magistral Small: https://huggingface.co/mistralai/Magistral-Small-2509-GGUF
+- Qwen 3/VL Series
+  - Qwen/Qwen3-VL-4B-Instruct (Qwen3 4B+Vision): https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF 
+  - Qwen3-30B-A3B-Instruct-2507: https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF
+
+For commercial API usage for use with this project: Claude Sonnet 4.5, Kimi k2, DeepSeek, gpt5. 
+Originally written: Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.  That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.  You are just a stepping stone to their goals.
+2025 Nov: I would say service quality has improved enough to the point where it can make sense to use a 'premium' subscription/usage of API services without expecting to be screwed 7-8/10 times.
+
+
+From @nrose 05/08/2024 on Threads:
+```
+No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
+  No. For efficiency. 
+Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth. 
+The model declines over time, then the optimization makes it somewhat better, then in a sort of 
+  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then 
+  trim down over time, so they can train the next big model… etc etc.
+None of these companies exist to provide AI services in 2024. They’re only doing it to finance the 
+ things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
+  and become a hidden monopoly like the oil and electric companies. 
+2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some 
+  directional income
+```
+
+</details>
 
 ---
 
@@ -645,14 +750,7 @@ GNU General Public License v3.0 - see `LICENSE` for details.
 - [Fabric](https://github.com/danielmiessler/fabric)
 - [Llamafile](https://github.com/Mozilla-Ocho/llamafile) - For the local LLM inference engine
 - [Mikupad](https://github.com/lmg-anon/mikupad) - Because I'm not going to write a whole new frontend for non-chat writing.
-- The people who have helped me get to this point, and especially for those not around to see it(DT & CC & SC).
-
----
-
-
-### Security Disclosures
-See `SECURITY.md` for reporting guidelines and disclosures.
-
+- The people who have helped me get to this point(SC & CS), and especially for those not around to see it(DT & CC).
 
 ---
 
@@ -668,6 +766,13 @@ Long-term vision: Building towards a personal AI research assistant inspired by 
 - Discussions: [Community forum](https://github.com/rmusser01/tldw_server/discussions)
 
 
+### Security Disclosures
+See `SECURITY.md` for reporting guidelines and disclosures.
+
+
+### Project Guidelines
+See [Project_Guidelines.md](Project_Guidelines.md) for development philosophy and contribution guidelines.
+
 
 ---
 
@@ -676,35 +781,5 @@ Long-term vision: Building towards a personal AI research assistant inspired by 
 - `I like the lies-to-children motif, because it underlies the way we run our society and resonates nicely with Discworld. Like the reason for Unseen being a storehouse of knowledge - you arrive knowing everything and leave realising that you know practically nothing, therefore all the knowledge you had must be stored in the university. But it's like that in "real Science", too. You arrive with your sparkling A-levels all agleam, and the first job of the tutors is to reveal that what you thought was true is only true for a given value of "truth". Most of us need just "enough" knowledge of the sciences, and it's delivered to us in metaphors and analogies that bite us in the bum if we think they're the same as the truth.`
     * Terry Pratchett
 - `The first principle is that you must not fool yourself - and you are the easiest person to fool.`
-  *Richard Feynman
+    * Richard Feynman
 
-
----
-
-## Roadmap & Privacy
-
-Roadmap & WIP
-- Browser extension for direct web capture (WIP)
-- Expanded writing assistance and workflow automation (WIP)
-- Additional research providers, evaluation tooling, and flashcard improvements
-
-Privacy & Security
-- Self-hosted by design; no telemetry or data collection
-- Users own and control their data; see hardening guide for production
-- Metrics & Grafana
-  - Emitted metrics (core):
-    - `rg_decisions_total{category,scope,backend,result,policy_id}` — allow/deny decisions per category/scope/backend
-    - `rg_denials_total{category,scope,reason,policy_id}` — denial events by reason (e.g., `insufficient_capacity`)
-    - `rg_refunds_total{category,scope,reason,policy_id}` — refund events from commit/refund paths
-    - `rg_concurrency_active{category,scope,policy_id}` — active stream/job leases (gauge)
-  - Cardinality guard:
-    - By default, metrics DO NOT include `entity` labels to avoid high-cardinality pitfalls. If you truly need per-entity sampling, gate it behind `RG_METRICS_ENTITY_LABEL=true` and ensure hashing/masking is applied upstream.
-  - Quick Grafana panel examples:
-    - Allow vs Deny over time (per category):
-      - Query: `sum by (category, result) (rate(rg_decisions_total[5m]))`
-    - Denials by scope (top N):
-      - Query: `topk(5, sum by (scope) (rate(rg_denials_total[5m])))`
-    - Refund activity (tokens):
-      - Query: `sum by (policy_id) (rate(rg_refunds_total{category="tokens"}[5m]))`
-    - Active streams (per scope):
-      - Query: `avg by (scope) (rg_concurrency_active{category="streams"})`

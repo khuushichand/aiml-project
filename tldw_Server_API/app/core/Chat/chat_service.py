@@ -716,7 +716,17 @@ async def execute_streaming_call(
 
         if queue_enabled:
             # Submit streaming job to the queue and bridge chunks via channel
-            stream_channel: asyncio.Queue = asyncio.Queue(maxsize=100)
+            # Bounded per-request channel for queued streaming; size is configurable via config.txt
+            try:
+                _maxsz_raw = os.getenv("CHAT_STREAM_CHANNEL_MAXSIZE")
+                if not _maxsz_raw:
+                    from tldw_Server_API.app.core.config import load_comprehensive_config
+                    _cp = load_comprehensive_config()
+                    _maxsz_raw = _cp.get('Chat-Module', 'chat_stream_channel_maxsize', fallback='100') if _cp else '100'
+                stream_channel_maxsize = int(str(_maxsz_raw))
+            except Exception:
+                stream_channel_maxsize = 100
+            stream_channel: asyncio.Queue = asyncio.Queue(maxsize=stream_channel_maxsize)
             est_tokens_for_queue = max(1, len(request_json) // 4)
 
             def _queued_processor():

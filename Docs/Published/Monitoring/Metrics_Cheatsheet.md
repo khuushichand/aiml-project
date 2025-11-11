@@ -10,7 +10,7 @@ The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, syste
 
 Installation (optional OpenTelemetry):
 - To enable OTel exporters and auto-instrumentation, install extras:
-  - `pip install "tldw-server[otel]"` or `pip install -r requirements-otel.txt`
+  - `pip install "tldw-server[otel]"`
   - Set env: `OTEL_METRICS_EXPORTER=prometheus,otlp`, `OTEL_TRACES_EXPORTER=otlp`, `PROMETHEUS_PORT=9090`
 
 ## HTTP

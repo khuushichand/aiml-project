@@ -34,6 +34,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     DetailResponse,
     NoteBulkCreateRequest, NoteBulkCreateItemResult, NoteBulkCreateResponse,
     NotesListResponse, NotesExportResponse,
+    TitleSuggestRequest, TitleSuggestResponse,
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
@@ -44,6 +45,8 @@ from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_top
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Writing.note_title import generate_note_title, TitleGenOptions
+from tldw_Server_API.app.core.config import settings as core_settings
 #
 #
 #######################################################################################################################
@@ -186,7 +189,10 @@ async def create_note(
 
         # The user context (user_id) is implicitly handled by `get_chacha_db_for_user`
         # The `db` instance is already specific to the authenticated user.
-        logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{note_in.title[:30]}...'")
+        safe_title_log = (note_in.title or "").strip()
+        if len(safe_title_log) > 30:
+            safe_title_log = safe_title_log[:30] + "..."
+        logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{safe_title_log}'")
         # Topic monitoring (non-blocking) for title and content
         try:
             mon = get_topic_monitoring_service()
@@ -197,8 +203,35 @@ async def create_note(
                 mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
         except Exception:
             pass
+        # Compute title (auto-generate if requested)
+        effective_title = (note_in.title or "").strip()
+        if not effective_title:
+            if getattr(note_in, "auto_title", False):
+                try:
+                    _strategy = getattr(note_in, "title_strategy", "heuristic")
+                    _default = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+                    if _strategy == "heuristic" and _default != "heuristic":
+                        _strategy = _default
+                    if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
+                        _strategy = "heuristic"
+                    effective_title = generate_note_title(
+                        note_in.content,
+                        options=TitleGenOptions(
+                            strategy=_strategy,
+                            max_len=getattr(note_in, "title_max_len", 250) or 250,
+                            language=getattr(note_in, "language", None),
+                        ),
+                    )
+                except Exception as gen_err:
+                    logger.warning(f"Auto-title generation failed, falling back: {gen_err}")
+                    # Fallback to safe timestamped title
+                    effective_title = generate_note_title(note_in.content)
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail="Title is required unless auto_title=true")
+
         note_id = db.add_note(
-            title=note_in.title,
+            title=effective_title,
             content=note_in.content,
             note_id=note_in.id  # Pass optional client-provided ID
         )
@@ -728,6 +761,47 @@ async def export_notes_post(
 
 
 # --- Keyword Endpoints (related to Notes) ---
+
+@router.post(
+    "/title/suggest",
+    response_model=TitleSuggestResponse,
+    summary="Suggest a title for provided content",
+    tags=["notes"],
+)
+async def suggest_note_title(
+        payload: TitleSuggestRequest,
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.title.suggest")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.title.suggest")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.title.suggest",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+
+        _strategy = payload.title_strategy
+        _default = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+        if _strategy == "heuristic" and _default != "heuristic":
+            _strategy = _default
+        if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
+            _strategy = "heuristic"
+        opts = TitleGenOptions(
+            strategy=_strategy,
+            max_len=payload.title_max_len,
+            language=payload.language,
+        )
+        title = generate_note_title(payload.content, options=opts)
+        return TitleSuggestResponse(title=title)
+    except HTTPException:
+        raise
+    except Exception as e:
+        handle_db_errors(e, "title suggestion")
+
 @router.post(
     "/bulk",
     response_model=NoteBulkCreateResponse,
@@ -766,8 +840,33 @@ async def bulk_create_notes(
                     mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
             except Exception:
                 pass
+            # Compute title per item
+            effective_title = (getattr(item, 'title', None) or "").strip()
+            if not effective_title:
+                if getattr(item, "auto_title", False):
+                    try:
+                        _strategy = getattr(item, "title_strategy", "heuristic")
+                        _default = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+                        if _strategy == "heuristic" and _default != "heuristic":
+                            _strategy = _default
+                        if _strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
+                            _strategy = "heuristic"
+                        effective_title = generate_note_title(
+                            item.content,
+                            options=TitleGenOptions(
+                                strategy=_strategy,
+                                max_len=getattr(item, "title_max_len", 250) or 250,
+                                language=getattr(item, "language", None),
+                            ),
+                        )
+                    except Exception as gen_err:
+                        logger.warning(f"[Bulk] Auto-title generation failed, falling back: {gen_err}")
+                        effective_title = generate_note_title(item.content)
+                else:
+                    raise InputError("Title is required for bulk item unless auto_title=true.")
+
             note_id = db.add_note(
-                title=item.title,
+                title=effective_title,
                 content=item.content,
                 note_id=item.id
             )

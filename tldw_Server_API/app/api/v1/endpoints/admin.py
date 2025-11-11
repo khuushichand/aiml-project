@@ -1099,6 +1099,58 @@ async def set_cleanup_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Failed to set cleanup settings")
 
 
+# ---------------------------------------------
+# Notes Title Settings
+# ---------------------------------------------
+
+@router.get("/notes/title-settings")
+async def get_notes_title_settings() -> Dict[str, Any]:
+    """Get Notes auto-title settings (LLM enabled flag and default strategy)."""
+    try:
+        llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
+        default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+        return {
+            "llm_enabled": llm_enabled,
+            "default_strategy": default_strategy,
+            "strategies": ["heuristic", "llm", "llm_fallback"],
+        }
+    except Exception as e:
+        logger.error(f"Failed to get notes title settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get notes title settings")
+
+
+@router.post("/notes/title-settings")
+async def set_notes_title_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Update Notes auto-title settings.
+
+    Payload fields (both optional):
+    - llm_enabled: bool
+    - default_strategy: one of [heuristic, llm, llm_fallback]
+    """
+    try:
+        if "llm_enabled" in payload:
+            app_settings["NOTES_TITLE_LLM_ENABLED"] = bool(payload["llm_enabled"])  # type: ignore[index]
+        if "default_strategy" in payload:
+            val = str(payload["default_strategy"]).strip().lower()  # type: ignore[index]
+            if val not in {"heuristic", "llm", "llm_fallback"}:
+                raise HTTPException(status_code=400, detail="default_strategy must be heuristic|llm|llm_fallback")
+            app_settings["NOTES_TITLE_DEFAULT_STRATEGY"] = val  # type: ignore[index]
+        # Return effective settings
+        llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
+        default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+        # If LLM disabled but default is llm/llm_fallback, leave value as-is (runtime will fallback where needed)
+        return {
+            "llm_enabled": llm_enabled,
+            "default_strategy": default_strategy,
+            "strategies": ["heuristic", "llm", "llm_fallback"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set notes title settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set notes title settings")
+
+
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,

@@ -518,6 +518,21 @@ Default behavior
 
 Configure in `config.txt`
 - Section: `[API-Routes]`
+
+## Streaming
+
+Purpose: control unified streaming behavior and chat stream channel size from `config.txt`.
+
+Section: `[Streaming]`
+- `streams_unified` (bool): Enable the centralized SSE/WS streaming helpers for chat and selected SSE endpoints. Standardizes heartbeats, idle timeout handling, and metrics. Accepts `true|false`.
+- `chat_stream_channel_maxsize` (int, optional): Bounded size of the per-request in-memory channel used when chat requests are executed via the internal queue. Defaults to `100`. You may also set this in `[Chat-Module]` as `chat_stream_channel_maxsize`; the `[Chat-Module]` value takes precedence.
+
+Section: `[Chat-Module]`
+- `chat_stream_channel_maxsize` (int, optional): Same as above; co-located with other chat streaming knobs like `streaming_idle_timeout_seconds` and `streaming_heartbeat_interval_seconds`.
+
+Notes
+- Environment variables still override file settings (`STREAMS_UNIFIED`, `CHAT_STREAM_CHANNEL_MAXSIZE`).
+- When `streams_unified=true`, the chat `/api/v1/chat/completions` streaming path uses `SSEStream` with bounded queues and heartbeat/idle enforcement.
 - Keys:
   - `stable_only` (bool, default: true): When true, disables the experimental set unless explicitly enabled.
   - `disable` (csv): Route keys to always disable.

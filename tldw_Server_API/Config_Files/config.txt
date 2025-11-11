@@ -51,6 +51,9 @@ max_request_size_bytes = 1000000
 streaming_idle_timeout_seconds = 300
 streaming_heartbeat_interval_seconds = 0
 streaming_max_response_size_mb = 10
+# For queued streaming requests, bound the internal per-request channel size
+# to limit memory use and apply backpressure. Default: 100
+chat_stream_channel_maxsize = 100
 chat_save_default = False
 conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
@@ -202,6 +205,14 @@ rate_limit_per_minute = 60
 rate_limit_burst = 10
 access_token_expire_minutes = 30
 refresh_token_expire_days = 7
+
+[Streaming]
+# Unified Streams: standardize SSE handling (heartbeats/idle/errors/metrics)
+# for chat and selected SSE endpoints. Set to true to enable.
+streams_unified = true
+# Optional: allow setting the chat stream channel maxsize here as well
+# (Chat-Module.chat_stream_channel_maxsize takes precedence when present)
+# chat_stream_channel_maxsize = 100
 
 [Embeddings]
 embedding_provider = huggingface
