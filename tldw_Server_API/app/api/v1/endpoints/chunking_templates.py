@@ -20,7 +20,8 @@ from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
     ApplyTemplateRequest,
     ApplyTemplateResponse,
     TemplateValidationResponse,
-    TemplateValidationError
+    TemplateValidationError,
+    TemplateConfig,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage, TemplateClassifier, TemplateLearner
@@ -783,6 +784,21 @@ async def validate_template(
     warnings = []
 
     try:
+        # First pass: try structured validation using TemplateConfig.
+        # Do not expose 422; convert validation errors into a 200 response payload.
+        from pydantic import ValidationError
+        try:
+            parsed = TemplateConfig.model_validate(template_config)  # type: ignore[arg-type]
+            # Use normalized dict for the remaining checks
+            template_config = model_dump_compat(parsed)  # type: ignore[assignment]
+        except ValidationError as ve:
+            for err in ve.errors():
+                loc = err.get('loc') or []
+                field = '.'.join(str(x) for x in loc) if isinstance(loc, (list, tuple)) else str(loc)
+                msg = err.get('msg') or 'Invalid value'
+                errors.append(TemplateValidationError(field=field or 'template_config', message=str(msg)))
+            return TemplateValidationResponse(valid=False, errors=errors, warnings=warnings or None)
+
         # Check required fields
         if 'chunking' not in template_config:
             errors.append(TemplateValidationError(
