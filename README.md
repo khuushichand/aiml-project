@@ -35,6 +35,7 @@
 - [Documentation & Resources](#documentation--resources)
   - [Resource Governor Config](#resource-governor-config)
   - [OpenAI-Compatible Strict Mode (Local Providers)](#openai-compatible-strict-mode-local-providers)
+  - [Chatbook Tools Guide](#chatbook-tools-guide)
 - [Deployment](#deployment)
 - [Monitoring](#monitoring)
   - [PostgreSQL Content Mode](#postgresql-content-mode)
@@ -527,6 +528,42 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Providers: `GET /api/v1/llm/providers` - provider/models list
 - MCP: `GET /api/v1/mcp/status` - MCP server status
 
+Examples
+- GET `/api/v1/chat/commands` response
+  ```json
+  {
+    "commands": [
+      {"name": "time", "description": "Show the current time (optional TZ).", "required_permission": "chat.commands.time"},
+      {"name": "weather", "description": "Show current weather for a location.", "required_permission": "chat.commands.weather"}
+    ]
+  }
+  ```
+- POST `/api/v1/chat/dictionaries/validate` request
+  ```json
+  {
+    "data": {
+      "name": "Example",
+      "entries": [
+        {"type": "literal", "pattern": "today", "replacement": "It is {{ now('%B %d') }}."},
+        {"type": "regex", "pattern": "User:(\\\w+)", "replacement": "Hello, {{ match.group(1) }}!"}
+      ]
+    },
+    "schema_version": 1,
+    "strict": false
+  }
+  ```
+  Minimal success response
+  ```json
+  {
+    "ok": true,
+    "schema_version": 1,
+    "errors": [],
+    "warnings": [],
+    "entry_stats": {"total": 2, "regex": 1, "literal": 1},
+    "suggested_fixes": []
+  }
+  ```
+
 </details>
 
 ## Running Tests
@@ -558,10 +595,22 @@ For complete Resource Governor setup and examples (env, DB store bootstrap, YAML
 
 Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`). For local providers you can enable a strict mode that filters non-standard keys from chat payloads.
 
+### Chatbook Tools Guide
+
+<details><summary>Chatbook Tools Guide - Click Here</summary>
+
+- Getting started: `Docs/User_Guides/Chatbook_Tools_Getting_Started.md`
+- Product spec (PRD): `Docs/Product/Chatbook-Tools-PRD.md`
+- Related endpoints (also listed above under Key Endpoints):
+  - `GET /api/v1/chat/commands` — list slash commands (RBAC-filtered when enabled; returns empty list when disabled)
+  - `POST /api/v1/chat/dictionaries/validate` — validate chat dictionaries (schema, regex, templates)
+
 - Set `strict_openai_compat: true` in the relevant provider section (`local_llm`, `llama_api`, `ooba_api`, `tabby_api`, `vllm_api`, `aphrodite_api`, `ollama_api`).
 - For `local_llm`, you can also use `LOCAL_LLM_STRICT_OPENAI_COMPAT=1`.
 - When enabled, only standard OpenAI Chat Completions parameters are sent:
   `messages, model, temperature, top_p, max_tokens, n, stop, presence_penalty, frequency_penalty, logit_bias, seed, response_format, tools, tool_choice, logprobs, top_logprobs, user, stream`.
+
+</details>
 
 ## Deployment
 
