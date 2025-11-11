@@ -25,4 +25,6 @@ def test_get_and_set_notes_title_settings(client_user_only: TestClient):
         json={"default_strategy": "invalid"},
     )
     assert r3.status_code == 400
+     )
+     assert r3.status_code == 400
 
