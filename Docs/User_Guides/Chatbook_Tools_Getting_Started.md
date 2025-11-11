@@ -41,8 +41,8 @@ Examples:
 
 Limits and safety:
 - Expression-only: control structures are rejected.
-- Output cap: `MAX_TEMPLATE_OUTPUT_CHARS` (default 2000).
-- Render timeout: `TEMPLATE_RENDER_TIMEOUT_MS` (default 250 ms). Soft timeout: rendering is not interrupted; metrics are recorded.
+- Output cap: `MAX_TEMPLATE_OUTPUT_CHARS` (default: 2000).
+- Render timeout: `TEMPLATE_RENDER_TIMEOUT_MS` (default: 250 ms). Note: soft timeout — rendering is not interrupted; only metrics are recorded.
 - Random helpers are disabled by default; enable with `CHAT_DICT_TEMPLATES_ALLOW_RANDOM=1`.
 
 Optional defaults in config.txt:

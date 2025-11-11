@@ -545,7 +545,7 @@ Examples
       "name": "Example",
       "entries": [
         {"type": "literal", "pattern": "today", "replacement": "It is {{ now('%B %d') }}."},
-        {"type": "regex", "pattern": "User:(\\\w+)", "replacement": "Hello, {{ match.group(1) }}!"}
+        {"type": "regex", "pattern": "User:(\\w+)", "replacement": "Hello, {{ match.group(1) }}!"}
       ]
     },
     "schema_version": 1,

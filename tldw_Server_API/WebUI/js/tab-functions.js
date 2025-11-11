@@ -4807,7 +4807,17 @@ function renderToolResults(toolResults, container) {
         // Also mirror to the right-side tools log if present
         try {
             const log = document.getElementById('chat-tools-log');
-            if (log) log.appendChild(details.cloneNode(true));
+            if (log) {
+                const clone = details.cloneNode(true);
+                const btn = clone.querySelector('.tool-actions button');
+                if (btn && !btn._bound) {
+                    btn._bound = true;
+                    btn.addEventListener('click', () => {
+                        try { continueConversation(); } catch (_) {}
+                    });
+                }
+                log.appendChild(clone);
+            }
         } catch(_){}
     });
 }
