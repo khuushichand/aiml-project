@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 # Imports
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Literal
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from datetime import date
@@ -440,6 +440,21 @@ class RateLimitResetResponse(BaseModel):
     note: Optional[str] = None
     db_rows_deleted: int = 0
     redis_keys_deleted: int = 0
+
+#
+#
+# Notes Title Settings Schema
+
+class NotesTitleSettingsUpdate(BaseModel):
+    """Update payload for Notes auto-title settings.
+
+    - llm_enabled: enable/disable LLM-backed title generation
+    - default_strategy: default strategy to use when clients send "heuristic"
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    llm_enabled: Optional[bool] = Field(default=None)
+    default_strategy: Optional[Literal['heuristic', 'llm', 'llm_fallback']] = Field(default=None)
 
 #
 ## End of admin_schemas.py

@@ -50,6 +50,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolCatalogEntryResponse,
     RateLimitResetRequest,
     RateLimitResetResponse,
+    NotesTitleSettingsUpdate,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -1120,7 +1121,7 @@ async def get_notes_title_settings() -> Dict[str, Any]:
 
 
 @router.post("/notes/title-settings")
-async def set_notes_title_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[str, Any]:
     """Update Notes auto-title settings.
 
     Payload fields (both optional):
@@ -1128,27 +1129,28 @@ async def set_notes_title_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     - default_strategy: one of [heuristic, llm, llm_fallback]
     """
     try:
-        if "llm_enabled" in payload:
-            app_settings["NOTES_TITLE_LLM_ENABLED"] = bool(payload["llm_enabled"])  # type: ignore[index]
-        if "default_strategy" in payload:
-            val = str(payload["default_strategy"]).strip().lower()  # type: ignore[index]
-            if val not in {"heuristic", "llm", "llm_fallback"}:
-                raise HTTPException(status_code=400, detail="default_strategy must be heuristic|llm|llm_fallback")
-            app_settings["NOTES_TITLE_DEFAULT_STRATEGY"] = val  # type: ignore[index]
+        if payload.llm_enabled is not None:
+            app_settings["NOTES_TITLE_LLM_ENABLED"] = bool(payload.llm_enabled)
+        if payload.default_strategy is not None:
+            app_settings["NOTES_TITLE_DEFAULT_STRATEGY"] = payload.default_strategy
         # Return effective settings
         llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
         default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
-        # If LLM disabled but default is llm/llm_fallback, leave value as-is (runtime will fallback where needed)
+        # Provide an effective strategy hint for clients when LLM is disabled
+        effective_strategy = (
+            default_strategy if llm_enabled or default_strategy == "heuristic" else "heuristic"
+        )
         return {
             "llm_enabled": llm_enabled,
             "default_strategy": default_strategy,
+            "effective_strategy": effective_strategy,
             "strategies": ["heuristic", "llm", "llm_fallback"],
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to set notes title settings: {e}")
-        raise HTTPException(status_code=500, detail="Failed to set notes title settings")
+        raise HTTPException(status_code=500, detail="Failed to set notes title settings") from e
 
 
 @router.get("/users/{user_id}")
