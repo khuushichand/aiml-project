@@ -97,11 +97,10 @@ class RunTestCasesSimpleRequest(BaseModel):
         if isinstance(v, list):
             out = []
             for t in v:
-                # keep strings like "test-1" as-is
                 try:
                     out.append(int(t))
-                except Exception:
-                    out.append(t)
+                except (ValueError, TypeError):
+                    raise ValueError(f"test_case_ids must contain only integers, got: {t}")
             return out
         return v
 
