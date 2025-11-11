@@ -18,8 +18,8 @@ Notes on conventions used here:
 1. [Chat Dictionary API](#chat-dictionary-api)
 2. [World Book Manager API](#world-book-manager-api)
 3. [Chat Tools (Slash Commands)](#chat-tools-slash-commands)
-3. [Document Generator API](#document-generator-api)
-4. [Chatbooks Import/Export API](#chatbooks-importexport-api)
+4. [Document Generator API](#document-generator-api)
+5. [Chatbooks Import/Export API](#chatbooks-importexport-api)
 
 ---
 
