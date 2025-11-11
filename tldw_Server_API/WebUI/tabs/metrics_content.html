@@ -770,16 +770,30 @@ function stopAutoRefresh() {
     }
 }
 
+function escapeHTML(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function runMetricsAnalysis() {
     const timeRange = document.getElementById('metricsAnalysis_timeRange').value;
     const metric = document.getElementById('metricsAnalysis_metric').value;
     const aggregation = document.getElementById('metricsAnalysis_aggregation').value;
 
+    // Escape variables from user input
+    const safeMetric = escapeHTML(metric);
+    const safeAggregation = escapeHTML(aggregation);
+    const safeTimeRange = escapeHTML(timeRange);
+
     // Simulate analysis results
     const chartContainer = document.getElementById('metricsAnalysis_chart');
     chartContainer.innerHTML = `
         <div class="chart-placeholder">
-            <p>Chart: ${metric} over ${timeRange} (${aggregation})</p>
+            <p>Chart: ${safeMetric} over ${safeTimeRange} (${safeAggregation})</p>
             <div class="chart-bars">
                 <div class="chart-bar" style="height: 60%;"></div>
                 <div class="chart-bar" style="height: 80%;"></div>
@@ -797,8 +811,8 @@ function runMetricsAnalysis() {
         <div class="insights">
             <h4>Analysis Insights</h4>
             <ul>
-                <li>Peak ${metric} occurred at 14:30 UTC</li>
-                <li>Average ${aggregation} value: 234ms</li>
+                <li>Peak ${safeMetric} occurred at 14:30 UTC</li>
+                <li>Average ${safeAggregation} value: 234ms</li>
                 <li>Detected anomaly at 12:15 UTC (3σ deviation)</li>
                 <li>Trend: Increasing by 12% over selected period</li>
             </ul>

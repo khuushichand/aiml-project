@@ -1,6 +1,16 @@
 (() => {
     'use strict';
 
+    // Escapes dangerous HTML entities
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function removeChatMessage(prefix, id) {
         if (typeof chatUI !== 'undefined') {
             chatUI.removeMessage(prefix, id);
@@ -388,7 +398,7 @@
                     + '• Using smaller files or shorter videos<br>'
                     + '• Reducing quality settings if available<br>'
                     + '• Processing files one at a time<br><br>'
-                    + `<small>Error: ${error.message}</small>`
+                    + `<small>Error: ${escapeHtml(error.message)}</small>`
                     + '</div>';
                 Toast.error('Request timed out. The operation may still be processing on the server.');
             } else {
