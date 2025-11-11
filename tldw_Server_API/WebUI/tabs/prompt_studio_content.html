@@ -605,13 +605,23 @@ function sendPromptStudioWebSocketMessage() {
     }
 }
 
+// Escapes HTML meta characters in text for safe insertion
+function escapeHtml(text) {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 function logPromptStudioMessage(type, message) {
     const log = document.getElementById('promptStudioWebSocket_log');
     const entry = document.createElement('div');
     entry.className = `websocket-message ${type}`;
 
     const timestamp = new Date().toLocaleTimeString();
-    entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> <span class="message-type">${type.toUpperCase()}:</span> <pre>${message}</pre>`;
+    entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> <span class="message-type">${type.toUpperCase()}:</span> <pre>${escapeHtml(message)}</pre>`;
 
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
