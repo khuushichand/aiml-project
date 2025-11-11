@@ -11,6 +11,8 @@ from tldw_Server_API.app.api.v1.schemas.notes_graph import (
     NoteLinkCreate,
     GraphLimits,
 )
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError, InputError, CharactersRAGDBError
 
 
 router = APIRouter()
@@ -205,16 +207,36 @@ async def create_manual_link(
         ..., example={"to_note_id": "note:456", "directed": False, "weight": 1.0}
     ),
     current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
     __: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
 ) -> Dict[str, Any]:
     """
-    Stub for manual link creation; returns a placeholder response.
+    Create a manual link in the user's ChaChaNotes DB. Populates created_by.
     """
     to_note_id = link.to_note_id
     if not to_note_id:
         raise HTTPException(status_code=400, detail="to_note_id is required")
-    return {"status": "stub", "edge": None, "from": note_id, "to": to_note_id}
+
+    try:
+        principal = f"user:{current_user.id_str}"
+        edge = db.create_manual_note_edge(
+            user_id=str(current_user.id_str),
+            from_note_id=note_id,
+            to_note_id=to_note_id,
+            directed=bool(link.directed),
+            weight=link.weight if link.weight is not None else 1.0,
+            metadata=link.metadata,
+            created_by=principal,
+        )
+        return {"status": "created", "edge": edge}
+    except ConflictError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate manual link")
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to create manual note link: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link creation failed")
 
 
 @router.delete(
@@ -248,10 +270,18 @@ async def create_manual_link(
 async def delete_manual_link(
     edge_id: str,
     current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
     __: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
 ) -> Dict[str, Any]:
     """
-    Stub for manual link deletion; returns a placeholder response.
+    Delete a manual link by id for the current user.
     """
-    return {"deleted": False, "edge_id": edge_id, "status": "stub"}
+    try:
+        deleted = db.delete_manual_note_edge(user_id=str(current_user.id_str), edge_id=edge_id)
+        return {"deleted": bool(deleted), "edge_id": edge_id}
+    except InputError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except CharactersRAGDBError as e:
+        logger.error(f"Failed to delete manual note link: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link deletion failed")

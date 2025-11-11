@@ -357,7 +357,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 8  # Schema v8 adds multi-image support for messages
+    _CURRENT_SCHEMA_VERSION = 9  # Schema v9 adds note_edges for Notes Graph manual links
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
 
     _FTS_CONFIG: List[Tuple[str, str, List[str]]] = [
@@ -1472,6 +1472,43 @@ UPDATE db_schema_version
    AND version < 8;
 """
 
+    # --- Migration: V8 -> V9 (Notes Graph: note_edges table) ---
+    _MIGRATION_SQL_V8_TO_V9 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 9 - Notes Graph manual edges (2025-11-11)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+/* Explicit manual note edges (per user). Derived edges are NOT persisted. */
+CREATE TABLE IF NOT EXISTS note_edges(
+  edge_id       TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL,
+  from_note_id  TEXT NOT NULL,
+  to_note_id    TEXT NOT NULL,
+  type          TEXT NOT NULL, /* 'manual' (MVP) */
+  directed      INTEGER NOT NULL DEFAULT 0,
+  weight        REAL DEFAULT 1.0,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by    TEXT NOT NULL,
+  metadata      JSON
+);
+
+/* Canonicalization for undirected edges (enforced at application layer). */
+
+/* Helpful indexes */
+CREATE INDEX IF NOT EXISTS idx_note_edges_user_from_to ON note_edges(user_id, from_note_id, to_note_id);
+CREATE INDEX IF NOT EXISTS idx_note_edges_user_type     ON note_edges(user_id, type);
+CREATE INDEX IF NOT EXISTS idx_note_edges_user_to       ON note_edges(user_id, to_note_id);
+
+/* Uniqueness for undirected edges after canonicalization */
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_note_edges_undirected ON note_edges(user_id, type, directed, from_note_id, to_note_id);
+
+UPDATE db_schema_version
+   SET version = 9
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 9;
+"""
+
     def __init__(
         self,
         db_path: Union[str, Path],
@@ -2270,6 +2307,25 @@ UPDATE db_schema_version
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V7->V8: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V8 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v8_to_v9(self, conn: sqlite3.Connection):
+        """Migrates schema from V8 to V9 (adds note_edges for manual links)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V8 to V9 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V8_TO_V9)
+            final_version = self._get_db_version(conn)
+            if final_version != 9:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V8->V9 failed version check. Expected 9, got: {final_version}")
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V9 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V8->V9 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V8->V9 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V8->V9: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V9 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2403,6 +2459,9 @@ UPDATE db_schema_version
                     if target_version >= 8 and current_db_version == 7:
                         self._migrate_from_v7_to_v8(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 9 and current_db_version == 8:
+                        self._migrate_from_v8_to_v9(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -2434,6 +2493,9 @@ UPDATE db_schema_version
                         if target_version >= 8 and current_db_version == 7:
                             self._migrate_from_v7_to_v8(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 9 and current_db_version == 8:
+                            self._migrate_from_v8_to_v9(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 5 and target_version >= 6:
                         self._migrate_from_v5_to_v6(conn)
                         current_db_version = self._get_db_version(conn)
@@ -2443,14 +2505,26 @@ UPDATE db_schema_version
                         if target_version >= 8 and current_db_version == 7:
                             self._migrate_from_v7_to_v8(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 9 and current_db_version == 8:
+                            self._migrate_from_v8_to_v9(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 6 and target_version >= 7:
                         self._migrate_from_v6_to_v7(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 8 and current_db_version == 7:
                             self._migrate_from_v7_to_v8(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 9 and current_db_version == 8:
+                            self._migrate_from_v8_to_v9(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 7 and target_version >= 8:
                         self._migrate_from_v7_to_v8(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 9 and current_db_version == 8:
+                            self._migrate_from_v8_to_v9(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 8 and target_version >= 9:
+                        self._migrate_from_v8_to_v9(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -2530,6 +2604,10 @@ UPDATE db_schema_version
             if current_version < 8:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V7_TO_V8, conn, expected_version=8)
                 current_version = 8
+
+            if current_version < 9:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V8_TO_V9, conn, expected_version=9)
+                current_version = 9
 
             if current_version > target_version:
                 raise SchemaError(
@@ -3165,6 +3243,142 @@ UPDATE db_schema_version
             }
             return mapping.get(table_name, table_name)
         return table_name
+
+    # ----------------------
+    # Notes Graph: manual edges (note_edges)
+    # ----------------------
+    def create_manual_note_edge(
+        self,
+        *,
+        user_id: str,
+        from_note_id: str,
+        to_note_id: str,
+        directed: bool = False,
+        weight: Optional[float] = 1.0,
+        metadata: Optional[Dict[str, Any]] = None,
+        created_by: str,
+    ) -> Dict[str, Any]:
+        """Create a manual note edge, enforcing undirected canonicalization and uniqueness.
+
+        Returns the created edge row as a dict. Raises ConflictError on duplicates.
+        """
+        if not user_id or not from_note_id or not to_note_id or created_by is None or created_by == "":
+            raise InputError("user_id, from_note_id, to_note_id, and created_by are required")
+
+        # Canonicalize for undirected edges
+        src = from_note_id
+        dst = to_note_id
+        if not directed and src > dst:
+            src, dst = dst, src
+
+        edge_id = self._generate_uuid()
+        now_iso = self._get_current_utc_timestamp_iso()
+        type_str = "manual"
+
+        try:
+            with self.transaction() as conn:
+                query = (
+                    "INSERT INTO note_edges(edge_id, user_id, from_note_id, to_note_id, type, directed, weight, created_at, created_by, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    edge_id,
+                    str(user_id),
+                    src,
+                    dst,
+                    type_str,
+                    1 if directed else 0,
+                    float(weight) if weight is not None else 1.0,
+                    now_iso,
+                    created_by,
+                    json.dumps(metadata) if metadata is not None else None,
+                )
+                conn.execute(query, params)
+
+                # Log sync event
+                payload = {
+                    "edge_id": edge_id,
+                    "user_id": str(user_id),
+                    "from_note_id": src,
+                    "to_note_id": dst,
+                    "type": type_str,
+                    "directed": bool(directed),
+                    "weight": float(weight) if weight is not None else 1.0,
+                    "created_at": now_iso,
+                    "created_by": created_by,
+                }
+                entity_col = 'entity_id'
+                if self.backend_type == BackendType.POSTGRESQL:
+                    try:
+                        cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
+                        if 'entity_uuid' in cols and 'entity_id' not in cols:
+                            entity_col = 'entity_uuid'
+                    except Exception:
+                        pass
+                conn.execute(
+                    f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("note_edges", edge_id, "create", now_iso, self.client_id, 1, json.dumps(payload)),
+                )
+
+                # Fetch inserted row
+                cur = conn.execute(
+                    "SELECT edge_id, user_id, from_note_id, to_note_id, type, directed, weight, created_at, created_by, metadata FROM note_edges WHERE edge_id = ?",
+                    (edge_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise CharactersRAGDBError("Inserted edge not found")
+                # Normalize metadata JSON
+                out = dict(row)
+                try:
+                    if out.get("metadata") is not None and isinstance(out.get("metadata"), str):
+                        out["metadata"] = json.loads(out["metadata"])  # type: ignore[arg-type]
+                except Exception:
+                    pass
+                out["directed"] = bool(out.get("directed", 0))
+                return out
+        except sqlite3.IntegrityError as e:
+            msg = str(e).lower()
+            if "unique" in msg or "constraint" in msg:
+                raise ConflictError("Duplicate manual link for this user and endpoints") from e
+            raise CharactersRAGDBError(f"Failed to create manual note edge: {e}") from e
+        except BackendDatabaseError as e:
+            # Try to detect unique/duplicate
+            msg = str(e).lower()
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError("Duplicate manual link for this user and endpoints") from e
+            raise CharactersRAGDBError(f"Backend error creating manual note edge: {e}") from e
+
+    def delete_manual_note_edge(self, *, user_id: str, edge_id: str) -> bool:
+        """Delete a manual note edge by id for the given user. Returns True if deleted."""
+        if not user_id or not edge_id:
+            raise InputError("user_id and edge_id are required")
+        now_iso = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                cur = conn.execute(
+                    "DELETE FROM note_edges WHERE edge_id = ? AND user_id = ?",
+                    (edge_id, str(user_id)),
+                )
+                deleted = cur.rowcount > 0
+                if deleted:
+                    entity_col = 'entity_id'
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        try:
+                            cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
+                            if 'entity_uuid' in cols and 'entity_id' not in cols:
+                                entity_col = 'entity_uuid'
+                        except Exception:
+                            pass
+                    conn.execute(
+                        f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        ("note_edges", edge_id, "delete", now_iso, self.client_id, 1, json.dumps({"edge_id": edge_id})),
+                    )
+                return deleted
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to delete manual note edge: {e}") from e
+        except BackendDatabaseError as e:
+            raise CharactersRAGDBError(f"Backend error deleting manual note edge: {e}") from e
 
     def _get_current_db_version(self, conn: sqlite3.Connection, table_name: str, pk_col_name: str,
                                 pk_value: Any) -> int:

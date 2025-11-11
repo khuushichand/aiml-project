@@ -43,7 +43,7 @@ def _normalize_text_for_title(text: str) -> str:
 
     # Remove code blocks (fences) and inline backticks
     # Remove fenced code blocks completely as they often aren't descriptive titles
-    fenced_code_pattern = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+    fenced_code_pattern = re.compile(r"```.*?```", re.DOTALL)
     text_wo_fences = re.sub(fenced_code_pattern, "", text)
     text_wo_backticks = text_wo_fences.replace("`", "")
 
@@ -52,8 +52,8 @@ def _normalize_text_for_title(text: str) -> str:
         line = raw_line.strip()
         if not line:
             continue
-        # Strip common markdown list/items/heading markers
-        line = re.sub(r"^(#+|[-*+]>?|\d+\.)\s*", "", line)
+        # Strip common markdown list/items/heading markers (headings, blockquotes, lists, ordered lists)
+        line = re.sub(r"^(?:#+|>+|[-*+]|\d+\.)\s*", "", line)
         # Strip markdown links: [text](url) -> text
         line = re.sub(r"\[(?P<text>[^\]]+)\]\([^\)]+\)", r"\g<text>", line)
         # Strip image syntax: ![alt](url) -> alt
@@ -63,7 +63,7 @@ def _normalize_text_for_title(text: str) -> str:
         if line:
             # If line is too long, try to cut to first sentence-ish delimiter
             # Prefer ., !, ? or em-dash ; fall back to hard cut later
-            sentence_cut = re.split(r"(?<=[\.!?])\s+|\s+—\s+|\s+-\s+", line, maxsplit=1)
+            sentence_cut = re.split(r"(?<=[.!?])\s+|\s+—\s+|\s+-\s+", line, maxsplit=1)
             candidate = sentence_cut[0].strip() if sentence_cut else line
             return candidate
 
@@ -80,7 +80,7 @@ def _truncate_title(title: str, max_len: int) -> str:
     ws_idx = truncated.rfind(" ")
     if ws_idx > 0:
         truncated = truncated[:ws_idx]
-    truncated = truncated.rstrip(" -—:;,.\u2026")
+    truncated = truncated.rstrip(" -—:;,.…")
     return truncated
 
 
@@ -102,7 +102,7 @@ def generate_note_title_heuristic(content: str, max_len: int = 250, *, language:
     if not base:
         return _truncate_title(_fallback_timestamp_title(language), max_len)
     # Remove trailing punctuation often not ideal in titles
-    base = base.rstrip(" .:;,-—\u2026")
+    base = base.rstrip(" .:;,-—…")
     if not base:
         base = _fallback_timestamp_title(language)
     return _truncate_title(base, max_len)

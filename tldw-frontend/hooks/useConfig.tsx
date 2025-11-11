@@ -94,9 +94,11 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const setTheme = (t: Theme) => setConfig((c) => ({ ...c, theme: t }));
 
   const reloadBootstrapConfig = async () => {
-    if (typeof window === 'undefined') return;
     try {
-      const resp = await fetch('/webui/config.json', { credentials: 'include' });
+      // Prefer explicit UI base origin if provided; else use API host; else window origin
+      const preferredBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').toString().trim() || config.apiBaseHost || (typeof window !== 'undefined' ? window.location.origin : '');
+      const base = (preferredBase || '').replace(/\/$/, '');
+      const resp = await fetch(`${base}/webui/config.json`, { credentials: 'include' });
       if (!resp.ok) return;
       const json = await resp.json();
       const host = json?.base_url || json?.api_base_url || config.apiBaseHost;

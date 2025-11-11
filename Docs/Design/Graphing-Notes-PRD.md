@@ -84,7 +84,7 @@ Table: `note_edges`
 - `directed INTEGER NOT NULL DEFAULT 0`
 - `weight REAL DEFAULT 1.0`
 - `created_at DATETIME NOT NULL`
-- `created_by TEXT`
+- `created_by TEXT NOT NULL`
 - `metadata JSON`
 
 Undirected canonicalization and uniqueness:
@@ -98,6 +98,12 @@ Indexes:
 
 Deletion model:
 - Hard delete is acceptable for MVP. Optionally consider soft delete (`deleted_at`) later to align with note recovery semantics.
+
+Created-by semantics:
+- `created_by` records the authenticated principal that created the edge and is always required (NOT NULL).
+- Format: a stable principal string such as `user:<user_id>`, `api_key:<hash_prefix>`, or `system:<component>` for maintenance tasks.
+- For MVP, only explicit manual edges are persisted; these are created by users, so `created_by` MUST be set by the server at creation time.
+- If we later allow system-generated explicit edges, they must use a non-null `system:<component>` value; NULL is never used.
 
 Derived indices (computed at note save/update):
 - Wikilinks/backlinks detection from content (`[[id:UUID]]` or `[[Title]]` match + title resolution).
