@@ -484,7 +484,7 @@ def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[
         try:
             ctx.minimum_version = _tls_min_version_from_str(min_ver)
         except Exception:
-            pass
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection((host, port), timeout=DEFAULT_CONNECT_TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                 der = ssock.getpeercert(binary_form=True)
