@@ -392,6 +392,15 @@
         }
 
         // Test API functionality
+        function escapeHTML(str) {
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
         async function runTest() {
             const button = document.getElementById('testBtn');
             const spinner = document.getElementById('testSpinner');
@@ -484,7 +493,7 @@
                     <strong>To fix this:</strong>
                     <ol style="margin-left: 20px; margin-top: 10px;">
                         <li>Make sure the server is running: <code>python -m uvicorn tldw_Server_API.app.main:app --reload</code></li>
-                        <li>Check that the server is accessible at: <code>${baseUrl}</code></li>
+                        <li>Check that the server is accessible at: <code>${escapeHTML(baseUrl)}</code></li>
                         <li>Verify your API key is correct in the configuration</li>
                     </ol>
                 `;
