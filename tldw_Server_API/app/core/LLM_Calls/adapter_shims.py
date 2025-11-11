@@ -829,7 +829,7 @@ async def anthropic_chat_handler_async(
                     msg = getattr(norm, 'message', msg) or msg
                 except Exception:
                     pass
-                yield sse_data({"error": {"message": msg, "type": "qwen_stream_error"}})
+                yield sse_data({"error": {"message": msg, "type": "anthropic_stream_error"}})
                 yield sse_done()
         return _guarded_astream()
     return await adapter.achat(request)
