@@ -472,7 +472,7 @@ export default function ChatPage() {
           <div className="rounded-md border bg-white p-3 h-[72vh] overflow-y-auto">
             <div className="mb-2 flex items-center justify-between text-xs text-gray-600">
               <div>Count: {sessions.length}</div>
-              <Button variant="secondary" onClick={() => setConversationId(null)}>New Chat</Button>
+              <Button variant="secondary" onClick={startNewChat}>New Chat</Button>
             </div>
             <ul className="text-sm divide-y">
               {sessions.map((s) => (
