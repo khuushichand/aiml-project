@@ -2,8 +2,10 @@ import os
 import urllib.parse
 
 import pytest
-# Import required AuthNZ fixtures directly to make them available to this module
-from tldw_Server_API.tests.AuthNZ.conftest import setup_test_database, clean_database  # noqa: F401
+
+# Reuse Postgres AuthNZ fixtures (setup/cleanup) as a plugin so
+# this module's @usefixtures works without direct imports.
+pytest_plugins = ["tldw_Server_API.tests.AuthNZ.conftest"]
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
