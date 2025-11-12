@@ -31,17 +31,13 @@ _REQUIRED_ENV = (
 pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not installed")
 
 
-def _postgres_config() -> DatabaseConfig:
-    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
-    _pg = get_pg_env()
-    return DatabaseConfig(
-        backend_type=BackendType.POSTGRESQL,
-        pg_host=_pg.host,
-        pg_port=int(_pg.port),
-        pg_database=_pg.database,
-        pg_user=_pg.user,
-        pg_password=_pg.password,
-    )
+def _postgres_config_from_fixture(pg_database_config: DatabaseConfig) -> DatabaseConfig:
+    """Build a DatabaseConfig from the unified pg fixture params.
+
+    This ensures tests run against an isolated, per-test database with proper
+    teardown, rather than relying on ad-hoc environment defaults.
+    """
+    return pg_database_config
 
 
 def _reset_postgres_database(config: DatabaseConfig) -> None:
@@ -167,8 +163,8 @@ def _column_exists(backend, conn, table: str, column: str) -> bool:
 
 
 @pytest.mark.integration
-def test_workflows_postgres_schema_migration_adds_missing_columns() -> None:
-    config = _postgres_config()
+def test_workflows_postgres_schema_migration_adds_missing_columns(pg_database_config: DatabaseConfig) -> None:
+    config = _postgres_config_from_fixture(pg_database_config)
     _reset_postgres_database(config)
     backend = DatabaseBackendFactory.create_backend(config)
 

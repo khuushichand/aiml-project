@@ -2,6 +2,7 @@
 # Description: Registry and factory for TTS adapters
 #
 import asyncio
+import os
 import time
 import math
 from typing import Dict, List, Optional, Type, Any, Set
@@ -252,12 +253,37 @@ class TTSAdapterRegistry:
                     logger.info(f"Provider {provider.value} is disabled in configuration")
                     return False
             else:
-                # Using direct config (legacy/flattened dict). Treat missing keys as disabled
-                # to avoid inadvertently enabling providers that aren't explicitly configured.
+                # Heuristic for direct dict configs used in tests:
+                # - If an explicit "{provider}_enabled" flag is present, honor it.
+                # - Otherwise, enable lightweight/remote providers when credentials are present
+                #   (e.g., OPENAI/ELEVENLABS) and keep heavy local providers disabled by default.
                 enabled_key = f"{provider.value}_enabled"
-                if not self.config.get(enabled_key, False):
-                    logger.info(f"Provider {provider.value} is disabled in configuration")
-                    return False
+                if enabled_key in self.config:
+                    if not bool(self.config.get(enabled_key)):
+                        logger.info(f"Provider {provider.value} is disabled in configuration")
+                        return False
+                else:
+                    remote_providers = {TTSProvider.OPENAI, TTSProvider.ELEVENLABS}
+                    if provider in remote_providers:
+                        # Consider provider enabled if API key is supplied via config or env
+                        api_key: Optional[str] = None
+                        if provider == TTSProvider.OPENAI:
+                            api_key = (self.config.get("openai_api_key")
+                                       or os.getenv("OPENAI_API_KEY"))
+                        elif provider == TTSProvider.ELEVENLABS:
+                            api_key = (self.config.get("elevenlabs_api_key")
+                                       or os.getenv("ELEVENLABS_API_KEY"))
+                        if not api_key:
+                            logger.info(
+                                f"Provider {provider.value} is disabled (no credentials found)"
+                            )
+                            return False
+                    else:
+                        # Keep local/heavy providers disabled unless explicitly enabled
+                        logger.info(
+                            f"Provider {provider.value} is disabled by default (no explicit enable flag)"
+                        )
+                        return False
 
             # Get resource manager for monitoring
             resource_manager = await get_resource_manager()

@@ -8,6 +8,11 @@ import uuid
 
 import pytest
 
+# Bring in unified Postgres fixtures (pg_database_config, etc.) for this test package
+pytest_plugins = [
+    "tldw_Server_API.tests._plugins.postgres",
+]
+
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
 )

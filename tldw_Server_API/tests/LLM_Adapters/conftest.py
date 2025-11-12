@@ -3,7 +3,17 @@
 Provides:
 - Lightweight stub for app.main when real app import fails (unit-only cases)
 - Access to shared chat fixtures (client, authenticated_client, auth headers)
+  via project-level plugin registration in pyproject.toml
 - Backward-compat fixture alias client_user_only used by some tests
+
+Note on plugin discovery and subtree runs
+- These tests rely on the Chat fixtures plugin declared in pyproject.toml.
+- When running tests from this subtree (or individual files) and the runner
+  doesn’t load project-level plugins (e.g., PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  or non-root working directory), fixtures like `authenticated_client` may be
+  missing. In those cases, explicitly importing the plugin at module level
+  (as some tests already do) or adding a local pytest_plugins declaration will
+  restore deterministic fixture availability.
 """
 
 import sys

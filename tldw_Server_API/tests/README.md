@@ -4,6 +4,8 @@ This directory contains the end-to-end, integration, and unit tests for `tldw_se
 
 ## Quick Start
 - Install dependencies with `pip install -e .[dev]`.
+- Install PG drivers: pip install -e .[db_postgres]
+  - Set DSN: `export PG_TEST_DSN=postgresql://tldw_user:TestPassword123!@localhost:5432/postgres`
 - Run the whole suite: `python -m pytest tldw_Server_API/tests -q`.
 - Run by marker: `python -m pytest -m "unit"` or `pytest -m "integration and not slow"`.
 - Use `pytest --maxfail=1 -x` while iterating to stop on the first failure.
