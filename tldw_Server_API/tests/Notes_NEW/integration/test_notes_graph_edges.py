@@ -72,7 +72,7 @@ def test_create_and_delete_manual_link(client_with_graph_db: TestClient):
     payload = resp.json()
     assert payload.get("status") == "created"
     edge = payload.get("edge")
-    assert isinstance(edge, dict) and edge.get("id") or edge.get("edge_id")
+    assert isinstance(edge, dict) and (edge.get("id") or edge.get("edge_id"))
     # created_by principal set
     assert edge.get("created_by", "").startswith("user:")
     # Undirected canonicalization: from <= to (lexicographic)
