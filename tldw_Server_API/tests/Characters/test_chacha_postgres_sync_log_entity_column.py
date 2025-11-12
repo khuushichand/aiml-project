@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+pytest_plugins = [
+    "tldw_Server_API.tests._plugins.postgres",
+]
+
 import uuid
 import pytest
 
