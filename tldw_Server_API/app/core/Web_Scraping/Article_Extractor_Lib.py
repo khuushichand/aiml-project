@@ -177,10 +177,15 @@ def is_allowed_by_robots(url: str, user_agent: str, *, timeout: float = 5.0) -> 
     try:
         robots_url = _robots_url_for(url)
         resp = http_fetch(method="GET", url=robots_url, timeout=timeout, allow_redirects=True)
-        if resp.get("status", 0) >= 400 or not resp.get("text"):
+        # Use robust getter to support dicts, objects, and test doubles
+        status = _resp_get(resp, "status")
+        if status is None:
+            status = _resp_get(resp, "status_code")
+        text = _resp_get(resp, "text", "")
+        if (int(status or 0) >= 400) or (not text):
             return True  # treat missing/unreadable robots as allow
         rp = RobotFileParser()
-        rp.parse(resp["text"].splitlines())
+        rp.parse(str(text).splitlines())
         return bool(rp.can_fetch(user_agent, url))
     except Exception:
         # On any error, allow by default to avoid false negatives

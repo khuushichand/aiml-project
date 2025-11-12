@@ -5,7 +5,15 @@ import importlib
 from fastapi.testclient import TestClient
 import pytest
 
-# Reuse Postgres AuthNZ fixtures (isolated_test_environment) as a plugin
+# Reuse Postgres AuthNZ fixtures (isolated_test_environment) as a plugin.
+#
+# Why register explicitly here?
+# - Some CI/dev invocations run tests from subfolders or with
+#   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, which can prevent project-level plugin
+#   declarations in pyproject.toml from loading.
+# - Explicitly listing the plugin at the module level ensures this test can be
+#   run in isolation (e.g., `pytest -q this_file.py`) and still find the
+#   required fixtures without reintroducing a root conftest.
 pytest_plugins = ["tldw_Server_API.tests.AuthNZ.conftest"]
 
 

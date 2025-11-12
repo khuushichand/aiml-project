@@ -1,6 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
+# Ensure pgvector fixtures (pgvector_dsn, pgvector_temp_table) are available
+# even when running this file or subtree directly.
+pytest_plugins = ["tldw_Server_API.tests.helpers.pgvector"]
+
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter

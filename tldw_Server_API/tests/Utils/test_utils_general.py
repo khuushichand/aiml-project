@@ -8,19 +8,6 @@ from tldw_Server_API.app.core.Utils import System_Checks_Lib
 from tldw_Server_API.app.core.Utils import Utils
 
 
-class _FakeResponse:
-    def __init__(self, *, status_code: int, headers: dict[str, str], body: bytes):
-        self.status_code = status_code
-        self.headers = headers
-        self._body = body
-
-    def raise_for_status(self):
-        pass
-
-    def iter_content(self, chunk_size=8192):
-        yield self._body
-
-
 class _TqdmStub:
     def __init__(self, *_, **__):
         pass
@@ -37,31 +24,29 @@ class _TqdmStub:
 
 def test_download_file_resumes_without_truncation(monkeypatch, tmp_path):
     dest = tmp_path / "file.bin"
-    tmp_file = dest.with_suffix(".bin.tmp")
-    tmp_file.write_bytes(b"12345")
+    # http_client.download uses a ".part" suffix for resume writes
+    part_path = dest.with_suffix(dest.suffix + ".part")
+    part_path.write_bytes(b"12345")
 
-    captured_headers = {}
+    # Stub the centralized downloader used by Utils.download_file
+    def fake_download(*, url, dest, resume=False, retry=None, **_kwargs):  # signature-compatible
+        assert resume is True
+        dpath = Path(dest)
+        tpath = dpath.with_suffix(dpath.suffix + ".part")
+        # Simulate server returning the remaining bytes and atomic rename
+        with open(tpath, "ab") as f:
+            f.write(b"67890")
+        Path(tpath).replace(dpath)
+        return dpath
 
-    def fake_get(url, stream=True, headers=None, timeout=60):
-        nonlocal captured_headers
-        captured_headers = headers or {}
-        return _FakeResponse(
-            status_code=206,
-            headers={
-                "Content-Range": "bytes 5-9/10",
-                "content-length": "5",
-            },
-            body=b"67890",
-        )
-
-    monkeypatch.setattr(Utils.requests, "get", fake_get)
+    monkeypatch.setattr(Utils, "download", fake_download)
     monkeypatch.setattr(Utils, "tqdm", _TqdmStub)
 
     Utils.download_file("https://example.com/file.bin", str(dest))
 
     assert dest.read_bytes() == b"1234567890"
-    assert not tmp_file.exists()
-    assert captured_headers.get("Range") == "bytes=5-"
+    # Ensure the temporary part file is cleaned up
+    assert not part_path.exists()
 
 
 def test_extract_text_from_segments_collects_all_segments():

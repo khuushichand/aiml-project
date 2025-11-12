@@ -5,6 +5,12 @@ import pytest
 
 # Reuse Postgres AuthNZ fixtures (setup/cleanup) as a plugin so
 # this module's @usefixtures works without direct imports.
+#
+# Rationale: Running this file directly or from a subtree may skip
+# project-level plugins declared in pyproject.toml (depending on CWD and
+# environment, e.g., PYTEST_DISABLE_PLUGIN_AUTOLOAD=1). Declaring the plugin
+# here keeps this test hermetic and consistently runnable in CI and locally
+# without relying on a root conftest.
 pytest_plugins = ["tldw_Server_API.tests.AuthNZ.conftest"]
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase

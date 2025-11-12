@@ -1,5 +1,9 @@
 import pytest
 
+# Ensure pgvector fixtures (pgvector_dsn, pgvector_temp_table) are available
+# even when running this file or subtree directly.
+pytest_plugins = ["tldw_Server_API.tests.helpers.pgvector"]
+
 pytestmark = pytest.mark.pg_integration
 
 

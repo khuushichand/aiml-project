@@ -516,7 +516,9 @@ class EnhancedWebScraper:
     """Main enhanced web scraping class"""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        raw_cfg = config or load_and_log_configs().get('web_scraper', {})
+        # Respect an explicitly provided (even empty) config; only fall back to
+        # on-disk config when config is None.
+        raw_cfg = config if config is not None else load_and_log_configs().get('web_scraper', {})
         # Normalize config values
         def _as_float(v, d):
             try:
@@ -1028,8 +1030,10 @@ class EnhancedWebScraper:
         visited: Set[str] = set()
         base_norm = normalize_for_crawl(base_url, base_url)
         # Build filter chain based on config (include_external, allow/deny, patterns, content types)
-        cfg = load_and_log_configs() or {}
-        wc = cfg.get('web_scraper', {}) if isinstance(cfg, dict) else {}
+        # Prefer instance config provided at construction; do not override with
+        # on-disk config unless necessary. Tests pass config={} to exercise
+        # default behavior deterministically.
+        wc = self.config if isinstance(self.config, dict) else {}
         include_external_flag = bool(wc.get('web_crawl_include_external', False))
         if include_external_override is not None:
             include_external_flag = bool(include_external_override)
@@ -1303,25 +1307,25 @@ class EnhancedWebScraper:
                                         pass
                                     logger.debug(f"Skip URL (custom filter): {cand}")
                                     continue
-                            # Tie-break on path segment count (deeper paths first)
-                            try:
-                                from urllib.parse import urlparse as _urlparse
-                                _ps2 = len([seg for seg in (_urlparse(cand).path or '/').split('/') if seg])
-                            except Exception:
-                                _ps2 = 0
-                            try:
-                                ord_val = float(order_scorer.score(cand))
-                            except Exception:
-                                ord_val = float(s_val)
-                            heappush(pq, (-float(ord_val), depth + 1, -_ps2, cand, r_url))
-                            seen.add(cand)
-                            remaining -= 1
-                            logger.debug(f"Enqueue URL (score={s_val:.3f}, depth={depth+1}): {cand}")
-                            # Gauge: queue size after enqueue
-                            try:
-                                log_gauge("webscraping.crawl.queue_size", float(len(pq)))
-                            except Exception:
-                                pass
+                                # Tie-break on path segment count (deeper paths first)
+                                try:
+                                    from urllib.parse import urlparse as _urlparse
+                                    _ps2 = len([seg for seg in (_urlparse(cand).path or '/').split('/') if seg])
+                                except Exception:
+                                    _ps2 = 0
+                                try:
+                                    ord_val = float(order_scorer.score(cand))
+                                except Exception:
+                                    ord_val = float(s_val)
+                                heappush(pq, (-float(ord_val), depth + 1, -_ps2, cand, r_url))
+                                seen.add(cand)
+                                remaining -= 1
+                                logger.debug(f"Enqueue URL (score={s_val:.3f}, depth={depth+1}): {cand}")
+                                # Gauge: queue size after enqueue
+                                try:
+                                    log_gauge("webscraping.crawl.queue_size", float(len(pq)))
+                                except Exception:
+                                    pass
         else:
             # FIFO/BFS strategy
             from collections import deque as _deque
