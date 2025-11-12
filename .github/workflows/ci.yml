@@ -316,35 +316,11 @@ jobs:
             uv.lock
           extras: dev
 
-      - name: Setup PostgreSQL (macOS/Windows)
-        uses: shogo82148/actions-setup-postgres@v1
-        with:
-          postgresql-version: '16'
-          user: tldw_user
-          password: TestPassword123!
-          database: tldw_content
-
-      - name: Install pytest deps and psycopg
+      - name: Ensure pytest-asyncio installed (OS matrix)
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio "psycopg[binary]>=3.1"
-
-      - name: Export PG env vars (macOS/Windows)
-        shell: bash
-        run: |
-          echo "POSTGRES_TEST_HOST=127.0.0.1" >> "$GITHUB_ENV"
-          echo "POSTGRES_TEST_DB=tldw_content" >> "$GITHUB_ENV"
-          echo "POSTGRES_TEST_USER=tldw_user" >> "$GITHUB_ENV"
-          echo "POSTGRES_TEST_PASSWORD=TestPassword123!" >> "$GITHUB_ENV"
-          echo "TEST_DB_HOST=127.0.0.1" >> "$GITHUB_ENV"
-          echo "TEST_DB_USER=tldw_user" >> "$GITHUB_ENV"
-          echo "TEST_DB_PASSWORD=TestPassword123!" >> "$GITHUB_ENV"
-          echo "TEST_DB_NAME=tldw_test" >> "$GITHUB_ENV"
-          echo "TEST_DB_PORT=5432" >> "$GITHUB_ENV"
-          echo "POSTGRES_TEST_PORT=5432" >> "$GITHUB_ENV"
-          echo "TEST_DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content" >> "$GITHUB_ENV"
-          echo "DATABASE_URL=postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content" >> "$GITHUB_ENV"
+          pip install pytest pytest-asyncio
 
       - name: Verify pytest-asyncio import (OS matrix)
         shell: bash
@@ -446,7 +422,7 @@ jobs:
 
       - name: Run full test suite - exclude Jobs and E2E
         run: |
-          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -p tldw_Server_API.tests._plugins.postgres -m "not jobs and not e2e" \
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
             --ignore=tldw_Server_API/tests/Jobs \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
             --junit-xml=test-results-${{ matrix.os }}-3.12.xml
