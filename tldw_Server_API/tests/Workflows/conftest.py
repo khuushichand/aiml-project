@@ -8,10 +8,9 @@ import uuid
 
 import pytest
 
-# Bring in unified Postgres fixtures (pg_database_config, etc.) for this test package
-pytest_plugins = [
-    "tldw_Server_API.tests._plugins.postgres",
-]
+# Note: pytest >= 8 forbids defining `pytest_plugins` in non top-level
+# conftest files. The unified Postgres fixtures are loaded globally via
+# `pyproject.toml` under `[tool.pytest.ini_options].plugins`.
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
