@@ -20,8 +20,8 @@ except Exception:
         import asyncio as _asyncio
         try:
             loop = _asyncio.get_event_loop()
-            if loop.is_running():
-                return _asyncio.get_event_loop().run_until_complete(coro)  # type: ignore[misc]
+            if not loop.is_running():
+                return loop.run_until_complete(coro)  # type: ignore[misc]
         except RuntimeError:
             pass
         return _asyncio.run(coro)
